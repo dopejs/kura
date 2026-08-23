@@ -8,7 +8,7 @@ mod openai;
 mod provider;
 
 pub use llm_bridge::OpenAiCompatibleProvider;
-pub use openai::{OpenAiCompatibleClient, OpenAiCompatibleImageClient, Sampling};
+pub use openai::{Credential, OpenAiCompatibleClient, OpenAiCompatibleImageClient, Sampling};
 pub use provider::{
     GeneratedAsset, GenerationModality, GenerationProvider, GenerationRequest, GenerationStatus,
     ModelProvider, Prompt, ProviderError, ResponseEvent, ToolSpec,

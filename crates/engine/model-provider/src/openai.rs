@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
 
 use async_stream::try_stream;
 use kura_protocol::ResponseItem;
@@ -22,10 +23,46 @@ use crate::provider::ResponseEvent;
 /// Streaming client for OpenAI-compatible `/chat/completions` endpoints
 /// (OpenAI, local vLLM/Ollama gateways, openai-compatible providers in the
 /// Go daemon's provider manager).
+/// A credential that can be replaced while the provider is registered.
+///
+/// OAuth access tokens last about an hour, and the daemon outlives them by a
+/// long way. Reading the credential at boot and holding it would mean either a
+/// provider that starts failing mid-session or a daemon restart every time a
+/// token rotates -- and a restart drops whatever run was in flight. The handle
+/// is cloned into whatever refreshes it, so the swap costs one lock.
+#[derive(Clone, Default)]
+pub struct Credential(Arc<RwLock<Option<String>>>);
+
+impl Credential {
+    #[must_use]
+    pub fn new(value: Option<String>) -> Self {
+        Self(Arc::new(RwLock::new(value)))
+    }
+
+    /// Replace the credential used by every request from here on.
+    pub fn set(&self, value: Option<String>) {
+        // A poisoned lock means a panic while swapping a token, which says
+        // nothing about the new value; recovering keeps a dispatch working.
+        let mut guard = match self.0.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = value;
+    }
+
+    #[must_use]
+    pub fn get(&self) -> Option<String> {
+        match self.0.read() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+}
+
 pub struct OpenAiCompatibleClient {
     base_url: String,
     model: String,
-    api_key: Option<String>,
+    api_key: Credential,
     /// Extra headers sent with every request; see [`Self::with_headers`].
     headers: BTreeMap<String, String>,
     /// Sampling parameters; `None` fields are omitted from the body.
@@ -55,7 +92,7 @@ impl OpenAiCompatibleClient {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             model: model.into(),
-            api_key,
+            api_key: Credential::new(api_key),
             headers: BTreeMap::new(),
             sampling: Sampling::default(),
             http: reqwest::Client::new(),
@@ -77,6 +114,12 @@ impl OpenAiCompatibleClient {
     pub fn with_sampling(mut self, sampling: Sampling) -> Self {
         self.sampling = sampling;
         self
+    }
+
+    /// A handle to this client's credential, for whatever keeps it fresh.
+    #[must_use]
+    pub fn credential(&self) -> Credential {
+        self.api_key.clone()
     }
 }
 
@@ -102,7 +145,9 @@ impl ModelProvider for OpenAiCompatibleClient {
         for (name, value) in &self.headers {
             request = request.header(name, value);
         }
-        let request = match &self.api_key {
+        // Read per request, not captured at construction: a token refreshed
+        // since the last dispatch has to be the one that goes out.
+        let request = match self.api_key.get() {
             Some(key) => request.bearer_auth(key),
             None => request,
         };
@@ -586,5 +631,95 @@ mod tests {
         let mut pending = Vec::new();
         let err = accumulate_chunk("{oops", &mut pending).unwrap_err();
         assert!(matches!(err, ProviderError::Malformed(_)));
+    }
+
+    /// An endpoint that records the `Authorization` of each request it serves.
+    ///
+    /// Two connections, because the point of the test is what the *second*
+    /// request carries after the credential was replaced between them.
+    fn spawn_recording_endpoint(
+        connections: usize,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = std::sync::Arc::clone(&seen);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(connections) {
+                let Ok(mut stream) = stream else { continue };
+                let mut buffer = [0u8; 8192];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let text = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let authorization = text
+                    .lines()
+                    .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                recorded.lock().expect("lock").push(authorization);
+                let body = "data: [DONE]\n\n";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    async fn drain(client: &OpenAiCompatibleClient) {
+        use futures::StreamExt;
+        let prompt = Prompt::default();
+        let mut stream = client.stream(&prompt);
+        while stream.next().await.is_some() {}
+    }
+
+    #[tokio::test]
+    async fn a_replaced_credential_is_used_by_the_next_request() {
+        // An OAuth access token expires roughly hourly while this daemon runs
+        // for far longer. Reading the credential once at construction would
+        // mean every dispatch after the first refresh goes out with a dead
+        // token -- and arrives back as a 401 that reads as misconfiguration.
+        let (base_url, seen) = spawn_recording_endpoint(2);
+        let client = OpenAiCompatibleClient::new(base_url, "m", Some("first-token".to_string()));
+
+        drain(&client).await;
+        client.credential().set(Some("second-token".to_string()));
+        drain(&client).await;
+
+        let headers = seen.lock().expect("lock").clone();
+        assert_eq!(headers.len(), 2, "both requests were served");
+        assert!(headers[0].ends_with("Bearer first-token"), "got {}", headers[0]);
+        assert!(headers[1].ends_with("Bearer second-token"), "got {}", headers[1]);
+    }
+
+    #[tokio::test]
+    async fn a_cleared_credential_stops_the_header_being_sent() {
+        // Signing an account out has to actually stop the token going out,
+        // not leave the last one in place until the daemon restarts.
+        let (base_url, seen) = spawn_recording_endpoint(1);
+        let client = OpenAiCompatibleClient::new(base_url, "m", Some("token".to_string()));
+
+        client.credential().set(None);
+        drain(&client).await;
+
+        assert_eq!(seen.lock().expect("lock").as_slice(), &["".to_string()]);
+    }
+
+    #[test]
+    fn a_credential_handle_is_shared_rather_than_copied() {
+        // The handle is cloned into whatever refreshes it; a copy would swap a
+        // value nothing reads.
+        let client = OpenAiCompatibleClient::new("http://example.test", "m", None);
+        let handle = client.credential();
+
+        handle.set(Some("live".to_string()));
+
+        assert_eq!(client.credential().get().as_deref(), Some("live"));
     }
 }

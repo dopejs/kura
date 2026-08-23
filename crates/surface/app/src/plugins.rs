@@ -517,6 +517,10 @@ fn build_llm(asm: &mut Assembly) -> Result<(), AppError> {
             temperature: openai.sampling.temperature,
             top_p: openai.sampling.top_p,
         });
+        // Kept so the credential can be replaced while the daemon runs: an
+        // OAuth token expires in about an hour, and a restart to pick up a
+        // refreshed one would drop whatever run is in flight.
+        asm.state.openai_credential = Some(client.credential());
         llm.register_provider(Arc::new(
             kura_model_provider::OpenAiCompatibleProvider::new("openai_compatible", client),
         ));

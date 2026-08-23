@@ -1298,6 +1298,7 @@ dependencies = [
  "kura-mail",
  "kura-mcp",
  "kura-memory",
+ "kura-model-provider",
  "kura-opsreadiness",
  "kura-orchestration",
  "kura-plugin",

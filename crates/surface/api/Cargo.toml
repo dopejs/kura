@@ -37,6 +37,7 @@ kura-router = { workspace = true }
 kura-policy = { workspace = true }
 kura-identity = { workspace = true }
 kura-llm = { workspace = true }
+kura-model-provider = { workspace = true }
 kura-providers = { workspace = true }
 kura-skills = { workspace = true }
 kura-sandbox = { workspace = true }

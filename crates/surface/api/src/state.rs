@@ -82,6 +82,14 @@ pub struct AppState {
     pub runtime: Option<Arc<RuntimeManager>>,
     /// Go Dependencies.LLM.
     pub llm: Option<Arc<Dispatcher>>,
+    /// The OpenAI-compatible provider's credential, swappable at runtime.
+    ///
+    /// Present only when that provider is configured. It exists because an
+    /// OAuth access token expires roughly hourly while the daemon runs for
+    /// far longer: without a way to replace the credential in place, a
+    /// refreshed token would need a restart, and a restart drops whatever run
+    /// is in flight.
+    pub openai_credential: Option<kura_model_provider::Credential>,
     /// Go Dependencies.Chat.
     ///
     pub chat: Option<Arc<ChatService>>,
@@ -187,6 +195,7 @@ impl AppState {
             router: None,
             runtime: None,
             llm: None,
+            openai_credential: None,
             chat: None,
             providers: None,
             skills: None,

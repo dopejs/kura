@@ -35,6 +35,51 @@ use crate::state::AppState;
 
 use super::{decode_json_or_default, decode_json_required};
 
+/// Body of `PUT /v1/providers/{provider_id}/credential`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetCredentialRequest {
+    /// The bearer to send from now on. An empty string clears it.
+    #[serde(default)]
+    api_key: String,
+}
+
+/// Replaces the credential a configured provider sends, without a restart.
+///
+/// This exists for OAuth: an access token lasts about an hour while the daemon
+/// runs for far longer, so whatever holds the grant has to be able to hand the
+/// refreshed token over in place. Restarting instead would drop any run in
+/// flight, and letting the token go stale turns every later dispatch into a
+/// 401 that reads as a configuration fault.
+///
+/// Only the configured HTTP provider has a credential to replace. The managed
+/// bridges borrow a CLI's own session and hold nothing to swap, so asking for
+/// one is a 404 rather than a silent success.
+async fn set_credential(
+    State(state): State<AppState>,
+    Path(provider_id): Path<String>,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    if provider_id != "openai_compatible" {
+        return Err(ApiError::NotFound(format!(
+            "provider has no replaceable credential: {provider_id}"
+        )));
+    }
+    // Required, not defaulted: a malformed or empty body must not be read as
+    // "clear the credential", which would silently disable the provider.
+    let request: SetCredentialRequest = decode_json_required(&body)?;
+    let Some(credential) = state.openai_credential.clone() else {
+        return Err(ApiError::NotFound(
+            "the openai_compatible provider is not configured".to_string(),
+        ));
+    };
+    let trimmed = request.api_key.trim();
+    credential.set((!trimmed.is_empty()).then(|| trimmed.to_string()));
+    // Never echoed back: it went in, and reading it out again is not something
+    // this endpoint should make possible.
+    Ok((StatusCode::OK, Json(serde_json::json!({"updated": true}))).into_response())
+}
+
 /// Route family router.
 #[must_use]
 pub fn router() -> Router<AppState> {
@@ -45,6 +90,7 @@ pub fn router() -> Router<AppState> {
         .route("/v1/providers/{provider_id}/auth/{action}", post(auth_action))
         .route("/v1/providers/{provider_id}/models", get(list_models))
         .route("/v1/providers/{provider_id}/default-model", post(set_default_model))
+        .route("/v1/providers/{provider_id}/credential", put(set_credential))
         .route("/v1/providers/{provider_id}/checks", get(list_checks).post(run_check))
         .route("/v1/providers/{provider_id}/checks/{check_id}", get(get_check))
         .route("/v1/model-roles", get(list_model_roles))
