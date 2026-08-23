@@ -526,6 +526,66 @@ fn build_llm(asm: &mut Assembly) -> Result<(), AppError> {
         ));
     }
 
+    // Providers backed by a subscription the user signed into.
+    //
+    // One per account rather than a slot per vendor, and the protocol is named
+    // rather than guessed from the URL: most of these speak the
+    // OpenAI-compatible shape and need no wire of their own, while Anthropic
+    // and Codex each need theirs. Every one keeps a credential handle, because
+    // an access token lasts about an hour and the daemon far longer.
+    for account in &asm.cfg.llm.accounts {
+        let id = account.id.trim();
+        if id.is_empty() || account.base_url.trim().is_empty() {
+            continue;
+        }
+        let token = {
+            let value = account.access_token.trim();
+            (!value.is_empty()).then(|| value.to_string())
+        };
+        let credential = match account.protocol {
+            kura_config::AccountProtocol::AnthropicMessages => {
+                let client = kura_model_provider::AnthropicClient::new(
+                    account.base_url.trim(),
+                    account.model.trim(),
+                    token,
+                )
+                .with_headers(account.headers.clone());
+                let handle = client.credential();
+                llm.register_provider(Arc::new(
+                    kura_model_provider::ModelProviderBridge::new(id, client),
+                ));
+                handle
+            }
+            kura_config::AccountProtocol::OpenAiResponses => {
+                let client = kura_model_provider::ResponsesClient::new(
+                    account.base_url.trim(),
+                    account.model.trim(),
+                    token,
+                )
+                .with_headers(account.headers.clone());
+                let handle = client.credential();
+                llm.register_provider(Arc::new(
+                    kura_model_provider::ModelProviderBridge::new(id, client),
+                ));
+                handle
+            }
+            kura_config::AccountProtocol::OpenAiCompatible => {
+                let client = kura_model_provider::OpenAiCompatibleClient::new(
+                    account.base_url.trim(),
+                    account.model.trim(),
+                    token,
+                )
+                .with_headers(account.headers.clone());
+                let handle = client.credential();
+                llm.register_provider(Arc::new(
+                    kura_model_provider::OpenAiCompatibleProvider::new(id, client),
+                ));
+                handle
+            }
+        };
+        asm.state.account_credentials.insert(id.to_string(), credential);
+    }
+
     // Deterministic in-process fallback so the daemon always has a default
     // provider (Go registers echo in dispatcher.go).
     llm.register_provider(Arc::new(kura_llm::EchoProvider::new()));

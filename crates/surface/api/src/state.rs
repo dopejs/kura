@@ -90,6 +90,12 @@ pub struct AppState {
     /// refreshed token would need a restart, and a restart drops whatever run
     /// is in flight.
     pub openai_credential: Option<kura_model_provider::Credential>,
+    /// Credentials for providers backed by a signed-in subscription, by id.
+    ///
+    /// One per account, because each holds its own grant and they expire
+    /// independently. Whatever refreshes a token hands the new value here
+    /// rather than restarting the daemon.
+    pub account_credentials: std::collections::BTreeMap<String, kura_model_provider::Credential>,
     /// Go Dependencies.Chat.
     ///
     pub chat: Option<Arc<ChatService>>,
@@ -196,6 +202,7 @@ impl AppState {
             runtime: None,
             llm: None,
             openai_credential: None,
+            account_credentials: std::collections::BTreeMap::new(),
             chat: None,
             providers: None,
             skills: None,

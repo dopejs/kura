@@ -248,9 +248,60 @@ pub struct LlmConfig {
     pub claude: ManagedCliProviderConfig,
     /// Managed Codex CLI provider settings.
     pub codex: ManagedCliProviderConfig,
+    /// Providers backed by a subscription the user signed into.
+    ///
+    /// One entry per account rather than a fixed slot per vendor: a person can
+    /// hold several subscriptions, and the set is whatever they signed into
+    /// rather than anything this build decides in advance.
+    #[serde(default)]
+    pub accounts: Vec<AccountProviderConfig>,
     /// Model routing by modality. Defaults to unrouted for every role.
     #[serde(default)]
     pub roles: ModelRoutingConfig,
+}
+
+/// Which wire an account's vendor speaks.
+///
+/// Most of them are OpenAI-compatible and need no protocol of their own; the
+/// two that are not each cost a wire, which is why this is named rather than
+/// inferred from a URL.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AccountProtocol {
+    // Named one by one rather than derived. `rename_all = "snake_case"` turns
+    // `OpenAiCompatible` into `open_ai_compatible`, which is not what this
+    // protocol is called anywhere else in the system -- the config key, the
+    // provider id and the Workbench all say `openai_compatible`, and the
+    // mismatch surfaced only as a rejected request naming a variant nobody
+    // had written.
+    #[default]
+    #[serde(rename = "openai_compatible")]
+    OpenAiCompatible,
+    /// Anthropic's Messages API.
+    #[serde(rename = "anthropic_messages")]
+    AnthropicMessages,
+    /// OpenAI's Responses API, as Codex uses it.
+    #[serde(rename = "openai_responses")]
+    OpenAiResponses,
+}
+
+/// One subscription, reached with the grant its owner authorised.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountProviderConfig {
+    /// Provider id, unique among providers.
+    pub id: String,
+    /// Shown in a provider listing.
+    pub title: String,
+    pub protocol: AccountProtocol,
+    #[serde(rename = "baseURL")]
+    pub base_url: String,
+    pub model: String,
+    /// The access token. Replaced in place as it is refreshed, so what is here
+    /// is only the value the daemon starts with.
+    #[serde(default)]
+    pub access_token: String,
+    #[serde(default)]
+    pub headers: std::collections::BTreeMap<String, String>,
 }
 
 /// Settings for an OpenAI-compatible HTTP provider.

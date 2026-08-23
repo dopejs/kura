@@ -18,14 +18,24 @@ use crate::openai::OpenAiCompatibleClient;
 use crate::provider::{ModelProvider, Prompt, ProviderError, ResponseEvent};
 
 /// Registers an OpenAI-compatible endpoint with the dispatcher.
-pub struct OpenAiCompatibleProvider {
+/// Adapts any [`ModelProvider`] to the dispatcher's `Provider`.
+///
+/// Generic over the client because the adaptation -- accumulate the stream,
+/// relay chunks, report the reason it ended -- is the same whatever wire
+/// produced the events. Anthropic's Messages API and OpenAI's Responses API
+/// differ in how a request is built and a stream is read, and in nothing
+/// downstream of that.
+pub struct ModelProviderBridge<M: ModelProvider> {
     name: String,
-    client: OpenAiCompatibleClient,
+    client: M,
 }
 
-impl OpenAiCompatibleProvider {
+/// The original name, kept because it is what callers and tests already use.
+pub type OpenAiCompatibleProvider = ModelProviderBridge<OpenAiCompatibleClient>;
+
+impl<M: ModelProvider> ModelProviderBridge<M> {
     #[must_use]
-    pub fn new(name: impl Into<String>, client: OpenAiCompatibleClient) -> Self {
+    pub fn new(name: impl Into<String>, client: M) -> Self {
         Self { name: name.into(), client }
     }
 }
@@ -86,7 +96,7 @@ fn to_llm_error(error: ProviderError) -> LlmError {
     }
 }
 
-impl Provider for OpenAiCompatibleProvider {
+impl<M: ModelProvider> Provider for ModelProviderBridge<M> {
     fn name(&self) -> &str {
         &self.name
     }
@@ -113,7 +123,7 @@ impl Provider for OpenAiCompatibleProvider {
     }
 }
 
-impl OpenAiCompatibleProvider {
+impl<M: ModelProvider> ModelProviderBridge<M> {
     async fn run(
         &self,
         request: ProviderRequest,

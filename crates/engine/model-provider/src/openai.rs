@@ -201,7 +201,7 @@ fn non_empty_or(value: String, fallback: String) -> String {
 }
 
 /// Return the response byte stream, or a `Status` error carrying the body.
-async fn checked_bytes_stream(
+pub(crate) async fn checked_bytes_stream(
     response: reqwest::Response,
 ) -> Result<impl futures::Stream<Item = reqwest::Result<bytes::Bytes>>, ProviderError> {
     if response.status().is_success() {

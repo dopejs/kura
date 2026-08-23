@@ -35,6 +35,122 @@ use crate::state::AppState;
 
 use super::{decode_json_or_default, decode_json_required};
 
+/// Body of `PUT /v1/providers/{provider_id}/account`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpsertAccountRequest {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    protocol: kura_config::AccountProtocol,
+    #[serde(default, rename = "baseURL")]
+    base_url: String,
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    access_token: String,
+    #[serde(default)]
+    headers: std::collections::BTreeMap<String, String>,
+}
+
+/// Registers or replaces a provider while the daemon runs.
+///
+/// Configuring a provider used to mean restarting, because the inventory was
+/// read once at boot. A restart ends whatever run is in flight -- which is
+/// exactly what a user is in the middle of when they reach for another
+/// provider -- so the registration happens in place: the client is swapped
+/// into the dispatcher and the inventory re-read, and anything already
+/// streaming keeps streaming.
+async fn upsert_account(
+    State(state): State<AppState>,
+    Path(provider_id): Path<String>,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    let request: UpsertAccountRequest = decode_json_required(&body)?;
+    let provider_id = provider_id.trim().to_string();
+    if provider_id.is_empty() || request.base_url.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "a provider id and base URL are required".to_string(),
+        ));
+    }
+    let manager = manager(&state)?;
+    let Some(llm) = state.llm.clone() else {
+        return Err(ApiError::NotFound("no dispatcher".to_string()));
+    };
+
+    let token = {
+        let value = request.access_token.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    };
+    let credential = match request.protocol {
+        kura_config::AccountProtocol::AnthropicMessages => {
+            let client = kura_model_provider::AnthropicClient::new(
+                request.base_url.trim(),
+                request.model.trim(),
+                token,
+            )
+            .with_headers(request.headers.clone());
+            let handle = client.credential();
+            llm.register_provider(std::sync::Arc::new(
+                kura_model_provider::ModelProviderBridge::new(provider_id.clone(), client),
+            ));
+            handle
+        }
+        kura_config::AccountProtocol::OpenAiResponses => {
+            let client = kura_model_provider::ResponsesClient::new(
+                request.base_url.trim(),
+                request.model.trim(),
+                token,
+            )
+            .with_headers(request.headers.clone());
+            let handle = client.credential();
+            llm.register_provider(std::sync::Arc::new(
+                kura_model_provider::ModelProviderBridge::new(provider_id.clone(), client),
+            ));
+            handle
+        }
+        kura_config::AccountProtocol::OpenAiCompatible => {
+            let client = kura_model_provider::OpenAiCompatibleClient::new(
+                request.base_url.trim(),
+                request.model.trim(),
+                token,
+            )
+            .with_headers(request.headers.clone());
+            let handle = client.credential();
+            llm.register_provider(std::sync::Arc::new(
+                kura_model_provider::OpenAiCompatibleProvider::new(provider_id.clone(), client),
+            ));
+            handle
+        }
+    };
+
+    manager.upsert_account(kura_config::AccountProviderConfig {
+        id: provider_id.clone(),
+        title: request.title,
+        protocol: request.protocol,
+        base_url: request.base_url,
+        model: request.model,
+        access_token: request.access_token,
+        headers: request.headers,
+    });
+    // Registered before the reply, so a caller that dispatches on success is
+    // not racing the registration it just asked for.
+    let _ = credential;
+    Ok((StatusCode::OK, Json(serde_json::json!({"registered": true}))).into_response())
+}
+
+/// Forgets a provider registered from an account.
+async fn remove_account(
+    State(state): State<AppState>,
+    Path(provider_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let manager = manager(&state)?;
+    if !manager.remove_account(provider_id.trim()) {
+        return Err(ApiError::NotFound(format!("unknown provider: {provider_id}")));
+    }
+    Ok((StatusCode::OK, Json(serde_json::json!({"removed": true}))).into_response())
+}
+
 /// Body of `PUT /v1/providers/{provider_id}/credential`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +207,7 @@ pub fn router() -> Router<AppState> {
         .route("/v1/providers/{provider_id}/models", get(list_models))
         .route("/v1/providers/{provider_id}/default-model", post(set_default_model))
         .route("/v1/providers/{provider_id}/credential", put(set_credential))
+        .route("/v1/providers/{provider_id}/account", put(upsert_account).delete(remove_account))
         .route("/v1/providers/{provider_id}/checks", get(list_checks).post(run_check))
         .route("/v1/providers/{provider_id}/checks/{check_id}", get(get_check))
         .route("/v1/model-roles", get(list_model_roles))

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::Utc;
-use kura_config::LlmConfig;
+use kura_config::{AccountProviderConfig, LlmConfig};
 use kura_llm::{CancelToken, CreateDispatchInput, Dispatcher, Message, MessageRole, PrepareError};
 use kura_setupwizard::{Service, ServiceDependencies, SetupSession, new_service};
 use parking_lot::RwLock;
@@ -71,6 +71,13 @@ enum ManagedAction {
 
 #[derive(Default)]
 struct Inner {
+    /// Accounts registered since the daemon started.
+    ///
+    /// Held here rather than in the immutable config because they change while
+    /// it runs: a provider added mid-session must take effect without a
+    /// restart, and restarting to pick one up would end whatever run is in
+    /// flight -- which is the whole reason a user configures one.
+    accounts: Vec<AccountProviderConfig>,
     profiles: HashMap<String, Profile>,
     order: Vec<String>,
     auth_states: HashMap<String, AuthState>,
@@ -597,16 +604,24 @@ impl Manager {
         if !self.cfg.openai_compatible.base_url.trim().is_empty() {
             items.push(self.build_openai_compatible_profile(&self.inner.read()));
         }
-        if let Some(registry) = &self.registry {
-            for bridge in registry.list() {
-                // A bridge whose command-line tool is not installed cannot
-                // serve anything. Listing it produces a permanently failing
-                // row the user has no way to remove.
-                if bridge.available() {
-                    items.push(self.build_managed_profile(&bridge));
-                }
+        for account in &self.inner.read().accounts {
+            if !account.id.trim().is_empty() && !account.base_url.trim().is_empty() {
+                items.push(build_account_profile(account, &self.dispatcher));
             }
         }
+
+        // Managed bridges are not listed as providers.
+        //
+        // A bridge borrows a vendor's coding agent and drives it with `-p`,
+        // which means every request pays for that agent's own system prompt
+        // and tool definitions before it reaches a model: measured against a
+        // ten-token question, twenty-seven thousand tokens and eight seconds.
+        // Loopforge is an agent itself, so wrapping another one is overhead
+        // with nothing gained -- a subscription is reached by holding its
+        // OAuth grant and calling the vendor's API directly.
+        //
+        // They remain available for auth inspection through the registry;
+        // they are simply not somewhere a model request can be routed.
         let default_provider_id = default_provider_id_for_items(&self.cfg, &items);
         for item in &mut items {
             item.default = item.provider_id == default_provider_id;
@@ -619,6 +634,34 @@ impl Manager {
             inner.order.push(item.provider_id.clone());
             inner.profiles.insert(item.provider_id.clone(), item);
         }
+    }
+
+    /// Register or replace a provider backed by a signed-in account.
+    ///
+    /// Returns once the inventory reflects it. The caller registers the client
+    /// with the dispatcher; this is what makes it visible to everything that
+    /// resolves a provider by id, which is what dispatch does.
+    pub fn upsert_account(&self, account: AccountProviderConfig) {
+        {
+            let mut inner = self.inner.write();
+            inner.accounts.retain(|existing| existing.id != account.id);
+            inner.accounts.push(account);
+        }
+        self.load_profiles();
+    }
+
+    /// Forget a provider backed by an account. True when there was one.
+    pub fn remove_account(&self, provider_id: &str) -> bool {
+        let removed = {
+            let mut inner = self.inner.write();
+            let before = inner.accounts.len();
+            inner.accounts.retain(|existing| existing.id != provider_id.trim());
+            inner.accounts.len() != before
+        };
+        if removed {
+            self.load_profiles();
+        }
+        removed
     }
 
     fn build_echo_profile(&self) -> Profile {
@@ -859,6 +902,42 @@ fn has_provider(dispatcher: &Option<Arc<Dispatcher>>, provider_id: &str) -> bool
 }
 
 #[must_use]
+/// The inventory entry for an account-backed provider.
+fn build_account_profile(
+    account: &AccountProviderConfig,
+    dispatcher: &Option<Arc<Dispatcher>>,
+) -> Profile {
+    let model = account.model.trim().to_string();
+    let mut issues = Vec::new();
+    if model.is_empty() {
+        issues.push("default model is not configured".to_string());
+    }
+    if account.access_token.trim().is_empty() {
+        issues.push("the account is not signed in".to_string());
+    }
+    Profile {
+        provider_id: account.id.trim().to_string(),
+        title: if account.title.trim().is_empty() {
+            account.id.trim().to_string()
+        } else {
+            account.title.trim().to_string()
+        },
+        family: Family::OpenAICompatible,
+        auth_mode: AuthMode::ApiKey,
+        source: Source::Config,
+        model_selection_mode: ModelSelectionMode::Open,
+        known_models: if model.is_empty() { Vec::new() } else { vec![model.clone()] },
+        registered: has_provider(dispatcher, account.id.trim()),
+        configured: true,
+        ready: issues.is_empty(),
+        default_model: model.clone(),
+        effective_model: model,
+        capabilities: CapabilityFlags { chat: true, stream: true, ..CapabilityFlags::default() },
+        issues,
+        ..Profile::default()
+    }
+}
+
 fn default_provider_id_for_items(cfg: &LlmConfig, items: &[Profile]) -> String {
     let explicit = cfg.default_provider.trim();
     if !explicit.is_empty() {

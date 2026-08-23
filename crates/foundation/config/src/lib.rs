@@ -23,6 +23,7 @@ pub use projection::{
     SlackHostedReadinessProjection, TelegramHostedReadinessProjection,
 };
 pub use types::{
+    AccountProtocol, AccountProviderConfig,
     Config, ConnectorConfig, DiscordConnectorConfig, Environment, LlmConfig,
     ManagedCliProviderConfig, MatrixConnectorConfig, ModelRole, ModelRoleBinding,
     ModelRoutingConfig, OpenAiCompatibleProviderConfig, SamplingConfig, SlackConnectorConfig,

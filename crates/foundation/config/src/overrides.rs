@@ -19,6 +19,23 @@ pub(crate) fn apply_env_overrides(cfg: &mut Config) {
     cfg.llm.default_model = getenv("KURA_LLM_DEFAULT_MODEL", &cfg.llm.default_model);
     cfg.llm.default_timeout_ms = getenv_int("KURA_LLM_DEFAULT_TIMEOUT_MS", cfg.llm.default_timeout_ms);
     cfg.llm.default_max_retries = getenv_int("KURA_LLM_DEFAULT_MAX_RETRIES", cfg.llm.default_max_retries);
+    // Signed-in subscriptions, as JSON, because the set is whatever the user
+    // signed into rather than a fixed number of slots. Passed in the
+    // environment for the same reason the API key is: it keeps the credential
+    // in one place on disk instead of copying it into a config file.
+    //
+    // Unparseable input leaves the configured accounts alone. Replacing them
+    // with nothing would silently drop every subscription the user has.
+    if let Ok(raw) = std::env::var("KURA_LLM_ACCOUNTS") {
+        if !raw.trim().is_empty() {
+            match serde_json::from_str::<Vec<crate::types::AccountProviderConfig>>(&raw) {
+                Ok(accounts) => cfg.llm.accounts = accounts,
+                Err(error) => {
+                    eprintln!("[kura] ignoring KURA_LLM_ACCOUNTS: {error}");
+                }
+            }
+        }
+    }
 
     cfg.llm.openai_compatible.base_url = getenv(
         "KURA_LLM_OPENAI_COMPATIBLE_BASE_URL",
