@@ -751,11 +751,40 @@ mod tests {
     use axum::http::StatusCode;
     use std::sync::Arc;
 
+    /// A manager with one provider actually configured.
+    ///
+    /// Nothing is listed until something is set up, so a test that wants to
+    /// read a provider has to configure one. It used to rely on the inventory
+    /// being seeded with built-ins whatever the configuration said, which is
+    /// the behaviour these routes no longer have.
+    /// A manager with one provider actually configured.
+    ///
+    /// Asking for echo by name is what puts it in the inventory now, so this
+    /// doubles as the check that an explicitly configured provider appears.
+    /// The routes used to be exercised against whatever the inventory happened
+    /// to be seeded with regardless of configuration.
     fn state_with_manager() -> crate::state::AppState {
+        let mut state = test_state();
+        let mut llm = state.config.llm.clone();
+        llm.default_provider = "echo".to_string();
+        let manager = kura_providers::new_manager(llm, None, Vec::new());
+        state.providers = Some(Arc::new(manager));
+        state
+    }
+
+    #[tokio::test]
+    async fn nothing_is_listed_until_something_is_configured() {
+        // An untouched daemon is empty, not broken. Seeding the inventory made
+        // a fresh install list several providers, most of them reporting
+        // faults, with no way for a user to remove any of them.
         let mut state = test_state();
         let manager = kura_providers::new_manager(state.config.llm.clone(), None, Vec::new());
         state.providers = Some(Arc::new(manager));
-        state
+
+        let (status, listed) = request_json(state, "GET", "/v1/providers", None).await;
+
+        assert_eq!(status, StatusCode::OK, "{listed}");
+        assert!(listed["items"].as_array().expect("items").is_empty(), "{listed}");
     }
 
     #[tokio::test]

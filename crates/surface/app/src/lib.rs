@@ -904,6 +904,8 @@ mod tests {
     use tower::ServiceExt;
 
     /// A test config pointing at a fresh temp data dir.
+    use kura_config::LlmConfig;
+
     fn test_config() -> Config {
         let dir = std::env::temp_dir().join(format!("kura-app-smoke-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&dir).expect("create temp data dir");
@@ -913,7 +915,11 @@ mod tests {
             data_dir: dir.to_string_lossy().into_owned(),
             log_level: "info".to_string(),
             version: "dev".to_string(),
-            llm: Default::default(),
+            // These tests dispatch at `echo`, which is a fixture rather than a
+            // provider the daemon ships: it appears only where something names
+            // it. Asking for it here is what these tests were relying on the
+            // inventory to do for them.
+            llm: LlmConfig { default_provider: "echo".to_string(), ..Default::default() },
             connectors: Default::default(),
         }
     }

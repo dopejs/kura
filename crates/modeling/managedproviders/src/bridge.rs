@@ -61,6 +61,13 @@ pub trait Bridge: Send + Sync {
     fn display_name(&self) -> String;
     fn family(&self) -> Family;
     fn auth_mode(&self) -> AuthMode;
+    /// Whether this bridge has the command-line tool it borrows.
+    ///
+    /// Answered from the resolved path rather than by running anything: it is
+    /// consulted while building the provider inventory, and an inventory that
+    /// spawned a process per entry would make listing providers as slow as
+    /// using one.
+    fn available(&self) -> bool;
     fn detect(&self, cancel: &CancelToken) -> Result<(AuthState, Vec<Model>), crate::error::Error>;
     fn start(&self, cancel: &CancelToken) -> Result<(AuthState, Vec<Model>), crate::error::Error>;
     fn complete(&self, cancel: &CancelToken) -> Result<(AuthState, Vec<Model>), crate::error::Error>;
@@ -531,6 +538,10 @@ impl ManagedBridgeAdapter {
 }
 
 impl kura_providers::ManagedBridge for ManagedBridgeAdapter {
+    fn available(&self) -> bool {
+        self.bridge.available()
+    }
+
     fn provider_id(&self) -> String {
         self.bridge.provider_id()
     }

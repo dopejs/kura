@@ -234,6 +234,12 @@ pub trait ManagedBridge: Send + Sync {
     fn display_name(&self) -> String;
     fn family(&self) -> Family;
     fn auth_mode(&self) -> AuthMode;
+    /// Whether the tool this bridge borrows is installed.
+    ///
+    /// Consulted while building the provider inventory, so it must not run
+    /// anything: a bridge with nothing to borrow is left out rather than
+    /// listed as a provider that fails every request.
+    fn available(&self) -> bool;
     fn detect(&self) -> BoxFuture<'_, Result<(AuthState, Vec<Model>), ProvidersError>>;
     fn start(&self) -> BoxFuture<'_, Result<(AuthState, Vec<Model>), ProvidersError>>;
     fn complete(&self) -> BoxFuture<'_, Result<(AuthState, Vec<Model>), ProvidersError>>;

@@ -6,21 +6,56 @@ use kura_config::LlmConfig;
 use kura_llm::{Dispatcher, EchoProvider};
 use kura_providers::{new_check_id, new_manager};
 
+/// A manager with echo asked for by name.
+///
+/// Nothing is listed until something is configured, so a test that wants echo
+/// has to say so. These used to rely on the inventory being seeded regardless
+/// of configuration, which is what made a fresh daemon list several providers
+/// its owner had never set up.
 fn manager_with_echo() -> kura_providers::Manager {
     let dispatcher = Arc::new(Dispatcher::new());
     dispatcher.register_provider(Arc::new(EchoProvider::new()));
-    new_manager(LlmConfig::default(), Some(dispatcher), vec![])
+    let cfg = LlmConfig { default_provider: "echo".to_string(), ..LlmConfig::default() };
+    new_manager(cfg, Some(dispatcher), vec![])
 }
 
 #[test]
-fn list_profiles_returns_echo_and_openai() {
+fn only_what_was_configured_is_listed() {
     let manager = manager_with_echo();
     let profiles = manager.list_profiles();
-    assert_eq!(profiles.len(), 2);
-    assert!(profiles.iter().any(|p| p.provider_id == "echo"));
-    assert!(profiles.iter().any(|p| p.provider_id == "openai_compatible"));
-    // Sorted by provider id.
-    assert!(profiles.windows(2).all(|w| w[0].provider_id <= w[1].provider_id));
+    // Echo was asked for; the HTTP endpoint was not configured, so it is
+    // absent rather than listed with faults nobody can clear.
+    assert_eq!(
+        profiles.iter().map(|p| p.provider_id.as_str()).collect::<Vec<_>>(),
+        vec!["echo"]
+    );
+}
+
+#[test]
+fn an_unconfigured_manager_lists_nothing() {
+    let dispatcher = Arc::new(Dispatcher::new());
+    let manager = new_manager(LlmConfig::default(), Some(dispatcher), vec![]);
+
+    // Empty, not broken. A daemon nobody has set up should read as one.
+    assert!(manager.list_profiles().is_empty());
+}
+
+#[test]
+fn a_configured_endpoint_is_listed() {
+    let cfg = LlmConfig {
+        openai_compatible: kura_config::OpenAiCompatibleProviderConfig {
+            base_url: "https://api.example.test/v1".to_string(),
+            model: "a-model".to_string(),
+            ..Default::default()
+        },
+        ..LlmConfig::default()
+    };
+    let manager = new_manager(cfg, Some(Arc::new(Dispatcher::new())), vec![]);
+
+    assert_eq!(
+        manager.list_profiles().iter().map(|p| p.provider_id.as_str()).collect::<Vec<_>>(),
+        vec!["openai_compatible"]
+    );
 }
 
 #[test]

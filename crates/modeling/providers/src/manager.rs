@@ -579,13 +579,32 @@ impl Manager {
         // write lock must not be held while managed profiles are built (a
         // parking_lot RwLock is not reentrant and self-deadlocks when a
         // managed registry is present).
-        let mut items = vec![
-            self.build_echo_profile(),
-            self.build_openai_compatible_profile(&self.inner.read()),
-        ];
+        // A provider appears when it can actually be used, and not before.
+        //
+        // Seeding the inventory with every provider the build knows about
+        // meant a daemon nobody had configured still listed several, most of
+        // them reporting faults -- so an untouched install read as broken
+        // rather than as empty, and "not set up yet" was indistinguishable
+        // from "set up and failing".
+        let mut items = Vec::new();
+        // Echo answers deterministically without reaching anything. It is a
+        // test fixture, so it is present only when something asked for it by
+        // name; offering it otherwise invites routing real work at a provider
+        // that returns its own input.
+        if self.cfg.default_provider.trim() == "echo" {
+            items.push(self.build_echo_profile());
+        }
+        if !self.cfg.openai_compatible.base_url.trim().is_empty() {
+            items.push(self.build_openai_compatible_profile(&self.inner.read()));
+        }
         if let Some(registry) = &self.registry {
             for bridge in registry.list() {
-                items.push(self.build_managed_profile(&bridge));
+                // A bridge whose command-line tool is not installed cannot
+                // serve anything. Listing it produces a permanently failing
+                // row the user has no way to remove.
+                if bridge.available() {
+                    items.push(self.build_managed_profile(&bridge));
+                }
             }
         }
         let default_provider_id = default_provider_id_for_items(&self.cfg, &items);

@@ -262,6 +262,10 @@ impl Bridge for ClaudeBridge {
         Family::ClaudeCodeCLI
     }
 
+    fn available(&self) -> bool {
+        !self.cli_path.trim().is_empty()
+    }
+
     fn auth_mode(&self) -> AuthMode {
         AuthMode::LocalCLIBridge
     }
