@@ -23,7 +23,7 @@
   "properties": {
     "providerId": { "type": "string" },
     "title": { "type": "string" },
-    "family": { "type": "string", "enum": ["builtin_echo", "openai_compatible", "claude_code_cli", "codex_cli"] },
+    "family": { "type": "string", "enum": ["builtin_echo", "openai_compatible", "anthropic_messages", "openai_responses", "claude_code_cli", "codex_cli"] },
     "authMode": { "type": "string", "enum": ["none", "api_key", "local_cli_bridge"] },
     "source": { "type": "string", "enum": ["builtin", "config", "managed"] },
     "modelSelectionMode": { "type": "string", "enum": ["fixed", "open"] },

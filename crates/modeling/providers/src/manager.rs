@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::Utc;
-use kura_config::{AccountProviderConfig, LlmConfig};
+use kura_config::{AccountProtocol, AccountProviderConfig, LlmConfig};
 use kura_llm::{CancelToken, CreateDispatchInput, Dispatcher, Message, MessageRole, PrepareError};
 use kura_setupwizard::{Service, ServiceDependencies, SetupSession, new_service};
 use parking_lot::RwLock;
@@ -99,11 +99,22 @@ pub fn new_manager(
     registries: Vec<Arc<dyn ManagedRegistry>>,
 ) -> Manager {
     let registry = registries.into_iter().next();
+    // Seeded from the configuration, then owned by `Inner`.
+    //
+    // The accounts a user configured before the daemon started arrive in the
+    // config; the ones they add while it runs arrive through `upsert_account`.
+    // Both have to live in the same list, because `load_profiles` rebuilds the
+    // inventory from one place. Leaving this empty meant the configured ones
+    // were dispatchable -- the clients are registered at boot -- and yet
+    // invisible: `/v1/providers` answered with nothing while a request still
+    // reached the vendor. A settings page showing no providers next to a
+    // default provider it had never heard of is that bug, not two.
+    let accounts = cfg.accounts.clone();
     let manager = Manager {
         cfg,
         dispatcher,
         registry,
-        inner: RwLock::new(Inner::default()),
+        inner: RwLock::new(Inner { accounts, ..Inner::default() }),
     };
     manager.load_profiles();
     manager
@@ -922,7 +933,15 @@ fn build_account_profile(
         } else {
             account.title.trim().to_string()
         },
-        family: Family::OpenAICompatible,
+        // The wire it actually speaks. Every account reported the OpenAI
+        // family regardless, which is the label a surface puts next to the
+        // provider's name -- so an Anthropic subscription was shown tagged
+        // with a protocol it does not serve.
+        family: match account.protocol {
+            AccountProtocol::AnthropicMessages => Family::AnthropicMessages,
+            AccountProtocol::OpenAiResponses => Family::OpenAIResponses,
+            AccountProtocol::OpenAiCompatible => Family::OpenAICompatible,
+        },
         auth_mode: AuthMode::ApiKey,
         source: Source::Config,
         model_selection_mode: ModelSelectionMode::Open,

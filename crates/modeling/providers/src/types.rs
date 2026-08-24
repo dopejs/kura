@@ -35,6 +35,12 @@ macro_rules! string_enum {
 string_enum!(Family {
     BuiltinEcho => "builtin_echo",
     OpenAICompatible => "openai_compatible",
+    // The two wires that are not the OpenAI shape. Reporting an Anthropic
+    // endpoint as `openai_compatible` was not a cosmetic slip: the family is
+    // what a surface labels a provider with, so every subscription the user
+    // signed into was tagged with the name of a protocol it does not speak.
+    AnthropicMessages => "anthropic_messages",
+    OpenAIResponses => "openai_responses",
     ClaudeCodeCLI => "claude_code_cli",
     CodexCLI => "codex_cli",
 });

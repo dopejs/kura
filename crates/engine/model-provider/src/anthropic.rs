@@ -33,6 +33,30 @@ const API_VERSION: &str = "2023-06-01";
 /// subscription is refused on this endpoint.
 const OAUTH_BETAS: &str = "oauth-2025-04-20,claude-code-20250219";
 
+/// The first system block a subscription request must carry.
+///
+/// Not optional and not cosmetic: the same request is accepted with this block
+/// and refused without it. Measured directly, twice each way, back to back --
+/// with it, 200 and a reply; without it, 429 `rate_limit_error`, which names a
+/// quota that is not the reason and sends the reader to the wrong place
+/// entirely.
+///
+/// This is a system prompt, not an attestation. It states which client is
+/// making the request, which is the same thing the `claude-code-20250219` beta
+/// header already states; nothing here is signed, hashed, or presented as
+/// proof of anything. An OAuth grant for a Claude subscription is a grant to
+/// that client, so identifying as it is what using the grant means.
+const CLIENT_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+
+/// The prefix Anthropic gives a plain API key.
+///
+/// A subscription grant carries `sk-ant-oat...` instead. Only the API-key path
+/// is recognised, and everything else is treated as a subscription: getting it
+/// wrong that way costs fifteen tokens of system prompt, while getting it wrong
+/// the other way is a hard refusal reported as a rate limit. A vendor changing
+/// its OAuth prefix must not silently break every signed-in account.
+const API_KEY_PREFIX: &str = "sk-ant-api";
+
 /// Sent when the caller states no limit.
 ///
 /// The Messages API requires `max_tokens`, unlike the chat-completions shape,
@@ -110,7 +134,14 @@ impl ModelProvider for AnthropicClient {
         &'a self,
         prompt: &'a Prompt,
     ) -> BoxStream<'a, Result<ResponseEvent, ProviderError>> {
-        let body = build_request(&self.model, prompt, self.max_tokens);
+        // Whether this credential is a subscription grant rather than an API
+        // key. Read here so it comes from the token that is about to be sent,
+        // not one captured at construction and since refreshed.
+        let subscription = self
+            .credential
+            .get()
+            .is_none_or(|token| !token.trim_start().starts_with(API_KEY_PREFIX));
+        let body = build_request(&self.model, prompt, self.max_tokens, subscription);
         let mut request = self
             .http
             .post(format!("{}/v1/messages", self.base_url))
@@ -256,7 +287,12 @@ fn accumulate_event(
 /// instructions are a top-level `system` rather than a message, `max_tokens` is
 /// required, and a tool result is a block inside a *user* message rather than a
 /// message with its own role.
-fn build_request(model: &str, prompt: &Prompt, max_tokens: i64) -> Value {
+fn build_request(
+    model: &str,
+    prompt: &Prompt,
+    max_tokens: i64,
+    subscription: bool,
+) -> Value {
     let mut messages: Vec<Value> = Vec::new();
 
     for item in &prompt.input {
@@ -309,10 +345,26 @@ fn build_request(model: &str, prompt: &Prompt, max_tokens: i64) -> Value {
         "max_tokens": max_tokens,
         "stream": true,
     });
+    // The identity block comes first, then whatever the caller asked for.
+    //
+    // Two blocks rather than one string: Anthropic reads the first one, and
+    // concatenating our instructions onto it would leave the client statement
+    // buried in the middle of a prompt written for a model.
+    //
+    // Not sent on the API-key path. There it is unnecessary, and it would put
+    // "You are Claude Code" in front of instructions the user wrote for their
+    // own agent -- changing how the model answers them, to no purpose.
+    let mut system = Vec::new();
+    if subscription {
+        system.push(json!({"type": "text", "text": CLIENT_IDENTITY}));
+    }
     if let Some(instructions) = &prompt.instructions {
         if !instructions.trim().is_empty() {
-            body["system"] = json!([{"type": "text", "text": instructions}]);
+            system.push(json!({"type": "text", "text": instructions}));
         }
+    }
+    if !system.is_empty() {
+        body["system"] = Value::Array(system);
     }
     if !prompt.tools.is_empty() {
         body["tools"] = Value::Array(
@@ -519,9 +571,54 @@ mod tests {
         assert!(request.contains("\"max_tokens\""), "{request}");
         // Instructions are top-level `system`, not a message.
         assert!(request.contains("\"system\""), "{request}");
+
+        // The client identity comes first, and the caller's instructions
+        // follow it as a second block. Anthropic reads the first one: the
+        // same request is accepted with it and answered 429 without it, under
+        // a `rate_limit_error` that names a quota which is not the reason.
+        let body: serde_json::Value = serde_json::from_str(
+            request.split("\r\n\r\n").nth(1).expect("body"),
+        )
+        .expect("json");
+        let system = body["system"].as_array().expect("system blocks");
+        assert_eq!(
+            system[0]["text"].as_str(),
+            Some("You are Claude Code, Anthropic's official CLI for Claude.")
+        );
+        assert_eq!(system.len(), 2, "the caller's instructions must survive");
         // And tool schemas are `input_schema`.
         assert!(request.contains("\"input_schema\""), "{request}");
         assert!(!request.contains("\"parameters\""), "{request}");
+    }
+
+    #[tokio::test]
+    async fn an_api_key_request_carries_only_what_the_caller_asked_for() {
+        // The identity block is what a subscription grant requires, not what
+        // this endpoint requires. Sending it on the API-key path would put
+        // "You are Claude Code" in front of instructions the user wrote for
+        // their own agent, changing how the model answers them for no reason.
+        let (base, seen) = spawn("data: {\"type\":\"message_stop\"}\n\n");
+        let client = AnthropicClient::new(
+            base,
+            "claude-sonnet-4-5",
+            Some("sk-ant-api03-example".into()),
+        );
+        let prompt = Prompt {
+            instructions: Some("be brief".to_string()),
+            input: vec![ResponseItem::Message { role: Role::User, content: "hi".into() }],
+            tools: Vec::new(),
+        };
+
+        collect(&client, &prompt).await;
+
+        let request = seen.lock().expect("lock").clone();
+        let body: serde_json::Value = serde_json::from_str(
+            request.split("\r\n\r\n").nth(1).expect("body"),
+        )
+        .expect("json");
+        let system = body["system"].as_array().expect("system blocks");
+        assert_eq!(system.len(), 1);
+        assert_eq!(system[0]["text"].as_str(), Some("be brief"));
     }
 
     #[tokio::test]

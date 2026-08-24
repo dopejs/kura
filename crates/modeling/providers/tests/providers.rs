@@ -87,3 +87,63 @@ fn set_default_model_rejects_unknown_model() {
     assert!(err.to_string().contains("not supported"), "err: {err}");
     assert!(manager.set_default_model("echo", "echo-v1").is_ok());
 }
+
+#[test]
+fn an_account_configured_before_startup_is_listed() {
+    // The accounts a user configured are handed to the daemon at startup. They
+    // were registered with the dispatcher and then left out of the inventory,
+    // so a request reached the vendor while the settings page said no provider
+    // existed -- and the default provider named one that was not in the list.
+    let cfg = LlmConfig {
+        default_provider: "anthropic".to_string(),
+        accounts: vec![kura_config::AccountProviderConfig {
+            id: "anthropic".to_string(),
+            title: "Anthropic".to_string(),
+            protocol: kura_config::AccountProtocol::AnthropicMessages,
+            base_url: "https://api.anthropic.test".to_string(),
+            model: "claude-sonnet-4-5".to_string(),
+            access_token: "token".to_string(),
+            ..Default::default()
+        }],
+        ..LlmConfig::default()
+    };
+    let manager = new_manager(cfg, Some(Arc::new(Dispatcher::new())), vec![]);
+
+    let profiles = manager.list_profiles();
+    assert_eq!(
+        profiles.iter().map(|p| p.provider_id.as_str()).collect::<Vec<_>>(),
+        vec!["anthropic"]
+    );
+    assert!(profiles[0].default, "the configured default must be the one listed");
+}
+
+#[test]
+fn an_account_added_while_running_joins_the_configured_ones() {
+    // Both lists are the same list. Adding one at runtime used to replace the
+    // startup set in the eyes of `load_profiles`, because only one of the two
+    // was ever read.
+    let cfg = LlmConfig {
+        accounts: vec![kura_config::AccountProviderConfig {
+            id: "anthropic".to_string(),
+            base_url: "https://api.anthropic.test".to_string(),
+            model: "claude-sonnet-4-5".to_string(),
+            access_token: "token".to_string(),
+            ..Default::default()
+        }],
+        ..LlmConfig::default()
+    };
+    let manager = new_manager(cfg, Some(Arc::new(Dispatcher::new())), vec![]);
+
+    manager.upsert_account(kura_config::AccountProviderConfig {
+        id: "zhipu".to_string(),
+        base_url: "https://open.bigmodel.test/api/paas/v4".to_string(),
+        model: "glm-4".to_string(),
+        access_token: "token".to_string(),
+        ..Default::default()
+    });
+
+    assert_eq!(
+        manager.list_profiles().iter().map(|p| p.provider_id.as_str()).collect::<Vec<_>>(),
+        vec!["anthropic", "zhipu"]
+    );
+}
