@@ -199,6 +199,7 @@ fn load_reads_config_file_from_kura_dir() {
 #[test]
 fn managed_provider_home_dir_uses_isolated_test_root() {
     let cfg = Config {
+        project_root: String::new(),
         environment: Environment::Test,
         data_dir: "/tmp/kura-test".to_string(),
         bind_addr: String::new(),
@@ -216,6 +217,7 @@ fn managed_provider_home_dir_isolates_embedded_like_test() {
     // A host runs one embedded daemon per workspace, so managed CLI
     // credentials must stay inside the data dir rather than the user's home.
     let cfg = Config {
+        project_root: String::new(),
         environment: Environment::Embedded,
         data_dir: "/tmp/dope-embedded".to_string(),
         bind_addr: String::new(),

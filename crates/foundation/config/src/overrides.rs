@@ -12,6 +12,7 @@ pub(crate) fn apply_env_overrides(cfg: &mut Config) {
     cfg.environment = resolve_environment(&getenv("KURA_ENV", ""), &cfg.version);
     cfg.bind_addr = getenv("KURA_BIND_ADDR", &cfg.bind_addr);
     cfg.data_dir = getenv("KURA_DATA_DIR", &cfg.data_dir);
+    cfg.project_root = getenv("KURA_PROJECT_ROOT", &cfg.project_root);
     cfg.log_level = getenv("KURA_LOG_LEVEL", &cfg.log_level);
     cfg.version = getenv("KURA_VERSION", &cfg.version);
 

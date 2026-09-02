@@ -31,6 +31,15 @@ pub struct Config {
     pub bind_addr: String,
     /// Effective data directory (fully resolved, `~` expanded).
     pub data_dir: String,
+    /// The project this daemon serves, when it serves one.
+    ///
+    /// Empty for a daemon that is not scoped to a directory, which is the
+    /// ordinary case. When set, it is what the `project_tools` sandbox profile
+    /// grants access to -- a tool server that has to read the project cannot
+    /// run under a profile scoped to the daemon's own data directory, and the
+    /// alternative to naming the directory is declaring that the process needs
+    /// nothing and handing it the path anyway.
+    pub project_root: String,
     /// Log level filter string.
     pub log_level: String,
     /// Daemon version string.
@@ -46,6 +55,7 @@ impl Config {
     /// env overrides are applied.
     pub(crate) fn defaults(environment: Environment, version: String, data_dir: String) -> Self {
         Config {
+            project_root: String::new(),
             environment,
             bind_addr: default_bind_addr(environment).to_string(),
             data_dir,

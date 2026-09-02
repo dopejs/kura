@@ -910,6 +910,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kura-app-smoke-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&dir).expect("create temp data dir");
         Config {
+            project_root: String::new(),
             environment: Environment::Test,
             bind_addr: "127.0.0.1:0".to_string(),
             data_dir: dir.to_string_lossy().into_owned(),

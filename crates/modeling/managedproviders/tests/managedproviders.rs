@@ -28,6 +28,7 @@ use kura_sandbox::{
 
 fn test_cfg(data_dir: &str) -> kura_config::Config {
     kura_config::Config {
+        project_root: String::new(),
         environment: kura_config::Environment::Test,
         bind_addr: String::new(),
         data_dir: data_dir.to_string(),

@@ -838,6 +838,7 @@ mod hook_wiring_tests {
 
     fn test_sandbox(store: &Arc<parking_lot::Mutex<kura_store::SQLiteStore>>) -> Arc<kura_sandbox::Manager> {
         let config = kura_config::Config {
+            project_root: String::new(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-hook-wiring".to_string(),

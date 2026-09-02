@@ -200,6 +200,7 @@ pub(crate) mod tests_support {
 
     pub(crate) fn test_config() -> kura_config::Config {
         kura_config::Config {
+            project_root: String::new(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-test".to_string(),
@@ -282,6 +283,7 @@ mod tests {
 
     fn test_config() -> kura_config::Config {
         kura_config::Config {
+            project_root: String::new(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-test".to_string(),

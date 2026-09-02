@@ -33,6 +33,7 @@ fn temp_dir(name: &str) -> String {
 
 fn test_config(data_dir: &str) -> kura_config::Config {
     kura_config::Config {
+        project_root: String::new(),
         environment: kura_config::Environment::Test,
         bind_addr: "127.0.0.1:19192".to_string(),
         data_dir: data_dir.to_string(),
@@ -913,4 +914,147 @@ fn clean_path_normalizes_like_filepath_clean() {
     assert_eq!(clean_path("/a//b/./c"), "/a/b/c");
     assert_eq!(clean_path("a/b/../../c"), "c");
     assert_eq!(first_non_empty(&["", "  ", "value", "other"]), "value");
+}
+
+// ---------------------------------------------------------------------------
+// The project profile
+//
+// A tool server that reads the project cannot run under `subprocess_default`,
+// which scopes the filesystem to the daemon's own data directory. The way to
+// make that work without a profile is to declare that the process needs no
+// filesystem at all and hand it the project path on its command line, which
+// passes the check by lying to it.
+// ---------------------------------------------------------------------------
+
+fn config_for_project(data_dir: &str, project_root: &str) -> kura_config::Config {
+    kura_config::Config {
+        project_root: project_root.to_string(),
+        ..test_config(data_dir)
+    }
+}
+
+#[test]
+fn a_daemon_serving_no_project_has_no_project_profile() {
+    // A profile granting access to a project should not exist where there is
+    // none: it would be a standing route to the filesystem, waiting for
+    // something to name it.
+    let dir = temp_dir("noproject");
+    let manager = test_manager(&dir);
+
+    assert!(manager.get_profile(kura_sandbox::PROFILE_ID_PROJECT_TOOLS).is_none());
+}
+
+#[test]
+fn a_configured_project_gets_a_profile_scoped_to_it() {
+    let dir = temp_dir("project");
+    let project = temp_dir("projectroot");
+    let store = Arc::new(Mutex::new(SQLiteStore::new(&dir).expect("open store")));
+    let manager = Manager::new(
+        config_for_project(&dir, &project),
+        Some(store),
+        Bus::new(),
+        Engine::new(),
+    );
+
+    let profile = manager
+        .get_profile(kura_sandbox::PROFILE_ID_PROJECT_TOOLS)
+        .expect("a configured project must have a profile");
+    assert_eq!(profile.default_work_dir, project);
+    assert!(profile.filesystem_policy.read_roots.contains(&project));
+    assert!(profile.filesystem_policy.write_roots.contains(&project));
+}
+
+#[test]
+fn the_project_profile_permits_working_in_the_project() {
+    // The decision the MCP server start makes. Under the default profile this
+    // is a deny, which is what left the tool server registered and never run.
+    let dir = temp_dir("projectallow");
+    let project = temp_dir("projectallowroot");
+    let store = Arc::new(Mutex::new(SQLiteStore::new(&dir).expect("open store")));
+    let manager = Manager::new(
+        config_for_project(&dir, &project),
+        Some(store),
+        Bus::new(),
+        Engine::new(),
+    );
+
+    let scoped = manager.get_profile(kura_sandbox::PROFILE_ID_PROJECT_TOOLS).unwrap();
+    let (resolution, _) = kura_sandbox::evaluate_filesystem(
+        &scoped,
+        &project,
+        &AccessRequest {
+            read_roots: vec![project.clone()],
+            ..AccessRequest::default()
+        },
+    );
+    assert_eq!(resolution, DecisionResolution::Allow);
+
+    // Why the profile is needed at all. Stated with an explicit path rather
+    // than the temp directory used above: the default profile's temp root
+    // covers anything under it, so a project that happens to live in temp is
+    // allowed for a reason that has nothing to do with the project.
+    let default_profile = manager.get_profile(PROFILE_ID_SUBPROCESS_DEFAULT).unwrap();
+    let (denied, _) = kura_sandbox::evaluate_filesystem(
+        &default_profile,
+        "/Users/someone/Code/a-game",
+        &AccessRequest::default(),
+    );
+    assert_eq!(denied, DecisionResolution::Deny, "the default profile should still refuse");
+}
+
+#[test]
+fn the_project_profile_outlives_a_command_timeout() {
+    // A tool server is a session, not a command. Under the default thirty
+    // seconds it started healthy, was killed on the timeout, and the next tool
+    // call found it gone -- the model was told the server was unavailable, with
+    // nothing anywhere saying it had been killed for not exiting.
+    let dir = temp_dir("projecttimeout");
+    let project = temp_dir("projecttimeoutroot");
+    let store = Arc::new(Mutex::new(SQLiteStore::new(&dir).expect("open store")));
+    let manager = Manager::new(
+        config_for_project(&dir, &project),
+        Some(store),
+        Bus::new(),
+        Engine::new(),
+    );
+
+    let profile = manager.get_profile(kura_sandbox::PROFILE_ID_PROJECT_TOOLS).unwrap();
+    let effective = kura_sandbox::effective_timeout(&profile, 0);
+    assert!(effective >= 60 * 60 * 1000, "a session would be killed after {effective}ms");
+
+    // Still bounded: a wedged child that nothing reaps is the other failure.
+    assert!(effective <= 24 * 60 * 60 * 1000, "{effective}ms is effectively unlimited");
+
+    let default_profile = manager.get_profile(PROFILE_ID_SUBPROCESS_DEFAULT).unwrap();
+    assert!(
+        kura_sandbox::effective_timeout(&default_profile, 0) < 60 * 1000,
+        "the default profile should still be for commands that finish"
+    );
+}
+
+#[test]
+fn the_project_profile_does_not_widen_beyond_the_project() {
+    // Scoped to the project and the data directory, not to the home directory
+    // that contains them both.
+    let dir = temp_dir("projectnarrow");
+    let project = temp_dir("projectnarrowroot");
+    let store = Arc::new(Mutex::new(SQLiteStore::new(&dir).expect("open store")));
+    let manager = Manager::new(
+        config_for_project(&dir, &project),
+        Some(store),
+        Bus::new(),
+        Engine::new(),
+    );
+
+    let profile = manager.get_profile(kura_sandbox::PROFILE_ID_PROJECT_TOOLS).unwrap();
+    assert!(!profile.filesystem_policy.allow_home_read);
+    assert!(!profile.filesystem_policy.allow_home_write);
+    assert_eq!(profile.network_policy.mode, NetworkMode::Deny);
+
+    let (elsewhere, _) = kura_sandbox::evaluate_filesystem(
+        &profile,
+        "/etc",
+        &AccessRequest::default(),
+    );
+    assert_eq!(elsewhere, DecisionResolution::Deny);
 }

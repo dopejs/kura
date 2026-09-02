@@ -212,6 +212,14 @@ string_enum!(BackendSelectionOutcome {
 });
 
 pub const PROFILE_ID_SUBPROCESS_DEFAULT: &str = "subprocess_default";
+/// A subprocess scoped to the project the daemon serves.
+///
+/// Exists only when `project_root` is configured. A tool server that reads the
+/// project cannot run under the default profile, which scopes the filesystem
+/// to the daemon's own data directory -- and the alternative to naming the
+/// directory is telling the policy engine the process needs nothing while
+/// handing it the path on its command line.
+pub const PROFILE_ID_PROJECT_TOOLS: &str = "project_tools";
 pub const PROFILE_ID_DOCKER_DEFAULT: &str = "docker_default";
 pub const PROFILE_ID_MANAGED_PROVIDER_CLAUDE: &str = "managed_provider_claude";
 pub const PROFILE_ID_MANAGED_PROVIDER_CODEX: &str = "managed_provider_codex";

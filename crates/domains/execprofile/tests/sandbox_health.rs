@@ -132,6 +132,7 @@ fn manager_projects_real_sandbox_capabilities() {
     // detected as available, so a subprocess profile reports ready.
     let dir = temp_dir("real");
     let cfg = kura_config::Config {
+        project_root: String::new(),
         environment: kura_config::Environment::Test,
         bind_addr: "127.0.0.1:19192".to_string(),
         data_dir: dir.clone(),

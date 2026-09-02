@@ -26,7 +26,7 @@ use crate::{
     EnvironmentMode, ErrorClass, Execution,
     ExecutionFinalization, ExecutionRequest, ExecutionStatus, FilesystemMode, NetworkMode,
     PROFILE_ID_DOCKER_DEFAULT, PROFILE_ID_MANAGED_PROVIDER_CLAUDE,
-    PROFILE_ID_MANAGED_PROVIDER_CODEX, PROFILE_ID_SUBPROCESS_DEFAULT, PolicyRecordStatus, Profile,
+    PROFILE_ID_MANAGED_PROVIDER_CODEX, PROFILE_ID_PROJECT_TOOLS, PROFILE_ID_SUBPROCESS_DEFAULT, PolicyRecordStatus, Profile,
     Result as SandboxResult, SecretResolution, SecretScopeOutcome, Source, is_terminal,
 };
 
@@ -2649,8 +2649,9 @@ fn builtin_profiles(cfg: &kura_config::Config) -> Vec<Profile> {
     };
     let temp_root = std::env::temp_dir().to_string_lossy().to_string();
     let env = environment_str(cfg.environment);
+    let project_root = cfg.project_root.trim().to_string();
 
-    vec![
+    let mut profiles = vec![
         Profile {
             profile_id: PROFILE_ID_SUBPROCESS_DEFAULT.to_string(),
             title: "Default Subprocess Sandbox".to_string(),
@@ -2925,5 +2926,87 @@ fn builtin_profiles(cfg: &kura_config::Config) -> Vec<Profile> {
             active: true,
             ..Profile::default()
         },
-    ]
+    ];
+
+    // Only when an operator named a directory. A profile that grants access to
+    // the project should not exist on a daemon that serves no project: it
+    // would be an always-present way to reach the filesystem, waiting for
+    // something to reference it by name.
+    if !project_root.is_empty() {
+        profiles.push(Profile {
+            profile_id: PROFILE_ID_PROJECT_TOOLS.to_string(),
+            title: "Project Tools".to_string(),
+            description:
+                "Subprocess execution scoped to the project this daemon serves, for tool servers \
+                 that read and write it."
+                    .to_string(),
+            backend_kind: BackendKind::Subprocess,
+            default_work_dir: project_root.clone(),
+            filesystem_policy: crate::FilesystemPolicy {
+                mode: FilesystemMode::Scoped,
+                // The project and the daemon's own data directory, and nothing
+                // else. Writable because the commands that change project state
+                // belong here once a person can approve them; a profile that
+                // has to be widened later is one nobody re-reads.
+                read_roots: vec![project_root.clone(), data_dir.clone()],
+                write_roots: vec![project_root.clone(), data_dir.clone()],
+                temp_roots: vec![temp_root.clone()],
+                allow_data_dir: true,
+                allow_user_agents_dir: false,
+                allow_home_read: false,
+                allow_home_write: false,
+            },
+            network_policy: crate::NetworkPolicy {
+                mode: NetworkMode::Deny,
+                allowed_hosts: Vec::new(),
+                allowed_ports: Vec::new(),
+                allow_loopback: false,
+                enforcement_mode: "declared_only".to_string(),
+            },
+            env_policy: crate::EnvironmentPolicy {
+                mode: EnvironmentMode::InheritSafe,
+                // `PATH` because the server is a command found on it, and the
+                // rest because a CLI that cannot read its locale or terminal
+                // misformats what it prints.
+                allowed_vars: vec![
+                    "PATH".to_string(),
+                    "HOME".to_string(),
+                    "LANG".to_string(),
+                    "LC_ALL".to_string(),
+                    "TMPDIR".to_string(),
+                    "TERM".to_string(),
+                ],
+                injected_vars: HashMap::from([
+                    ("KURA_DATA_DIR".to_string(), data_dir.clone()),
+                    ("KURA_ENV".to_string(), env.to_string()),
+                    ("HOME".to_string(), home_dir.clone()),
+                ]),
+                redacted_vars: Vec::new(),
+            },
+            process_policy: crate::ProcessPolicy {
+                // A tool server is a session, not a command. The default of
+                // thirty seconds is right for something that finishes and
+                // fatal for something that waits: it started healthy, was
+                // killed on the timeout, and the next tool call found it gone
+                // -- the model was told the server was unavailable and had no
+                // way to know it had been killed for taking too long to exit.
+                //
+                // Bounded rather than unlimited, because a wedged child that
+                // nothing reaps is the other failure. Twelve hours outlives any
+                // session a person works through and still ends one that hangs.
+                timeout_ms: 12 * 60 * 60 * 1000,
+                max_timeout_ms: 12 * 60 * 60 * 1000,
+                kill_grace_ms: 1000,
+                capture_stdout: true,
+                capture_stderr: true,
+                max_output_bytes: 65536,
+                ..crate::ProcessPolicy::default()
+            },
+            source: Source::Builtin,
+            active: true,
+            ..Profile::default()
+        });
+    }
+
+    profiles
 }

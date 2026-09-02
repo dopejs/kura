@@ -27,6 +27,7 @@ fn test_state() -> kura_api::AppState {
         kura_store::SQLiteStore::new(dir.to_str().expect("path")).expect("store"),
     ));
     let config = kura_config::Config {
+        project_root: String::new(),
         environment: kura_config::Environment::Test,
         bind_addr: "127.0.0.1:19192".to_string(),
         data_dir: dir.to_string_lossy().to_string(),

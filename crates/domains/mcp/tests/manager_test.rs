@@ -28,6 +28,7 @@ use serde_json::{Map, Value};
 
 fn test_cfg(data_dir: &str) -> kura_config::Config {
     kura_config::Config {
+        project_root: String::new(),
         environment: kura_config::Environment::Test,
         bind_addr: "127.0.0.1:19192".to_string(),
         data_dir: data_dir.to_string(),
