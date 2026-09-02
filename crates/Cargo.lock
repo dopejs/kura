@@ -1349,6 +1349,7 @@ dependencies = [
  "kura-config",
  "kura-connectors",
  "kura-context",
+ "kura-core",
  "kura-delivery",
  "kura-discord",
  "kura-evaluation",

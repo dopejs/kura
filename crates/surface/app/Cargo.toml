@@ -6,6 +6,7 @@ version.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+kura-core.workspace = true
 kura-plugin = { workspace = true }
 kura-session = { workspace = true }
 kura-improvement = { workspace = true }

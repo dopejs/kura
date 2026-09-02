@@ -265,7 +265,9 @@ pub(crate) const BUILTINS: &[BuiltinPlugin] = &[
             id: "chat",
             summary: "Chat query service over the LLM dispatcher",
             provides: &["chat.service"],
-            requires: &["llm"],
+            // `mcp` because the tools the model may call come from there, and
+            // a registry read before that plugin built would be empty.
+            requires: &["llm", "mcp"],
         },
         build: build_chat,
     },
@@ -705,9 +707,23 @@ fn build_chat(asm: &mut Assembly) -> Result<(), AppError> {
     if let Some(hooks) = asm.state.hooks.clone() {
         chat.set_hooks(hooks);
     }
+    // Whatever the connected MCP servers publish, as tools the agent loop may
+    // call. Each one still goes through `authorize_tool` when it is called:
+    // being offered is not being permitted, and a tool with no exposure rule
+    // is refused however the model asks for it.
+    if let Some(mcp) = asm.state.mcp.clone() {
+        let mut registry = kura_core::ToolRegistry::new();
+        for tool in kura_mcp::tools_for_surface(&mcp, CHAT_RUNTIME_SURFACE) {
+            registry.register(tool);
+        }
+        chat.set_tools(Arc::new(registry));
+    }
     asm.state.chat = Some(Arc::new(chat));
     Ok(())
 }
+
+/// The surface exposure rules are written against for chat turns.
+const CHAT_RUNTIME_SURFACE: &str = "chat";
 
 /// The default context-assembly hook: injects the tenant's Ready L3/L2
 /// memory bootstrap into the system frame under a budget, with citations
