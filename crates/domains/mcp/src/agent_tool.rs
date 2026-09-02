@@ -130,6 +130,9 @@ impl Tool for McpTool {
                     &self.tool_name,
                     &AuthorizeToolInput {
                         runtime_surface: self.runtime_surface.clone(),
+                        // What the person will be shown. Without it the
+                        // approval names a tool and nothing else.
+                        arguments: invocation.arguments.clone(),
                         approval_id: String::new(),
                         requested_by: "agent".to_string(),
                     },
@@ -220,6 +223,7 @@ impl McpTool {
                             &self.tool_name,
                             &AuthorizeToolInput {
                                 runtime_surface: self.runtime_surface.clone(),
+                                arguments: String::new(),
                                 approval_id: approval_id.clone(),
                                 requested_by: "agent".to_string(),
                             },

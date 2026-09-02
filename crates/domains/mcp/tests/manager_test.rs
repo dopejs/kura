@@ -1258,7 +1258,7 @@ async fn asking_raises_an_approval_a_person_can_find() {
         let manager = Arc::clone(&manager);
         async move {
             let tool = approving_tool(&manager, Duration::from_millis(500));
-            tool.call(&invocation("srv-1__advance", "{}")).await
+            tool.call(&invocation("srv-1__advance", r#"{"target_stage":"PROTOTYPING"}"#)).await
         }
     });
     let mut found = None;
@@ -1274,6 +1274,15 @@ async fn asking_raises_an_approval_a_person_can_find() {
 
     let approval = found.expect("asking must leave an approval to answer");
     assert_eq!(approval.action, "tool_call.execute");
+    // What is being approved, not merely that something is. A tool name alone
+    // is not a question: "may the agent run `advance`" has no answer without
+    // knowing what it would advance to.
+    assert!(approval.reason.contains("advance"), "{}", approval.reason);
+    assert!(
+        approval.reason.contains("PROTOTYPING"),
+        "the arguments must reach the person deciding: {}",
+        approval.reason
+    );
     assert!(approval.resource_id.contains("advance"), "{}", approval.resource_id);
     assert!(approval.resource_id.contains("chat"), "{}", approval.resource_id);
 }

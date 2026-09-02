@@ -656,6 +656,14 @@ pub struct CatalogRevalidationResult {
 #[serde(rename_all = "camelCase")]
 pub struct AuthorizeToolInput {
     pub runtime_surface: String,
+    /// What the caller is asking to run, as arguments.
+    ///
+    /// Carried so the approval says what is being approved. Without it a
+    /// person is shown a tool name and asked to decide -- "may the agent run
+    /// `advance`" is not a question anyone can answer, because the answer
+    /// depends entirely on what it would advance to.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub arguments: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub approval_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]

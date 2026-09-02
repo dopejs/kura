@@ -735,7 +735,7 @@ impl Manager {
                     action: "tool_call.execute".to_string(),
                     resource_kind: RESOURCE_KIND_TOOL.to_string(),
                     resource_id: approval_resource_id,
-                    reason: "MCP tool execution requires approval".to_string(),
+                    reason: approval_reason(&tool_name, &input.arguments),
                     requested_by: requested_by.clone(),
                     ..kura_policy::RequestApprovalInput::default()
                 })
@@ -4604,6 +4604,27 @@ pub fn consumer_view_map(view: &kura_sandbox::ConsumerContractView) -> Option<Va
 
 /// Go `policy.approval_requested` event payload.
 #[must_use]
+/// What a person is actually being asked.
+///
+/// The tool and the arguments, because the tool alone is not a question: "may
+/// the agent run `advance`" has no answer without knowing what it would
+/// advance to. Bounded, because the arguments come from a model and an
+/// approval prompt is not a place to render an unbounded string.
+#[must_use]
+pub fn approval_reason(tool_name: &str, arguments: &str) -> String {
+    const MAX_ARGUMENTS: usize = 500;
+    let arguments = arguments.trim();
+    if arguments.is_empty() || arguments == "{}" {
+        return format!("run {tool_name}");
+    }
+    if arguments.len() <= MAX_ARGUMENTS {
+        return format!("run {tool_name} with {arguments}");
+    }
+    // Cut visibly. A silently shortened argument list would be read as the
+    // whole request, and someone would approve less than they were shown.
+    format!("run {tool_name} with {}… [truncated]", &arguments[..MAX_ARGUMENTS])
+}
+
 pub fn approval_payload(approval: &kura_policy::Approval) -> Map<String, Value> {
     let mut payload = Map::new();
     payload.insert("action".to_string(), Value::String(approval.action.clone()));
