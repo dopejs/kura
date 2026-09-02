@@ -308,6 +308,15 @@ pub struct Tool {
     pub description: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub schema_fingerprint: String,
+    /// The tool's declared argument schema, as the server published it.
+    ///
+    /// Kept alongside the fingerprint rather than replaced by it. A hash
+    /// answers "did this change"; it cannot answer "what does this take",
+    /// which is the only thing a model needs in order to call the tool. Empty
+    /// for rows discovered before this was retained, and for a server that
+    /// publishes no schema.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub input_schema: serde_json::Value,
     pub discovery_status: DiscoveryStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_discovered_at: Option<DateTime<Utc>>,

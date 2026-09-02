@@ -13,35 +13,104 @@
   ],
   "additionalProperties": false,
   "properties": {
-    "tenantId": { "type": "string" },
-    "serverId": { "type": "string" },
-    "toolName": { "type": "string" },
-    "title": { "type": "string" },
-    "description": { "type": "string" },
-    "schemaFingerprint": { "type": "string" },
-    "discoveryStatus": { "type": "string", "enum": ["discovered", "stale", "unavailable"] },
-    "lastDiscoveredAt": { "type": "string", "format": "date-time" },
-    "updatedAt": { "type": "string", "format": "date-time" },
+    "tenantId": {
+      "type": "string"
+    },
+    "serverId": {
+      "type": "string"
+    },
+    "toolName": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "schemaFingerprint": {
+      "type": "string"
+    },
+    "inputSchema": {
+      "type": "object",
+      "description": "The argument schema the server published. A fingerprint says whether it changed; this says what the tool takes."
+    },
+    "discoveryStatus": {
+      "type": "string",
+      "enum": [
+        "discovered",
+        "stale",
+        "unavailable"
+      ]
+    },
+    "lastDiscoveredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
     "exposure": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["serverId", "toolName", "runtimeSurface", "exposureMode", "active", "updatedAt"],
+        "required": [
+          "serverId",
+          "toolName",
+          "runtimeSurface",
+          "exposureMode",
+          "active",
+          "updatedAt"
+        ],
         "additionalProperties": false,
         "properties": {
-          "tenantId": { "type": "string" },
-          "serverId": { "type": "string" },
-          "toolName": { "type": "string" },
-          "runtimeSurface": { "type": "string" },
-          "exposureMode": { "type": "string", "enum": ["blocked", "allow", "approval_required"] },
-          "active": { "type": "boolean" },
-          "reason": { "type": "string" },
-          "updatedAt": { "type": "string", "format": "date-time" }
+          "tenantId": {
+            "type": "string"
+          },
+          "serverId": {
+            "type": "string"
+          },
+          "toolName": {
+            "type": "string"
+          },
+          "runtimeSurface": {
+            "type": "string"
+          },
+          "exposureMode": {
+            "type": "string",
+            "enum": [
+              "blocked",
+              "allow",
+              "approval_required"
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       }
     },
-    "effectiveAvailability": { "type": "string", "enum": ["available", "blocked", "unavailable"] },
-    "approvalRequired": { "type": "boolean" },
-    "unavailableReason": { "type": "string" }
+    "effectiveAvailability": {
+      "type": "string",
+      "enum": [
+        "available",
+        "blocked",
+        "unavailable"
+      ]
+    },
+    "approvalRequired": {
+      "type": "boolean"
+    },
+    "unavailableReason": {
+      "type": "string"
+    }
   }
 }

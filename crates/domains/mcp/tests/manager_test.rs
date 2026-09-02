@@ -1015,3 +1015,161 @@ fn secret_resolution_falls_back_to_mcp_secrets_file() {
     assert_eq!(resolved.availability_status, AvailabilityStatus::Ready);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------------------------------------------------------------------------
+// Tools the agent loop can call
+//
+// The loop in `kura-core` calls anything implementing its `Tool` trait; MCP
+// already knows how to reach a server, what it publishes, and whether a surface
+// may invoke it. What matters here is that the adapter between them does not
+// route around the last of those: an exposure rule is the boundary a
+// state-changing tool depends on, and a model asking nicely must not clear it.
+// ---------------------------------------------------------------------------
+
+fn started_server_with(tool: Tool) -> Arc<kura_mcp::Manager> {
+    let session = FakeSession::new("session-1", vec![tool]);
+    // With a policy engine, because without one an approval-required tool
+    // fails to authorize at all rather than coming back pending -- safe, but
+    // not the path this is about.
+    let manager = Arc::new(kura_mcp::Manager::new(
+        test_cfg("~/.kura-test"),
+        None,
+        None,
+        None,
+        Some(kura_policy::Engine::new()),
+        Some(Arc::new(FakeTransport { session })),
+    ));
+    manager.create_server(streamable_server_input("srv-1")).unwrap();
+    manager.start("srv-1", "operator").unwrap();
+    manager
+}
+
+fn allow(manager: &kura_mcp::Manager, tool_name: &str, mode: ExposureMode) {
+    manager
+        .update_tool_exposure(
+            "srv-1",
+            tool_name,
+            &UpdateExposureInput {
+                runtime_surface: "chat".to_string(),
+                exposure_mode: mode,
+                active: true,
+                reason: String::new(),
+            },
+        )
+        .unwrap();
+}
+
+fn invocation(name: &str, arguments: &str) -> kura_core::ToolInvocation {
+    kura_core::ToolInvocation {
+        call_id: "call_1".to_string(),
+        name: name.to_string(),
+        arguments: arguments.to_string(),
+    }
+}
+
+#[test]
+fn a_published_tool_is_offered_with_the_schema_the_server_declared() {
+    // Discovery kept only a fingerprint of the schema. A hash answers "did
+    // this change"; it cannot answer "what does this take", which is the only
+    // thing a model needs in order to call the tool at all.
+    let mut tool = fake_tool("lookup");
+    tool.description = "look something up".to_string();
+    tool.input_schema = serde_json::json!({
+        "type": "object",
+        "properties": {"q": {"type": "string"}},
+    });
+    let manager = started_server_with(tool);
+    allow(&manager, "lookup", ExposureMode::Allow);
+
+    let tools = kura_mcp::tools_for_surface(&manager, "chat");
+    assert_eq!(tools.len(), 1);
+    let spec = tools[0].spec();
+    assert_eq!(spec.name, "srv-1__lookup");
+    assert_eq!(spec.description, "look something up");
+    assert_eq!(spec.parameters["properties"]["q"]["type"], "string");
+}
+
+#[test]
+fn a_tool_that_declared_no_schema_is_offered_as_taking_an_object() {
+    // `null` would leave a provider to guess the shape of the arguments.
+    let manager = started_server_with(fake_tool("ping"));
+    allow(&manager, "ping", ExposureMode::Allow);
+
+    let spec = kura_mcp::tools_for_surface(&manager, "chat")[0].spec();
+    assert_eq!(spec.parameters["type"], "object");
+}
+
+#[tokio::test]
+async fn an_allowed_tool_runs() {
+    let manager = started_server_with(fake_tool("lookup"));
+    allow(&manager, "lookup", ExposureMode::Allow);
+    let tools = kura_mcp::tools_for_surface(&manager, "chat");
+
+    let output = tools[0].call(&invocation("srv-1__lookup", "{}")).await.unwrap();
+
+    assert!(output.success, "{}", output.content);
+}
+
+#[tokio::test]
+async fn a_tool_needing_approval_is_refused_and_says_so() {
+    // The boundary a state-changing tool depends on. The model may ask; a
+    // person decides. Reported in words it can relay rather than as a fault.
+    let manager = started_server_with(fake_tool("advance"));
+    allow(&manager, "advance", ExposureMode::ApprovalRequired);
+    let tools = kura_mcp::tools_for_surface(&manager, "chat");
+
+    let output = tools[0].call(&invocation("srv-1__advance", "{}")).await.unwrap();
+
+    assert!(!output.success);
+    assert!(output.content.contains("approve"), "{}", output.content);
+}
+
+#[tokio::test]
+async fn a_tool_with_no_exposure_rule_is_refused() {
+    // Blocked is the default, and a tool nobody exposed must stay that way
+    // however the model asks for it.
+    let manager = started_server_with(fake_tool("lookup"));
+    let tools = kura_mcp::tools_for_surface(&manager, "chat");
+
+    let output = tools[0].call(&invocation("srv-1__lookup", "{}")).await.unwrap();
+
+    assert!(!output.success, "an unexposed tool ran");
+}
+
+#[tokio::test]
+async fn a_rule_for_another_surface_does_not_allow_this_one() {
+    // Exposure is per surface: allowed in a scheduled run is not allowed in
+    // chat, and the adapter asks with the surface it was built for.
+    let manager = started_server_with(fake_tool("lookup"));
+    manager
+        .update_tool_exposure(
+            "srv-1",
+            "lookup",
+            &UpdateExposureInput {
+                runtime_surface: "scheduler".to_string(),
+                exposure_mode: ExposureMode::Allow,
+                active: true,
+                reason: String::new(),
+            },
+        )
+        .unwrap();
+
+    let tools = kura_mcp::tools_for_surface(&manager, "chat");
+    let output = tools[0].call(&invocation("srv-1__lookup", "{}")).await.unwrap();
+
+    assert!(!output.success, "a rule for another surface allowed this one");
+}
+
+#[tokio::test]
+async fn malformed_arguments_are_reported_to_the_model_not_raised() {
+    // The model wrote them, so it is the one that can fix them. Raising would
+    // end the turn over something the next round could correct.
+    let manager = started_server_with(fake_tool("lookup"));
+    allow(&manager, "lookup", ExposureMode::Allow);
+    let tools = kura_mcp::tools_for_surface(&manager, "chat");
+
+    let output = tools[0].call(&invocation("srv-1__lookup", "not json")).await.unwrap();
+
+    assert!(!output.success);
+    assert!(output.content.contains("valid JSON"), "{}", output.content);
+}

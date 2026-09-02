@@ -218,3 +218,41 @@ fn open_error(
         Err(err) => err,
     }
 }
+
+#[test]
+fn discovery_keeps_the_schema_a_server_published() {
+    // It kept a fingerprint and dropped the schema. A hash answers "did this
+    // change"; it cannot answer "what does this take", which is the only thing
+    // a model needs in order to call the tool -- so a tool could be
+    // discovered, listed, authorized, and still impossible to offer.
+    let raw = serde_json::json!({
+        "tools": [{
+            "name": "lookup",
+            "description": "look something up",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+                "required": ["q"],
+            },
+        }],
+    });
+
+    let tools = kura_mcp::transport::decode_tools_list(&raw, "srv-1", chrono::Utc::now()).unwrap();
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].input_schema["properties"]["q"]["type"], "string");
+    assert_eq!(tools[0].input_schema["required"][0], "q");
+    // The fingerprint is still there; the two answer different questions.
+    assert!(!tools[0].schema_fingerprint.is_empty());
+}
+
+#[test]
+fn a_server_that_publishes_no_schema_leaves_it_null() {
+    // Absent is not the same as empty, and the adapter substitutes a shape
+    // only when it knows there was none.
+    let raw = serde_json::json!({"tools": [{"name": "ping"}]});
+
+    let tools = kura_mcp::transport::decode_tools_list(&raw, "srv-1", chrono::Utc::now()).unwrap();
+
+    assert!(tools[0].input_schema.is_null());
+}

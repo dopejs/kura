@@ -195,6 +195,7 @@ pub fn decode_tools_list(
             title: item.title.trim().to_string(),
             description: item.description.trim().to_string(),
             schema_fingerprint: schema_fingerprint(&item.input_schema),
+            input_schema: item.input_schema,
             discovery_status: DiscoveryStatus::Discovered,
             last_discovered_at: Some(now),
             updated_at: now,

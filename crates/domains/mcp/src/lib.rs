@@ -28,6 +28,7 @@ use std::time::Duration;
 use chrono::SecondsFormat;
 
 pub mod catalog;
+mod agent_tool;
 pub mod manager;
 pub mod transport;
 pub mod types;
@@ -118,6 +119,7 @@ pub enum McpError {
     Store(String),
 }
 
+pub use agent_tool::{McpTool, qualified_name, tools_for_surface};
 pub use manager::{
     AttachedExecution, AttachedExecutionStarter, Manager, SecretResolver, SessionState,
 };
