@@ -108,7 +108,14 @@ struct ManagerInner {
     cfg: kura_config::Config,
     store: Option<Arc<Mutex<kura_store::SQLiteStore>>>,
     event_bus: Option<kura_events::Bus>,
-    policy: Option<kura_policy::Engine>,
+    /// Shared, not owned.
+    ///
+    /// An approval this manager raises has to be answerable, and the only way
+    /// to answer one is through the policy API -- which reads the daemon's
+    /// engine. With an engine of its own, every approval a tool call raised
+    /// went into a set nothing else could list, so a tool marked
+    /// `approval_required` could be asked for and never granted by anyone.
+    policy: Option<Arc<kura_policy::Engine>>,
     sandboxes: Option<Arc<dyn AttachedExecutionStarter>>,
     transport: Option<Arc<dyn Transport>>,
     secrets: parking_lot::RwLock<Option<Arc<dyn SecretResolver>>>,
@@ -153,7 +160,7 @@ impl Manager {
         store: Option<Arc<Mutex<kura_store::SQLiteStore>>>,
         event_bus: Option<kura_events::Bus>,
         sandboxes: Option<Arc<dyn AttachedExecutionStarter>>,
-        policy: Option<kura_policy::Engine>,
+        policy: Option<Arc<kura_policy::Engine>>,
         transport: Option<Arc<dyn Transport>>,
     ) -> Self {
         let transport = match transport {
@@ -611,6 +618,16 @@ impl Manager {
 
     /// Go `AuthorizeTool`: checks the exposure rule, then either allow-lists, requests
     /// approval through the policy engine, or resolves a previously issued approval.
+    /// An approval this manager raised, as it stands now.
+    ///
+    /// A tool that needs one is authorized twice: the first call raises the
+    /// approval and answers `Pending`, and the second carries its id. Between
+    /// them something has to be able to watch it, which is what this is for.
+    #[must_use]
+    pub fn approval(&self, approval_id: &str) -> Option<kura_policy::Approval> {
+        self.inner.policy.as_ref()?.get_approval(approval_id.trim())
+    }
+
     pub fn authorize_tool(
         &self,
         server_id: &str,

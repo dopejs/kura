@@ -646,7 +646,12 @@ fn build_mcp(asm: &mut Assembly) -> Result<(), AppError> {
         Some(asm.secondary.clone()),
         Some((*asm.event_bus).clone()),
         Some(mcp_starter.clone()),
-        Some(PolicyEngine::new()),
+        // The daemon's engine, not one of its own. An approval is answered
+        // through the policy API, which reads this one; a private engine made
+        // every approval a tool call raised unlistable and unanswerable, so a
+        // tool marked `approval_required` could be asked for by the model and
+        // granted by nobody.
+        asm.state.policy.clone(),
         None, // concrete MCP transports attach lazily (restore path)
     ));
     mcp.set_secret_manager(mcp_secret_resolver.clone());

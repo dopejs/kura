@@ -14,13 +14,25 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use kura_core::{Tool, ToolError, ToolInvocation, ToolOutput};
 use kura_llm::ToolSpec;
 use serde_json::Value;
 
 use crate::manager::Manager;
-use crate::types::{AuthorizeToolInput, ToolAuthorizationStatus};
+use crate::types::{AuthorizeToolInput, ToolAuthorizationResponse, ToolAuthorizationStatus};
+
+/// How long a tool waits for a person to answer before giving up.
+///
+/// The person is usually right there -- the model has just said it needs their
+/// approval -- so this is about how long a turn may sit open, not how long
+/// someone might take to notice. Giving up hands the turn back with the reason,
+/// and the approval stays pending for the next attempt.
+const APPROVAL_WAIT: Duration = Duration::from_secs(180);
+
+/// How often the pending approval is re-read while waiting.
+const APPROVAL_POLL: Duration = Duration::from_millis(250);
 
 /// The name a tool is offered to the model under.
 ///
@@ -41,6 +53,8 @@ pub struct McpTool {
     /// Which surface is asking. Exposure rules are per surface, so a tool may
     /// be allowed in chat and blocked in a scheduled run.
     runtime_surface: String,
+    /// How long to wait for a person to answer an approval.
+    approval_wait: Duration,
 }
 
 impl McpTool {
@@ -60,7 +74,16 @@ impl McpTool {
             description: description.into(),
             parameters,
             runtime_surface: runtime_surface.into(),
+            approval_wait: APPROVAL_WAIT,
         }
+    }
+
+    /// How long this tool waits for an approval. A surface nobody is watching
+    /// wants a shorter one than a chat someone is sitting in front of.
+    #[must_use]
+    pub fn with_approval_wait(mut self, wait: Duration) -> Self {
+        self.approval_wait = wait;
+        self
     }
 }
 
@@ -113,16 +136,22 @@ impl Tool for McpTool {
                 )
                 .map_err(|error| ToolError::Failed(error.to_string()))?;
 
-            match authorization.status {
-                ToolAuthorizationStatus::Allowed => {}
-                // Said plainly, so the model tells the user what is needed
-                // rather than reporting that the tool is broken.
-                ToolAuthorizationStatus::Pending => {
-                    return Ok(ToolOutput::failed(format!(
-                        "{} needs a person to approve it before it can run",
-                        self.tool_name
-                    )));
-                }
+            let authorization = match authorization.status {
+                ToolAuthorizationStatus::Allowed => authorization,
+                // Someone has to say yes. The approval was raised by the call
+                // above and an event announced it; this waits for the answer
+                // rather than failing the turn, because the person is being
+                // asked right now and a turn that ended here would make them
+                // start it over.
+                ToolAuthorizationStatus::Pending => match self.await_approval(&authorization).await {
+                    Some(granted) => granted,
+                    None => {
+                        return Ok(ToolOutput::failed(format!(
+                            "{} was not run: it needs a person to approve it, and none did",
+                            self.tool_name
+                        )));
+                    }
+                },
                 ToolAuthorizationStatus::Rejected | ToolAuthorizationStatus::Blocked => {
                     let reason = if authorization.message.is_empty() {
                         "it is not available on this surface".to_string()
@@ -134,7 +163,7 @@ impl Tool for McpTool {
                         self.tool_name
                     )));
                 }
-            }
+            };
 
             let result = self
                 .manager
@@ -153,6 +182,68 @@ impl Tool for McpTool {
             };
             Ok(ToolOutput::ok(output))
         })
+    }
+}
+
+impl McpTool {
+    /// Wait for a person to answer the approval this call raised.
+    ///
+    /// Returns the second authorization -- the one carrying the approval id --
+    /// when it was granted, and `None` when it was refused or nobody answered
+    /// in time.
+    ///
+    /// The second authorization is not a formality: a rule can change while a
+    /// person is deciding, and the runtime is asked again with the approval in
+    /// hand. It is not the only thing between a stale grant and a call,
+    /// though -- `call_tool` refuses anything that is not `Allowed` whatever it
+    /// is handed, so dropping the check here changes the message the model gets
+    /// and not whether the tool runs. Defence in depth, said plainly so nobody
+    /// reads it as the guard.
+    async fn await_approval(
+        &self,
+        pending: &ToolAuthorizationResponse,
+    ) -> Option<ToolAuthorizationResponse> {
+        let approval_id = pending.approval.as_ref()?.approval_id.clone();
+        if approval_id.is_empty() {
+            return None;
+        }
+        let deadline = std::time::Instant::now() + self.approval_wait;
+        loop {
+            match self.manager.approval(&approval_id) {
+                // Answered yes. Ask again with the id, and let the runtime say
+                // whether that is still enough.
+                Some(approval) if approval.status == kura_policy::ApprovalStatus::Approved => {
+                    let granted = self
+                        .manager
+                        .authorize_tool(
+                            &self.server_id,
+                            &self.tool_name,
+                            &AuthorizeToolInput {
+                                runtime_surface: self.runtime_surface.clone(),
+                                approval_id: approval_id.clone(),
+                                requested_by: "agent".to_string(),
+                            },
+                        )
+                        .ok()?;
+                    return (granted.status == ToolAuthorizationStatus::Allowed).then_some(granted);
+                }
+                // Answered no, or withdrawn. Either way there is nothing to
+                // wait for.
+                Some(approval)
+                    if approval.status != kura_policy::ApprovalStatus::Pending =>
+                {
+                    return None;
+                }
+                // Still pending, or gone. A vanished approval is not something
+                // that will resolve.
+                Some(_) => {}
+                None => return None,
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            tokio::time::sleep(APPROVAL_POLL).await;
+        }
     }
 }
 

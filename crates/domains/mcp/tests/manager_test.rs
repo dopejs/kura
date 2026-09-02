@@ -19,6 +19,7 @@ use kura_mcp::manager::{
     redact_string, sanitize_websocket_endpoint_for_projection, validate_websocket_endpoint,
 };
 use kura_mcp::transport::read_framed_message;
+use kura_core::Tool as _;
 use kura_mcp::types::*;
 use kura_mcp::{
     McpError, Session, SessionPipes, Transport, is_terminal_status, live_validation_matrix_rows,
@@ -594,7 +595,7 @@ fn manager_update_exposure_and_authorize_tool() {
         None,
         None,
         None,
-        Some(policy),
+        Some(Arc::new(policy)),
         Some(Arc::new(FakeTransport { session })),
     );
     manager.create_server(streamable_server_input("srv-1")).unwrap();
@@ -1037,7 +1038,7 @@ fn started_server_with(tool: Tool) -> Arc<kura_mcp::Manager> {
         None,
         None,
         None,
-        Some(kura_policy::Engine::new()),
+        Some(Arc::new(kura_policy::Engine::new())),
         Some(Arc::new(FakeTransport { session })),
     ));
     manager.create_server(streamable_server_input("srv-1")).unwrap();
@@ -1058,6 +1059,21 @@ fn allow(manager: &kura_mcp::Manager, tool_name: &str, mode: ExposureMode) {
             },
         )
         .unwrap();
+}
+
+/// The published tool, with a wait short enough for a test to sit through.
+fn approving_tool(manager: &Arc<kura_mcp::Manager>, wait: Duration) -> kura_mcp::McpTool {
+    let published = manager.list_tools("srv-1").unwrap();
+    let tool = published.first().expect("a published tool");
+    kura_mcp::McpTool::new(
+        Arc::clone(manager),
+        "srv-1",
+        tool.tool.tool_name.clone(),
+        tool.tool.description.clone(),
+        tool.tool.input_schema.clone(),
+        "chat",
+    )
+    .with_approval_wait(wait)
 }
 
 fn invocation(name: &str, arguments: &str) -> kura_core::ToolInvocation {
@@ -1111,15 +1127,168 @@ async fn an_allowed_tool_runs() {
     assert!(output.success, "{}", output.content);
 }
 
-#[tokio::test]
-async fn a_tool_needing_approval_is_refused_and_says_so() {
-    // The boundary a state-changing tool depends on. The model may ask; a
-    // person decides. Reported in words it can relay rather than as a fault.
-    let manager = started_server_with(fake_tool("advance"));
+/// The manager, and the policy engine it raises approvals with.
+fn started_server_with_policy(tool: Tool) -> (Arc<kura_mcp::Manager>, Arc<kura_policy::Engine>) {
+    // One engine, held by both. An approval raised here is answered through
+    // the same engine the policy API reads -- which is the whole reason the
+    // manager takes a handle rather than making its own.
+    let policy = Arc::new(kura_policy::Engine::new());
+    let session = FakeSession::new("session-1", vec![tool]);
+    let manager = Arc::new(kura_mcp::Manager::new(
+        test_cfg("~/.kura-test"),
+        None,
+        None,
+        None,
+        Some(Arc::clone(&policy)),
+        Some(Arc::new(FakeTransport { session })),
+    ));
+    manager.create_server(streamable_server_input("srv-1")).unwrap();
+    manager.start("srv-1", "operator").unwrap();
+    (manager, policy)
+}
+
+/// Answer the one approval waiting, once one appears.
+fn answer_pending(policy: Arc<kura_policy::Engine>, resolution: &str) -> std::thread::JoinHandle<()> {
+    let resolution = resolution.to_string();
+    std::thread::spawn(move || {
+        for _ in 0..200 {
+            let pending = policy.list_approvals(Some(kura_policy::ApprovalStatus::Pending));
+            if let Some(approval) = pending.first() {
+                let _ = policy.resolve_approval(
+                    &approval.approval_id,
+                    kura_policy::ResolveApprovalInput {
+                        resolution: resolution.clone(),
+                        comment: "from a person".to_string(),
+                    },
+                );
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tool_runs_once_a_person_approves_it() {
+    // The whole point of `approval_required`. The model asks, a person says
+    // yes, and the call it asked for goes through -- in the same turn, because
+    // ending the turn at "pending" would make them start it over.
+    let (manager, policy) = started_server_with_policy(fake_tool("advance"));
+    allow(&manager, "advance", ExposureMode::ApprovalRequired);
+    let tools = kura_mcp::tools_for_surface(&manager, "chat");
+    let answering = answer_pending(policy, "approved");
+
+    let output = tools[0].call(&invocation("srv-1__advance", "{}")).await.unwrap();
+    answering.join().unwrap();
+
+    assert!(output.success, "{}", output.content);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_approval_stops_the_tool_at_once() {
+    // A person saying no has to stop it, and stop it *then*. Asserting only
+    // that the tool did not run passed even with the refusal branch deleted:
+    // the call sat until the wait expired and failed for having no answer,
+    // which is a different thing that looks identical from the outside.
+    let (manager, policy) = started_server_with_policy(fake_tool("advance"));
+    allow(&manager, "advance", ExposureMode::ApprovalRequired);
+    // Long enough that timing out is not how this can pass.
+    let tool = approving_tool(&manager, Duration::from_secs(60));
+    let answering = answer_pending(policy, "rejected");
+
+    let started = std::time::Instant::now();
+    let output = tool.call(&invocation("srv-1__advance", "{}")).await.unwrap();
+    answering.join().unwrap();
+
+    assert!(!output.success, "a refused tool ran anyway");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the refusal was not noticed; this waited {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rule_revoked_while_waiting_stops_the_tool() {
+    // Why the grant is re-authorized rather than assumed. A person approves,
+    // and between the approval and the call the tool is blocked -- the runtime
+    // decides again with the approval in hand, and the second answer counts.
+    let (manager, policy) = started_server_with_policy(fake_tool("advance"));
+    allow(&manager, "advance", ExposureMode::ApprovalRequired);
+    let tool = approving_tool(&manager, Duration::from_secs(60));
+
+    let revoking = std::thread::spawn({
+        let manager = Arc::clone(&manager);
+        move || {
+            for _ in 0..600 {
+                let pending = policy.list_approvals(Some(kura_policy::ApprovalStatus::Pending));
+                if let Some(approval) = pending.first() {
+                    allow(&manager, "advance", ExposureMode::Blocked);
+                    let _ = policy.resolve_approval(
+                        &approval.approval_id,
+                        kura_policy::ResolveApprovalInput {
+                            resolution: "approved".to_string(),
+                            comment: String::new(),
+                        },
+                    );
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    });
+
+    let output = tool.call(&invocation("srv-1__advance", "{}")).await.unwrap();
+    revoking.join().unwrap();
+
+    assert!(!output.success, "an approval outlived the rule that allowed asking");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn asking_raises_an_approval_a_person_can_find() {
+    // Nobody can answer what they cannot see. The call has to leave a pending
+    // approval behind, naming the tool, before it waits for anyone.
+    let (manager, policy) = started_server_with_policy(fake_tool("advance"));
     allow(&manager, "advance", ExposureMode::ApprovalRequired);
     let tools = kura_mcp::tools_for_surface(&manager, "chat");
 
-    let output = tools[0].call(&invocation("srv-1__advance", "{}")).await.unwrap();
+    // Driven, not merely constructed: a future does nothing until it is polled,
+    // so nothing is raised until the call is actually running.
+    let calling = tokio::spawn({
+        let manager = Arc::clone(&manager);
+        async move {
+            let tool = approving_tool(&manager, Duration::from_millis(500));
+            tool.call(&invocation("srv-1__advance", "{}")).await
+        }
+    });
+    let mut found = None;
+    for _ in 0..200 {
+        let pending = policy.list_approvals(Some(kura_policy::ApprovalStatus::Pending));
+        if let Some(approval) = pending.first() {
+            found = Some(approval.clone());
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let _ = calling.await;
+
+    let approval = found.expect("asking must leave an approval to answer");
+    assert_eq!(approval.action, "tool_call.execute");
+    assert!(approval.resource_id.contains("advance"), "{}", approval.resource_id);
+    assert!(approval.resource_id.contains("chat"), "{}", approval.resource_id);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tool_nobody_approves_is_not_run() {
+    // Waiting must not become a way through. When nobody answers, the tool does
+    // not run and the turn is handed back with the reason -- the approval stays
+    // pending, so the next attempt asks the same question rather than raising a
+    // second one.
+    let (manager, _policy) = started_server_with_policy(fake_tool("advance"));
+    allow(&manager, "advance", ExposureMode::ApprovalRequired);
+    let tool = approving_tool(&manager, Duration::from_millis(150));
+
+    let output = tool.call(&invocation("srv-1__advance", "{}")).await.unwrap();
 
     assert!(!output.success);
     assert!(output.content.contains("approve"), "{}", output.content);
