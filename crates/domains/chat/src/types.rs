@@ -178,7 +178,17 @@ pub struct Service {
     /// The plugin hook bus (pluginization phase 2). Absent = no hook points
     /// run and the pipeline behaves exactly as before.
     pub(crate) hooks: Option<Arc<kura_plugin::HookBus>>,
+    /// Tools the model may call. Absent or empty = none are offered and a
+    /// turn is a single dispatch, exactly as before.
+    pub(crate) tools: Option<Arc<kura_core::ToolRegistry>>,
+    /// Hard cap on model-tool-model rounds inside one turn. A misbehaving
+    /// model or a tool that always provokes another call would otherwise burn
+    /// provider quota without bound.
+    pub(crate) max_tool_rounds: usize,
 }
+
+/// Rounds allowed in a single turn before the turn is failed.
+pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 16;
 
 impl Service {
     /// Go `chat.NewService`. The dispatcher is required; every other
@@ -199,6 +209,22 @@ impl Service {
             event_bus,
             store,
             hooks: None,
+            tools: None,
+            max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
+        }
+    }
+
+    /// Attaches the tools the model may call. Without this the pipeline offers
+    /// none and every turn is one dispatch.
+    pub fn set_tools(&mut self, tools: Arc<kura_core::ToolRegistry>) {
+        self.tools = Some(tools);
+    }
+
+    /// Overrides the per-turn round cap. Zero is rejected: a turn that cannot
+    /// run a single round is not a configuration anyone wants silently.
+    pub fn set_max_tool_rounds(&mut self, rounds: usize) {
+        if rounds > 0 {
+            self.max_tool_rounds = rounds;
         }
     }
 

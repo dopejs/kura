@@ -1077,8 +1077,9 @@ impl LlmConsolidator {
                 kura_llm::Message {
                     role: kura_llm::MessageRole::System,
                     content: system.to_string(),
+                    ..Default::default()
                 },
-                kura_llm::Message { role: kura_llm::MessageRole::User, content: user },
+                kura_llm::Message { role: kura_llm::MessageRole::User, content: user, ..Default::default() },
             ],
             ..kura_llm::CreateDispatchInput::default()
         };

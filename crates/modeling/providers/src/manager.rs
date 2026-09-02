@@ -564,7 +564,7 @@ impl Manager {
         let dispatch_input = CreateDispatchInput {
             provider: resolved.provider_id.clone(),
             model: resolved.model.clone(),
-            messages: vec![Message { role: MessageRole::User, content: prompt }],
+            messages: vec![Message { role: MessageRole::User, content: prompt, ..Default::default() }],
             // A reachability check asks the endpoint to say one word. Offering
             // tools would test something the check is not about.
             tools: Vec::new(),

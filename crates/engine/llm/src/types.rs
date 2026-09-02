@@ -17,11 +17,27 @@ pub enum MessageRole {
     Tool,
 }
 
+/// One turn of conversation as the dispatcher carries it.
+///
+/// The two tool fields are what let a turn that called something be replayed
+/// on the next round. Without them an assistant message could only say what
+/// the model wrote, not what it asked to call, so the round after a tool ran
+/// showed the model a result with nothing to attach it to.
+///
+/// The shape mirrors the chat-completions wire every provider already speaks:
+/// an assistant message carries `tool_calls`, and each result comes back as a
+/// `Tool` message naming the call it answers.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
     pub role: MessageRole,
     pub content: String,
+    /// Calls this assistant turn asked for. Empty on every other role.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
+    /// The call a `Tool` message is the result of. Empty on every other role.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tool_call_id: String,
 }
 
 /// Token accounting for one dispatch. `total_tokens` is normalized to

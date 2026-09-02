@@ -130,9 +130,17 @@ impl Dispatcher {
             return Err(PrepareError::ModelRequired);
         }
 
-        if input.messages.is_empty()
-            || input.messages.iter().any(|message| message.content.trim().is_empty())
-        {
+        // A message has to say something -- but text is no longer the only way
+        // to say it. An assistant turn that only asks to call a tool carries
+        // no text, and a tool result carries the id of the call it answers
+        // even when the tool returned nothing. This guard predates tool calls
+        // and rejected both, so the round after a model asked for a call could
+        // not be prepared at all.
+        if input.messages.is_empty() || input.messages.iter().any(|message| {
+            message.content.trim().is_empty()
+                && message.tool_calls.is_empty()
+                && message.tool_call_id.is_empty()
+        }) {
             return Err(PrepareError::MessagesRequired);
         }
 

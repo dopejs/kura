@@ -1490,6 +1490,7 @@ dependencies = [
  "futures",
  "kura-bindings",
  "kura-config",
+ "kura-core",
  "kura-events",
  "kura-llm",
  "kura-plugin",

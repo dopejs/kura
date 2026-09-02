@@ -1541,6 +1541,7 @@ fn sqlite_store_adapter_ports_dispatch_and_defers_continuity() {
         messages: vec![Message {
             role: MessageRole::User,
             content: "hi".to_string(),
+            ..Default::default()
         }],
         stream: false,
         status: DispatchStatus::Completed,
@@ -1692,6 +1693,7 @@ fn query_result_round_trips_with_dispatch() {
         messages: vec![Message {
             role: MessageRole::User,
             content: "hi".to_string(),
+            ..Default::default()
         }],
         stream: true,
         status: DispatchStatus::Completed,
@@ -1804,7 +1806,8 @@ fn compile_prompt_messages_lays_out_overlays_skills_and_query() {
         messages[2],
         Message {
             role: MessageRole::User,
-            content: "hello".to_string()
+            content: "hello".to_string(),
+            ..Default::default()
         }
     );
 }
@@ -1817,10 +1820,12 @@ fn inject_continuity_messages_inserts_before_first_user_message() {
         Message {
             role: MessageRole::System,
             content: "sys".to_string(),
+            ..Default::default()
         },
         Message {
             role: MessageRole::User,
             content: "current".to_string(),
+            ..Default::default()
         },
     ];
     let out = inject_continuity_messages(&base, &[turn]);
@@ -1830,7 +1835,8 @@ fn inject_continuity_messages_inserts_before_first_user_message() {
         out[1],
         Message {
             role: MessageRole::User,
-            content: "prior".to_string()
+            content: "prior".to_string(),
+            ..Default::default()
         }
     );
     assert_eq!(out[2], base[1]);
@@ -2156,4 +2162,281 @@ fn stream_runs_hook_points() {
         .messages
         .first()
         .is_some_and(|message| message.content == "session-strategy window")));
+}
+
+// ------------------------------------------------------------------------
+// Tool loop
+//
+// A turn is one or more dispatches. When the model asks to call something the
+// calls are run, their results are appended, and the next round is prepared and
+// dispatched like any other -- so every round is hooked, persisted and evented,
+// and a turn that used tools can be read back round by round. Before this a
+// turn was always exactly one dispatch: the model was offered no tools, and a
+// call it asked for anyway was discarded before the service could see it.
+// ------------------------------------------------------------------------
+
+/// A provider that replays one scripted response per call.
+struct ScriptedProvider {
+    rounds: parking_lot::Mutex<std::collections::VecDeque<ProviderResponse>>,
+    seen: Arc<parking_lot::RwLock<Vec<ProviderRequest>>>,
+}
+
+impl ScriptedProvider {
+    fn new(rounds: Vec<ProviderResponse>) -> (Arc<Self>, Arc<parking_lot::RwLock<Vec<ProviderRequest>>>) {
+        let seen = Arc::new(parking_lot::RwLock::new(Vec::new()));
+        (
+            Arc::new(Self { rounds: parking_lot::Mutex::new(rounds.into()), seen: Arc::clone(&seen) }),
+            seen,
+        )
+    }
+}
+
+impl Provider for ScriptedProvider {
+    fn name(&self) -> &str {
+        OPENAI_COMPATIBLE_PROVIDER_NAME
+    }
+
+    fn complete<'a>(
+        &'a self,
+        request: ProviderRequest,
+    ) -> BoxFuture<'a, Result<ProviderResponse, ProviderError>> {
+        self.seen.write().push(request);
+        let next = self.rounds.lock().pop_front();
+        Box::pin(async move {
+            Ok(next.unwrap_or(ProviderResponse {
+                output: "unscripted".to_string(),
+                ..ProviderResponse::default()
+            }))
+        })
+    }
+
+    fn stream<'a>(
+        &'a self,
+        request: ProviderRequest,
+        _emit: kura_llm::StreamEmitter<'a>,
+    ) -> BoxFuture<'a, Result<ProviderResponse, ProviderError>> {
+        self.complete(request)
+    }
+}
+
+/// A tool that records what it was asked and answers with fixed text.
+struct RecordingTool {
+    name: String,
+    answer: String,
+    calls: Arc<parking_lot::RwLock<Vec<String>>>,
+}
+
+impl kura_core::Tool for RecordingTool {
+    fn spec(&self) -> kura_llm::ToolSpec {
+        kura_llm::ToolSpec {
+            name: self.name.clone(),
+            description: "a test tool".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    fn call<'a>(
+        &'a self,
+        invocation: &'a kura_core::ToolInvocation,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<kura_core::ToolOutput, kura_core::ToolError>> + Send + 'a>,
+    > {
+        self.calls.write().push(invocation.arguments.clone());
+        let answer = self.answer.clone();
+        Box::pin(async move { Ok(kura_core::ToolOutput::ok(answer)) })
+    }
+}
+
+fn asked_for(call_id: &str, name: &str, arguments: &str) -> ProviderResponse {
+    ProviderResponse {
+        tool_calls: vec![kura_llm::ToolCall {
+            call_id: call_id.to_string(),
+            name: name.to_string(),
+            arguments: arguments.to_string(),
+        }],
+        finish_reason: "tool_calls".to_string(),
+        ..ProviderResponse::default()
+    }
+}
+
+fn answered(text: &str) -> ProviderResponse {
+    ProviderResponse {
+        output: text.to_string(),
+        finish_reason: "stop".to_string(),
+        ..ProviderResponse::default()
+    }
+}
+
+fn service_with_tool(
+    rounds: Vec<ProviderResponse>,
+    tool: Arc<RecordingTool>,
+) -> (Service, Arc<parking_lot::RwLock<Vec<ProviderRequest>>>) {
+    let (provider, seen) = ScriptedProvider::new(rounds);
+    let mut registry = kura_core::ToolRegistry::new();
+    registry.register(tool);
+    let mut svc = service(new_dispatcher(provider), None, None);
+    svc.set_tools(Arc::new(registry));
+    (svc, seen)
+}
+
+#[test]
+fn a_turn_runs_the_call_the_model_asked_for_and_answers_with_the_result() {
+    let calls = Arc::new(parking_lot::RwLock::new(Vec::new()));
+    let tool = Arc::new(RecordingTool {
+        name: "loopforge_status".to_string(),
+        answer: "{\"stage\":\"DISCOVERY\"}".to_string(),
+        calls: Arc::clone(&calls),
+    });
+    let (svc, seen) = service_with_tool(
+        vec![asked_for("call_1", "loopforge_status", "{}"), answered("You are in DISCOVERY.")],
+        tool,
+    );
+
+    let execution = svc
+        .query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "where am i"), &CancellationToken::new())
+        .expect("query");
+
+    assert!(execution.exec_error.is_none());
+    assert_eq!(execution.result.dispatch.output, "You are in DISCOVERY.");
+    // The tool ran, once, with what the model sent.
+    assert_eq!(*calls.read(), vec!["{}".to_string()]);
+    // Two rounds: one that asked, one that answered.
+    assert_eq!(seen.read().len(), 2);
+}
+
+#[test]
+fn the_second_round_shows_the_model_its_own_call_and_the_result() {
+    // Without both, the model sees a result attached to nothing and asks for
+    // the same call again.
+    let tool = Arc::new(RecordingTool {
+        name: "loopforge_status".to_string(),
+        answer: "{\"stage\":\"DISCOVERY\"}".to_string(),
+        calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
+    });
+    let (svc, seen) = service_with_tool(
+        vec![asked_for("call_1", "loopforge_status", "{}"), answered("done")],
+        tool,
+    );
+
+    svc.query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "where am i"), &CancellationToken::new())
+        .expect("query");
+
+    let requests = seen.read();
+    let second = &requests[1];
+    let assistant = second
+        .messages
+        .iter()
+        .find(|m| m.role == MessageRole::Assistant)
+        .expect("the round that asked must be replayed");
+    assert_eq!(assistant.tool_calls.len(), 1);
+    let result = second
+        .messages
+        .iter()
+        .find(|m| m.role == MessageRole::Tool)
+        .expect("the result must be replayed");
+    assert_eq!(result.tool_call_id, "call_1");
+    assert_eq!(result.content, "{\"stage\":\"DISCOVERY\"}");
+}
+
+#[test]
+fn every_round_is_offered_the_same_tools() {
+    let tool = Arc::new(RecordingTool {
+        name: "loopforge_status".to_string(),
+        answer: "ok".to_string(),
+        calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
+    });
+    let (svc, seen) = service_with_tool(
+        vec![asked_for("call_1", "loopforge_status", "{}"), answered("done")],
+        tool,
+    );
+
+    svc.query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "hi"), &CancellationToken::new())
+        .expect("query");
+
+    for request in seen.read().iter() {
+        assert_eq!(request.tools.len(), 1, "a round was offered no tools");
+        assert_eq!(request.tools[0].name, "loopforge_status");
+    }
+}
+
+#[test]
+fn a_turn_that_needs_no_tool_is_still_one_dispatch() {
+    // The ordinary path must not gain a round.
+    let tool = Arc::new(RecordingTool {
+        name: "loopforge_status".to_string(),
+        answer: "ok".to_string(),
+        calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
+    });
+    let (svc, seen) = service_with_tool(vec![answered("hello")], tool);
+
+    let execution = svc
+        .query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "hi"), &CancellationToken::new())
+        .expect("query");
+
+    assert_eq!(execution.result.dispatch.output, "hello");
+    assert_eq!(seen.read().len(), 1);
+}
+
+#[test]
+fn a_service_with_no_registry_offers_nothing_and_runs_one_round() {
+    // Absent registry = the pipeline before any of this existed.
+    let (provider, seen) = ScriptedProvider::new(vec![answered("hello")]);
+    let svc = service(new_dispatcher(provider), None, None);
+
+    svc.query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "hi"), &CancellationToken::new())
+        .expect("query");
+
+    assert_eq!(seen.read().len(), 1);
+    assert!(seen.read()[0].tools.is_empty());
+}
+
+#[test]
+fn a_failing_tool_is_reported_to_the_model_rather_than_ending_the_turn() {
+    // The model asked for something and is owed an answer; "no such tool" is
+    // something it can act on. Aborting would strand the user with nothing.
+    let tool = Arc::new(RecordingTool {
+        name: "loopforge_status".to_string(),
+        answer: "ok".to_string(),
+        calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
+    });
+    let (svc, seen) = service_with_tool(
+        vec![asked_for("call_1", "no_such_tool", "{}"), answered("I could not do that.")],
+        tool,
+    );
+
+    let execution = svc
+        .query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "do it"), &CancellationToken::new())
+        .expect("query");
+
+    assert!(execution.exec_error.is_none());
+    assert_eq!(execution.result.dispatch.output, "I could not do that.");
+    let requests = seen.read();
+    let reported = requests[1]
+        .messages
+        .iter()
+        .find(|m| m.role == MessageRole::Tool)
+        .expect("the failure must reach the model");
+    assert!(reported.content.contains("no_such_tool"), "{}", reported.content);
+}
+
+#[test]
+fn a_turn_that_never_stops_calling_is_failed_rather_than_run_forever() {
+    // A misbehaving model, or a tool that always provokes another call, would
+    // otherwise burn provider quota without bound.
+    let tool = Arc::new(RecordingTool {
+        name: "loopforge_status".to_string(),
+        answer: "ok".to_string(),
+        calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
+    });
+    let rounds: Vec<ProviderResponse> =
+        (0..10).map(|_| asked_for("call_1", "loopforge_status", "{}")).collect();
+    let (mut svc, seen) = service_with_tool(rounds, tool);
+    svc.set_max_tool_rounds(3);
+
+    let error = svc
+        .query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "loop"), &CancellationToken::new())
+        .expect_err("a turn that never stops must fail");
+
+    assert!(error.to_string().contains("tool rounds exceeded"), "{error}");
+    assert_eq!(seen.read().len(), 3);
 }

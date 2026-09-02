@@ -63,10 +63,29 @@ fn to_prompt(messages: &[Message], tools: &[ToolSpec]) -> Prompt {
             instructions = Some(message.content.clone());
             continue;
         }
-        input.push(ResponseItem::Message {
-            role: to_protocol_role(message.role),
-            content: message.content.clone(),
-        });
+        // A tool result answers a specific call, and an assistant turn may
+        // have asked for several. Flattening either into plain text would hand
+        // the model a result with nothing to attach it to, and it would ask
+        // for the same call again.
+        if !message.tool_call_id.is_empty() {
+            input.push(ResponseItem::FunctionCallOutput {
+                call_id: message.tool_call_id.clone(),
+                output: message.content.clone(),
+            });
+            continue;
+        }
+        if !message.content.is_empty() || message.tool_calls.is_empty() {
+            input.push(ResponseItem::Message {
+                role: to_protocol_role(message.role),
+                content: message.content.clone(),            });
+        }
+        for call in &message.tool_calls {
+            input.push(ResponseItem::FunctionCall {
+                call_id: call.call_id.clone(),
+                name: call.name.clone(),
+                arguments: call.arguments.clone(),
+            });
+        }
     }
     // Carried, not dropped. This was `Vec::new()`, so every provider reaching
     // the dispatcher was told about no tools whatever the caller offered --
@@ -205,8 +224,8 @@ mod tests {
         // The request builder already emits `instructions` as a system
         // message; keeping it in `input` too would send it twice.
         let prompt = to_prompt(&[
-            Message { role: MessageRole::System, content: "be brief".into() },
-            Message { role: MessageRole::User, content: "hi".into() },
+            Message { role: MessageRole::System, content: "be brief".into(), ..Default::default() },
+            Message { role: MessageRole::User, content: "hi".into(), ..Default::default() },
         ], &[]);
         assert_eq!(prompt.instructions.as_deref(), Some("be brief"));
         assert_eq!(prompt.input.len(), 1);
@@ -215,8 +234,8 @@ mod tests {
     #[test]
     fn a_later_system_message_stays_in_the_conversation() {
         let prompt = to_prompt(&[
-            Message { role: MessageRole::User, content: "hi".into() },
-            Message { role: MessageRole::System, content: "now be terse".into() },
+            Message { role: MessageRole::User, content: "hi".into(), ..Default::default() },
+            Message { role: MessageRole::System, content: "now be terse".into(), ..Default::default() },
         ], &[]);
         assert!(prompt.instructions.is_none());
         assert_eq!(prompt.input.len(), 2);
@@ -255,6 +274,7 @@ mod tests {
         let response = bridge.complete(request(vec![Message {
             role: MessageRole::User,
             content: "where am i".into(),
+            ..Default::default()
         }]))
         .await
         .expect("dispatch");
@@ -289,6 +309,7 @@ mod tests {
         let response = bridge.complete(request(vec![Message {
             role: MessageRole::User,
             content: "where am i".into(),
+            ..Default::default()
         }]))
         .await
         .expect("dispatch");
@@ -310,12 +331,94 @@ mod tests {
         let response = bridge.complete(request(vec![Message {
             role: MessageRole::User,
             content: "hi".into(),
+            ..Default::default()
         }]))
         .await
         .expect("dispatch");
 
         assert_eq!(response.output, "hello");
         assert!(response.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn a_tool_round_replays_as_a_call_and_its_result() {
+        // The round after a tool ran has to show the model what it asked for
+        // and what came back. A `Message` could only carry text, so the call
+        // vanished and the result arrived attached to nothing -- the model
+        // would ask for the same call again.
+        let prompt = to_prompt(
+            &[
+                Message { role: MessageRole::User, content: "where am i".into(), ..Default::default() },
+                Message {
+                    role: MessageRole::Assistant,
+                    content: String::new(),
+                    tool_calls: vec![ToolCall {
+                        call_id: "call_1".into(),
+                        name: "loopforge_status".into(),
+                        arguments: "{}".into(),
+                    }],
+                    ..Default::default()
+                },
+                Message {
+                    role: MessageRole::Tool,
+                    content: "{\"stage\":\"DISCOVERY\"}".into(),
+                    tool_call_id: "call_1".into(),
+                    ..Default::default()
+                },
+            ],
+            &[],
+        );
+
+        assert_eq!(
+            prompt.input,
+            vec![
+                ResponseItem::Message { role: Role::User, content: "where am i".into() },
+                ResponseItem::FunctionCall {
+                    call_id: "call_1".into(),
+                    name: "loopforge_status".into(),
+                    arguments: "{}".into(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "call_1".into(),
+                    output: "{\"stage\":\"DISCOVERY\"}".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_assistant_that_spoke_and_called_keeps_both() {
+        // A model may answer and ask for a call in the same turn.
+        let prompt = to_prompt(
+            &[Message {
+                role: MessageRole::Assistant,
+                content: "checking".into(),
+                tool_calls: vec![ToolCall {
+                    call_id: "call_1".into(),
+                    name: "loopforge_status".into(),
+                    arguments: "{}".into(),
+                }],
+                ..Default::default()
+            }],
+            &[],
+        );
+
+        assert_eq!(prompt.input.len(), 2);
+        assert!(matches!(prompt.input[0], ResponseItem::Message { .. }));
+        assert!(matches!(prompt.input[1], ResponseItem::FunctionCall { .. }));
+    }
+
+    #[test]
+    fn an_ordinary_conversation_is_unchanged() {
+        // The common path must not acquire empty items.
+        let prompt = to_prompt(
+            &[
+                Message { role: MessageRole::User, content: "hi".into(), ..Default::default() },
+                Message { role: MessageRole::Assistant, content: "hello".into(), ..Default::default() },
+            ],
+            &[],
+        );
+        assert_eq!(prompt.input.len(), 2);
     }
 
     #[test]
@@ -330,7 +433,7 @@ mod tests {
             parameters: serde_json::json!({"type": "object"}),
         }];
         let prompt = to_prompt(
-            &[Message { role: MessageRole::User, content: "where am i".into() }],
+            &[Message { role: MessageRole::User, content: "where am i".into(), ..Default::default() }],
             &tools,
         );
         assert_eq!(prompt.tools, tools);
@@ -340,7 +443,7 @@ mod tests {
     fn a_request_offering_nothing_still_offers_nothing() {
         // Plain chat is the ordinary case and must not acquire a tool list.
         let prompt = to_prompt(
-            &[Message { role: MessageRole::User, content: "hi".into() }],
+            &[Message { role: MessageRole::User, content: "hi".into(), ..Default::default() }],
             &[],
         );
         assert!(prompt.tools.is_empty());
@@ -422,7 +525,7 @@ mod tests {
         };
         let response = provider
             .run(
-                request(vec![Message { role: MessageRole::User, content: "hi".into() }]),
+                request(vec![Message { role: MessageRole::User, content: "hi".into(), ..Default::default() }]),
                 &mut emit,
             )
             .await
@@ -444,7 +547,7 @@ mod tests {
         let mut sink = |_: StreamChunk| Ok(());
         let result = provider
             .run(
-                request(vec![Message { role: MessageRole::User, content: "hi".into() }]),
+                request(vec![Message { role: MessageRole::User, content: "hi".into(), ..Default::default() }]),
                 &mut sink,
             )
             .await;

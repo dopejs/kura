@@ -10,6 +10,7 @@ use kura_llm::{
     Message, MessageRole, PrepareError, Provider, ProviderError, ProviderRequest, ProviderResponse,
     StreamChunk, StreamEmitter, Usage,
 };
+use kura_llm::EchoProvider;
 use futures::future::BoxFuture;
 
 type CompleteFn =
@@ -75,7 +76,7 @@ fn unused_complete() -> CompleteFn {
 }
 
 fn user_message(content: &str) -> Message {
-    Message { role: MessageRole::User, content: content.into() }
+    Message { role: MessageRole::User, content: content.into(), ..Default::default() }
 }
 
 fn failed(result: Result<Dispatch, FailedDispatch>) -> FailedDispatch {
@@ -561,4 +562,68 @@ async fn echo_provider_round_trips_through_dispatcher() {
     assert_eq!(final_dispatch.usage.input_tokens, 3);
     assert_eq!(final_dispatch.usage.output_tokens, 3);
     assert_eq!(final_dispatch.usage.total_tokens, 6);
+}
+
+#[tokio::test]
+async fn a_message_may_carry_a_call_instead_of_text() {
+    // An assistant turn that only asks to call a tool has no text, and a tool
+    // result carries the id of the call it answers even when the tool returned
+    // nothing. The emptiness guard predates tool calls and rejected both, so
+    // the round after a model asked for a call could not be prepared at all.
+    let dispatcher = Dispatcher::new();
+    dispatcher.register_provider(Arc::new(EchoProvider::new()));
+
+    let prepared = dispatcher.prepare(
+        CreateDispatchInput {
+            provider: "echo".to_string(),
+            model: "echo-v1".to_string(),
+            messages: vec![
+                Message { role: MessageRole::User, content: "where am i".into(), ..Default::default() },
+                Message {
+                    role: MessageRole::Assistant,
+                    content: String::new(),
+                    tool_calls: vec![kura_llm::ToolCall {
+                        call_id: "call_1".into(),
+                        name: "status".into(),
+                        arguments: "{}".into(),
+                    }],
+                    ..Default::default()
+                },
+                Message {
+                    role: MessageRole::Tool,
+                    content: String::new(),
+                    tool_call_id: "call_1".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        },
+        false,
+    );
+
+    assert!(prepared.is_ok(), "{:?}", prepared.err());
+}
+
+#[tokio::test]
+async fn a_message_that_says_nothing_at_all_is_still_refused() {
+    // The guard still has a job: a message with no text, no call and no call
+    // id is a caller bug, and sending it wastes a dispatch.
+    let dispatcher = Dispatcher::new();
+    dispatcher.register_provider(Arc::new(EchoProvider::new()));
+
+    let prepared = dispatcher.prepare(
+        CreateDispatchInput {
+            provider: "echo".to_string(),
+            model: "echo-v1".to_string(),
+            messages: vec![Message {
+                role: MessageRole::User,
+                content: "   ".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        false,
+    );
+
+    assert!(matches!(prepared, Err(PrepareError::MessagesRequired)));
 }

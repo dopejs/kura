@@ -97,7 +97,7 @@ fn make_dispatch(id: &str) -> Dispatch {
         dispatch_id: id.to_string(),
         provider: "openai".to_string(),
         model: "gpt-4o".to_string(),
-        messages: vec![Message { role: MessageRole::User, content: "hi".to_string() }],
+        messages: vec![Message { role: MessageRole::User, content: "hi".to_string(), ..Default::default() }],
         stream: false,
         status: DispatchStatus::Completed,
         output: "hello".to_string(),

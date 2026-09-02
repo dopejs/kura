@@ -54,6 +54,34 @@
           },
           "content": {
             "type": "string"
+          },
+          "toolCalls": {
+            "type": "array",
+            "description": "Calls this assistant turn asked for.",
+            "items": {
+              "type": "object",
+              "required": [
+                "callId",
+                "name",
+                "arguments"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "callId": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "arguments": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "toolCallId": {
+            "type": "string",
+            "description": "The call a tool message is the result of."
           }
         }
       }

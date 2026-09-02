@@ -262,7 +262,7 @@ fn claude_provider_maps_auth_failure() {
     let provider = ClaudeCLIProvider { bridge };
     let request = ProviderRequest {
         model: "claude-opus-4-6".to_string(),
-        messages: vec![Message { role: MessageRole::User, content: "hello".to_string() }],
+        messages: vec![Message { role: MessageRole::User, content: "hello".to_string(), ..Default::default() }],
         ..ProviderRequest::default()
     };
     let err = futures::executor::block_on(provider.complete(request)).unwrap_err();
@@ -316,7 +316,7 @@ fn codex_provider_reads_cli_output_file() {
     let provider = kura_managedproviders::CodexCLIProvider { bridge: Arc::new(bridge) };
     let request = ProviderRequest {
         model: "gpt-5.4".to_string(),
-        messages: vec![Message { role: MessageRole::User, content: "hello".to_string() }],
+        messages: vec![Message { role: MessageRole::User, content: "hello".to_string(), ..Default::default() }],
         ..ProviderRequest::default()
     };
     let response = futures::executor::block_on(provider.complete(request)).expect("complete");

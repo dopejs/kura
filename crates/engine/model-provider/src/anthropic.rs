@@ -453,8 +453,7 @@ mod tests {
         Prompt {
             input: vec![ResponseItem::Message {
                 role: Role::User,
-                content: text.to_string(),
-            }],
+                content: text.to_string(),            }],
             ..Prompt::default()
         }
     }

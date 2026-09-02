@@ -88,7 +88,7 @@ mod tests {
     use crate::provider::CancelToken;
 
     fn user_message(content: &str) -> Message {
-        Message { role: crate::types::MessageRole::User, content: content.into() }
+        Message { role: crate::types::MessageRole::User, content: content.into(), ..Default::default() }
     }
 
     fn request(messages: Vec<Message>) -> ProviderRequest {

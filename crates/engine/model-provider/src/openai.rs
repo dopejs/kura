@@ -551,8 +551,7 @@ mod tests {
             input: vec![
                 ResponseItem::Message {
                     role: Role::User,
-                    content: "hi".into(),
-                },
+                    content: "hi".into(),                },
                 ResponseItem::FunctionCall {
                     call_id: "call_1".into(),
                     name: "shell".into(),

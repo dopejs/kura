@@ -110,36 +110,10 @@ impl Service {
         let mut continuity = self.prepare_continuity(&input, &mut dispatch_input)?;
         let agent_profile_id =
             if has_active_profile { active_profile.profile_id.clone() } else { String::new() };
-        self.run_pre_dispatch_hooks(&input, &agent_profile_id, &mut dispatch_input)?;
-
-        let dispatch = self
-            .dispatcher
-            .prepare(dispatch_input, false)
-            .map_err(ChatError::Prepare)?;
-        let dispatch_id = dispatch.dispatch_id.clone();
-        persist_dispatch(self.store.as_deref(), &dispatch)?;
-        if has_active_profile {
-            self.record_active_profile_projection(
-                &input,
-                &active_profile,
-                &active_selection,
-                &continuity,
-                &binding_selection,
-                has_binding,
-            )?;
-        }
-        if has_binding {
-            self.record_runtime_binding_evidence(&input, &binding_selection, false)?;
-        }
-        self.persist_continuity_request(&mut continuity, &input, &dispatch_id, input.query.trim())?;
-        publish_dispatch_event(
-            self.event_bus.as_ref(),
-            self.store.as_deref(),
-            &input.scope,
-            &dispatch,
-            &selected_skills,
-            "llm.dispatch.requested",
-        )?;
+        // Offer whatever the runtime has registered. No registry, or an empty
+        // one, means no tools are offered and the loop below runs exactly one
+        // round -- byte-identical to the single-dispatch behaviour before it.
+        dispatch_input.tools = self.tool_specs();
 
         // Execute on a fresh current-thread runtime; killing `cancel` cancels
         // the kura-llm token and aborts the blocking dispatch.
@@ -147,21 +121,102 @@ impl Service {
         let kura_cancel = kura_llm::CancelToken::new();
         let child = cancel.child();
         let _link = child.link_to(&kura_cancel);
-        let exec_result = runtime.block_on(self.dispatcher.dispatch(dispatch, &kura_cancel));
 
-        let final_dispatch = match &exec_result {
-            Ok(d) => d.clone(),
-            Err(failed) => failed.dispatch.clone(),
-        };
-        persist_dispatch(self.store.as_deref(), &final_dispatch)?;
-        publish_dispatch_event(
-            self.event_bus.as_ref(),
-            self.store.as_deref(),
-            &input.scope,
-            &final_dispatch,
-            &selected_skills,
-            &terminal_dispatch_event(&final_dispatch),
-        )?;
+        // One turn, one or more dispatches.
+        //
+        // A dispatch is a single model round. When the model asks to call
+        // something, the calls are run, their results are appended to the
+        // conversation, and the next round is prepared and dispatched like any
+        // other -- so every round is hooked, persisted and evented, and a turn
+        // that used tools can be read back round by round afterwards. Putting
+        // the loop below the dispatcher instead would have made the tool
+        // rounds invisible to all three.
+        let mut exec_result;
+        let mut final_dispatch;
+        let mut rounds = 0usize;
+        let mut first_dispatch_id = String::new();
+        loop {
+            rounds += 1;
+            // Per round, not per turn: the invariant this hook exists for is
+            // that the persisted dispatch is byte-identical to what the
+            // provider receives, and each round is its own dispatch.
+            self.run_pre_dispatch_hooks(&input, &agent_profile_id, &mut dispatch_input)?;
+
+            let dispatch = self
+                .dispatcher
+                .prepare(dispatch_input.clone(), false)
+                .map_err(ChatError::Prepare)?;
+            let dispatch_id = dispatch.dispatch_id.clone();
+            persist_dispatch(self.store.as_deref(), &dispatch)?;
+            if rounds == 1 {
+                first_dispatch_id = dispatch_id.clone();
+                if has_active_profile {
+                    self.record_active_profile_projection(
+                        &input,
+                        &active_profile,
+                        &active_selection,
+                        &continuity,
+                        &binding_selection,
+                        has_binding,
+                    )?;
+                }
+                if has_binding {
+                    self.record_runtime_binding_evidence(&input, &binding_selection, false)?;
+                }
+                // Continuity records the turn, not the round: the question was
+                // asked once however many rounds answering it takes.
+                self.persist_continuity_request(
+                    &mut continuity,
+                    &input,
+                    &first_dispatch_id,
+                    input.query.trim(),
+                )?;
+            }
+            publish_dispatch_event(
+                self.event_bus.as_ref(),
+                self.store.as_deref(),
+                &input.scope,
+                &dispatch,
+                &selected_skills,
+                "llm.dispatch.requested",
+            )?;
+
+            exec_result = runtime.block_on(self.dispatcher.dispatch(dispatch, &kura_cancel));
+            final_dispatch = match &exec_result {
+                Ok(d) => d.clone(),
+                Err(failed) => failed.dispatch.clone(),
+            };
+            persist_dispatch(self.store.as_deref(), &final_dispatch)?;
+            publish_dispatch_event(
+                self.event_bus.as_ref(),
+                self.store.as_deref(),
+                &input.scope,
+                &final_dispatch,
+                &selected_skills,
+                &terminal_dispatch_event(&final_dispatch),
+            )?;
+
+            if exec_result.is_err() || final_dispatch.tool_calls.is_empty() {
+                break;
+            }
+            if rounds >= self.max_tool_rounds() {
+                // Stopped, and said so. Silently answering with the last text
+                // would present a turn that never finished as one that did.
+                return Err(ChatError::Provider(format!(
+                    "tool rounds exceeded {} in one turn",
+                    self.max_tool_rounds()
+                )));
+            }
+
+            let results = runtime.block_on(self.run_tool_calls(&final_dispatch.tool_calls));
+            dispatch_input.messages.push(kura_llm::Message {
+                role: kura_llm::MessageRole::Assistant,
+                content: final_dispatch.output.clone(),
+                tool_calls: final_dispatch.tool_calls.clone(),
+                ..Default::default()
+            });
+            dispatch_input.messages.extend(results);
+        }
         self.persist_continuity_response(&mut continuity, &input, &final_dispatch)?;
 
         let mut result = QueryResult {
@@ -372,6 +427,51 @@ impl Service {
     // ------------------------------------------------------------------
 
     /// `chat/turn-start`: hooks may rewrite the query or veto the turn.
+    /// What the model is told it may call.
+    fn tool_specs(&self) -> Vec<kura_llm::ToolSpec> {
+        self.tools.as_ref().map(|registry| registry.specs()).unwrap_or_default()
+    }
+
+    fn max_tool_rounds(&self) -> usize {
+        self.max_tool_rounds
+    }
+
+    /// Run the calls a round asked for, in the order asked.
+    ///
+    /// A failure becomes the call's output rather than the turn's: the model
+    /// asked for something and is owed an answer, and "that tool does not
+    /// exist" or "those arguments are wrong" is something it can act on. A
+    /// turn aborted on the first bad call would strand the user with nothing.
+    async fn run_tool_calls(&self, calls: &[kura_llm::ToolCall]) -> Vec<kura_llm::Message> {
+        let mut results = Vec::with_capacity(calls.len());
+        for call in calls {
+            let output = match &self.tools {
+                Some(registry) => {
+                    let invocation = kura_core::ToolInvocation {
+                        call_id: call.call_id.clone(),
+                        name: call.name.clone(),
+                        arguments: call.arguments.clone(),
+                    };
+                    match registry.invoke(&invocation).await {
+                        Ok(output) => output.content,
+                        Err(error) => error.to_string(),
+                    }
+                }
+                // The model was offered nothing, so it should not have asked.
+                // Saying so is better than an empty result it would read as
+                // success.
+                None => format!("no tool is registered: {}", call.name),
+            };
+            results.push(kura_llm::Message {
+                role: kura_llm::MessageRole::Tool,
+                content: output,
+                tool_call_id: call.call_id.clone(),
+                ..Default::default()
+            });
+        }
+        results
+    }
+
     fn run_turn_start_hooks(&self, input: &mut QueryInput) -> Result<(), ChatError> {
         let Some(hooks) = &self.hooks else {
             return Ok(());
@@ -1195,6 +1295,7 @@ pub fn profile_context_messages(profile: &AgentProfile) -> Vec<Message> {
         messages.push(Message {
             role: MessageRole::System,
             content: format!("Agent profile persona: {summary}"),
+            ..Default::default()
         });
     }
     let safety = profile.safety_defaults.approval_posture.trim().to_string();
@@ -1202,6 +1303,7 @@ pub fn profile_context_messages(profile: &AgentProfile) -> Vec<Message> {
         messages.push(Message {
             role: MessageRole::System,
             content: format!("Agent profile safety posture: {safety}"),
+            ..Default::default()
         });
     }
     messages
@@ -1256,6 +1358,7 @@ pub fn compile_prompt_messages(
             )
             .trim()
             .to_string(),
+            ..Default::default()
         });
     }
     for skill in selected {
@@ -1275,11 +1378,13 @@ pub fn compile_prompt_messages(
         messages.push(Message {
             role: MessageRole::System,
             content: builder,
+            ..Default::default()
         });
     }
     messages.push(Message {
         role: MessageRole::User,
         content: query.trim().to_string(),
+        ..Default::default()
     });
     messages
 }
@@ -1468,6 +1573,7 @@ pub fn inject_handoff_source_reference_messages(
             prior.push(Message {
                 role: MessageRole::User,
                 content: summary.to_string(),
+                ..Default::default()
             });
         }
     }
@@ -1509,6 +1615,7 @@ pub fn inject_continuity_messages(messages: &[Message], turns: &[ContinuityTurn]
             prior.push(Message {
                 role,
                 content: content.to_string(),
+                ..Default::default()
             });
         }
         for excerpt in &turn.artifact_excerpt_refs {
@@ -1522,6 +1629,7 @@ pub fn inject_continuity_messages(messages: &[Message], turns: &[ContinuityTurn]
             prior.push(Message {
                 role,
                 content: summary.text,
+                ..Default::default()
             });
         }
     }

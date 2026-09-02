@@ -84,8 +84,7 @@ impl Session {
     ) -> Result<TurnOutcome, CoreError> {
         self.history.push(ResponseItem::Message {
             role: Role::User,
-            content: input.to_string(),
-        });
+            content: input.to_string(),        });
         self.publish(emit, EventMsg::TurnStarted);
 
         let mut rounds = 0;
@@ -132,8 +131,7 @@ impl Session {
                 if !text.is_empty() {
                     self.history.push(ResponseItem::Message {
                         role: Role::Assistant,
-                        content: text.clone(),
-                    });
+                        content: text.clone(),                    });
                     self.publish(
                         emit,
                         EventMsg::AgentMessage {

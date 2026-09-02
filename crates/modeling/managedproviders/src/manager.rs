@@ -253,7 +253,7 @@ impl Manager {
         let request = ProviderRequest {
             provider: bridge.provider_id(),
             model: effective_model.clone(),
-            messages: vec![Message { role: MessageRole::User, content: prompt }],
+            messages: vec![Message { role: MessageRole::User, content: prompt, ..Default::default() }],
             ..ProviderRequest::default()
         };
         let response = futures::executor::block_on(bridge.provider().complete(request));
