@@ -12,6 +12,7 @@
 //! Streaming is a callback emitter (`stream`, the faithful Go shape) plus a
 //! thread + `std::sync::mpsc` variant (`stream_channel`).
 
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
@@ -29,6 +30,7 @@ use kura_profiles::{
     build_runtime_projection, safe_profile_summary,
 };
 use kura_setupwizard::{SafeUseMode, ServiceDependencies, TARGET_OPENAI_COMPATIBLE, new_service};
+use kura_protocol::{ResponseItem, Role};
 use kura_skills::{Overlay, Registry, Skill};
 use kura_threads::{
     ContinuityDecision, ContinuityItemKind, ContinuityMode, ContinuityPreview,
@@ -110,113 +112,53 @@ impl Service {
         let mut continuity = self.prepare_continuity(&input, &mut dispatch_input)?;
         let agent_profile_id =
             if has_active_profile { active_profile.profile_id.clone() } else { String::new() };
-        // Offer whatever the runtime has registered. No registry, or an empty
-        // one, means no tools are offered and the loop below runs exactly one
-        // round -- byte-identical to the single-dispatch behaviour before it.
-        dispatch_input.tools = self.tool_specs();
-
-        // Execute on a fresh current-thread runtime; killing `cancel` cancels
-        // the kura-llm token and aborts the blocking dispatch.
-        let runtime = bridge_runtime()?;
-        let kura_cancel = kura_llm::CancelToken::new();
-        let child = cancel.child();
-        let _link = child.link_to(&kura_cancel);
-
-        // One turn, one or more dispatches.
-        //
-        // A dispatch is a single model round. When the model asks to call
-        // something, the calls are run, their results are appended to the
-        // conversation, and the next round is prepared and dispatched like any
-        // other -- so every round is hooked, persisted and evented, and a turn
-        // that used tools can be read back round by round afterwards. Putting
-        // the loop below the dispatcher instead would have made the tool
-        // rounds invisible to all three.
-        let mut exec_result;
-        let mut final_dispatch;
-        let mut rounds = 0usize;
-        let mut first_dispatch_id = String::new();
-        loop {
-            rounds += 1;
-            // Per round, not per turn: the invariant this hook exists for is
-            // that the persisted dispatch is byte-identical to what the
-            // provider receives, and each round is its own dispatch.
-            self.run_pre_dispatch_hooks(&input, &agent_profile_id, &mut dispatch_input)?;
-
-            let dispatch = self
-                .dispatcher
-                .prepare(dispatch_input.clone(), false)
-                .map_err(ChatError::Prepare)?;
-            let dispatch_id = dispatch.dispatch_id.clone();
-            persist_dispatch(self.store.as_deref(), &dispatch)?;
-            if rounds == 1 {
-                first_dispatch_id = dispatch_id.clone();
-                if has_active_profile {
-                    self.record_active_profile_projection(
-                        &input,
-                        &active_profile,
-                        &active_selection,
-                        &continuity,
-                        &binding_selection,
-                        has_binding,
-                    )?;
+        // The turn runs as an agent loop, and a round of that loop is a
+        // dispatch. `kura-core` owns the looping; what this supplies is what a
+        // round means here -- hooked, prepared, persisted, evented.
+        let (final_dispatch, exec_error_message) = self.run_agent_turn(
+            &input,
+            &agent_profile_id,
+            &selected_skills,
+            &dispatch_input,
+            cancel,
+            Box::new({
+                let service = self.clone();
+                let input = input.clone();
+                let active_profile = active_profile.clone();
+                let active_selection = active_selection.clone();
+                let binding_selection = binding_selection.clone();
+                let continuity_snapshot = continuity.clone();
+                move |dispatch: &kura_llm::Dispatch| {
+                    // First round only: a profile projection and a binding
+                    // record describe the turn, and continuity records the
+                    // question, which was asked once however many rounds
+                    // answering it takes.
+                    if has_active_profile {
+                        service.record_active_profile_projection(
+                            &input,
+                            &active_profile,
+                            &active_selection,
+                            &continuity_snapshot,
+                            &binding_selection,
+                            has_binding,
+                        )?;
+                    }
+                    if has_binding {
+                        service.record_runtime_binding_evidence(&input, &binding_selection, false)?;
+                    }
+                    let _ = dispatch;
+                    Ok(())
                 }
-                if has_binding {
-                    self.record_runtime_binding_evidence(&input, &binding_selection, false)?;
-                }
-                // Continuity records the turn, not the round: the question was
-                // asked once however many rounds answering it takes.
-                self.persist_continuity_request(
-                    &mut continuity,
-                    &input,
-                    &first_dispatch_id,
-                    input.query.trim(),
-                )?;
-            }
-            publish_dispatch_event(
-                self.event_bus.as_ref(),
-                self.store.as_deref(),
-                &input.scope,
-                &dispatch,
-                &selected_skills,
-                "llm.dispatch.requested",
-            )?;
-
-            exec_result = runtime.block_on(self.dispatcher.dispatch(dispatch, &kura_cancel));
-            final_dispatch = match &exec_result {
-                Ok(d) => d.clone(),
-                Err(failed) => failed.dispatch.clone(),
-            };
-            persist_dispatch(self.store.as_deref(), &final_dispatch)?;
-            publish_dispatch_event(
-                self.event_bus.as_ref(),
-                self.store.as_deref(),
-                &input.scope,
-                &final_dispatch,
-                &selected_skills,
-                &terminal_dispatch_event(&final_dispatch),
-            )?;
-
-            if exec_result.is_err() || final_dispatch.tool_calls.is_empty() {
-                break;
-            }
-            if rounds >= self.max_tool_rounds() {
-                // Stopped, and said so. Silently answering with the last text
-                // would present a turn that never finished as one that did.
-                return Err(ChatError::Provider(format!(
-                    "tool rounds exceeded {} in one turn",
-                    self.max_tool_rounds()
-                )));
-            }
-
-            let results = runtime.block_on(self.run_tool_calls(&final_dispatch.tool_calls));
-            dispatch_input.messages.push(kura_llm::Message {
-                role: kura_llm::MessageRole::Assistant,
-                content: final_dispatch.output.clone(),
-                tool_calls: final_dispatch.tool_calls.clone(),
-                ..Default::default()
-            });
-            dispatch_input.messages.extend(results);
-        }
+            }),
+        )?;
+        // Outside the per-round callback: continuity is mutated here and read
+        // after, so it cannot be borrowed by a closure the loop owns.
+        self.persist_continuity_request(
+            &mut continuity,
+            &input,
+            &final_dispatch.dispatch_id,
+            input.query.trim(),
+        )?;
         self.persist_continuity_response(&mut continuity, &input, &final_dispatch)?;
 
         let mut result = QueryResult {
@@ -228,10 +170,7 @@ impl Service {
         };
         apply_continuity_result(&mut result, &continuity);
         self.run_turn_end_hooks(&input, &result);
-        let exec_error = match exec_result {
-            Ok(_) => None,
-            Err(failed) => Some(ChatError::Dispatch(failed.error.to_string())),
-        };
+        let exec_error = exec_error_message.map(ChatError::Dispatch);
         Ok(QueryExecution { result, exec_error })
     }
 
@@ -427,49 +366,122 @@ impl Service {
     // ------------------------------------------------------------------
 
     /// `chat/turn-start`: hooks may rewrite the query or veto the turn.
-    /// What the model is told it may call.
-    fn tool_specs(&self) -> Vec<kura_llm::ToolSpec> {
-        self.tools.as_ref().map(|registry| registry.specs()).unwrap_or_default()
-    }
-
-    fn max_tool_rounds(&self) -> usize {
-        self.max_tool_rounds
-    }
-
-    /// Run the calls a round asked for, in the order asked.
+    /// Run one turn as an agent loop, and report the dispatch that answered.
     ///
-    /// A failure becomes the call's output rather than the turn's: the model
-    /// asked for something and is owed an answer, and "that tool does not
-    /// exist" or "those arguments are wrong" is something it can act on. A
-    /// turn aborted on the first bad call would strand the user with nothing.
-    async fn run_tool_calls(&self, calls: &[kura_llm::ToolCall]) -> Vec<kura_llm::Message> {
-        let mut results = Vec::with_capacity(calls.len());
-        for call in calls {
-            let output = match &self.tools {
-                Some(registry) => {
-                    let invocation = kura_core::ToolInvocation {
-                        call_id: call.call_id.clone(),
-                        name: call.name.clone(),
-                        arguments: call.arguments.clone(),
-                    };
-                    match registry.invoke(&invocation).await {
-                        Ok(output) => output.content,
-                        Err(error) => error.to_string(),
-                    }
-                }
-                // The model was offered nothing, so it should not have asked.
-                // Saying so is better than an empty result it would read as
-                // success.
-                None => format!("no tool is registered: {}", call.name),
-            };
-            results.push(kura_llm::Message {
-                role: kura_llm::MessageRole::Tool,
-                content: output,
-                tool_call_id: call.call_id.clone(),
-                ..Default::default()
-            });
+    /// The loop is `kura-core`'s. It streams a model, runs whatever calls come
+    /// back, and goes around until the model answers without asking for more;
+    /// what this supplies is a `ModelProvider` for which a round means a
+    /// dispatch through this daemon -- hooked, prepared, persisted, evented.
+    ///
+    /// Chat briefly carried a second loop of its own. There is one.
+    pub(crate) fn run_agent_turn(
+        &self,
+        input: &QueryInput,
+        agent_profile_id: &str,
+        selected_skills: &[Skill],
+        dispatch_input: &CreateDispatchInput,
+        cancel: &CancellationToken,
+        on_first_round: crate::round::OnFirstRound,
+    ) -> Result<(Dispatch, Option<String>), ChatError> {
+        // The assembled conversation, split the way the loop reads it: a
+        // leading system message is the standing instruction, the last user
+        // message is this turn's question, and everything between is what came
+        // before it.
+        let (instructions, history, question) = split_for_turn(&dispatch_input.messages);
+
+        // One token for the turn, linked to the caller's. The link has to
+        // outlive every round, which is why it is held here rather than inside
+        // one.
+        let kura_cancel = kura_llm::CancelToken::new();
+        let child = cancel.child();
+        let _link = child.link_to(&kura_cancel);
+
+        let log = Arc::new(parking_lot::Mutex::new(crate::round::RoundLog::default()));
+        let context = crate::round::RoundContext {
+            cancel: kura_cancel,
+            service: self.clone(),
+            input: input.clone(),
+            agent_profile_id: agent_profile_id.to_string(),
+            selected_skills: selected_skills.to_vec(),
+            provider: dispatch_input.provider.clone(),
+            model: dispatch_input.model.clone(),
+            timeout_ms: dispatch_input.timeout_ms,
+            max_retries: dispatch_input.max_retries,
+        };
+        let provider: Arc<dyn kura_model_provider::ModelProvider> = Arc::new(
+            crate::round::DispatcherProvider::new(context, Arc::clone(&log), on_first_round),
+        );
+
+        // No registry means an empty one: no tools are offered, the model asks
+        // for none, and the loop takes exactly one round -- the single
+        // dispatch a turn was before any of this.
+        let tools = match &self.tools {
+            Some(registry) => Arc::clone(registry),
+            None => Arc::new(kura_core::ToolRegistry::new()),
+        };
+        let mut session = kura_core::Session::new(provider, tools)
+            .with_history(history)
+            .with_max_tool_rounds(self.max_tool_rounds);
+        if let Some(instructions) = instructions {
+            session = session.with_instructions(instructions);
         }
-        results
+
+        let runtime = bridge_runtime()?;
+        let mut emit = |_event: kura_protocol::Event| {};
+        let outcome = runtime.block_on(session.run_turn(&question, &mut emit));
+
+        let mut log = log.lock();
+        let Some(dispatch) = log.last.take() else {
+            // The loop never completed a round: a hook vetoed the turn, or the
+            // dispatch was rejected before it was sent. Either way there is no
+            // dispatch to report, and the reason travelled in the error.
+            return Err(match outcome {
+                Err(error) => ChatError::Provider(error.to_string()),
+                Ok(_) => ChatError::Provider("the turn produced no dispatch".to_string()),
+            });
+        };
+        // A round cap reached is a turn that never finished. Answering with
+        // the last text would present it as one that did.
+        if let Err(error) = outcome {
+            return Err(ChatError::Provider(error.to_string()));
+        }
+        Ok((dispatch, log.failure.take()))
+    }
+
+    /// Persist and announce a round that is about to be sent.
+    pub(crate) fn record_round_requested(
+        &self,
+        context: &crate::round::RoundContext,
+        dispatch: &Dispatch,
+    ) -> Result<(), ChatError> {
+        persist_dispatch(self.store.as_deref(), dispatch)?;
+        publish_dispatch_event(
+            self.event_bus.as_ref(),
+            self.store.as_deref(),
+            &context.input.scope,
+            dispatch,
+            &context.selected_skills,
+            "llm.dispatch.requested",
+        )
+        .map(|_| ())
+    }
+
+    /// Persist and announce a round that has settled, however it settled.
+    pub(crate) fn record_round_settled(
+        &self,
+        context: &crate::round::RoundContext,
+        dispatch: &Dispatch,
+    ) -> Result<(), ChatError> {
+        persist_dispatch(self.store.as_deref(), dispatch)?;
+        publish_dispatch_event(
+            self.event_bus.as_ref(),
+            self.store.as_deref(),
+            &context.input.scope,
+            dispatch,
+            &context.selected_skills,
+            &terminal_dispatch_event(dispatch),
+        )
+        .map(|_| ())
     }
 
     fn run_turn_start_hooks(&self, input: &mut QueryInput) -> Result<(), ChatError> {
@@ -508,7 +520,7 @@ impl Service {
     /// dispatch is prepared/persisted, so whatever the hooks leave in
     /// provider/model/messages is exactly what is logged on the dispatch
     /// record and what the model sees ("model-visible = logged").
-    fn run_pre_dispatch_hooks(
+    pub(crate) fn run_pre_dispatch_hooks(
         &self,
         input: &QueryInput,
         agent_profile_id: &str,
@@ -1412,6 +1424,48 @@ pub fn selected_skill_contracts(
 
 /// Go `terminalDispatchEvent`.
 #[must_use]
+/// Split an assembled conversation the way the agent loop reads it.
+///
+/// Returns the standing instruction, everything said before this turn, and
+/// this turn's question. The loop appends the question itself, so it must not
+/// also appear in the history -- the model would see it twice and answer the
+/// duplicate.
+///
+/// A leading system message becomes the instruction because that is where the
+/// request builders put it; later system messages stay in the conversation,
+/// where a mid-turn instruction belongs.
+pub(crate) fn split_for_turn(messages: &[Message]) -> (Option<String>, Vec<ResponseItem>, String) {
+    let mut instructions = None;
+    let mut items = Vec::with_capacity(messages.len());
+    for (index, message) in messages.iter().enumerate() {
+        if index == 0 && message.role == MessageRole::System {
+            instructions = Some(message.content.clone());
+            continue;
+        }
+        items.push(message.clone());
+    }
+    // The last user message is the question. Anything after it -- a trailing
+    // system note, say -- stays in the history where it was.
+    let question_at = items.iter().rposition(|message| message.role == MessageRole::User);
+    let question = match question_at {
+        Some(at) => items.remove(at).content,
+        None => String::new(),
+    };
+    let history = items
+        .into_iter()
+        .map(|message| ResponseItem::Message {
+            role: match message.role {
+                MessageRole::System => Role::System,
+                MessageRole::User => Role::User,
+                MessageRole::Assistant => Role::Assistant,
+                MessageRole::Tool => Role::Tool,
+            },
+            content: message.content,
+        })
+        .collect();
+    (instructions, history, question)
+}
+
 pub fn terminal_dispatch_event(dispatch: &Dispatch) -> String {
     match dispatch.status {
         DispatchStatus::PartialFailed => "llm.dispatch.partial_failed".to_string(),

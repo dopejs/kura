@@ -7,6 +7,9 @@ rust-version.workspace = true
 
 [dependencies]
 kura-core.workspace = true
+futures.workspace = true
+kura-protocol.workspace = true
+kura-model-provider.workspace = true
 kura-llm.workspace = true
 kura-plugin.workspace = true
 kura-store.workspace = true

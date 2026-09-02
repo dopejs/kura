@@ -2437,6 +2437,8 @@ fn a_turn_that_never_stops_calling_is_failed_rather_than_run_forever() {
         .query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "loop"), &CancellationToken::new())
         .expect_err("a turn that never stops must fail");
 
-    assert!(error.to_string().contains("tool rounds exceeded"), "{error}");
+    // The loop's own wording: the cap belongs to `kura-core`, which is what
+    // counts the rounds.
+    assert!(error.to_string().contains("exceeded 3 tool rounds"), "{error}");
     assert_eq!(seen.read().len(), 3);
 }

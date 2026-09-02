@@ -38,13 +38,13 @@ pub struct Session {
     instructions: Option<String>,
     history: Vec<ResponseItem>,
     provider: Arc<dyn ModelProvider>,
-    tools: ToolRegistry,
+    tools: Arc<ToolRegistry>,
     max_tool_rounds: usize,
     event_seq: u64,
 }
 
 impl Session {
-    pub fn new(provider: Arc<dyn ModelProvider>, tools: ToolRegistry) -> Self {
+    pub fn new(provider: Arc<dyn ModelProvider>, tools: Arc<ToolRegistry>) -> Self {
         Self {
             thread_id: ThreadId::new(),
             instructions: None,
@@ -63,6 +63,17 @@ impl Session {
 
     pub fn with_max_tool_rounds(mut self, max_tool_rounds: usize) -> Self {
         self.max_tool_rounds = max_tool_rounds;
+        self
+    }
+
+    /// Seed the conversation this turn continues.
+    ///
+    /// A caller that assembles its own history -- skills, continuity, an
+    /// operator overlay -- hands it over here rather than replaying it one
+    /// `run_turn` at a time, which would dispatch once per prior message.
+    #[must_use]
+    pub fn with_history(mut self, history: Vec<ResponseItem>) -> Self {
+        self.history = history;
         self
     }
 
@@ -89,7 +100,10 @@ impl Session {
 
         let mut rounds = 0;
         loop {
-            if rounds > self.max_tool_rounds {
+            // `>=`, checked before the round it would allow. With `>` the cap
+            // permitted one round more than it named -- a cap of three ran
+            // four. Never exercised until the loop became load-bearing.
+            if rounds >= self.max_tool_rounds {
                 let message = CoreError::MaxToolRounds(self.max_tool_rounds).to_string();
                 self.publish(
                     emit,
@@ -266,7 +280,7 @@ mod tests {
             ResponseEvent::OutputTextDelta(" world".into()),
             ResponseEvent::Completed,
         ]]));
-        let mut session = Session::new(provider, ToolRegistry::new());
+        let mut session = Session::new(provider, Arc::new(ToolRegistry::new()));
         let (mut emit, seen) = collect_events();
 
         let outcome = session.run_turn("hi", &mut emit).await.unwrap();
@@ -310,7 +324,7 @@ mod tests {
         ]));
         let mut registry = ToolRegistry::new();
         registry.register(Arc::new(EchoTool));
-        let mut session = Session::new(provider.clone(), registry);
+        let mut session = Session::new(provider.clone(), Arc::new(registry));
         let (mut emit, seen) = collect_events();
 
         let outcome = session.run_turn("use the tool", &mut emit).await.unwrap();
@@ -354,7 +368,7 @@ mod tests {
                 ResponseEvent::Completed,
             ],
         ]));
-        let mut session = Session::new(provider, ToolRegistry::new());
+        let mut session = Session::new(provider, Arc::new(ToolRegistry::new()));
         let (mut emit, seen) = collect_events();
 
         let outcome = session.run_turn("hi", &mut emit).await.unwrap();
@@ -381,7 +395,7 @@ mod tests {
         let provider = Arc::new(FakeProvider::with_rounds(vec![call_round; 4]));
         let mut registry = ToolRegistry::new();
         registry.register(Arc::new(EchoTool));
-        let mut session = Session::new(provider, registry).with_max_tool_rounds(2);
+        let mut session = Session::new(provider, Arc::new(registry)).with_max_tool_rounds(2);
         let (mut emit, seen) = collect_events();
 
         let err = session.run_turn("hi", &mut emit).await.unwrap_err();
@@ -389,6 +403,17 @@ mod tests {
         assert!(matches!(err, CoreError::MaxToolRounds(2)));
         let msgs = seen.lock().clone();
         assert!(msgs.iter().any(|msg| matches!(msg, EventMsg::Error { .. })));
+        // The cap has to bound what it names. Asserting only that the error
+        // fired let it run one round more than allowed for as long as this
+        // loop was unused: a cap of two dispatched three times.
+        assert_eq!(provider_rounds(&session), 2);
+    }
+
+    /// How many rounds the provider was actually asked for.
+    fn provider_rounds(session: &Session) -> usize {
+        session.history().iter().filter(|item| {
+            matches!(item, ResponseItem::FunctionCall { .. })
+        }).count()
     }
 
     #[tokio::test]
@@ -406,7 +431,7 @@ mod tests {
             }
         }
 
-        let mut session = Session::new(Arc::new(FailingProvider), ToolRegistry::new());
+        let mut session = Session::new(Arc::new(FailingProvider), Arc::new(ToolRegistry::new()));
         let (mut emit, _seen) = collect_events();
 
         let err = session.run_turn("hi", &mut emit).await.unwrap_err();
