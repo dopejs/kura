@@ -708,15 +708,15 @@ fn build_chat(asm: &mut Assembly) -> Result<(), AppError> {
         chat.set_hooks(hooks);
     }
     // Whatever the connected MCP servers publish, as tools the agent loop may
-    // call. Each one still goes through `authorize_tool` when it is called:
-    // being offered is not being permitted, and a tool with no exposure rule
-    // is refused however the model asks for it.
+    // call. Read per turn rather than snapshotted here: servers are connected
+    // and stopped while the daemon runs, and a registry built at assembly
+    // would be whatever existed at boot -- which is nothing.
+    //
+    // Each one still goes through `authorize_tool` when it is called: being
+    // offered is not being permitted, and a tool with no exposure rule is
+    // refused however the model asks for it.
     if let Some(mcp) = asm.state.mcp.clone() {
-        let mut registry = kura_core::ToolRegistry::new();
-        for tool in kura_mcp::tools_for_surface(&mcp, CHAT_RUNTIME_SURFACE) {
-            registry.register(tool);
-        }
-        chat.set_tools(Arc::new(registry));
+        chat.set_tools(Arc::new(McpTools { mcp }));
     }
     asm.state.chat = Some(Arc::new(chat));
     Ok(())
@@ -724,6 +724,21 @@ fn build_chat(asm: &mut Assembly) -> Result<(), AppError> {
 
 /// The surface exposure rules are written against for chat turns.
 const CHAT_RUNTIME_SURFACE: &str = "chat";
+
+/// The connected MCP servers, as the tools a chat turn may call.
+struct McpTools {
+    mcp: Arc<kura_mcp::Manager>,
+}
+
+impl kura_chat::ToolSource for McpTools {
+    fn registry(&self) -> Arc<kura_core::ToolRegistry> {
+        let mut registry = kura_core::ToolRegistry::new();
+        for tool in kura_mcp::tools_for_surface(&self.mcp, CHAT_RUNTIME_SURFACE) {
+            registry.register(tool);
+        }
+        Arc::new(registry)
+    }
+}
 
 /// The default context-assembly hook: injects the tenant's Ready L3/L2
 /// memory bootstrap into the system frame under a budget, with citations

@@ -178,9 +178,15 @@ pub struct Service {
     /// The plugin hook bus (pluginization phase 2). Absent = no hook points
     /// run and the pipeline behaves exactly as before.
     pub(crate) hooks: Option<Arc<kura_plugin::HookBus>>,
-    /// Tools the model may call. Absent or empty = none are offered and a
-    /// turn is a single dispatch, exactly as before.
-    pub(crate) tools: Option<Arc<kura_core::ToolRegistry>>,
+    /// Where the tools the model may call come from.
+    ///
+    /// Asked once per turn rather than held as a snapshot. MCP servers are
+    /// connected, started and stopped while the daemon runs, so a registry
+    /// built at assembly would be whatever existed at boot -- which is nothing,
+    /// because a server registered a moment later would never appear. Absent
+    /// means none are offered and a turn is a single dispatch, exactly as
+    /// before.
+    pub(crate) tools: Option<Arc<dyn ToolSource>>,
     /// Hard cap on model-tool-model rounds inside one turn. A misbehaving
     /// model or a tool that always provokes another call would otherwise burn
     /// provider quota without bound.
@@ -189,6 +195,15 @@ pub struct Service {
 
 /// Rounds allowed in a single turn before the turn is failed.
 pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 16;
+
+/// What the model may call, as of now.
+///
+/// A trait rather than a registry because the answer changes: a user connects
+/// an MCP server, or stops one, and the next turn should see that without the
+/// daemon restarting.
+pub trait ToolSource: Send + Sync {
+    fn registry(&self) -> Arc<kura_core::ToolRegistry>;
+}
 
 impl Service {
     /// Go `chat.NewService`. The dispatcher is required; every other
@@ -214,9 +229,9 @@ impl Service {
         }
     }
 
-    /// Attaches the tools the model may call. Without this the pipeline offers
-    /// none and every turn is one dispatch.
-    pub fn set_tools(&mut self, tools: Arc<kura_core::ToolRegistry>) {
+    /// Attaches where tools come from. Without this the pipeline offers none
+    /// and every turn is one dispatch.
+    pub fn set_tools(&mut self, tools: Arc<dyn ToolSource>) {
         self.tools = Some(tools);
     }
 

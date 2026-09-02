@@ -1965,7 +1965,16 @@ impl Manager {
                 if created {
                     guard.server_ids.push(server_id.clone());
                 }
-                server.tenant_id = String::new(); // activeTenantID(ctx)
+                // The tenant that created it, so the reads can find it again.
+                //
+                // This was hardcoded empty, with the Go call it stood in for
+                // left in a comment. Every read filters by the requesting
+                // tenant, so a server created through the API was invisible to
+                // the very next request on the same API -- created, returned,
+                // and gone.
+                if !create_input.tenant_id.trim().is_empty() {
+                    server.tenant_id = create_input.tenant_id.trim().to_string();
+                }
                 server.display_name = create_input.display_name.trim().to_string();
                 if create_input.origin_kind != OriginKind::default() {
                     server.origin_kind = create_input.origin_kind;
@@ -4260,6 +4269,9 @@ pub fn catalog_management_for_create(
 #[must_use]
 pub fn server_to_create_input(server: &Server) -> CreateServerInput {
     CreateServerInput {
+        // Carried, or a round trip through this helper would move the server
+        // to the tenant that has none and hide it from its owner.
+        tenant_id: server.tenant_id.clone(),
         server_id: server.server_id.clone(),
         display_name: server.display_name.clone(),
         origin_kind: server.origin_kind,

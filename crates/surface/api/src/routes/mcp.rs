@@ -158,7 +158,13 @@ async fn create_mcp_server(
 ) -> Result<(StatusCode, Json<mcp::ServerResource>), ApiError> {
     let manager = mcp_manager(&state)?;
     require_mcp_manage(tenant.as_ref().map(|e| &e.0.0))?;
-    let input: mcp::CreateServerInput = decode_json_body(&body)?;
+    let mut input: mcp::CreateServerInput = decode_json_body(&body)?;
+    // From the request, never from the body: a caller must not be able to
+    // create a server belonging to someone else by saying so.
+    input.tenant_id = tenant
+        .as_ref()
+        .map(|extension| extension.0.0.tenant_id.clone())
+        .unwrap_or_default();
     let (resource, created) = manager.create_server(input).map_err(map_mcp_error)?;
     let status = if created {
         StatusCode::CREATED

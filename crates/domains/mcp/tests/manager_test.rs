@@ -1173,3 +1173,50 @@ async fn malformed_arguments_are_reported_to_the_model_not_raised() {
     assert!(!output.success);
     assert!(output.content.contains("valid JSON"), "{}", output.content);
 }
+
+#[test]
+fn a_server_is_visible_to_the_tenant_that_created_it() {
+    // It was not. `upsert_server` hardcoded an empty tenant id, with the Go
+    // call it stood in for left in a comment, while every read filters by the
+    // requesting tenant. So a server created through the API was created,
+    // returned, and gone: the next request on the same API could not find it,
+    // and a listing came back empty with nothing saying why.
+    let manager = kura_mcp::Manager::new(test_cfg("~/.kura-test"), None, None, None, None, None);
+    manager
+        .create_server(CreateServerInput {
+            tenant_id: "tenant-1".to_string(),
+            ..streamable_server_input("srv-1")
+        })
+        .unwrap();
+
+    assert!(manager.get_server_for_tenant("srv-1", "tenant-1").is_some());
+    assert_eq!(manager.list_servers_for_tenant("tenant-1").len(), 1);
+}
+
+#[test]
+fn a_server_is_not_visible_to_another_tenant() {
+    // The filter still has a job. Recording the creator must not turn into
+    // showing it to everyone.
+    let manager = kura_mcp::Manager::new(test_cfg("~/.kura-test"), None, None, None, None, None);
+    manager
+        .create_server(CreateServerInput {
+            tenant_id: "tenant-1".to_string(),
+            ..streamable_server_input("srv-1")
+        })
+        .unwrap();
+
+    assert!(manager.get_server_for_tenant("srv-1", "tenant-2").is_none());
+    assert_eq!(manager.list_servers_for_tenant("tenant-2").len(), 0);
+}
+
+#[test]
+fn a_server_created_without_a_tenant_stays_visible_to_everyone() {
+    // Single-tenant deployments send no tenant at all, and their servers must
+    // not become invisible now that the field is recorded.
+    let manager = kura_mcp::Manager::new(test_cfg("~/.kura-test"), None, None, None, None, None);
+    manager.create_server(streamable_server_input("srv-1")).unwrap();
+
+    assert!(manager.get_server_for_tenant("srv-1", "tenant-1").is_none());
+    assert!(manager.get_server("srv-1").is_some());
+    assert_eq!(manager.list_servers().len(), 1);
+}

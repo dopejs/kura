@@ -38,4 +38,4 @@ pub use service::{
     selected_skill_contracts, selected_skill_ids_from_skills, terminal_dispatch_event,
 };
 pub use store::{BindingResolutionParams, ChatStore, ContinuityLookupQuery};
-pub use types::{QueryExecution, QueryInput, QueryResult, Service, StreamChunk};
+pub use types::{QueryExecution, QueryInput, QueryResult, Service, StreamChunk, ToolSource};

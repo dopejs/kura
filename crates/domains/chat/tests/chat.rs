@@ -2219,6 +2219,15 @@ impl Provider for ScriptedProvider {
     }
 }
 
+/// A source that always answers with the same registry.
+struct FixedTools(Arc<kura_core::ToolRegistry>);
+
+impl kura_chat::ToolSource for FixedTools {
+    fn registry(&self) -> Arc<kura_core::ToolRegistry> {
+        Arc::clone(&self.0)
+    }
+}
+
 /// A tool that records what it was asked and answers with fixed text.
 struct RecordingTool {
     name: String,
@@ -2275,7 +2284,7 @@ fn service_with_tool(
     let mut registry = kura_core::ToolRegistry::new();
     registry.register(tool);
     let mut svc = service(new_dispatcher(provider), None, None);
-    svc.set_tools(Arc::new(registry));
+    svc.set_tools(Arc::new(FixedTools(Arc::new(registry))));
     (svc, seen)
 }
 
@@ -2441,4 +2450,54 @@ fn a_turn_that_never_stops_calling_is_failed_rather_than_run_forever() {
     // counts the rounds.
     assert!(error.to_string().contains("exceeded 3 tool rounds"), "{error}");
     assert_eq!(seen.read().len(), 3);
+}
+
+/// A source that counts how often it was asked, and can change its answer.
+struct CountingTools {
+    asked: Arc<parking_lot::RwLock<usize>>,
+    registry: Arc<parking_lot::RwLock<Arc<kura_core::ToolRegistry>>>,
+}
+
+impl kura_chat::ToolSource for CountingTools {
+    fn registry(&self) -> Arc<kura_core::ToolRegistry> {
+        *self.asked.write() += 1;
+        Arc::clone(&self.registry.read())
+    }
+}
+
+#[test]
+fn the_tools_are_asked_for_per_turn_rather_than_snapshotted() {
+    // MCP servers are connected and stopped while the daemon runs. A registry
+    // captured at assembly would be whatever existed at boot -- which is
+    // nothing, because a server registered a moment later would never appear
+    // and every turn would silently offer no tools.
+    let asked = Arc::new(parking_lot::RwLock::new(0usize));
+    let registry = Arc::new(parking_lot::RwLock::new(Arc::new(kura_core::ToolRegistry::new())));
+    let (provider, seen) = ScriptedProvider::new(vec![answered("one"), answered("two")]);
+    let mut svc = service(new_dispatcher(provider), None, None);
+    svc.set_tools(Arc::new(CountingTools {
+        asked: Arc::clone(&asked),
+        registry: Arc::clone(&registry),
+    }));
+
+    svc.query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "hi"), &CancellationToken::new())
+        .expect("first turn");
+
+    // A tool appears between the turns, the way one does when a user connects
+    // a server.
+    let mut grown = kura_core::ToolRegistry::new();
+    grown.register(Arc::new(RecordingTool {
+        name: "loopforge_status".to_string(),
+        answer: "ok".to_string(),
+        calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
+    }));
+    *registry.write() = Arc::new(grown);
+
+    svc.query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "again"), &CancellationToken::new())
+        .expect("second turn");
+
+    assert_eq!(*asked.read(), 2, "the source was not consulted per turn");
+    let requests = seen.read();
+    assert!(requests[0].tools.is_empty(), "the first turn should have had none");
+    assert_eq!(requests[1].tools.len(), 1, "the second turn did not see the new tool");
 }

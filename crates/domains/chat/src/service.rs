@@ -416,7 +416,7 @@ impl Service {
         // for none, and the loop takes exactly one round -- the single
         // dispatch a turn was before any of this.
         let tools = match &self.tools {
-            Some(registry) => Arc::clone(registry),
+            Some(source) => source.registry(),
             None => Arc::new(kura_core::ToolRegistry::new()),
         };
         let mut session = kura_core::Session::new(provider, tools)

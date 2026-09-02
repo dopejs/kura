@@ -428,6 +428,11 @@ pub struct ToolResource {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateServerInput {
+    /// Whose server this is. Filled by the route from the request's context,
+    /// not by the caller: every read filters by it, so a server stored under
+    /// the wrong tenant is a server nobody can see.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tenant_id: String,
     pub server_id: String,
     pub display_name: String,
     #[serde(default)]
