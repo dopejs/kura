@@ -511,6 +511,9 @@ impl Manager {
             provider: resolved.provider_id.clone(),
             model: resolved.model.clone(),
             messages: input.messages.clone(),
+            // Resolution picks a provider and model; it does not decide what
+            // the caller is offering the model, so the tools pass through.
+            tools: input.tools.clone(),
             timeout_ms: resolved.timeout_ms,
             max_retries: resolved.max_retries,
         };
@@ -562,6 +565,9 @@ impl Manager {
             provider: resolved.provider_id.clone(),
             model: resolved.model.clone(),
             messages: vec![Message { role: MessageRole::User, content: prompt }],
+            // A reachability check asks the endpoint to say one word. Offering
+            // tools would test something the check is not about.
+            tools: Vec::new(),
             timeout_ms: resolved.timeout_ms,
             max_retries: resolved.max_retries,
         };

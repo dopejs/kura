@@ -55,6 +55,8 @@ impl Provider for EchoProvider {
 fn echo_response(messages: &[Message]) -> ProviderResponse {
     let output = compose_echo_output(messages);
     ProviderResponse {
+        // Echo answers from its input; it calls nothing.
+        tool_calls: Vec::new(),
         usage: Usage {
             input_tokens: approximate_tokens(&compose_echo_output(messages)),
             output_tokens: approximate_tokens(&output),

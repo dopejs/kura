@@ -1313,6 +1313,7 @@ mod consolidator_tests {
             let body = self.body.clone();
             Box::pin(async move {
                 Ok(kura_llm::ProviderResponse {
+            tool_calls: Vec::new(),
                     output: body,
                     finish_reason: "stop".to_string(),
                     ..kura_llm::ProviderResponse::default()

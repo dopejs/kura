@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::future::BoxFuture;
+use kura_protocol::ToolSpec;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
 use crate::types::{Message, StreamChunk, Usage};
@@ -139,6 +141,9 @@ pub struct ProviderRequest {
     pub provider: String,
     pub model: String,
     pub messages: Vec<Message>,
+    /// Tools the model may call. Empty is the ordinary case: a plain chat
+    /// request offers none, and a provider that cannot use them ignores them.
+    pub tools: Vec<ToolSpec>,
     pub attempt: i64,
     pub timeout_ms: i64,
     pub stream_first_chunk_timeout_ms: i64,
@@ -150,8 +155,31 @@ pub struct ProviderRequest {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderResponse {
     pub output: String,
+    /// Calls the model asked for, in the order it asked for them.
+    ///
+    /// Carried rather than discarded. The adapter between an HTTP provider and
+    /// this interface used to drop them on the floor -- with a comment saying
+    /// so -- which is why a tool-capable model could be configured, told about
+    /// tools, and still only ever produce prose.
+    pub tool_calls: Vec<ToolCall>,
     pub finish_reason: String,
     pub usage: Usage,
+}
+
+/// One call the model asked for.
+///
+/// Serializable because it is persisted with the dispatch: a turn that called
+/// a tool cannot be explained afterwards from the text alone.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCall {
+    pub call_id: String,
+    pub name: String,
+    /// JSON, as the model produced it. Not parsed here: whether it satisfies
+    /// the tool's schema is the tool's judgement, and a malformed argument is
+    /// something the model is told about rather than something that fails the
+    /// dispatch.
+    pub arguments: String,
 }
 
 /// Object-safe provider interface, mirroring Go's `Provider`. Futures are

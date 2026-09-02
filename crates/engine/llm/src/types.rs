@@ -2,6 +2,8 @@
 //! of `daemon/internal/llm/dispatcher.go`.
 
 use chrono::{DateTime, Utc};
+use crate::provider::ToolCall;
+use kura_protocol::ToolSpec;
 use serde::{Deserialize, Serialize};
 
 /// Chat message role; wire values match the Go `MessageRole` constants.
@@ -54,9 +56,23 @@ pub struct Dispatch {
     pub provider: String,
     pub model: String,
     pub messages: Vec<Message>,
+    /// The tools the model was offered on this round.
+    ///
+    /// Persisted with the rest of the dispatch for the same reason the
+    /// messages are: what the model could see is what the record has to show,
+    /// or a turn that called a tool cannot be explained afterwards.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolSpec>,
     pub stream: bool,
     pub status: DispatchStatus,
     pub output: String,
+    /// Calls the model asked for on this round, if any.
+    ///
+    /// A caller running a tool loop reads these, runs them, appends the
+    /// results to `messages`, and dispatches again. Empty means the model
+    /// answered, which is how a loop knows the turn is over.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub finish_reason: String,
     pub usage: Usage,
@@ -80,12 +96,22 @@ pub struct Dispatch {
 // serde(default): Go decodes the create-dispatch request into the zero value,
 // so absent fields (e.g. timeoutMs) must degrade to zero instead of rejecting
 // the request at the API boundary.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+// Not `Eq`: a tool carries a JSON Schema, and `serde_json::Value` is only
+// `PartialEq`. Nothing compares dispatch inputs for equality.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CreateDispatchInput {
     pub provider: String,
     pub model: String,
     pub messages: Vec<Message>,
+    /// Tools the caller is offering the model for this dispatch.
+    ///
+    /// A dispatch is one model round, not a whole turn: a caller running a
+    /// tool loop offers the same tools each round and appends what the tools
+    /// answered to `messages`. Keeping the loop above this layer means every
+    /// round is prepared, persisted and hooked like any other dispatch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolSpec>,
     pub timeout_ms: i64,
     pub max_retries: i64,
 }
@@ -140,6 +166,8 @@ mod tests {
     fn dispatch_omits_empty_optional_fields_like_go() {
         let now = Utc::now();
         let dispatch = Dispatch {
+            tools: Vec::new(),
+            tool_calls: Vec::new(),
             dispatch_id: "d-1".into(),
             provider: "echo".into(),
             model: "m".into(),

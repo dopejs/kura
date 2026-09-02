@@ -632,6 +632,7 @@ mod tests {
                     .map(|m| m.content.clone())
                     .unwrap_or_default();
                 Ok(ProviderResponse {
+            tool_calls: Vec::new(),
                     output: format!("reply:{content}"),
                     finish_reason: "stop".to_string(),
                     usage: Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
@@ -663,6 +664,7 @@ mod tests {
                     ..Default::default()
                 })?;
                 Ok(ProviderResponse {
+            tool_calls: Vec::new(),
                     output: format!("reply:{content}"),
                     finish_reason: "stop".to_string(),
                     usage: Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 },

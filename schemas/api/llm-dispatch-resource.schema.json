@@ -20,7 +20,9 @@
   ],
   "additionalProperties": false,
   "properties": {
-    "tenantId": { "type": "string" },
+    "tenantId": {
+      "type": "string"
+    },
     "dispatchId": {
       "type": "string"
     },
@@ -35,12 +37,20 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["role", "content"],
+        "required": [
+          "role",
+          "content"
+        ],
         "additionalProperties": false,
         "properties": {
           "role": {
             "type": "string",
-            "enum": ["system", "user", "assistant", "tool"]
+            "enum": [
+              "system",
+              "user",
+              "assistant",
+              "tool"
+            ]
           },
           "content": {
             "type": "string"
@@ -53,7 +63,14 @@
     },
     "status": {
       "type": "string",
-      "enum": ["queued", "running", "completed", "partial_failed", "failed", "cancelled"]
+      "enum": [
+        "queued",
+        "running",
+        "completed",
+        "partial_failed",
+        "failed",
+        "cancelled"
+      ]
     },
     "partial": {
       "type": "boolean"
@@ -66,7 +83,11 @@
     },
     "usage": {
       "type": "object",
-      "required": ["inputTokens", "outputTokens", "totalTokens"],
+      "required": [
+        "inputTokens",
+        "outputTokens",
+        "totalTokens"
+      ],
       "additionalProperties": false,
       "properties": {
         "inputTokens": {
@@ -116,6 +137,56 @@
     "completedAt": {
       "type": "string",
       "format": "date-time"
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "parameters"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "parameters": {
+            "type": "object",
+            "description": "JSON Schema for the arguments."
+          }
+        }
+      },
+      "description": "Tools the model was offered on this round."
+    },
+    "toolCalls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "callId",
+          "name",
+          "arguments"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "callId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "string",
+            "description": "JSON, as the model produced it."
+          }
+        }
+      },
+      "description": "Calls the model asked for, in the order it asked."
     }
   }
 }

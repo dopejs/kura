@@ -824,6 +824,8 @@ impl Service {
         );
         Ok((
             CreateDispatchInput {
+                // Chat offers none yet; the loop that would is the next slice.
+                tools: Vec::new(),
                 provider: input.provider.trim().to_string(),
                 model: input.model.trim().to_string(),
                 messages,

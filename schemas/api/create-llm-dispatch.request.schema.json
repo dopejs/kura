@@ -3,7 +3,11 @@
   "$id": "https://kura.local/schemas/api/create-llm-dispatch.request.schema.json",
   "title": "CreateLLMDispatchRequest",
   "type": "object",
-  "required": ["provider", "model", "messages"],
+  "required": [
+    "provider",
+    "model",
+    "messages"
+  ],
   "additionalProperties": false,
   "properties": {
     "provider": {
@@ -17,12 +21,20 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["role", "content"],
+        "required": [
+          "role",
+          "content"
+        ],
         "additionalProperties": false,
         "properties": {
           "role": {
             "type": "string",
-            "enum": ["system", "user", "assistant", "tool"]
+            "enum": [
+              "system",
+              "user",
+              "assistant",
+              "tool"
+            ]
           },
           "content": {
             "type": "string"
@@ -37,6 +49,31 @@
     "maxRetries": {
       "type": "integer",
       "minimum": 0
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "parameters"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "parameters": {
+            "type": "object",
+            "description": "JSON Schema for the arguments."
+          }
+        }
+      },
+      "description": "Tools the caller offers the model for this dispatch."
     }
   }
 }

@@ -82,6 +82,7 @@ impl Provider for TestProvider {
         Box::pin(async move {
             requests.write().push(request.clone());
             Ok(ProviderResponse {
+            tool_calls: Vec::new(),
                 output: format!("reply:{}", request.model),
                 finish_reason: "stop".to_string(),
                 usage: Usage {
@@ -118,6 +119,7 @@ impl Provider for TestProvider {
                 ..Default::default()
             })?;
             Ok(ProviderResponse {
+            tool_calls: Vec::new(),
                 output: format!("reply:{}", request.model),
                 finish_reason: "stop".to_string(),
                 usage: Usage {
@@ -153,6 +155,7 @@ impl Provider for SlowProvider {
             requests.write().push(request.clone());
             tokio::time::sleep(delay).await;
             Ok(ProviderResponse {
+            tool_calls: Vec::new(),
                 output: "late reply".to_string(),
                 finish_reason: "stop".to_string(),
                 usage: Usage::default(),
@@ -1530,6 +1533,8 @@ fn sqlite_store_adapter_ports_dispatch_and_defers_continuity() {
     let store = kura_store::SQLiteStore::new(dir.path().to_str().expect("path")).expect("store");
     let now = Utc::now();
     let dispatch = Dispatch {
+        tools: Vec::new(),
+        tool_calls: Vec::new(),
         dispatch_id: "d_1".to_string(),
         provider: "echo".to_string(),
         model: "m".to_string(),
@@ -1679,6 +1684,8 @@ fn query_input_round_trips_camel_case_wire() {
 fn query_result_round_trips_with_dispatch() {
     let now = Utc::now();
     let dispatch = Dispatch {
+        tools: Vec::new(),
+        tool_calls: Vec::new(),
         dispatch_id: "d_1".to_string(),
         provider: "echo".to_string(),
         model: "m".to_string(),
@@ -1833,6 +1840,8 @@ fn inject_continuity_messages_inserts_before_first_user_message() {
 fn terminal_dispatch_event_names_match_go() {
     let now = Utc::now();
     let base = Dispatch {
+        tools: Vec::new(),
+        tool_calls: Vec::new(),
         dispatch_id: "d".to_string(),
         provider: "p".to_string(),
         model: "m".to_string(),

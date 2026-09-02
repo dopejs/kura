@@ -790,6 +790,9 @@ fn codex_complete(
     }
     finalize_managed_provider_execution_success(bridge.sandboxes.as_deref(), &result);
     Ok(ProviderResponse {
+        // A borrowed CLI runs its own tool loop internally and reports only
+        // the finished text; there is nothing for a caller to dispatch.
+        tool_calls: Vec::new(),
         output,
         finish_reason: "stop".to_string(),
         usage: kura_llm::Usage::default(),

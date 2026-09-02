@@ -94,10 +94,24 @@ fn scan_llm_dispatch(row: &Row) -> Result<kura_llm::Dispatch, String> {
     let updated_at: String = row.get(15).map_err(|e| e.to_string())?;
     let started_at: Option<String> = row.get(16).map_err(|e| e.to_string())?;
     let completed_at: Option<String> = row.get(17).map_err(|e| e.to_string())?;
+    let tools_raw: Option<String> = row.get(18).map_err(|e| e.to_string())?;
+    let tool_calls_raw: Option<String> = row.get(19).map_err(|e| e.to_string())?;
 
     let status: kura_llm::DispatchStatus = parse_enum(&status)?;
     let messages: Vec<kura_llm::Message> =
         crate::crud::decode_json_field(&messages_raw).map_err(|e| format!("decode llm dispatch messages: {e}"))?;
+    // Null for every dispatch written before these columns existed, and for
+    // any plain chat request since.
+    let tools: Vec<kura_llm::ToolSpec> = match tools_raw {
+        Some(raw) if !raw.is_empty() => crate::crud::decode_json_field(&raw)
+            .map_err(|e| format!("decode llm dispatch tools: {e}"))?,
+        _ => Vec::new(),
+    };
+    let tool_calls: Vec<kura_llm::ToolCall> = match tool_calls_raw {
+        Some(raw) if !raw.is_empty() => crate::crud::decode_json_field(&raw)
+            .map_err(|e| format!("decode llm dispatch tool calls: {e}"))?,
+        _ => Vec::new(),
+    };
     let usage: kura_llm::Usage =
         crate::crud::decode_json_field(&usage_raw).map_err(|e| format!("decode llm dispatch usage: {e}"))?;
     let partial = status == kura_llm::DispatchStatus::PartialFailed;
@@ -107,6 +121,8 @@ fn scan_llm_dispatch(row: &Row) -> Result<kura_llm::Dispatch, String> {
         provider,
         model,
         messages,
+        tools,
+        tool_calls,
         stream,
         status,
         output,
@@ -255,8 +271,9 @@ impl SQLiteStore {
                 r#"INSERT INTO llm_dispatches (
                     dispatch_id, provider, model, messages_json, stream, status, output_text,
                     finish_reason, usage_json, error_code, error_text, timeout_ms, max_retries,
-                    attempt_count, created_at, updated_at, started_at, completed_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+                    attempt_count, created_at, updated_at, started_at, completed_at,
+                    tools_json, tool_calls_json
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
                 ON CONFLICT(dispatch_id) DO UPDATE SET
                     provider = excluded.provider,
                     model = excluded.model,
@@ -274,7 +291,9 @@ impl SQLiteStore {
                     created_at = excluded.created_at,
                     updated_at = excluded.updated_at,
                     started_at = excluded.started_at,
-                    completed_at = excluded.completed_at"#,
+                    completed_at = excluded.completed_at,
+                    tools_json = excluded.tools_json,
+                    tool_calls_json = excluded.tool_calls_json"#,
                 params![
                     dispatch.dispatch_id,
                     dispatch.provider,
@@ -294,6 +313,8 @@ impl SQLiteStore {
                     now_rfc3339(&dispatch.updated_at),
                     opt_time_string(&dispatch.started_at),
                     opt_time_string(&dispatch.completed_at),
+                    null_json(&dispatch.tools, "tools")?,
+                    null_json(&dispatch.tool_calls, "tool calls")?,
                 ],
             )
             .map_err(|e| format!("upsert llm dispatch {}: {e}", dispatch.dispatch_id))?;
@@ -306,7 +327,7 @@ impl SQLiteStore {
             .prepare(
                 r#"SELECT dispatch_id, provider, model, messages_json, stream, status, output_text,
                     finish_reason, usage_json, error_code, error_text, timeout_ms, max_retries,
-                    attempt_count, created_at, updated_at, started_at, completed_at
+                    attempt_count, created_at, updated_at, started_at, completed_at, tools_json, tool_calls_json
                 FROM llm_dispatches
                 ORDER BY created_at ASC, dispatch_id ASC"#,
             )
@@ -325,7 +346,7 @@ impl SQLiteStore {
             .prepare(
                 r#"SELECT dispatch_id, provider, model, messages_json, stream, status, output_text,
                     finish_reason, usage_json, error_code, error_text, timeout_ms, max_retries,
-                    attempt_count, created_at, updated_at, started_at, completed_at
+                    attempt_count, created_at, updated_at, started_at, completed_at, tools_json, tool_calls_json
                 FROM llm_dispatches
                 WHERE dispatch_id = ?1"#,
             )
@@ -336,4 +357,18 @@ impl SQLiteStore {
         };
         scan_llm_dispatch(row).map(Some)
     }
+}
+
+/// A JSON column that stays null when there is nothing to record.
+///
+/// Every dispatch predating these columns has neither, and a plain chat
+/// request still has neither -- writing `[]` for all of them would make an
+/// empty list indistinguishable from a row written before the column existed.
+fn null_json<T: serde::Serialize>(values: &[T], label: &str) -> Result<Option<String>, String> {
+    if values.is_empty() {
+        return Ok(None);
+    }
+    serde_json::to_string(values)
+        .map(Some)
+        .map_err(|e| format!("marshal llm dispatch {label}: {e}"))
 }

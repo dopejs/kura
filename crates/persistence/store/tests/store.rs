@@ -284,11 +284,80 @@ fn capability_round_trips_through_sqlite() {
     assert!(got.next_restart_at.is_some());
 }
 #[test]
+fn a_dispatch_remembers_the_tools_it_was_given_and_asked_for() {
+    // What the model could see is what the record has to show, or a turn that
+    // called a tool cannot be explained from the text afterwards.
+    let dir = temp_dir("llmtools");
+    let store = SQLiteStore::new(&dir).unwrap();
+    let now = Utc::now();
+    let tools = vec![kura_llm::ToolSpec {
+        name: "loopforge_status".to_string(),
+        description: "read project state".to_string(),
+        parameters: serde_json::json!({"type": "object"}),
+    }];
+    let tool_calls = vec![kura_llm::ToolCall {
+        call_id: "call_1".to_string(),
+        name: "loopforge_status".to_string(),
+        arguments: "{}".to_string(),
+    }];
+    let dispatch = Dispatch {
+        tools: tools.clone(),
+        tool_calls: tool_calls.clone(),
+        dispatch_id: "disp_tools".to_string(),
+        provider: "anthropic".to_string(),
+        model: "m".to_string(),
+        messages: vec![Message { role: MessageRole::User, content: "where am i".to_string() }],
+        stream: false,
+        status: DispatchStatus::Completed,
+        output: String::new(),
+        finish_reason: "stop".to_string(),
+        usage: Usage::default(),
+        error_code: String::new(),
+        error: String::new(),
+        timeout_ms: 30000,
+        partial: false,
+        max_retries: 0,
+        attempt_count: 1,
+        created_at: now,
+        updated_at: now,
+        started_at: Some(now),
+        completed_at: Some(now),
+    };
+    store.upsert_llm_dispatch(&dispatch).unwrap();
+
+    let listed = store.list_llm_dispatches().unwrap();
+    let got = listed.iter().find(|d| d.dispatch_id == "disp_tools").unwrap();
+    assert_eq!(got.tools, tools);
+    assert_eq!(got.tool_calls, tool_calls);
+}
+
+#[test]
+fn every_migration_survives_being_replayed() {
+    // The legacy re-stamp resets a database to the baseline and applies every
+    // post-baseline migration again, against a schema that already has them.
+    // `CREATE TABLE`/`CREATE INDEX` say `IF NOT EXISTS`; SQLite has no
+    // `ADD COLUMN IF NOT EXISTS`, so a migration adding one fails that replay
+    // and the database stops opening. Adding the tool columns hit exactly this.
+    let dir = temp_dir("replay");
+    {
+        let store = SQLiteStore::new(&dir).unwrap();
+        assert_eq!(store.schema_version().unwrap(), kura_store::CURRENT_SCHEMA_VERSION);
+        let conn = rusqlite::Connection::open(store.db_path()).unwrap();
+        conn.execute("DELETE FROM schema_migrations WHERE version > 1", []).unwrap();
+    }
+
+    let store = SQLiteStore::new(&dir).expect("a replayed migration must not fail the open");
+    assert_eq!(store.schema_version().unwrap(), kura_store::CURRENT_SCHEMA_VERSION);
+}
+
+#[test]
 fn llm_dispatch_round_trips_through_sqlite() {
     let dir = temp_dir("llm");
     let store = SQLiteStore::new(&dir).unwrap();
     let now = Utc::now();
     let dispatch = Dispatch {
+        tools: Vec::new(),
+        tool_calls: Vec::new(),
         dispatch_id: "disp_1".to_string(),
         provider: "openai".to_string(),
         model: "gpt-4o".to_string(),

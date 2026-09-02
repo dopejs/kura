@@ -1840,6 +1840,7 @@ version = "0.2.4"
 dependencies = [
  "chrono",
  "futures",
+ "kura-protocol",
  "parking_lot",
  "serde",
  "serde_json",

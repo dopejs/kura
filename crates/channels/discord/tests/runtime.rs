@@ -44,6 +44,7 @@ impl Provider for ReplyEchoProvider {
                 .map(|message| message.content.clone())
                 .unwrap_or_default();
             Ok(ProviderResponse {
+            tool_calls: Vec::new(),
                 output: format!("reply:{content}"),
                 finish_reason: "stop".to_string(),
                 usage: Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
@@ -65,6 +66,7 @@ impl Provider for ReplyEchoProvider {
             let output = format!("reply:{content}");
             emit(StreamChunk { delta: output.clone(), ..StreamChunk::default() })?;
             Ok(ProviderResponse {
+            tool_calls: Vec::new(),
                 output,
                 finish_reason: "stop".to_string(),
                 usage: Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 },

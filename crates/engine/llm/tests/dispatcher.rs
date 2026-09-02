@@ -93,6 +93,7 @@ async fn dispatches_successfully() {
         Box::new(|_request| {
             Box::pin(async {
                 Ok(ProviderResponse {
+                    tool_calls: Vec::new(),
                     output: "done".into(),
                     finish_reason: "stop".into(),
                     usage: Usage { input_tokens: 3, output_tokens: 1, total_tokens: 0 },
@@ -139,6 +140,7 @@ async fn retries_retryable_failure() {
                     ));
                 }
                 Ok(ProviderResponse {
+                    tool_calls: Vec::new(),
                     output: "recovered".into(),
                     finish_reason: "stop".into(),
                     usage: Usage { input_tokens: 2, output_tokens: 1, total_tokens: 0 },
@@ -178,7 +180,8 @@ async fn times_out_slow_complete() {
         Box::new(|_request| {
             Box::pin(async {
                 tokio::time::sleep(Duration::from_millis(200)).await;
-                Ok(ProviderResponse { output: "too slow".into(), ..ProviderResponse::default() })
+                Ok(ProviderResponse {
+                    tool_calls: Vec::new(), output: "too slow".into(), ..ProviderResponse::default() })
             })
         }),
         unused_stream(),
@@ -217,6 +220,7 @@ async fn streams_successfully() {
                 emit(StreamChunk { delta: "hello".into(), ..StreamChunk::default() })?;
                 emit(StreamChunk { delta: " world".into(), ..StreamChunk::default() })?;
                 Ok(ProviderResponse {
+                    tool_calls: Vec::new(),
                     output: "hello world".into(),
                     finish_reason: "stop".into(),
                     usage: Usage { input_tokens: 2, output_tokens: 2, total_tokens: 0 },

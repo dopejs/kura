@@ -14,7 +14,12 @@ pub use dispatcher::{Dispatcher, FailedDispatch, PrepareError};
 pub use echo::EchoProvider;
 pub use provider::{
     CancelToken, Provider, ProviderError, ProviderRequest, ProviderResponse, StreamEmitter,
+    ToolCall,
 };
+// Re-exported because it appears in this crate's public API
+// (`CreateDispatchInput::tools`): a consumer should not have to take a second
+// dependency to name a type this one hands it.
+pub use kura_protocol::ToolSpec;
 pub use types::{
     CreateDispatchInput, Dispatch, DispatchStatus, Message, MessageRole, StreamChunk, Usage,
 };

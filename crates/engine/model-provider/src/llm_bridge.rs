@@ -10,9 +10,9 @@ use futures::StreamExt;
 use futures::future::BoxFuture;
 use kura_llm::{
     Message, MessageRole, Provider, ProviderError as LlmError, ProviderRequest, ProviderResponse,
-    StreamChunk, StreamEmitter, Usage,
+    StreamChunk, StreamEmitter, ToolCall, Usage,
 };
-use kura_protocol::{ResponseItem, Role};
+use kura_protocol::{ResponseItem, Role, ToolSpec};
 
 use crate::openai::OpenAiCompatibleClient;
 use crate::provider::{ModelProvider, Prompt, ProviderError, ResponseEvent};
@@ -55,7 +55,7 @@ fn to_protocol_role(role: MessageRole) -> Role {
 /// A leading system message becomes `instructions` because that is where the
 /// OpenAI request builder puts it; sending it twice would duplicate the system
 /// prompt in the request body.
-fn to_prompt(messages: &[Message]) -> Prompt {
+fn to_prompt(messages: &[Message], tools: &[ToolSpec]) -> Prompt {
     let mut instructions = None;
     let mut input = Vec::with_capacity(messages.len());
     for (index, message) in messages.iter().enumerate() {
@@ -68,7 +68,10 @@ fn to_prompt(messages: &[Message]) -> Prompt {
             content: message.content.clone(),
         });
     }
-    Prompt { instructions, input, tools: Vec::new() }
+    // Carried, not dropped. This was `Vec::new()`, so every provider reaching
+    // the dispatcher was told about no tools whatever the caller offered --
+    // the clients could serialize a tool list and never received one.
+    Prompt { instructions, input, tools: tools.to_vec() }
 }
 
 /// Map a transport failure onto the dispatcher's error model.
@@ -129,9 +132,10 @@ impl<M: ModelProvider> ModelProviderBridge<M> {
         request: ProviderRequest,
         emit: StreamEmitter<'_>,
     ) -> Result<ProviderResponse, LlmError> {
-        let prompt = to_prompt(&request.messages);
+        let prompt = to_prompt(&request.messages, &request.tools);
         let mut events = self.client.stream(&prompt);
         let mut output = String::new();
+        let mut tool_calls = Vec::new();
         let mut finish_reason = String::new();
 
         while let Some(event) = events.next().await {
@@ -150,10 +154,12 @@ impl<M: ModelProvider> ModelProviderBridge<M> {
                         usage: None,
                     })?;
                 }
-                ResponseEvent::FunctionCall { .. } => {
-                    // Tool calls are not yet part of this path; ignoring them
-                    // keeps a tool-capable model usable for plain chat instead
-                    // of failing the dispatch outright.
+                ResponseEvent::FunctionCall { call_id, name, arguments } => {
+                    // Reported, not swallowed. Discarding these is what made a
+                    // tool-capable model produce prose about what it would do:
+                    // it asked to call something, the answer never left this
+                    // loop, and the caller saw an empty reply or a narration.
+                    tool_calls.push(ToolCall { call_id, name, arguments });
                 }
                 ResponseEvent::Completed => {
                     finish_reason = "stop".to_string();
@@ -163,6 +169,7 @@ impl<M: ModelProvider> ModelProviderBridge<M> {
 
         Ok(ProviderResponse {
             output,
+            tool_calls,
             finish_reason,
             // The endpoint reports usage only in a trailing frame this client
             // does not surface; leaving it zero lets the dispatcher normalize
@@ -180,6 +187,7 @@ mod tests {
     fn request(messages: Vec<Message>) -> ProviderRequest {
         ProviderRequest {
             dispatch_id: "d1".into(),
+            tools: Vec::new(),
             provider: "openai_compatible".into(),
             model: "m".into(),
             messages,
@@ -199,7 +207,7 @@ mod tests {
         let prompt = to_prompt(&[
             Message { role: MessageRole::System, content: "be brief".into() },
             Message { role: MessageRole::User, content: "hi".into() },
-        ]);
+        ], &[]);
         assert_eq!(prompt.instructions.as_deref(), Some("be brief"));
         assert_eq!(prompt.input.len(), 1);
     }
@@ -209,9 +217,133 @@ mod tests {
         let prompt = to_prompt(&[
             Message { role: MessageRole::User, content: "hi".into() },
             Message { role: MessageRole::System, content: "now be terse".into() },
-        ]);
+        ], &[]);
         assert!(prompt.instructions.is_none());
         assert_eq!(prompt.input.len(), 2);
+    }
+
+    /// A provider that replays a fixed event sequence.
+    struct ScriptedProvider(Vec<ResponseEvent>);
+
+    impl ModelProvider for ScriptedProvider {
+        fn stream<'a>(
+            &'a self,
+            _prompt: &'a Prompt,
+        ) -> futures::stream::BoxStream<'a, Result<ResponseEvent, ProviderError>> {
+            Box::pin(futures::stream::iter(self.0.clone().into_iter().map(Ok)))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tool_call_survives_the_adapter() {
+        // These were matched and discarded, with a comment saying so. A model
+        // that asked to call something produced a dispatch carrying an empty
+        // reply, and a caller had no way to learn a call had been requested --
+        // which is why a tool-capable model could only narrate.
+        let bridge = ModelProviderBridge::new(
+            "scripted",
+            ScriptedProvider(vec![
+                ResponseEvent::FunctionCall {
+                    call_id: "call_1".into(),
+                    name: "loopforge_status".into(),
+                    arguments: "{}".into(),
+                },
+                ResponseEvent::Completed,
+            ]),
+        );
+
+        let response = bridge.complete(request(vec![Message {
+            role: MessageRole::User,
+            content: "where am i".into(),
+        }]))
+        .await
+        .expect("dispatch");
+
+        assert_eq!(
+            response.tool_calls,
+            vec![ToolCall {
+                call_id: "call_1".into(),
+                name: "loopforge_status".into(),
+                arguments: "{}".into(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn text_and_calls_are_reported_together() {
+        // A model may say something and ask for a call in the same round;
+        // keeping only one of the two loses half the turn.
+        let bridge = ModelProviderBridge::new(
+            "scripted",
+            ScriptedProvider(vec![
+                ResponseEvent::OutputTextDelta("checking".into()),
+                ResponseEvent::FunctionCall {
+                    call_id: "call_1".into(),
+                    name: "loopforge_status".into(),
+                    arguments: "{}".into(),
+                },
+                ResponseEvent::Completed,
+            ]),
+        );
+
+        let response = bridge.complete(request(vec![Message {
+            role: MessageRole::User,
+            content: "where am i".into(),
+        }]))
+        .await
+        .expect("dispatch");
+
+        assert_eq!(response.output, "checking");
+        assert_eq!(response.tool_calls.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_plain_answer_reports_no_calls() {
+        let bridge = ModelProviderBridge::new(
+            "scripted",
+            ScriptedProvider(vec![
+                ResponseEvent::OutputTextDelta("hello".into()),
+                ResponseEvent::Completed,
+            ]),
+        );
+
+        let response = bridge.complete(request(vec![Message {
+            role: MessageRole::User,
+            content: "hi".into(),
+        }]))
+        .await
+        .expect("dispatch");
+
+        assert_eq!(response.output, "hello");
+        assert!(response.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn the_tools_a_caller_offers_reach_the_provider() {
+        // This built the prompt with `tools: Vec::new()` regardless. Every
+        // provider behind the dispatcher was therefore told about no tools
+        // whatever the caller offered -- the wire clients could serialize a
+        // tool list and never received one to serialize.
+        let tools = vec![ToolSpec {
+            name: "loopforge_status".into(),
+            description: "read project state".into(),
+            parameters: serde_json::json!({"type": "object"}),
+        }];
+        let prompt = to_prompt(
+            &[Message { role: MessageRole::User, content: "where am i".into() }],
+            &tools,
+        );
+        assert_eq!(prompt.tools, tools);
+    }
+
+    #[test]
+    fn a_request_offering_nothing_still_offers_nothing() {
+        // Plain chat is the ordinary case and must not acquire a tool list.
+        let prompt = to_prompt(
+            &[Message { role: MessageRole::User, content: "hi".into() }],
+            &[],
+        );
+        assert!(prompt.tools.is_empty());
     }
 
     #[test]

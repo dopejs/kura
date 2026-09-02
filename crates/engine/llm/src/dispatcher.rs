@@ -156,9 +156,11 @@ impl Dispatcher {
             provider: provider_name,
             model: model_name,
             messages: input.messages,
+            tools: input.tools,
             stream,
             status: DispatchStatus::Queued,
             output: String::new(),
+            tool_calls: Vec::new(),
             finish_reason: String::new(),
             usage: Usage::default(),
             error_code: String::new(),
@@ -257,6 +259,7 @@ impl Dispatcher {
                 provider: dispatch.provider.clone(),
                 model: dispatch.model.clone(),
                 messages: dispatch.messages.clone(),
+                tools: dispatch.tools.clone(),
                 attempt,
                 timeout_ms: dispatch.timeout_ms,
                 cancel: cancel.clone(),
@@ -299,6 +302,7 @@ impl Dispatcher {
                     let completed_at = Utc::now();
                     dispatch.status = DispatchStatus::Completed;
                     dispatch.output = response.output;
+                    dispatch.tool_calls = response.tool_calls;
                     dispatch.partial = false;
                     dispatch.finish_reason = response.finish_reason;
                     dispatch.usage = normalize_usage(response.usage);

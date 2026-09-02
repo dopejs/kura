@@ -6,6 +6,7 @@ version.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+kura-protocol.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 chrono.workspace = true

@@ -11,6 +11,21 @@ pub enum Op {
     Shutdown,
 }
 
+/// A tool the model may call, as the provider is told about it.
+///
+/// Lives here rather than beside the HTTP clients that serialize it: the
+/// dispatcher has to carry a tool list from the caller to the provider, and it
+/// sits below those clients in the dependency graph. Keeping the type up there
+/// is why the bridge could only ever hand the provider an empty list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    /// JSON Schema for the arguments. Opaque here; each wire shapes it.
+    pub parameters: serde_json::Value,
+}
+
 /// One item of conversation history fed back to the model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

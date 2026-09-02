@@ -8,4 +8,4 @@ mod ids;
 mod protocol;
 
 pub use ids::{ProfileId, RunId, TenantId, ThreadId};
-pub use protocol::{Event, EventMsg, Op, ResponseItem, Role};
+pub use protocol::{Event, EventMsg, Op, ResponseItem, Role, ToolSpec};

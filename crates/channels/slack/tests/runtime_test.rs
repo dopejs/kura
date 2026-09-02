@@ -64,6 +64,7 @@ impl Provider for EchoTestProvider {
                 .map(|m| m.content.clone())
                 .unwrap_or_default();
             Ok(ProviderResponse {
+            tool_calls: Vec::new(),
                 output: format!("reply:{content}"),
                 finish_reason: "stop".to_string(),
                 usage: Usage {
@@ -102,6 +103,7 @@ impl Provider for EchoTestProvider {
                 }),
             })?;
             Ok(ProviderResponse {
+            tool_calls: Vec::new(),
                 output: format!("reply:{content}"),
                 finish_reason: "stop".to_string(),
                 usage: Usage {

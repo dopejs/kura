@@ -87,7 +87,7 @@ pub use thread_persistence::ThreadListQuery;
 ///
 /// Must equal the highest `version` in `schema_migrations()`, or a database
 /// written by this build is rejected on reopen as "newer than supported".
-pub const CURRENT_SCHEMA_VERSION: i64 = 3;
+pub const CURRENT_SCHEMA_VERSION: i64 = 4;
 
 /// The last development-era schema version before the baseline collapse.
 /// Databases stamped exactly at this legacy head hold a schema identical to
@@ -116,6 +116,38 @@ pub struct SQLiteStore {
     data_dir: String,
     db_path: String,
     conn: Connection,
+}
+
+/// Apply one migration statement, tolerating a column that is already there.
+///
+/// Every statement in this chain has to be safe to run twice: a pre-release
+/// database stamped at the legacy head is re-stamped as the baseline and then
+/// has every post-baseline migration replayed against a schema that already
+/// contains them. `CREATE TABLE`/`CREATE INDEX` say `IF NOT EXISTS` and so
+/// survive that; SQLite has no `ADD COLUMN IF NOT EXISTS`, and without this a
+/// migration that adds one fails the replay and the database will not open.
+///
+/// Narrow on purpose: only this error, and only for `ADD COLUMN`. Anything
+/// else is a real migration failure and still stops the boot.
+fn apply_migration_statement(
+    tx: &rusqlite::Connection,
+    migration: &SchemaMigration,
+    statement: &str,
+) -> Result<(), String> {
+    match tx.execute_batch(statement) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let message = error.to_string();
+            let adds_column = statement.to_ascii_uppercase().contains("ADD COLUMN");
+            if adds_column && message.contains("duplicate column name") {
+                return Ok(());
+            }
+            Err(format!(
+                "apply schema migration {} ({}): {message}",
+                migration.version, migration.name
+            ))
+        }
+    }
 }
 
 impl SQLiteStore {
@@ -207,8 +239,7 @@ impl SQLiteStore {
                 continue;
             }
             for statement in &migration.statements {
-                tx.execute_batch(statement)
-                    .map_err(|e| format!("apply schema migration {} ({}): {e}", migration.version, migration.name))?;
+                apply_migration_statement(&tx, &migration, statement)?;
             }
             record_schema_migration(&tx, migration.version, &migration.name)?;
             current = migration.version;
@@ -242,8 +273,7 @@ impl SQLiteStore {
                 break;
             }
             for statement in &migration.statements {
-                tx.execute_batch(statement)
-                    .map_err(|e| format!("apply schema migration {} ({}): {e}", migration.version, migration.name))?;
+                apply_migration_statement(&tx, &migration, statement)?;
             }
             record_schema_migration(&tx, migration.version, &migration.name)?;
         }

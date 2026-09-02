@@ -612,6 +612,9 @@ pub fn parse_claude_result(
             return Err(ProviderError::provider(code, payload.result, false));
         }
         return Ok(ProviderResponse {
+        // A borrowed CLI runs its own tool loop internally and reports only
+        // the finished text; there is nothing for a caller to dispatch.
+        tool_calls: Vec::new(),
             output: payload.result,
             finish_reason: "stop".to_string(),
             usage: Usage {

@@ -1,4 +1,7 @@
 use kura_protocol::ResponseItem;
+// Re-exported: the type moved down to the protocol crate so the dispatcher can
+// carry it, and every caller here already imports it from this module.
+pub use kura_protocol::ToolSpec;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use serde::Deserialize;
@@ -13,13 +16,6 @@ pub struct Prompt {
     pub tools: Vec<ToolSpec>,
 }
 
-/// A tool definition handed to the model (JSON Schema parameters).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ToolSpec {
-    pub name: String,
-    pub description: String,
-    pub parameters: serde_json::Value,
-}
 
 /// Incremental model output. Function calls are emitted once complete;
 /// providers that stream call fragments must accumulate before emitting.

@@ -54,6 +54,7 @@ impl Provider for EchoTestProvider {
                 .map(|m| m.content.clone())
                 .unwrap_or_default();
             Ok(ProviderResponse {
+            tool_calls: Vec::new(),
                 output: format!("reply:{content}"),
                 finish_reason: "stop".to_string(),
                 usage: Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
@@ -85,6 +86,7 @@ impl Provider for EchoTestProvider {
                 ..Default::default()
             })?;
             Ok(ProviderResponse {
+            tool_calls: Vec::new(),
                 output: format!("reply:{content}"),
                 finish_reason: "stop".to_string(),
                 usage: Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
@@ -113,6 +115,7 @@ impl Provider for LongTestProvider {
         Box::pin(async move {
             let runes = output.chars().count() as i64;
             Ok(ProviderResponse {
+            tool_calls: Vec::new(),
                 output,
                 finish_reason: "stop".to_string(),
                 usage: Usage { input_tokens: 1, output_tokens: runes, total_tokens: runes + 1 },
@@ -145,6 +148,7 @@ impl Provider for LongTestProvider {
             }
             let count = runes.len() as i64;
             Ok(ProviderResponse {
+            tool_calls: Vec::new(),
                 output,
                 finish_reason: "stop".to_string(),
                 usage: Usage { input_tokens: 1, output_tokens: count, total_tokens: count + 1 },

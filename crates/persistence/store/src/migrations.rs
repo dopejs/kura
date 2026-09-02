@@ -3077,5 +3077,21 @@ pub fn schema_migrations() -> Vec<SchemaMigration> {
             );"#
                 .to_string(),
         ],
-    }]
+    },
+    SchemaMigration {
+        version: 4,
+        name: "llm_dispatch_tools".to_string(),
+        statements: vec![
+            // What the model was offered, and what it asked to call.
+            //
+            // Stored with the dispatch for the same reason the messages are:
+            // the record has to show what the model could see, or a turn that
+            // called a tool cannot be explained afterwards. Nullable, because
+            // every dispatch written before this one has neither, and a plain
+            // chat request still has neither.
+            r#"ALTER TABLE llm_dispatches ADD COLUMN tools_json TEXT;"#.to_string(),
+            r#"ALTER TABLE llm_dispatches ADD COLUMN tool_calls_json TEXT;"#.to_string(),
+        ],
+    }
+    ]
 }
