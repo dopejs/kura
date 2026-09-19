@@ -7,9 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
-use kura_livevalidation::{
-    FakeOutcome, FakeOutcomeResult, SafetyClass, fake_outcome_result_for,
-};
+use kura_livevalidation::{FakeOutcome, FakeOutcomeResult, SafetyClass, fake_outcome_result_for};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -155,7 +153,9 @@ impl Supervisor {
             updated_at: now,
             ..Connector::default()
         };
-        inner.by_id.insert(connector.connector_id.clone(), connector.clone());
+        inner
+            .by_id
+            .insert(connector.connector_id.clone(), connector.clone());
         inner.order.push(connector.connector_id.clone());
         Ok((connector, true))
     }
@@ -397,9 +397,5 @@ pub fn clean_strings(values: Vec<String>) -> Vec<String> {
 /// Go `minInt`.
 #[must_use]
 pub fn min_int(a: i64, b: i64) -> i64 {
-    if a < b {
-        a
-    } else {
-        b
-    }
+    if a < b { a } else { b }
 }

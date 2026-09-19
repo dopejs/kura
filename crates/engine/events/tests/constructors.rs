@@ -11,15 +11,27 @@ fn now() -> DateTime<Utc> {
 }
 
 fn payload_str<'a>(event: &'a Event, key: &str) -> &'a str {
-    event.payload.get(key).and_then(|v| v.as_str()).unwrap_or_default()
+    event
+        .payload
+        .get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
 }
 
 fn payload_i64(event: &Event, key: &str) -> i64 {
-    event.payload.get(key).and_then(|v| v.as_i64()).unwrap_or(-1)
+    event
+        .payload
+        .get(key)
+        .and_then(|v| v.as_i64())
+        .unwrap_or(-1)
 }
 
 fn payload_bool(event: &Event, key: &str) -> bool {
-    event.payload.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+    event
+        .payload
+        .get(key)
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 /// Builders for the kura-threads records (the crate deliberately has no
@@ -323,22 +335,75 @@ fn agent_profile_events_use_safe_metadata() {
     });
     assert_eq!(projection.name, "agent_profile.runtime_projected");
     assert_eq!(projection.resource.kind, "run");
-    assert_eq!(payload_str(&projection, "selectionReason"), "default_seeded");
+    assert_eq!(
+        payload_str(&projection, "selectionReason"),
+        "default_seeded"
+    );
 }
 
 #[test]
 fn agent_profile_lifecycle_event_names_cover_failure_retirement_and_rollback_outcomes() {
     let cases: Vec<(&str, &str, &str, &str)> = vec![
-        ("validation failure", "agent_profile.validation_failed", "denied", "profile_validation_failed"),
-        ("permission denial", "agent_profile.permission_denied", "denied", "permission_denied"),
-        ("archive", "agent_profile.archived", "succeeded", "operator_retired_profile"),
-        ("disable", "agent_profile.disabled", "succeeded", "operator_retired_profile"),
-        ("retirement denial", "agent_profile.retirement_denied", "denied", "profile_not_found"),
-        ("safe fallback", "agent_profile.safe_default_fallback", "succeeded", "current_default_retired"),
-        ("rollback requested", "agent_profile.rollback_requested", "requested", "operator_reverted_persona"),
-        ("rollback succeeded", "agent_profile.rolled_back", "succeeded", "operator_reverted_persona"),
-        ("rollback denied", "agent_profile.rollback_denied", "denied", "profile_not_activatable"),
-        ("audit failed closed", "agent_profile.audit_failed_closed", "failed_closed", "audit_write_failed"),
+        (
+            "validation failure",
+            "agent_profile.validation_failed",
+            "denied",
+            "profile_validation_failed",
+        ),
+        (
+            "permission denial",
+            "agent_profile.permission_denied",
+            "denied",
+            "permission_denied",
+        ),
+        (
+            "archive",
+            "agent_profile.archived",
+            "succeeded",
+            "operator_retired_profile",
+        ),
+        (
+            "disable",
+            "agent_profile.disabled",
+            "succeeded",
+            "operator_retired_profile",
+        ),
+        (
+            "retirement denial",
+            "agent_profile.retirement_denied",
+            "denied",
+            "profile_not_found",
+        ),
+        (
+            "safe fallback",
+            "agent_profile.safe_default_fallback",
+            "succeeded",
+            "current_default_retired",
+        ),
+        (
+            "rollback requested",
+            "agent_profile.rollback_requested",
+            "requested",
+            "operator_reverted_persona",
+        ),
+        (
+            "rollback succeeded",
+            "agent_profile.rolled_back",
+            "succeeded",
+            "operator_reverted_persona",
+        ),
+        (
+            "rollback denied",
+            "agent_profile.rollback_denied",
+            "denied",
+            "profile_not_activatable",
+        ),
+        (
+            "audit failed closed",
+            "agent_profile.audit_failed_closed",
+            "failed_closed",
+            "audit_write_failed",
+        ),
     ];
     for (case_name, event_name, outcome, reason_code) in cases {
         let event = agent_profile_lifecycle_event(AgentProfileLifecycleInput {
@@ -354,9 +419,21 @@ fn agent_profile_lifecycle_event_names_cover_failure_retirement_and_rollback_out
         });
         assert_eq!(event.name, event_name, "case {case_name}");
         assert_eq!(payload_str(&event, "outcome"), outcome, "case {case_name}");
-        assert_eq!(payload_str(&event, "reasonCode"), reason_code, "case {case_name}");
-        assert_eq!(payload_str(&event, "safeSummary"), "safe metadata", "case {case_name}");
-        assert_eq!(payload_str(&event, "redactionStatus"), "redacted", "case {case_name}");
+        assert_eq!(
+            payload_str(&event, "reasonCode"),
+            reason_code,
+            "case {case_name}"
+        );
+        assert_eq!(
+            payload_str(&event, "safeSummary"),
+            "safe metadata",
+            "case {case_name}"
+        );
+        assert_eq!(
+            payload_str(&event, "redactionStatus"),
+            "redacted",
+            "case {case_name}"
+        );
     }
 }
 
@@ -383,7 +460,10 @@ fn billing_event_projection() {
     assert_eq!(event.category, "billing");
     assert_eq!(event.name, BILLING_USAGE_RESERVED_NAME);
     assert_eq!(event.tenant_id, "ten_r38_a");
-    assert_eq!(payload_str(&event, "operationKey"), "tenant:ten_r38_a:run:client_1");
+    assert_eq!(
+        payload_str(&event, "operationKey"),
+        "tenant:ten_r38_a:run:client_1"
+    );
     assert_eq!(payload_i64(&event, "amount"), 1);
 }
 
@@ -397,12 +477,16 @@ fn billing_recovery_decision_event_projection() {
             category: kura_billing::Category::from(kura_billing::Category::RUN_LAUNCHES),
             quota_period_id: "period_1".into(),
             operation_key: "tenant:ten_r38_a:run:client_1".into(),
-            status: kura_billing::ReservationStatus::from(kura_billing::ReservationStatus::OPERATOR_ACTION_NEEDED),
+            status: kura_billing::ReservationStatus::from(
+                kura_billing::ReservationStatus::OPERATOR_ACTION_NEEDED,
+            ),
             updated_at,
             recovery_reason: "restart outcome could not be proven".into(),
             ..Default::default()
         },
-        outcome: kura_billing::ReservationStatus::from(kura_billing::ReservationStatus::OPERATOR_ACTION_NEEDED),
+        outcome: kura_billing::ReservationStatus::from(
+            kura_billing::ReservationStatus::OPERATOR_ACTION_NEEDED,
+        ),
         reason: "restart outcome could not be proven".into(),
     };
     let event = billing_recovery_decision_event(decision);
@@ -438,8 +522,14 @@ fn connector_management_events_carry_tenant_and_redaction_metadata() {
         assert_eq!(payload_str(event, "redactionStatus"), "redacted");
     }
     // Action/outcome defaults: action falls back to the event name, outcome to "succeeded".
-    assert_eq!(events[0].name, "connector.management_support_evidence_generated");
-    assert_eq!(payload_str(&events[0], "action"), "connector.management_support_evidence_generated");
+    assert_eq!(
+        events[0].name,
+        "connector.management_support_evidence_generated"
+    );
+    assert_eq!(
+        payload_str(&events[0], "action"),
+        "connector.management_support_evidence_generated"
+    );
     assert_eq!(payload_str(&events[0], "outcome"), "succeeded");
 }
 
@@ -488,7 +578,10 @@ fn connector_delivery_events_accept_slack_connector_evidence() {
     assert_eq!(failed.name, "connector.foreground_reply_failed");
     assert_eq!(payload_str(&failed, "connectorId"), "slack-main");
     assert_eq!(payload_str(&failed, "redactionStatus"), "redacted");
-    assert_eq!(payload_str(&failed, "backgroundDeliveryId"), "delivery_slack_background_1");
+    assert_eq!(
+        payload_str(&failed, "backgroundDeliveryId"),
+        "delivery_slack_background_1"
+    );
 
     let separation = connector_delivery_separation_recorded(ConnectorDeliverySeparationInput {
         tenant_id: "ten_slack".into(),
@@ -520,7 +613,10 @@ fn matrix_connector_event_names_cover_phase52_evidence() {
         CONNECTOR_EVENT_MATRIX_SMOKE_EVIDENCE_RECORDED,
     ];
     for name in want {
-        assert!(MATRIX_CONNECTOR_EVENT_NAMES.contains(&name), "MatrixConnectorEventNames missing {name}");
+        assert!(
+            MATRIX_CONNECTOR_EVENT_NAMES.contains(&name),
+            "MatrixConnectorEventNames missing {name}"
+        );
     }
 }
 
@@ -542,23 +638,27 @@ fn matrix_connector_event_constructors_are_redacted() {
     assert_eq!(route.name, CONNECTOR_EVENT_ROUTE_OUTCOME_RECORDED);
     assert_eq!(payload_str(&route, "redactionStatus"), "redacted");
 
-    let smoke = connector_matrix_smoke_evidence_recorded(ConnectorMatrixSmokeEvidenceRecordedInput {
-        tenant_id: "ten_matrix".into(),
-        connector_id: "matrix-main".into(),
-        smoke_evidence_id: "matrix_smoke_1".into(),
-        homeserver_binding_id: "matrix_hs_1".into(),
-        status: "skipped".into(),
-        authorization_mode: "unavailable".into(),
-        owner: "operator".into(),
-        reason: "safe_credentials_unavailable".into(),
-        redaction_status: "redacted".into(),
-        validated_at: now(),
-        retention_expires_at: now() + chrono::Duration::days(90),
-    });
+    let smoke =
+        connector_matrix_smoke_evidence_recorded(ConnectorMatrixSmokeEvidenceRecordedInput {
+            tenant_id: "ten_matrix".into(),
+            connector_id: "matrix-main".into(),
+            smoke_evidence_id: "matrix_smoke_1".into(),
+            homeserver_binding_id: "matrix_hs_1".into(),
+            status: "skipped".into(),
+            authorization_mode: "unavailable".into(),
+            owner: "operator".into(),
+            reason: "safe_credentials_unavailable".into(),
+            redaction_status: "redacted".into(),
+            validated_at: now(),
+            retention_expires_at: now() + chrono::Duration::days(90),
+        });
     assert_eq!(smoke.name, CONNECTOR_EVENT_MATRIX_SMOKE_EVIDENCE_RECORDED);
     assert_eq!(smoke.resource.kind, "matrix_smoke_evidence");
     assert_eq!(payload_str(&smoke, "redactionStatus"), "redacted");
-    assert_eq!(payload_str(&smoke, "reason"), "safe_credentials_unavailable");
+    assert_eq!(
+        payload_str(&smoke, "reason"),
+        "safe_credentials_unavailable"
+    );
 }
 
 // ---- connector_slack.go / connector_telegram.go tests ----
@@ -622,7 +722,8 @@ fn integration_diagnostic_events() {
         redaction_status: kura_integrations::RedactionStatus::Redacted,
         ..Default::default()
     };
-    let run_event = integration_diagnostic_run_event(INTEGRATION_DIAGNOSTIC_RUN_COMPLETED_NAME, run);
+    let run_event =
+        integration_diagnostic_run_event(INTEGRATION_DIAGNOSTIC_RUN_COMPLETED_NAME, run);
     assert_eq!(run_event.name, INTEGRATION_DIAGNOSTIC_RUN_COMPLETED_NAME);
     assert_eq!(payload_str(&run_event, "diagnosticRunId"), "diag_run_1");
     assert_eq!(payload_str(&run_event, "redactionStatus"), "redacted");
@@ -638,9 +739,18 @@ fn integration_diagnostic_events() {
         ..Default::default()
     };
     let redaction_event = integration_diagnostic_redaction_failed_event(result.clone());
-    assert_eq!(redaction_event.name, INTEGRATION_DIAGNOSTIC_REDACTION_FAILED_NAME);
-    assert_eq!(payload_str(&redaction_event, "redactionStatus"), "failed_closed");
-    assert_eq!(payload_str(&redaction_event, "targetKind"), "diagnostic_result");
+    assert_eq!(
+        redaction_event.name,
+        INTEGRATION_DIAGNOSTIC_REDACTION_FAILED_NAME
+    );
+    assert_eq!(
+        payload_str(&redaction_event, "redactionStatus"),
+        "failed_closed"
+    );
+    assert_eq!(
+        payload_str(&redaction_event, "targetKind"),
+        "diagnostic_result"
+    );
 
     let state_event = integration_diagnostic_state_changed_event(
         result,
@@ -649,7 +759,10 @@ fn integration_diagnostic_events() {
     assert_eq!(state_event.name, INTEGRATION_DIAGNOSTIC_STATE_CHANGED_NAME);
     assert_eq!(payload_str(&state_event, "previousStatus"), "healthy");
     assert_eq!(payload_str(&state_event, "status"), "unknown");
-    assert_eq!(payload_str(&state_event, "reasonCode"), "redaction_failed_closed");
+    assert_eq!(
+        payload_str(&state_event, "reasonCode"),
+        "redaction_failed_closed"
+    );
 
     let smoke = kura_opsreadiness::SmokeMatrixReport {
         smoke_report_id: "smoke_1".into(),
@@ -661,23 +774,40 @@ fn integration_diagnostic_events() {
         ..Default::default()
     };
     let smoke_event = integration_diagnostic_smoke_completed_event(smoke);
-    assert_eq!(smoke_event.name, INTEGRATION_DIAGNOSTIC_SMOKE_COMPLETED_NAME);
+    assert_eq!(
+        smoke_event.name,
+        INTEGRATION_DIAGNOSTIC_SMOKE_COMPLETED_NAME
+    );
     assert_eq!(payload_str(&smoke_event, "smokeReportId"), "smoke_1");
     assert_eq!(payload_str(&smoke_event, "status"), "completed");
     assert_eq!(
         smoke_event.payload["domainSummary"],
         serde_json::json!({ "feishu": "passed" })
     );
-    assert_eq!(smoke_event.payload["artifactRefs"], serde_json::json!(["artifact_1"]));
+    assert_eq!(
+        smoke_event.payload["artifactRefs"],
+        serde_json::json!(["artifact_1"])
+    );
 
     let applied_at = now + chrono::Duration::minutes(1);
-    let mut record = kura_integrations::new_diagnostic_retention_record("ten_r42", "diagnostic_run", "diag_run_1", now);
+    let mut record = kura_integrations::new_diagnostic_retention_record(
+        "ten_r42",
+        "diagnostic_run",
+        "diag_run_1",
+        now,
+    );
     record.retention_state = kura_integrations::DiagnosticRetentionState::Expired;
     record.applied_at = Some(applied_at);
     let retention_event = integration_diagnostic_retention_applied_event(record);
-    assert_eq!(retention_event.name, INTEGRATION_DIAGNOSTIC_RETENTION_APPLIED_NAME);
+    assert_eq!(
+        retention_event.name,
+        INTEGRATION_DIAGNOSTIC_RETENTION_APPLIED_NAME
+    );
     assert_eq!(payload_str(&retention_event, "retentionState"), "expired");
-    assert_eq!(payload_str(&retention_event, "targetKind"), "diagnostic_run");
+    assert_eq!(
+        payload_str(&retention_event, "targetKind"),
+        "diagnostic_run"
+    );
 }
 
 // ---- thread_continuity.go tests ----
@@ -687,7 +817,15 @@ fn thread_continuity_events_are_metadata_only() {
     use kura_threads::{ContinuityStatus, RedactionStatus};
     let now = now();
     let turn_event = thread_continuity_turn_recorded_event(
-        builders::continuity_turn("turn_1", "ten_1", "thr_1", "seg_1", 7, RedactionStatus::Redacted, now),
+        builders::continuity_turn(
+            "turn_1",
+            "ten_1",
+            "thr_1",
+            "seg_1",
+            7,
+            RedactionStatus::Redacted,
+            now,
+        ),
         "",
     );
     assert_eq!(turn_event.name, THREAD_CONTINUITY_TURN_RECORDED_NAME);
@@ -696,15 +834,27 @@ fn thread_continuity_events_are_metadata_only() {
     assert_eq!(payload_str(&turn_event, "reasonCode"), "included_recent");
     assert_eq!(turn_event.scope.session_id, "seg_1");
     assert_eq!(payload_str(&turn_event, "redactionStatus"), "redacted");
-    assert!(turn_event.payload.get("safeContent").is_none(), "turn event leaked content");
+    assert!(
+        turn_event.payload.get("safeContent").is_none(),
+        "turn event leaked content"
+    );
 
     let preview_event = thread_continuity_preview_recorded_event(builders::continuity_preview(
-        "contprev_1", "ten_1", "thr_1", "seg_1", ContinuityStatus::Applied, now, RedactionStatus::Redacted,
+        "contprev_1",
+        "ten_1",
+        "thr_1",
+        "seg_1",
+        ContinuityStatus::Applied,
+        now,
+        RedactionStatus::Redacted,
     ));
     assert_eq!(preview_event.name, THREAD_CONTINUITY_PREVIEW_RECORDED_NAME);
     assert_eq!(payload_str(&preview_event, "outcome"), "applied");
     assert_eq!(payload_str(&preview_event, "action"), "preview_recorded");
-    assert!(preview_event.payload.get("items").is_none(), "preview event leaked item detail");
+    assert!(
+        preview_event.payload.get("items").is_none(),
+        "preview event leaked item detail"
+    );
 }
 
 // ---- thread_group_room.go tests ----
@@ -712,25 +862,42 @@ fn thread_continuity_events_are_metadata_only() {
 #[test]
 fn group_room_reset_handoff_events_use_safe_metadata() {
     use kura_threads::{
-        ConversationShape, HandoffSourceReferenceStatus, HandoffStatus, ParticipationDecisionValue,
-        RedactionStatus, ResetEventStatus, GROUP_ROOM_REASON_MISSING_QUALIFYING_MENTION,
-        GROUP_ROOM_REASON_SCOPED_RESET_SUCCEEDED,
+        ConversationShape, GROUP_ROOM_REASON_MISSING_QUALIFYING_MENTION,
+        GROUP_ROOM_REASON_SCOPED_RESET_SUCCEEDED, HandoffSourceReferenceStatus, HandoffStatus,
+        ParticipationDecisionValue, RedactionStatus, ResetEventStatus,
     };
     let now = now();
 
     let participation = thread_participation_decision_event(builders::participation_decision(
-        "part_1", "ten_1", "thr_1", "seg_1", "slack-main", ConversationShape::Room,
-        ParticipationDecisionValue::Ignored, GROUP_ROOM_REASON_MISSING_QUALIFYING_MENTION, now,
+        "part_1",
+        "ten_1",
+        "thr_1",
+        "seg_1",
+        "slack-main",
+        ConversationShape::Room,
+        ParticipationDecisionValue::Ignored,
+        GROUP_ROOM_REASON_MISSING_QUALIFYING_MENTION,
+        now,
         RedactionStatus::Redacted,
     ));
-    assert_eq!(participation.name, THREAD_PARTICIPATION_DECISION_RECORDED_NAME);
+    assert_eq!(
+        participation.name,
+        THREAD_PARTICIPATION_DECISION_RECORDED_NAME
+    );
     assert_eq!(payload_str(&participation, "decision"), "ignored");
     assert_eq!(payload_str(&participation, "redactionStatus"), "redacted");
     assert_eq!(payload_str(&participation, "conversationShape"), "room");
 
     let reset = thread_scoped_reset_evidence_event(builders::reset_event(
-        "reset_1", "ten_1", "thr_1", ConversationShape::Room, "connectors.manage", "seg_2",
-        ResetEventStatus::Succeeded, GROUP_ROOM_REASON_SCOPED_RESET_SUCCEEDED, now,
+        "reset_1",
+        "ten_1",
+        "thr_1",
+        ConversationShape::Room,
+        "connectors.manage",
+        "seg_2",
+        ResetEventStatus::Succeeded,
+        GROUP_ROOM_REASON_SCOPED_RESET_SUCCEEDED,
+        now,
         RedactionStatus::Redacted,
     ));
     assert_eq!(reset.name, THREAD_RESET_SCOPED_NAME);
@@ -739,9 +906,17 @@ fn group_room_reset_handoff_events_use_safe_metadata() {
     assert_eq!(payload_str(&reset, "status"), "succeeded");
 
     let handoff = thread_handoff_linked_event(builders::handoff_link(
-        "handoff_1", "ten_1", "thr_source", "thr_destination", ConversationShape::Room,
-        ConversationShape::Web, HandoffStatus::Succeeded, "user_requested_handoff",
-        "connectors.manage", HandoffSourceReferenceStatus::Available, now,
+        "handoff_1",
+        "ten_1",
+        "thr_source",
+        "thr_destination",
+        ConversationShape::Room,
+        ConversationShape::Web,
+        HandoffStatus::Succeeded,
+        "user_requested_handoff",
+        "connectors.manage",
+        HandoffSourceReferenceStatus::Available,
+        now,
         RedactionStatus::Redacted,
     ));
     assert_eq!(handoff.name, THREAD_HANDOFF_LINKED_NAME);
@@ -757,8 +932,15 @@ fn thread_lifecycle_events() {
     use kura_threads::{LifecycleActionKind, RedactionStatus};
     let now = now();
     let event = thread_lifecycle_event(builders::lifecycle_action(
-        "action_1", "ten_1", "thr_1", LifecycleActionKind::Reset, "succeeded", "audit_1",
-        "user_requested_reset", now, RedactionStatus::Redacted,
+        "action_1",
+        "ten_1",
+        "thr_1",
+        LifecycleActionKind::Reset,
+        "succeeded",
+        "audit_1",
+        "user_requested_reset",
+        now,
+        RedactionStatus::Redacted,
     ));
     assert_eq!(event.category, "thread");
     assert_eq!(event.name, "thread.lifecycle_reset");
@@ -768,12 +950,26 @@ fn thread_lifecycle_events() {
     assert_eq!(payload_str(&event, "action"), "reset");
 
     let archive = thread_lifecycle_event(builders::lifecycle_action(
-        "action_2", "ten_1", "thr_2", LifecycleActionKind::Archive, "succeeded", "", "", now,
+        "action_2",
+        "ten_1",
+        "thr_2",
+        LifecycleActionKind::Archive,
+        "succeeded",
+        "",
+        "",
+        now,
         RedactionStatus::Redacted,
     ));
     assert_eq!(archive.name, "thread.lifecycle_archived");
     let reopen = thread_lifecycle_event(builders::lifecycle_action(
-        "action_3", "ten_1", "thr_2", LifecycleActionKind::Reopen, "succeeded", "", "", now,
+        "action_3",
+        "ten_1",
+        "thr_2",
+        LifecycleActionKind::Reopen,
+        "succeeded",
+        "",
+        "",
+        now,
         RedactionStatus::Redacted,
     ));
     assert_eq!(reopen.name, "thread.lifecycle_reopened");
@@ -785,28 +981,46 @@ fn thread_source_runtime_retention_and_failure_events() {
     let now = now();
 
     let source = thread_source_linked_event(builders::source_linkage(
-        "src_1", "ten_1", "thr_1", RoutingOutcome::Accepted, now, RedactionStatus::Redacted,
+        "src_1",
+        "ten_1",
+        "thr_1",
+        RoutingOutcome::Accepted,
+        now,
+        RedactionStatus::Redacted,
     ));
     assert_eq!(source.name, THREAD_SOURCE_LINKED_NAME);
     assert_eq!(payload_str(&source, "routingOutcome"), "accepted");
 
     let runtime = thread_runtime_projection_event(builders::runtime_projection(
-        "rtp_1", "ten_1", "thr_1", RuntimeResourceKind::Run, "run_1", "completed", now,
+        "rtp_1",
+        "ten_1",
+        "thr_1",
+        RuntimeResourceKind::Run,
+        "run_1",
+        "completed",
+        now,
         RedactionStatus::Redacted,
     ));
     assert_eq!(runtime.name, THREAD_RUNTIME_PROJECTION_NAME);
     assert_eq!(payload_str(&runtime, "resourceKind"), "run");
 
-    let retention = thread_retention_applied_event("ten_1", "thr_1", now, RedactionStatus::Redacted);
+    let retention =
+        thread_retention_applied_event("ten_1", "thr_1", now, RedactionStatus::Redacted);
     assert_eq!(retention.name, THREAD_RETENTION_APPLIED_NAME);
     assert!(!payload_str(&retention, "retentionExpiresAt").is_empty());
     assert_eq!(payload_str(&retention, "redactionStatus"), "redacted");
 
     let redaction = thread_redaction_failed_event("ten_1", "thr_1", "unsafe_provider_detail");
     assert_eq!(redaction.name, THREAD_REDACTION_FAILED_NAME);
-    assert_eq!(payload_str(&redaction, "reasonCode"), "unsafe_provider_detail");
+    assert_eq!(
+        payload_str(&redaction, "reasonCode"),
+        "unsafe_provider_detail"
+    );
     assert_eq!(payload_str(&redaction, "outcome"), "redaction_failed");
-    assert_eq!(payload_str(&redaction, "redactionStatus"), "redaction_failed");
+    assert_eq!(
+        payload_str(&redaction, "redactionStatus"),
+        "redaction_failed"
+    );
 
     let audit = thread_audit_failed_closed_event("ten_1", "thr_1", "audit_unavailable");
     assert_eq!(audit.name, THREAD_AUDIT_FAILED_CLOSED_NAME);
@@ -857,21 +1071,22 @@ fn live_validation_events_project_attempt_and_ledger_evidence() {
 
     // LedgerOutcome is not re-exported by kura-livevalidation, so build the
     // entry from JSON (the outcome type is a transparent string newtype).
-    let entry: kura_livevalidation::SideEffectLedgerEntry = serde_json::from_value(serde_json::json!({
-        "ledgerEntryId": "ledger_1",
-        "validationId": "lv_1",
-        "tenantId": "ten_1",
-        "candidateId": "cand_1",
-        "sourceRef": "run_1",
-        "toolClass": "mcp.tool_call",
-        "safetyClass": "read_only",
-        "actionRef": "mcp.call",
-        "outcome": "completed",
-        "ambiguousCommit": false,
-        "retryCount": 0,
-        "updatedAt": now.to_rfc3339(),
-    }))
-    .unwrap();
+    let entry: kura_livevalidation::SideEffectLedgerEntry =
+        serde_json::from_value(serde_json::json!({
+            "ledgerEntryId": "ledger_1",
+            "validationId": "lv_1",
+            "tenantId": "ten_1",
+            "candidateId": "cand_1",
+            "sourceRef": "run_1",
+            "toolClass": "mcp.tool_call",
+            "safetyClass": "read_only",
+            "actionRef": "mcp.call",
+            "outcome": "completed",
+            "ambiguousCommit": false,
+            "retryCount": 0,
+            "updatedAt": now.to_rfc3339(),
+        }))
+        .unwrap();
     let ledger = live_validation_ledger_event(LIVE_VALIDATION_SIDE_EFFECT_RECORDED_NAME, entry);
     assert_eq!(ledger.name, LIVE_VALIDATION_SIDE_EFFECT_RECORDED_NAME);
     assert_eq!(payload_str(&ledger, "toolClass"), "mcp.tool_call");
@@ -894,7 +1109,9 @@ fn live_validation_events_project_attempt_and_ledger_evidence() {
         ambiguous_commit_id: "amb_1".into(),
         tenant_id: "ten_1".into(),
         resolved_by: "prn_operator".into(),
-        resolution: ReconciliationResolutionValue::from(ReconciliationResolutionValue::CONFIRMED_COMMITTED),
+        resolution: ReconciliationResolutionValue::from(
+            ReconciliationResolutionValue::CONFIRMED_COMMITTED,
+        ),
         resolved_at: now,
         ..Default::default()
     };
@@ -941,7 +1158,9 @@ fn binding_lifecycle_and_visibility_events_are_redacted() {
     let visibility = capability_visibility_changed_event(CapabilityVisibilityChangedInput {
         tenant_id: "ten_1".into(),
         actor_principal_id: "prn_1".into(),
-        scope_kind: kura_bindings::VisibilityScopeKind::from(kura_bindings::VisibilityScopeKind::PROFILE),
+        scope_kind: kura_bindings::VisibilityScopeKind::from(
+            kura_bindings::VisibilityScopeKind::PROFILE,
+        ),
         scope_ref: "profile_1".into(),
         capability_id: "cap_1".into(),
         visibility: kura_bindings::Visibility::from(kura_bindings::Visibility::VISIBLE),
@@ -961,7 +1180,9 @@ fn binding_lifecycle_and_visibility_events_are_redacted() {
         selected_profile_id: "prof_1".into(),
         selected_profile_version_id: "profv_1".into(),
         selected_workspace_id: "ws_1".into(),
-        binding_scope: kura_bindings::BindingRuntimeScope::from(kura_bindings::BindingRuntimeScope::TENANT_DEFAULT),
+        binding_scope: kura_bindings::BindingRuntimeScope::from(
+            kura_bindings::BindingRuntimeScope::TENANT_DEFAULT,
+        ),
         binding_id: "bind_1".into(),
         classification: kura_bindings::Classification::from(kura_bindings::Classification::DEFAULT),
         selection_reason: "tenant_default".into(),
@@ -1013,7 +1234,10 @@ fn input_structs_serialize_camel_case() {
     let json = serde_json::to_value(&management).unwrap();
     assert_eq!(json["connectorId"], "matrix-main");
     assert_eq!(json["evidenceId"], "support_1");
-    assert_eq!(json["occurredAt"], now().to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true));
+    assert_eq!(
+        json["occurredAt"],
+        now().to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    );
 
     let setup = ConnectorDiscordSetupValidatedInput {
         tenant_id: "ten_1".into(),
@@ -1028,7 +1252,10 @@ fn input_structs_serialize_camel_case() {
     let json = serde_json::to_value(&setup).unwrap();
     assert_eq!(json["readinessState"], "ready");
     assert_eq!(json["hostedReady"], true);
-    assert_eq!(json["validatedAt"], now().to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true));
+    assert_eq!(
+        json["validatedAt"],
+        now().to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    );
 }
 
 #[test]
@@ -1081,8 +1308,19 @@ fn connector_route_outcome_resource_id_falls_back_to_connector_id() {
 #[test]
 fn thread_wire_strings_surface_in_event_payloads() {
     // The wire helpers are pub(crate); verify their output through the events.
-    let retention = thread_retention_applied_event("ten_1", "thr_1", now(), kura_threads::RedactionStatus::RedactionFailed);
-    assert_eq!(payload_str(&retention, "redactionStatus"), "redaction_failed");
+    let retention = thread_retention_applied_event(
+        "ten_1",
+        "thr_1",
+        now(),
+        kura_threads::RedactionStatus::RedactionFailed,
+    );
+    assert_eq!(
+        payload_str(&retention, "redactionStatus"),
+        "redaction_failed"
+    );
     let redaction = thread_redaction_failed_event("ten_1", "thr_1", "unsafe");
-    assert_eq!(payload_str(&redaction, "redactionStatus"), "redaction_failed");
+    assert_eq!(
+        payload_str(&redaction, "redactionStatus"),
+        "redaction_failed"
+    );
 }

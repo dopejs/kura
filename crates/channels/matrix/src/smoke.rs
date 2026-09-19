@@ -100,8 +100,9 @@ pub fn structured_skip_smoke_evidence(
         authorization_mode: SmokeAuthorizationMode::Unavailable,
         owner: owner.to_string(),
         reason: reason.to_string(),
-        remaining_risk: "No live Matrix hosted smoke was run; release review must consume this structured skip."
-            .to_string(),
+        remaining_risk:
+            "No live Matrix hosted smoke was run; release review must consume this structured skip."
+                .to_string(),
         validated_at: now,
         retention_expires_at: now + Duration::days(90),
         redaction_status: RedactionStatus::Redacted,
@@ -114,7 +115,11 @@ pub fn structured_skip_smoke_evidence(
 pub fn execute_safe_live_smoke<T: SmokeTransport>(
     input: SafeLiveSmokeInput<T>,
 ) -> Result<SmokeEvidence, String> {
-    let now = if is_unset_time(&input.now) { Utc::now() } else { input.now };
+    let now = if is_unset_time(&input.now) {
+        Utc::now()
+    } else {
+        input.now
+    };
     let (binding, result) = input.transport.validate_homeserver_binding(input.binding);
     result?;
     let mut policy = input.route_policy;

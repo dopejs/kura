@@ -37,7 +37,12 @@ fn upsert_run(store: &SQLiteStore, run_id: &str) {
     store.upsert_run(&run).unwrap();
 }
 
-fn sample_workflow(workflow_id: &str, run_id: &str, status: WorkflowStatus, at: DateTime<Utc>) -> Workflow {
+fn sample_workflow(
+    workflow_id: &str,
+    run_id: &str,
+    status: WorkflowStatus,
+    at: DateTime<Utc>,
+) -> Workflow {
     Workflow {
         workflow_id: workflow_id.to_string(),
         run_id: run_id.to_string(),
@@ -55,7 +60,12 @@ fn sample_workflow(workflow_id: &str, run_id: &str, status: WorkflowStatus, at: 
     }
 }
 
-fn sample_step(workflow_id: &str, step_id: &str, position: i64, status: StepStatus) -> WorkflowStep {
+fn sample_step(
+    workflow_id: &str,
+    step_id: &str,
+    position: i64,
+    status: StepStatus,
+) -> WorkflowStep {
     let now = Utc::now();
     WorkflowStep {
         workflow_step_id: step_id.to_string(),
@@ -114,7 +124,12 @@ fn workflow_round_trips_through_sqlite() {
     assert_eq!(got.interrupted_at, None);
 
     // No rows for a different run or environment scope.
-    assert!(store.list_workflows("test", "other_run").unwrap().is_empty());
+    assert!(
+        store
+            .list_workflows("test", "other_run")
+            .unwrap()
+            .is_empty()
+    );
     assert!(store.list_workflows("prod", "run_wf").unwrap().is_empty());
 
     // List ordering is created_at ASC, workflow_id ASC.
@@ -130,13 +145,22 @@ fn workflow_round_trips_through_sqlite() {
     assert_eq!(listed[0].workflow_id, "wf_1");
     assert_eq!(listed[1].workflow_id, "wf_2");
 
-    let fetched = store.get_workflow("test", "run_wf", "wf_1").unwrap().expect("found");
+    let fetched = store
+        .get_workflow("test", "run_wf", "wf_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(fetched.workflow_id, "wf_1");
     assert_eq!(fetched.status, WorkflowStatus::Completed);
-    assert_eq!(store.get_workflow("test", "run_wf", "missing").unwrap(), None);
+    assert_eq!(
+        store.get_workflow("test", "run_wf", "missing").unwrap(),
+        None
+    );
     assert_eq!(store.get_workflow("prod", "run_wf", "wf_1").unwrap(), None);
 
-    let by_id = store.get_workflow_by_id("test", "wf_1").unwrap().expect("found");
+    let by_id = store
+        .get_workflow_by_id("test", "wf_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(by_id.goal, "ship the release");
     assert_eq!(by_id.status, WorkflowStatus::Completed);
     assert_eq!(store.get_workflow_by_id("prod", "wf_1").unwrap(), None);
@@ -151,7 +175,12 @@ fn workflow_step_round_trips_through_sqlite() {
 
     upsert_run(&store, "run_wf");
     store
-        .upsert_workflow(&sample_workflow("wf_1", "run_wf", WorkflowStatus::Running, now))
+        .upsert_workflow(&sample_workflow(
+            "wf_1",
+            "run_wf",
+            WorkflowStatus::Running,
+            now,
+        ))
         .unwrap();
 
     let mut steps = vec![
@@ -164,7 +193,10 @@ fn workflow_step_round_trips_through_sqlite() {
     steps[0].runtime_step_id = "runstep_wfstep_1_v2".to_string();
     store.replace_workflow_steps("wf_1", &steps).unwrap();
 
-    let got = store.get_workflow("test", "run_wf", "wf_1").unwrap().expect("found");
+    let got = store
+        .get_workflow("test", "run_wf", "wf_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(got.steps.len(), 2);
     // Ordered by position ASC, workflow_step_id ASC.
     let first = &got.steps[0];
@@ -193,7 +225,12 @@ fn workflow_dependency_round_trips_through_sqlite() {
 
     upsert_run(&store, "run_wf");
     store
-        .upsert_workflow(&sample_workflow("wf_1", "run_wf", WorkflowStatus::Running, now))
+        .upsert_workflow(&sample_workflow(
+            "wf_1",
+            "run_wf",
+            WorkflowStatus::Running,
+            now,
+        ))
         .unwrap();
 
     let items = vec![
@@ -218,9 +255,14 @@ fn workflow_dependency_round_trips_through_sqlite() {
     // Replace again with a changed field.
     let mut revised = items.clone();
     revised[0].dependency_type = DependencyType::Failure;
-    store.replace_workflow_dependencies("wf_1", &revised).unwrap();
+    store
+        .replace_workflow_dependencies("wf_1", &revised)
+        .unwrap();
 
-    let got = store.get_workflow("test", "run_wf", "wf_1").unwrap().expect("found");
+    let got = store
+        .get_workflow("test", "run_wf", "wf_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(got.dependencies.len(), 2);
     // Ordered by dependency_id ASC.
     assert_eq!(got.dependencies[0].dependency_id, "wfdep_1");
@@ -230,7 +272,10 @@ fn workflow_dependency_round_trips_through_sqlite() {
     assert_eq!(got.dependencies[0].dependency_type, DependencyType::Failure);
     assert_eq!(got.dependencies[0].reason, "step 1 completes first");
     assert_eq!(got.dependencies[1].dependency_id, "wfdep_2");
-    assert_eq!(got.dependencies[1].dependency_type, DependencyType::Completion);
+    assert_eq!(
+        got.dependencies[1].dependency_type,
+        DependencyType::Completion
+    );
 }
 
 #[test]
@@ -241,7 +286,12 @@ fn workflow_handoff_round_trips_through_sqlite() {
 
     upsert_run(&store, "run_wf");
     store
-        .upsert_workflow(&sample_workflow("wf_1", "run_wf", WorkflowStatus::Running, now))
+        .upsert_workflow(&sample_workflow(
+            "wf_1",
+            "run_wf",
+            WorkflowStatus::Running,
+            now,
+        ))
         .unwrap();
 
     let mut items = vec![Handoff {
@@ -261,7 +311,10 @@ fn workflow_handoff_round_trips_through_sqlite() {
     items[0].consumed_at = Some(now);
     store.replace_workflow_handoffs("wf_1", &items).unwrap();
 
-    let got = store.get_workflow("test", "run_wf", "wf_1").unwrap().expect("found");
+    let got = store
+        .get_workflow("test", "run_wf", "wf_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(got.handoffs.len(), 1);
     let handoff = &got.handoffs[0];
     assert_eq!(handoff.handoff_id, "wfhandoff_1");
@@ -300,16 +353,27 @@ fn mark_in_flight_workflows_interrupted_round_trips() {
         invalid_reason: String::new(),
     }];
     store.upsert_workflow(&running).unwrap();
-    store.replace_workflow_steps("wf_running", &running.steps).unwrap();
-    store.replace_workflow_handoffs("wf_running", &running.handoffs).unwrap();
+    store
+        .replace_workflow_steps("wf_running", &running.steps)
+        .unwrap();
+    store
+        .replace_workflow_handoffs("wf_running", &running.handoffs)
+        .unwrap();
 
     // A completed workflow must not be touched.
     store
-        .upsert_workflow(&sample_workflow("wf_done", "run_wf", WorkflowStatus::Completed, now))
+        .upsert_workflow(&sample_workflow(
+            "wf_done",
+            "run_wf",
+            WorkflowStatus::Completed,
+            now,
+        ))
         .unwrap();
 
     let interrupted_at = now + chrono::Duration::seconds(5);
-    let updated = store.mark_in_flight_workflows_interrupted("test", interrupted_at).unwrap();
+    let updated = store
+        .mark_in_flight_workflows_interrupted("test", interrupted_at)
+        .unwrap();
     assert_eq!(updated.len(), 1);
     let got = &updated[0];
     assert_eq!(got.workflow_id, "wf_running");
@@ -320,20 +384,31 @@ fn mark_in_flight_workflows_interrupted_round_trips() {
     assert_eq!(got.steps[0].updated_at, interrupted_at);
     assert_eq!(got.steps[1].status, StepStatus::Completed);
     assert_eq!(got.handoffs[0].status, HandoffStatus::Invalid);
-    assert_eq!(got.handoffs[0].invalid_reason, "daemon_restart_interrupted_workflow");
+    assert_eq!(
+        got.handoffs[0].invalid_reason,
+        "daemon_restart_interrupted_workflow"
+    );
 
     // The mutated workflow, steps, and handoffs were persisted.
-    let persisted = store.get_workflow_by_id("test", "wf_running").unwrap().expect("found");
+    let persisted = store
+        .get_workflow_by_id("test", "wf_running")
+        .unwrap()
+        .expect("found");
     assert_eq!(persisted.status, WorkflowStatus::Interrupted);
     assert_eq!(persisted.interrupted_at, Some(interrupted_at));
     assert_eq!(persisted.steps[0].status, StepStatus::Interrupted);
     assert_eq!(persisted.handoffs[0].status, HandoffStatus::Invalid);
-    let untouched = store.get_workflow_by_id("test", "wf_done").unwrap().expect("found");
+    let untouched = store
+        .get_workflow_by_id("test", "wf_done")
+        .unwrap()
+        .expect("found");
     assert_eq!(untouched.status, WorkflowStatus::Completed);
 
     // A second call finds nothing left to interrupt.
-    assert!(store
-        .mark_in_flight_workflows_interrupted("test", interrupted_at)
-        .unwrap()
-        .is_empty());
+    assert!(
+        store
+            .mark_in_flight_workflows_interrupted("test", interrupted_at)
+            .unwrap()
+            .is_empty()
+    );
 }

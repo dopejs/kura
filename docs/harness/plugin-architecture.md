@@ -104,6 +104,22 @@ The chat pipeline (query and stream) now runs three kernel hook points:
   through the real assembly).
 - `chat/turn-end` — after the dispatch settled and continuity was
   persisted; observational (a halt only stops later handlers).
+- `chat/tool-call` (Stage 9.0, 2026-09-19) — before a tool the model asked
+  for is executed. Payload: `{tenantId, threadId, dispatchId, callId, name,
+  arguments}`; hooks may rewrite `arguments` or halt. A veto is reported to
+  the model as a tool error (and as `chat.hook.vetoed`), never silently
+  dropped, so the model can answer without the tool.
+
+Tool calling (Stage 9.0): a turn is a bounded sequence of dispatch rounds.
+The assembly's `ToolHost` (`crates/surface/app/src/tool_host.rs`) decides
+which tools the tenant is offered; when the model answers with tool calls
+the service runs them, appends the assistant request and the tool results,
+and dispatches again. Every round is its own persisted dispatch record
+(`tools_json`, `tool_calls_json`, schema v5) with its own `llm.dispatch.*`
+events, each call is a `chat.tool.called` event, and the turn's
+`toolTrace` is returned on the chat response. After `toolMaxRounds`
+(`plugins.json` → `entries.chat.config`, default 4) the model is dispatched
+once more with no tools so the turn ends in text.
 
 A veto surfaces as `ChatError::HookVetoed` → HTTP 403 and is recorded as a
 `chat.hook.vetoed` event. `GET /v1/plugins` reports every hook registration
@@ -145,7 +161,8 @@ so the model can drill back. Threadless turns keep their spans reachable
 through dispatch records only.
 
 Later slices: session frame objects (explicit goal/constraint records)
-and channel-native thread segmentation policies.
+and channel-native thread segmentation policies — planned as Stage 5 of
+[`agent-deepening-program.md`](agent-deepening-program.md).
 
 ### Context plugin (first slice shipped 2026-08-17)
 
@@ -187,9 +204,20 @@ widens to BM25>0 OR cosine ≥ 0.25; below the threshold, hash noise never
 leaks unrelated memory into context. A neural embedding provider replaces
 the default through the seam without touching the fusion.
 
-Later slices: neural embedding provider, symbolic tool-log compression
-with a lookup tool, binding-aware loadouts (agent-visibility assets), and
-a dedicated assembly-record read API if event queries prove insufficient.
+Symbolic compression (fourth slice, 2026-08-17, `92191d5`): non-frame
+messages over `refThresholdChars` (default 8000) externalize at
+`chat/pre-dispatch` — the full content persists as an L0 ref and the window
+keeps a 200-char preview plus its `Memory[l0_ref …]` citation. Binding-aware
+loadouts (fifth slice, 2026-08-17, `81a0529`): `Visibility::Agent` assets are
+admitted only when their bindings contain the turn's active agent profile id,
+fail closed and recorded in the AssemblyRecord.
+
+Still open (planned in
+[`agent-deepening-program.md`](agent-deepening-program.md)): a neural
+embedding provider for the seam, a model-facing lookup tool for following
+`Memory[…]` citations mid-turn (Stage 1.5), retrieval over L2/L3 rather than
+L1 atoms only (Stage 1.4), and a dedicated assembly-record read API
+(Stage 1.6).
 
 ## Behavioral pluginization (shipped 2026-08-17)
 

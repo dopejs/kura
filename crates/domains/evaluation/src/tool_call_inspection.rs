@@ -18,7 +18,8 @@ pub const INSPECTION_MISSING_REPLAY_EVIDENCE: &str = "missing_replay_evidence";
 pub const INSPECTION_LIVE_VALIDATION_DENIED: &str = "live_validation_denied";
 pub const INSPECTION_LIVE_VALIDATION_ABORTED: &str = "live_validation_aborted";
 pub const INSPECTION_LIVE_VALIDATION_FAILED: &str = "live_validation_failed";
-pub const INSPECTION_LIVE_VALIDATION_OPERATOR_ACTION: &str = "live_validation_operator_action_needed";
+pub const INSPECTION_LIVE_VALIDATION_OPERATOR_ACTION: &str =
+    "live_validation_operator_action_needed";
 pub const INSPECTION_LIVE_VALIDATION_COMPLETED: &str = "live_validation_completed";
 
 /// Go `ToolCallInspectionInput`.
@@ -46,14 +47,20 @@ pub fn build_tool_call_inspection(
     now: DateTime<Utc>,
 ) -> Result<ToolCallInspection, EvaluationError> {
     validate_tenant_scoped_product_request(&input.tenant_id)?;
-    if input.campaign_id.is_empty() || input.campaign_item_id.is_empty() || input.tool_call_ref.is_empty() {
+    if input.campaign_id.is_empty()
+        || input.campaign_item_id.is_empty()
+        || input.tool_call_ref.is_empty()
+    {
         return Err(EvaluationError::ToolCallInspectionEvidenceRequired);
     }
     let now = if is_zero_time(now) { Utc::now() } else { now };
     let inspection_id = {
         let trimmed = input.inspection_id.trim().to_string();
         if trimmed.is_empty() {
-            format!("inspection_{}", input.tool_call_ref.replace(':', "_").replace('/', "_"))
+            format!(
+                "inspection_{}",
+                input.tool_call_ref.replace(':', "_").replace('/', "_")
+            )
         } else {
             trimmed
         }

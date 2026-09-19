@@ -5,12 +5,13 @@ mod common;
 
 use kura_delivery::{OutcomeInput, ResultClass};
 
-use common::{manager_with, seed_delivery_preference_state, ScriptedAdapter};
+use common::{ScriptedAdapter, manager_with, seed_delivery_preference_state};
 use kura_delivery::TargetKind;
 
 #[test]
 fn latest_summary_for_run_and_workflow() {
-    let (manager, _store) = manager_with(vec![ScriptedAdapter::new(TargetKind::TestSink, Vec::new())]);
+    let (manager, _store) =
+        manager_with(vec![ScriptedAdapter::new(TargetKind::TestSink, Vec::new())]);
     seed_delivery_preference_state(&manager, "linkage-target");
     let outcome = manager
         .emit_outcome(OutcomeInput {
@@ -40,7 +41,8 @@ fn latest_summary_for_run_and_workflow() {
 
 #[test]
 fn latest_summaries_for_schedule_attempts() {
-    let (manager, _store) = manager_with(vec![ScriptedAdapter::new(TargetKind::TestSink, Vec::new())]);
+    let (manager, _store) =
+        manager_with(vec![ScriptedAdapter::new(TargetKind::TestSink, Vec::new())]);
     seed_delivery_preference_state(&manager, "schedule-linkage-target");
     let emit = |source_id: &str, attempt: &str| {
         manager
@@ -60,10 +62,15 @@ fn latest_summaries_for_schedule_attempts() {
     // A second outcome on the same attempt id must not replace the first summary.
     let dup = emit("run_sched_1b", "attempt_1");
 
-    let summaries = manager.latest_summaries_for_schedule_attempts("sched_linkage").unwrap();
+    let summaries = manager
+        .latest_summaries_for_schedule_attempts("sched_linkage")
+        .unwrap();
     assert_eq!(summaries.len(), 2);
     // Outcomes list newest-first (updated_at DESC); the newest outcome per attempt wins.
     assert_eq!(summaries["attempt_1"].latest_delivery_id, dup.delivery_id);
-    assert_eq!(summaries["attempt_2"].latest_delivery_id, second.delivery_id);
+    assert_eq!(
+        summaries["attempt_2"].latest_delivery_id,
+        second.delivery_id
+    );
     assert_ne!(summaries["attempt_1"].latest_delivery_id, first.delivery_id);
 }

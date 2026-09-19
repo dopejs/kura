@@ -32,4 +32,6 @@ pub enum AppError {
     RemindersStart(String),
     #[error("system event publish: {0}")]
     SystemEvent(String),
+    #[error("upgrade rehearsal: {0}")]
+    Rehearsal(String),
 }

@@ -48,7 +48,10 @@ impl Manager {
         }
         repo.save_plan(plan.clone()).await?;
         repo.append_usage_event(UsageEvent {
-            usage_event_id: format!("usage_event_plan_changed_{}_{}", plan.tenant_id, plan.plan_id),
+            usage_event_id: format!(
+                "usage_event_plan_changed_{}_{}",
+                plan.tenant_id, plan.plan_id
+            ),
             tenant_id: plan.tenant_id.clone(),
             event_kind: UsageEventKind::from(UsageEventKind::PLAN_CHANGED),
             reason_code: "billing.plan_changed".to_string(),
@@ -101,7 +104,9 @@ impl Manager {
             .repo()
             .ok_or(BillingError::NotSupported("manual adjustments"))?;
         if definition_for(&adjustment.category).is_none() {
-            return Err(BillingError::UnknownCategory(adjustment.category.to_string()));
+            return Err(BillingError::UnknownCategory(
+                adjustment.category.to_string(),
+            ));
         }
         let counter = repo
             .usage_counter(
@@ -147,7 +152,10 @@ impl Manager {
     }
 
     /// Resolve a reservation by ID to a terminal lifecycle outcome.
-    pub async fn resolve_reservation(&self, input: ResolveReservationInput) -> Result<UsageReservation> {
+    pub async fn resolve_reservation(
+        &self,
+        input: ResolveReservationInput,
+    ) -> Result<UsageReservation> {
         if input.reason.trim().is_empty() {
             return Err(BillingError::ReasonRequired);
         }
@@ -158,7 +166,9 @@ impl Manager {
             .reservation_by_id(&input.tenant_id, &input.reservation_id)
             .await?
         else {
-            return Err(BillingError::ReservationIdNotFound(input.reservation_id.clone()));
+            return Err(BillingError::ReservationIdNotFound(
+                input.reservation_id.clone(),
+            ));
         };
         let resolve_input = ResolveInput {
             tenant_id: input.tenant_id.clone(),
@@ -177,7 +187,9 @@ impl Manager {
             ReservationStatus::OPERATOR_ACTION_NEEDED => {
                 self.mark_operator_action_needed(resolve_input).await
             }
-            other => Err(BillingError::UnsupportedResolutionOutcome(other.to_string())),
+            other => Err(BillingError::UnsupportedResolutionOutcome(
+                other.to_string(),
+            )),
         }
     }
 }

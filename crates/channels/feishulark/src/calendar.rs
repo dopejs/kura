@@ -6,18 +6,18 @@ use std::time::Duration;
 use chrono::{DateTime, NaiveDate, Utc};
 use kura_adapterprovider::{Handler, HandlerError, Operation};
 use kura_calendar::{
-    attendee_emails, resolve_attendee_requests, AccountProjection, Attendee, AttendeeRequest,
-    AvailabilityQuery, BusyInterval, CancelEventInput, CreateEventInput, Event,
-    EventLifecycleState, InvitationStatus, ListEventsInput, RSVPStatus,
-    UpdateAttendeesInput, UpdateEventInput,
+    AccountProjection, Attendee, AttendeeRequest, AvailabilityQuery, BusyInterval,
+    CancelEventInput, CreateEventInput, Event, EventLifecycleState, InvitationStatus,
+    ListEventsInput, RSVPStatus, UpdateAttendeesInput, UpdateEventInput, attendee_emails,
+    resolve_attendee_requests,
 };
 use kura_integrations::{ReadinessStatus, Resource};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::value::RawValue;
 use serde_json::Value;
+use serde_json::value::RawValue;
 
-use crate::{first_non_empty, parse_token, Client, FaultKind, ProviderFault, ScopedToken};
+use crate::{Client, FaultKind, ProviderFault, ScopedToken, first_non_empty, parse_token};
 
 pub struct CalendarProvider {
     client: Client,
@@ -28,16 +28,26 @@ pub fn new_calendar_provider(client: Client) -> CalendarProvider {
 }
 
 impl Handler for CalendarProvider {
-    fn handle(&self, op: Operation, deadline: Option<Duration>) -> Result<Option<Box<RawValue>>, HandlerError> {
+    fn handle(
+        &self,
+        op: Operation,
+        deadline: Option<Duration>,
+    ) -> Result<Option<Box<RawValue>>, HandlerError> {
         if op.domain != "calendar" {
-            return Err(HandlerError::Fault(ProviderFault {
-                kind: FaultKind::Internal,
-                code: "unsupported_domain".to_string(),
-                message: "adapter serves the calendar domain only".to_string(),
-            }
-            .to_adapter_fault()));
+            return Err(HandlerError::Fault(
+                ProviderFault {
+                    kind: FaultKind::Internal,
+                    code: "unsupported_domain".to_string(),
+                    message: "adapter serves the calendar domain only".to_string(),
+                }
+                .to_adapter_fault(),
+            ));
         }
-        let raw_cred = op.credential.as_deref().map(|r| r.get().as_bytes()).unwrap_or(&[]);
+        let raw_cred = op
+            .credential
+            .as_deref()
+            .map(|r| r.get().as_bytes())
+            .unwrap_or(&[]);
         let token = parse_token(raw_cred).map_err(|f| HandlerError::Fault(f.to_adapter_fault()))?;
         let resource: Resource = op
             .resource
@@ -53,7 +63,13 @@ impl Handler for CalendarProvider {
 }
 
 impl CalendarProvider {
-    fn route(&self, token: &ScopedToken, resource: &Resource, op: &Operation, deadline: Option<Duration>) -> Result<Box<RawValue>, ProviderFault> {
+    fn route(
+        &self,
+        token: &ScopedToken,
+        resource: &Resource,
+        op: &Operation,
+        deadline: Option<Duration>,
+    ) -> Result<Box<RawValue>, ProviderFault> {
         let payload = op.payload.as_deref();
         match op.operation.as_str() {
             "ProjectAccount" => marshal_result(self.project_account(token, resource, deadline)?),
@@ -83,7 +99,12 @@ impl CalendarProvider {
             }
             "UpdateAttendees" => {
                 let input = decode_payload::<UpdateAttendeesPayload>(payload)?;
-                marshal_result(self.update_attendees(token, &input.account, &input.input, deadline)?)
+                marshal_result(self.update_attendees(
+                    token,
+                    &input.account,
+                    &input.input,
+                    deadline,
+                )?)
             }
             _ => Err(ProviderFault {
                 kind: FaultKind::Internal,
@@ -93,9 +114,22 @@ impl CalendarProvider {
         }
     }
 
-    fn project_account(&self, token: &ScopedToken, resource: &Resource, deadline: Option<Duration>) -> Result<AccountProjection, ProviderFault> {
+    fn project_account(
+        &self,
+        token: &ScopedToken,
+        resource: &Resource,
+        deadline: Option<Duration>,
+    ) -> Result<AccountProjection, ProviderFault> {
         let mut out = FeishuPrimaryResp::default();
-        self.client.call(deadline, "POST", "/open-apis/calendar/v4/calendars/primary?user_id_type=open_id", &token.access_token, Some(&Value::Object(Default::default())), Some(&mut out), false)?;
+        self.client.call(
+            deadline,
+            "POST",
+            "/open-apis/calendar/v4/calendars/primary?user_id_type=open_id",
+            &token.access_token,
+            Some(&Value::Object(Default::default())),
+            Some(&mut out),
+            false,
+        )?;
         let Some(primary) = out.calendars.first() else {
             return Err(ProviderFault {
                 kind: FaultKind::Unavailable,
@@ -104,7 +138,11 @@ impl CalendarProvider {
             });
         };
         let now = Utc::now();
-        let account_type = resource.account_binding.as_ref().map(|b| b.account_type.clone()).unwrap_or_default();
+        let account_type = resource
+            .account_binding
+            .as_ref()
+            .map(|b| b.account_type.clone())
+            .unwrap_or_default();
         Ok(AccountProjection {
             calendar_account_id: format!("fl_{}", primary.user_id),
             integration_id: resource.integration_id.clone(),
@@ -126,7 +164,13 @@ impl CalendarProvider {
         })
     }
 
-    fn list_events(&self, token: &ScopedToken, account: &AccountProjection, input: &ListEventsInput, deadline: Option<Duration>) -> Result<Vec<Event>, ProviderFault> {
+    fn list_events(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        input: &ListEventsInput,
+        deadline: Option<Duration>,
+    ) -> Result<Vec<Event>, ProviderFault> {
         let mut query: Vec<String> = Vec::new();
         if let Some(start) = input.starts_at {
             query.push(format!("start_time={}", start.timestamp()));
@@ -135,31 +179,84 @@ impl CalendarProvider {
             query.push(format!("end_time={}", end.timestamp()));
         }
         query.push("page_size=100".to_string());
-        let path = format!("/open-apis/calendar/v4/calendars/{}/events?{}", account.primary_calendar_ref, query.join("&"));
+        let path = format!(
+            "/open-apis/calendar/v4/calendars/{}/events?{}",
+            account.primary_calendar_ref,
+            query.join("&")
+        );
         let mut out = ItemsResp::default();
-        self.client.call(deadline, "GET", &path, &token.access_token, None::<&Value>, Some(&mut out), false)?;
-        Ok(out.items.iter().map(|item| map_event(account, item)).collect())
+        self.client.call(
+            deadline,
+            "GET",
+            &path,
+            &token.access_token,
+            None::<&Value>,
+            Some(&mut out),
+            false,
+        )?;
+        Ok(out
+            .items
+            .iter()
+            .map(|item| map_event(account, item))
+            .collect())
     }
 
-    fn get_event(&self, token: &ScopedToken, account: &AccountProjection, event_id: &str, deadline: Option<Duration>) -> Result<Event, ProviderFault> {
-        let path = format!("/open-apis/calendar/v4/calendars/{}/events/{}", account.primary_calendar_ref, event_id);
+    fn get_event(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        event_id: &str,
+        deadline: Option<Duration>,
+    ) -> Result<Event, ProviderFault> {
+        let path = format!(
+            "/open-apis/calendar/v4/calendars/{}/events/{}",
+            account.primary_calendar_ref, event_id
+        );
         let mut out = EventResp::default();
-        self.client.call(deadline, "GET", &path, &token.access_token, None::<&Value>, Some(&mut out), false)?;
+        self.client.call(
+            deadline,
+            "GET",
+            &path,
+            &token.access_token,
+            None::<&Value>,
+            Some(&mut out),
+            false,
+        )?;
         Ok(map_event(account, &out.event))
     }
 
-    fn busy_free(&self, token: &ScopedToken, account: &AccountProjection, input: &kura_calendar::BusyFreeInput, deadline: Option<Duration>) -> Result<AvailabilityQuery, ProviderFault> {
+    fn busy_free(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        input: &kura_calendar::BusyFreeInput,
+        deadline: Option<Duration>,
+    ) -> Result<AvailabilityQuery, ProviderFault> {
         let body = serde_json::json!({
             "time_min": input.window_start.to_rfc3339(),
             "time_max": input.window_end.to_rfc3339(),
             "user_id": account.account_key,
         });
         let mut out = FreebusyResp::default();
-        self.client.call(deadline, "POST", "/open-apis/calendar/v4/freebusy/list?user_id_type=open_id", &token.access_token, Some(&body), Some(&mut out), false)?;
+        self.client.call(
+            deadline,
+            "POST",
+            "/open-apis/calendar/v4/freebusy/list?user_id_type=open_id",
+            &token.access_token,
+            Some(&body),
+            Some(&mut out),
+            false,
+        )?;
         let mut intervals = Vec::new();
         for fb in &out.freebusy_list {
-            if let (Ok(start), Ok(end)) = (DateTime::parse_from_rfc3339(&fb.start_time), DateTime::parse_from_rfc3339(&fb.end_time)) {
-                intervals.push(BusyInterval { starts_at: start.with_timezone(&Utc), ends_at: end.with_timezone(&Utc) });
+            if let (Ok(start), Ok(end)) = (
+                DateTime::parse_from_rfc3339(&fb.start_time),
+                DateTime::parse_from_rfc3339(&fb.end_time),
+            ) {
+                intervals.push(BusyInterval {
+                    starts_at: start.with_timezone(&Utc),
+                    ends_at: end.with_timezone(&Utc),
+                });
             }
         }
         Ok(AvailabilityQuery {
@@ -175,7 +272,13 @@ impl CalendarProvider {
         })
     }
 
-    fn create_event(&self, token: &ScopedToken, account: &AccountProjection, input: &CreateEventInput, deadline: Option<Duration>) -> Result<Event, ProviderFault> {
+    fn create_event(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        input: &CreateEventInput,
+        deadline: Option<Duration>,
+    ) -> Result<Event, ProviderFault> {
         let requests = resolve_attendee_requests(&input.attendee_requests, &input.attendees);
         let body = write_event_body(EventBodyInput {
             title: input.title.clone(),
@@ -190,15 +293,32 @@ impl CalendarProvider {
             recurrence_rule: input.recurrence_rule.clone(),
             attendees: requests.clone(),
         });
-        let path = format!("/open-apis/calendar/v4/calendars/{}/events?need_notification={}", account.primary_calendar_ref, input.notify_attendees);
+        let path = format!(
+            "/open-apis/calendar/v4/calendars/{}/events?need_notification={}",
+            account.primary_calendar_ref, input.notify_attendees
+        );
         let mut out = EventResp::default();
-        self.client.call(deadline, "POST", &path, &token.access_token, Some(&body), Some(&mut out), true)?;
+        self.client.call(
+            deadline,
+            "POST",
+            &path,
+            &token.access_token,
+            Some(&body),
+            Some(&mut out),
+            true,
+        )?;
         let mut event = map_event(account, &out.event);
         apply_invitation_status(&mut event, &requests, input.notify_attendees);
         Ok(event)
     }
 
-    fn update_event(&self, token: &ScopedToken, account: &AccountProjection, input: &UpdateEventInput, deadline: Option<Duration>) -> Result<Event, ProviderFault> {
+    fn update_event(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        input: &UpdateEventInput,
+        deadline: Option<Duration>,
+    ) -> Result<Event, ProviderFault> {
         let requests = resolve_attendee_requests(&input.attendee_requests, &input.attendees);
         let body = write_event_body(EventBodyInput {
             title: input.title.clone(),
@@ -213,9 +333,20 @@ impl CalendarProvider {
             recurrence_rule: input.recurrence_rule.clone(),
             attendees: requests.clone(),
         });
-        let path = format!("/open-apis/calendar/v4/calendars/{}/events/{}?need_notification={}", account.primary_calendar_ref, input.external_event_id, input.notify_attendees);
+        let path = format!(
+            "/open-apis/calendar/v4/calendars/{}/events/{}?need_notification={}",
+            account.primary_calendar_ref, input.external_event_id, input.notify_attendees
+        );
         let mut out = EventResp::default();
-        self.client.call(deadline, "PATCH", &path, &token.access_token, Some(&body), Some(&mut out), true)?;
+        self.client.call(
+            deadline,
+            "PATCH",
+            &path,
+            &token.access_token,
+            Some(&body),
+            Some(&mut out),
+            true,
+        )?;
         let mut event = map_event(account, &out.event);
         if event.external_event_id.is_empty() {
             event.external_event_id = input.external_event_id.clone();
@@ -224,26 +355,68 @@ impl CalendarProvider {
         Ok(event)
     }
 
-    fn update_attendees(&self, token: &ScopedToken, account: &AccountProjection, input: &UpdateAttendeesInput, deadline: Option<Duration>) -> Result<Event, ProviderFault> {
-        let event_path = format!("/open-apis/calendar/v4/calendars/{}/events/{}", account.primary_calendar_ref, input.external_event_id);
+    fn update_attendees(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        input: &UpdateAttendeesInput,
+        deadline: Option<Duration>,
+    ) -> Result<Event, ProviderFault> {
+        let event_path = format!(
+            "/open-apis/calendar/v4/calendars/{}/events/{}",
+            account.primary_calendar_ref, input.external_event_id
+        );
         if !input.add_attendees.is_empty() {
             let body = serde_json::json!({
                 "attendees": attendee_body(&resolve_attendee_requests(&input.add_attendees, &[])),
                 "need_notification": input.notify,
             });
-            self.client.call(deadline, "POST", &format!("{event_path}/attendees"), &token.access_token, Some(&body), None::<&mut Value>, true)?;
+            self.client.call(
+                deadline,
+                "POST",
+                &format!("{event_path}/attendees"),
+                &token.access_token,
+                Some(&body),
+                None::<&mut Value>,
+                true,
+            )?;
         }
         if !input.remove_attendees.is_empty() {
             let mut current = EventResp::default();
-            self.client.call(deadline, "GET", &event_path, &token.access_token, None::<&Value>, Some(&mut current), false)?;
+            self.client.call(
+                deadline,
+                "GET",
+                &event_path,
+                &token.access_token,
+                None::<&Value>,
+                Some(&mut current),
+                false,
+            )?;
             let ids = resolve_attendee_ids(&current.event.attendees, &input.remove_attendees);
             if !ids.is_empty() {
-                let body = serde_json::json!({ "attendee_ids": ids, "need_notification": input.notify });
-                self.client.call(deadline, "POST", &format!("{event_path}/attendees/batch_delete"), &token.access_token, Some(&body), None::<&mut Value>, true)?;
+                let body =
+                    serde_json::json!({ "attendee_ids": ids, "need_notification": input.notify });
+                self.client.call(
+                    deadline,
+                    "POST",
+                    &format!("{event_path}/attendees/batch_delete"),
+                    &token.access_token,
+                    Some(&body),
+                    None::<&mut Value>,
+                    true,
+                )?;
             }
         }
         let mut out = EventResp::default();
-        self.client.call(deadline, "GET", &event_path, &token.access_token, None::<&Value>, Some(&mut out), false)?;
+        self.client.call(
+            deadline,
+            "GET",
+            &event_path,
+            &token.access_token,
+            None::<&Value>,
+            Some(&mut out),
+            false,
+        )?;
         let mut event = map_event(account, &out.event);
         if event.external_event_id.is_empty() {
             event.external_event_id = input.external_event_id.clone();
@@ -251,9 +424,26 @@ impl CalendarProvider {
         Ok(event)
     }
 
-    fn cancel_event(&self, token: &ScopedToken, account: &AccountProjection, input: &CancelEventInput, deadline: Option<Duration>) -> Result<Event, ProviderFault> {
-        let path = format!("/open-apis/calendar/v4/calendars/{}/events/{}", account.primary_calendar_ref, input.external_event_id);
-        self.client.call(deadline, "DELETE", &path, &token.access_token, None::<&Value>, None::<&mut Value>, true)?;
+    fn cancel_event(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        input: &CancelEventInput,
+        deadline: Option<Duration>,
+    ) -> Result<Event, ProviderFault> {
+        let path = format!(
+            "/open-apis/calendar/v4/calendars/{}/events/{}",
+            account.primary_calendar_ref, input.external_event_id
+        );
+        self.client.call(
+            deadline,
+            "DELETE",
+            &path,
+            &token.access_token,
+            None::<&Value>,
+            None::<&mut Value>,
+            true,
+        )?;
         let now = Utc::now();
         Ok(Event {
             external_event_id: input.external_event_id.clone(),
@@ -445,11 +635,29 @@ fn write_event_body(input: EventBodyInput) -> Value {
     let mut end = serde_json::Map::new();
     end.insert("timezone".to_string(), Value::String(input.tz.clone()));
     if input.all_day {
-        start.insert("date".to_string(), Value::String(first_non_empty(&[&input.start_date, &input.starts_at.format("%Y-%m-%d").to_string()])));
-        end.insert("date".to_string(), Value::String(first_non_empty(&[&input.end_date, &input.ends_at.format("%Y-%m-%d").to_string()])));
+        start.insert(
+            "date".to_string(),
+            Value::String(first_non_empty(&[
+                &input.start_date,
+                &input.starts_at.format("%Y-%m-%d").to_string(),
+            ])),
+        );
+        end.insert(
+            "date".to_string(),
+            Value::String(first_non_empty(&[
+                &input.end_date,
+                &input.ends_at.format("%Y-%m-%d").to_string(),
+            ])),
+        );
     } else {
-        start.insert("timestamp".to_string(), Value::String(input.starts_at.timestamp().to_string()));
-        end.insert("timestamp".to_string(), Value::String(input.ends_at.timestamp().to_string()));
+        start.insert(
+            "timestamp".to_string(),
+            Value::String(input.starts_at.timestamp().to_string()),
+        );
+        end.insert(
+            "timestamp".to_string(),
+            Value::String(input.ends_at.timestamp().to_string()),
+        );
     }
     let mut body = serde_json::Map::new();
     body.insert("summary".to_string(), Value::String(input.title));
@@ -462,7 +670,10 @@ fn write_event_body(input: EventBodyInput) -> Value {
         body.insert("location".to_string(), Value::Object(loc));
     }
     if !input.recurrence_rule.trim().is_empty() {
-        body.insert("recurrence".to_string(), Value::String(input.recurrence_rule));
+        body.insert(
+            "recurrence".to_string(),
+            Value::String(input.recurrence_rule),
+        );
     }
     let attendees = attendee_body(&input.attendees);
     if !attendees.is_empty() {
@@ -496,7 +707,11 @@ fn map_attendees(items: &[FeishuAttendee]) -> Vec<Attendee> {
         .map(|a| Attendee {
             email: first_non_empty(&[&a.third_party_email, &a.display_name]),
             display_name: a.display_name.clone(),
-            role: if a.is_optional { "optional".to_string() } else { "required".to_string() },
+            role: if a.is_optional {
+                "optional".to_string()
+            } else {
+                "required".to_string()
+            },
             rsvp: map_rsvp(&a.rsvp_status).as_str().to_string(),
             ..Attendee::default()
         })
@@ -526,7 +741,11 @@ fn apply_invitation_status(event: &mut Event, requests: &[AttendeeRequest], noti
             })
             .collect();
     }
-    let status = if notify { InvitationStatus::Sent.as_str() } else { InvitationStatus::NotRequested.as_str() };
+    let status = if notify {
+        InvitationStatus::Sent.as_str()
+    } else {
+        InvitationStatus::NotRequested.as_str()
+    };
     for detail in &mut event.attendee_details {
         detail.invitation_status = status.to_string();
     }
@@ -534,12 +753,17 @@ fn apply_invitation_status(event: &mut Event, requests: &[AttendeeRequest], noti
 }
 
 fn resolve_attendee_ids(current: &[FeishuAttendee], remove_emails: &[String]) -> Vec<String> {
-    let want: std::collections::HashSet<String> = remove_emails.iter().map(|e| e.trim().to_lowercase()).collect();
+    let want: std::collections::HashSet<String> = remove_emails
+        .iter()
+        .map(|e| e.trim().to_lowercase())
+        .collect();
     current
         .iter()
         .filter(|a| {
             !a.attendee_id.is_empty()
-                && want.contains(&first_non_empty(&[&a.third_party_email, &a.display_name]).to_lowercase())
+                && want.contains(
+                    &first_non_empty(&[&a.third_party_email, &a.display_name]).to_lowercase(),
+                )
         })
         .map(|a| a.attendee_id.clone())
         .collect()

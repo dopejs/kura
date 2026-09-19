@@ -155,7 +155,10 @@ pub struct FirstAction {
 
 /// The default first action offered once activation is otherwise ready.
 #[must_use]
-pub fn default_test_chat_first_action(available: bool, blocking_item_ids: Vec<String>) -> FirstAction {
+pub fn default_test_chat_first_action(
+    available: bool,
+    blocking_item_ids: Vec<String>,
+) -> FirstAction {
     FirstAction {
         action_id: FIRST_ACTION_TEST_CHAT.to_string(),
         action_kind: FIRST_ACTION_TEST_CHAT.to_string(),

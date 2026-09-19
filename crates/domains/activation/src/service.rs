@@ -6,6 +6,9 @@ use std::sync::Arc;
 
 use chrono::DateTime;
 use chrono::Utc;
+use kura_identity::AUDIT_OUTCOME_DENIED;
+use kura_identity::AUDIT_OUTCOME_FAILED_CLOSED;
+use kura_identity::AUDIT_OUTCOME_SUCCEEDED;
 use kura_identity::LifecycleStatus;
 use kura_identity::Membership;
 use kura_identity::MembershipFilter;
@@ -20,22 +23,19 @@ use kura_identity::TenantFilter;
 use kura_identity::TenantKind;
 use kura_identity::TokenAuthority;
 use kura_identity::TokenTenantGrant;
-use kura_identity::AUDIT_OUTCOME_DENIED;
-use kura_identity::AUDIT_OUTCOME_FAILED_CLOSED;
-use kura_identity::AUDIT_OUTCOME_SUCCEEDED;
 
 use crate::audit::AuditRecord;
-use crate::error::activation_error;
 use crate::error::ActivationError;
 use crate::error::StoreError;
+use crate::error::activation_error;
 use crate::readiness::active_state_for_personal_tenant;
-use crate::types::default_test_chat_first_action;
 use crate::types::FailureStage;
 use crate::types::ReasonCode;
 use crate::types::RemediationOwner;
+use crate::types::STEP_RESOLVE_PERSONAL_TENANT;
 use crate::types::State;
 use crate::types::Status;
-use crate::types::STEP_RESOLVE_PERSONAL_TENANT;
+use crate::types::default_test_chat_first_action;
 
 /// Object-safe boxed future used by the dependency traits.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -43,7 +43,10 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Persistence abstraction for activation state (Go `StateStore`).
 pub trait StateStore: Send + Sync {
     fn upsert_activation_state(&self, state: State) -> BoxFuture<'_, Result<(), StoreError>>;
-    fn get_activation_state(&self, activation_id: &str) -> BoxFuture<'_, Result<Option<State>, StoreError>>;
+    fn get_activation_state(
+        &self,
+        activation_id: &str,
+    ) -> BoxFuture<'_, Result<Option<State>, StoreError>>;
     fn get_activation_state_for_principal_tenant(
         &self,
         principal_id: &str,
@@ -53,16 +56,32 @@ pub trait StateStore: Send + Sync {
 
 /// Identity data access required by activation (Go `IdentityRepository`).
 pub trait IdentityRepository: Send + Sync {
-    fn get_principal(&self, principal_id: &str) -> BoxFuture<'_, Result<Option<Principal>, StoreError>>;
-    fn list_principals(&self, filter: &PrincipalFilter) -> BoxFuture<'_, Result<Vec<Principal>, StoreError>>;
+    fn get_principal(
+        &self,
+        principal_id: &str,
+    ) -> BoxFuture<'_, Result<Option<Principal>, StoreError>>;
+    fn list_principals(
+        &self,
+        filter: &PrincipalFilter,
+    ) -> BoxFuture<'_, Result<Vec<Principal>, StoreError>>;
     fn upsert_principal(&self, principal: Principal) -> BoxFuture<'_, Result<(), StoreError>>;
     fn get_tenant(&self, tenant_id: &str) -> BoxFuture<'_, Result<Option<Tenant>, StoreError>>;
-    fn list_tenants(&self, filter: &TenantFilter) -> BoxFuture<'_, Result<Vec<Tenant>, StoreError>>;
+    fn list_tenants(&self, filter: &TenantFilter)
+    -> BoxFuture<'_, Result<Vec<Tenant>, StoreError>>;
     fn upsert_tenant(&self, tenant: Tenant) -> BoxFuture<'_, Result<(), StoreError>>;
-    fn list_memberships(&self, filter: &MembershipFilter) -> BoxFuture<'_, Result<Vec<Membership>, StoreError>>;
+    fn list_memberships(
+        &self,
+        filter: &MembershipFilter,
+    ) -> BoxFuture<'_, Result<Vec<Membership>, StoreError>>;
     fn upsert_membership(&self, membership: Membership) -> BoxFuture<'_, Result<(), StoreError>>;
-    fn list_token_tenant_grants(&self, token_id: &str) -> BoxFuture<'_, Result<Vec<TokenTenantGrant>, StoreError>>;
-    fn upsert_token_tenant_grant(&self, grant: TokenTenantGrant) -> BoxFuture<'_, Result<(), StoreError>>;
+    fn list_token_tenant_grants(
+        &self,
+        token_id: &str,
+    ) -> BoxFuture<'_, Result<Vec<TokenTenantGrant>, StoreError>>;
+    fn upsert_token_tenant_grant(
+        &self,
+        grant: TokenTenantGrant,
+    ) -> BoxFuture<'_, Result<(), StoreError>>;
 }
 
 /// Quota baseline projection source (Go `BillingProjector`).
@@ -286,7 +305,8 @@ impl Service {
             state.test_chat = existing.test_chat;
             state.first_action_completed_at = existing.first_action_completed_at;
             state.last_transition_audit_event = existing.last_transition_audit_event;
-            if existing.status == Status::FIRST_ACTION_COMPLETED && state.status != Status::BLOCKED {
+            if existing.status == Status::FIRST_ACTION_COMPLETED && state.status != Status::BLOCKED
+            {
                 state.status = existing.status;
                 state.current_step_id = existing.current_step_id;
                 state.completed_step_ids = existing.completed_step_ids;
@@ -403,8 +423,11 @@ impl Service {
                 .await
                 .map_err(ActivationError::dependency)?;
             if let Some(tenant) = tenant {
-                if tenant.tenant_kind == TenantKind::Personal && tenant.status == LifecycleStatus::Active {
-                    self.ensure_personal_tenant_access(principal, &tenant, token, now).await?;
+                if tenant.tenant_kind == TenantKind::Personal
+                    && tenant.status == LifecycleStatus::Active
+                {
+                    self.ensure_personal_tenant_access(principal, &tenant, token, now)
+                        .await?;
                     return Ok(tenant);
                 }
             }
@@ -419,7 +442,8 @@ impl Service {
             .map_err(ActivationError::dependency)?;
         for tenant in tenants {
             if tenant.default_owner_principal_id == principal.principal_id {
-                self.ensure_personal_tenant_access(principal, &tenant, token, now).await?;
+                self.ensure_personal_tenant_access(principal, &tenant, token, now)
+                    .await?;
                 return Ok(tenant);
             }
         }
@@ -442,7 +466,8 @@ impl Service {
             .upsert_tenant(tenant.clone())
             .await
             .map_err(ActivationError::dependency)?;
-        self.ensure_personal_tenant_access(principal, &tenant, token, now).await?;
+        self.ensure_personal_tenant_access(principal, &tenant, token, now)
+            .await?;
         Ok(tenant)
     }
 
@@ -484,7 +509,10 @@ impl Service {
         if !has_membership {
             identity
                 .upsert_membership(Membership {
-                    membership_id: stable_activation_id("mem", &[&principal.principal_id, &tenant.tenant_id]),
+                    membership_id: stable_activation_id(
+                        "mem",
+                        &[&principal.principal_id, &tenant.tenant_id],
+                    ),
                     tenant_id: tenant.tenant_id.clone(),
                     principal_id: principal.principal_id.clone(),
                     role: Role::Owner,
@@ -605,16 +633,20 @@ mod tests {
         assert!(svc.hosted);
 
         let defaulted = Service::new(Dependencies::default());
-        assert_eq!(defaulted.environment_scope, "test", "empty scope defaults to test");
+        assert_eq!(
+            defaulted.environment_scope, "test",
+            "empty scope defaults to test"
+        );
     }
 
     #[tokio::test]
     async fn activate_creates_and_reuses_one_personal_tenant() {
         let now = test_now();
         let repo = Arc::new(MemoryIdentityRepository::default());
-        repo.principals
-            .lock()
-            .insert("prn_hosted".to_string(), active_principal("prn_hosted", now));
+        repo.principals.lock().insert(
+            "prn_hosted".to_string(),
+            active_principal("prn_hosted", now),
+        );
         let state_store = Arc::new(MemoryStateStore::default());
         let audit_sink = Arc::new(RecordingAuditSink::default());
         let svc = Service::new(Dependencies {
@@ -637,7 +669,10 @@ mod tests {
         let second = svc.activate(input).await.expect("second activate");
 
         assert!(!first.tenant_id.is_empty());
-        assert_eq!(first.tenant_id, second.tenant_id, "expected stable personal tenant");
+        assert_eq!(
+            first.tenant_id, second.tenant_id,
+            "expected stable personal tenant"
+        );
         assert_eq!(first.activation_id, second.activation_id);
         assert_eq!(second.status, Status::ACTIVE);
         let personal_tenants = repo
@@ -659,9 +694,10 @@ mod tests {
     async fn activate_concurrent_attempts_converge() {
         let now = test_now();
         let repo = Arc::new(MemoryIdentityRepository::default());
-        repo.principals
-            .lock()
-            .insert("prn_concurrent".to_string(), active_principal("prn_concurrent", now));
+        repo.principals.lock().insert(
+            "prn_concurrent".to_string(),
+            active_principal("prn_concurrent", now),
+        );
         let state_store = Arc::new(MemoryStateStore::default());
         let svc = Arc::new(Service::new(Dependencies {
             state_store: Some(state_store.clone()),
@@ -819,7 +855,10 @@ mod tests {
             })
             .await
             .expect_err("revoked membership must be denied");
-        assert_eq!(reason_code_from_error(&err), ReasonCode::TENANT_ACCESS_REVOKED);
+        assert_eq!(
+            reason_code_from_error(&err),
+            ReasonCode::TENANT_ACCESS_REVOKED
+        );
         assert!(
             state_store.states_by_key.lock().is_empty(),
             "revoked activation should not persist completion state"

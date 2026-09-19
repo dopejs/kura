@@ -7,10 +7,10 @@
 //! ported.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, types::Value, Row};
+use rusqlite::{Row, params, types::Value};
 
-use crate::crud::{now_rfc3339, null_string, opt_time_string, parse_opt_rfc3339, parse_rfc3339};
 use crate::SQLiteStore;
+use crate::crud::{now_rfc3339, null_string, opt_time_string, parse_opt_rfc3339, parse_rfc3339};
 
 /// A delivery target row. `document` is the JSON-serialized target document.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -207,7 +207,13 @@ fn scan_delivery_summary_window(row: &Row) -> Result<DeliverySummaryWindowRecord
 }
 
 /// Appends `AND <column> = ?<n>` for non-empty filter values, mirroring the Go filter builder.
-fn push_outcome_filter(sql: &mut String, args: &mut Vec<Value>, index: &mut usize, column: &str, value: &str) {
+fn push_outcome_filter(
+    sql: &mut String,
+    args: &mut Vec<Value>,
+    index: &mut usize,
+    column: &str,
+    value: &str,
+) {
     let trimmed = value.trim();
     if !trimmed.is_empty() {
         *index += 1;
@@ -245,7 +251,10 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn list_delivery_targets(&self, environment_scope: &str) -> Result<Vec<DeliveryTargetRecord>, String> {
+    pub fn list_delivery_targets(
+        &self,
+        environment_scope: &str,
+    ) -> Result<Vec<DeliveryTargetRecord>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -255,7 +264,9 @@ impl SQLiteStore {
                 ORDER BY updated_at DESC, target_id DESC"#,
             )
             .map_err(|e| format!("list delivery targets: {e}"))?;
-        let mut rows = stmt.query(params![environment_scope]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![environment_scope])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_delivery_target(row)?);
@@ -263,7 +274,11 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn get_delivery_target(&self, environment_scope: &str, target_id: &str) -> Result<Option<DeliveryTargetRecord>, String> {
+    pub fn get_delivery_target(
+        &self,
+        environment_scope: &str,
+        target_id: &str,
+    ) -> Result<Option<DeliveryTargetRecord>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -272,14 +287,19 @@ impl SQLiteStore {
                 WHERE environment_scope = ?1 AND target_id = ?2"#,
             )
             .map_err(|e| format!("get delivery target {target_id}: {e}"))?;
-        let mut rows = stmt.query(params![environment_scope, target_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![environment_scope, target_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
         scan_delivery_target(row).map(Some)
     }
 
-    pub fn upsert_delivery_preference(&self, record: &DeliveryPreferenceRecord) -> Result<(), String> {
+    pub fn upsert_delivery_preference(
+        &self,
+        record: &DeliveryPreferenceRecord,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 r#"INSERT INTO delivery_preferences (
@@ -309,7 +329,10 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn list_delivery_preferences(&self, environment_scope: &str) -> Result<Vec<DeliveryPreferenceRecord>, String> {
+    pub fn list_delivery_preferences(
+        &self,
+        environment_scope: &str,
+    ) -> Result<Vec<DeliveryPreferenceRecord>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -320,7 +343,9 @@ impl SQLiteStore {
                 ORDER BY updated_at DESC, preference_id DESC"#,
             )
             .map_err(|e| format!("list delivery preferences: {e}"))?;
-        let mut rows = stmt.query(params![environment_scope]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![environment_scope])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_delivery_preference(row)?);
@@ -328,7 +353,11 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn get_delivery_preference(&self, environment_scope: &str, preference_id: &str) -> Result<Option<DeliveryPreferenceRecord>, String> {
+    pub fn get_delivery_preference(
+        &self,
+        environment_scope: &str,
+        preference_id: &str,
+    ) -> Result<Option<DeliveryPreferenceRecord>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -338,7 +367,9 @@ impl SQLiteStore {
                 WHERE environment_scope = ?1 AND preference_id = ?2"#,
             )
             .map_err(|e| format!("get delivery preference {preference_id}: {e}"))?;
-        let mut rows = stmt.query(params![environment_scope, preference_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![environment_scope, preference_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -404,21 +435,59 @@ impl SQLiteStore {
         );
         let mut args: Vec<Value> = vec![Value::from(environment_scope.to_string())];
         let mut index = 1usize;
-        push_outcome_filter(&mut sql, &mut args, &mut index, "source_kind", &filter.source_kind);
-        push_outcome_filter(&mut sql, &mut args, &mut index, "source_id", &filter.source_id);
+        push_outcome_filter(
+            &mut sql,
+            &mut args,
+            &mut index,
+            "source_kind",
+            &filter.source_kind,
+        );
+        push_outcome_filter(
+            &mut sql,
+            &mut args,
+            &mut index,
+            "source_id",
+            &filter.source_id,
+        );
         push_outcome_filter(&mut sql, &mut args, &mut index, "run_id", &filter.run_id);
-        push_outcome_filter(&mut sql, &mut args, &mut index, "workflow_id", &filter.workflow_id);
-        push_outcome_filter(&mut sql, &mut args, &mut index, "schedule_id", &filter.schedule_id);
-        push_outcome_filter(&mut sql, &mut args, &mut index, "integration_id", &filter.integration_id);
+        push_outcome_filter(
+            &mut sql,
+            &mut args,
+            &mut index,
+            "workflow_id",
+            &filter.workflow_id,
+        );
+        push_outcome_filter(
+            &mut sql,
+            &mut args,
+            &mut index,
+            "schedule_id",
+            &filter.schedule_id,
+        );
+        push_outcome_filter(
+            &mut sql,
+            &mut args,
+            &mut index,
+            "integration_id",
+            &filter.integration_id,
+        );
         push_outcome_filter(&mut sql, &mut args, &mut index, "status", &filter.status);
-        push_outcome_filter(&mut sql, &mut args, &mut index, "chosen_target_id", &filter.target_id);
+        push_outcome_filter(
+            &mut sql,
+            &mut args,
+            &mut index,
+            "chosen_target_id",
+            &filter.target_id,
+        );
         sql.push_str(" ORDER BY updated_at DESC, delivery_id DESC");
 
         let mut stmt = self
             .conn
             .prepare(&sql)
             .map_err(|e| format!("list delivery outcomes: {e}"))?;
-        let mut rows = stmt.query(rusqlite::params_from_iter(args)).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(rusqlite::params_from_iter(args))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_delivery_outcome(row)?);
@@ -426,7 +495,11 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn get_delivery_outcome(&self, environment_scope: &str, delivery_id: &str) -> Result<Option<DeliveryOutcomeRecord>, String> {
+    pub fn get_delivery_outcome(
+        &self,
+        environment_scope: &str,
+        delivery_id: &str,
+    ) -> Result<Option<DeliveryOutcomeRecord>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -437,7 +510,9 @@ impl SQLiteStore {
                 WHERE environment_scope = ?1 AND delivery_id = ?2"#,
             )
             .map_err(|e| format!("get delivery outcome {delivery_id}: {e}"))?;
-        let mut rows = stmt.query(params![environment_scope, delivery_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![environment_scope, delivery_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -474,7 +549,10 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn list_delivery_attempts(&self, delivery_id: &str) -> Result<Vec<DeliveryAttemptRecord>, String> {
+    pub fn list_delivery_attempts(
+        &self,
+        delivery_id: &str,
+    ) -> Result<Vec<DeliveryAttemptRecord>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -485,7 +563,9 @@ impl SQLiteStore {
                 ORDER BY attempt_number ASC, attempt_id ASC"#,
             )
             .map_err(|e| format!("list delivery attempts: {e}"))?;
-        let mut rows = stmt.query(params![delivery_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![delivery_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_delivery_attempt(row)?);
@@ -493,7 +573,10 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn upsert_delivery_summary_window(&self, record: &DeliverySummaryWindowRecord) -> Result<(), String> {
+    pub fn upsert_delivery_summary_window(
+        &self,
+        record: &DeliverySummaryWindowRecord,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 r#"INSERT INTO delivery_summary_windows (
@@ -521,11 +604,19 @@ impl SQLiteStore {
                     None::<String>,
                 ],
             )
-            .map_err(|e| format!("upsert delivery summary window {}: {e}", record.summary_window_id))?;
+            .map_err(|e| {
+                format!(
+                    "upsert delivery summary window {}: {e}",
+                    record.summary_window_id
+                )
+            })?;
         Ok(())
     }
 
-    pub fn list_delivery_summary_windows(&self, environment_scope: &str) -> Result<Vec<DeliverySummaryWindowRecord>, String> {
+    pub fn list_delivery_summary_windows(
+        &self,
+        environment_scope: &str,
+    ) -> Result<Vec<DeliverySummaryWindowRecord>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -536,7 +627,9 @@ impl SQLiteStore {
                 ORDER BY updated_at DESC, summary_window_id DESC"#,
             )
             .map_err(|e| format!("list delivery summary windows: {e}"))?;
-        let mut rows = stmt.query(params![environment_scope]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![environment_scope])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_delivery_summary_window(row)?);
@@ -544,7 +637,11 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn get_delivery_summary_window(&self, environment_scope: &str, summary_window_id: &str) -> Result<Option<DeliverySummaryWindowRecord>, String> {
+    pub fn get_delivery_summary_window(
+        &self,
+        environment_scope: &str,
+        summary_window_id: &str,
+    ) -> Result<Option<DeliverySummaryWindowRecord>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -554,7 +651,9 @@ impl SQLiteStore {
                 WHERE environment_scope = ?1 AND summary_window_id = ?2"#,
             )
             .map_err(|e| format!("get delivery summary window {summary_window_id}: {e}"))?;
-        let mut rows = stmt.query(params![environment_scope, summary_window_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![environment_scope, summary_window_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };

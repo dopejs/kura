@@ -8,11 +8,11 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 use serde::{Deserialize, Serialize};
 
-use crate::crud::{now_rfc3339, null_string, opt_time_string};
 use crate::SQLiteStore;
+use crate::crud::{now_rfc3339, null_string, opt_time_string};
 
 /// Go `SlackHostedSetupRecord` (stored in `slack_hosted_setups`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -212,7 +212,8 @@ fn normalize_hosted_setup(mut record: SlackHostedSetupRecord) -> SlackHostedSetu
 /// Go `normalizeSlackRoutePolicyRecord`.
 fn normalize_route_policy(mut record: SlackRoutePolicyRecord) -> SlackRoutePolicyRecord {
     record.mention_gate = coalesce(&record.mention_gate, "agent_mention_required");
-    record.thread_reply_mode = coalesce(&record.thread_reply_mode, "channel_mentions_thread_rooted");
+    record.thread_reply_mode =
+        coalesce(&record.thread_reply_mode, "channel_mentions_thread_rooted");
     record.validation_state = coalesce(&record.validation_state, "blocked");
     record.redaction_status = coalesce(&record.redaction_status, "redacted");
     if is_unset_time(&record.validated_at) {
@@ -388,7 +389,10 @@ impl SQLiteStore {
     }
 
     /// Go `SaveSlackSmokeEvidence`.
-    pub fn save_slack_smoke_evidence(&self, record: &SlackSmokeEvidenceRecord) -> Result<(), String> {
+    pub fn save_slack_smoke_evidence(
+        &self,
+        record: &SlackSmokeEvidenceRecord,
+    ) -> Result<(), String> {
         let record = normalize_smoke(record.clone());
         let document = serde_json::to_string(&record)
             .map_err(|e| format!("marshal slack smoke evidence: {e}"))?;
@@ -429,7 +433,12 @@ impl SQLiteStore {
                     document,
                 ],
             )
-            .map_err(|e| format!("save slack smoke evidence {}: {e}", record.smoke_evidence_id))?;
+            .map_err(|e| {
+                format!(
+                    "save slack smoke evidence {}: {e}",
+                    record.smoke_evidence_id
+                )
+            })?;
         Ok(())
     }
 
@@ -451,7 +460,11 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("latest slack smoke evidence {connector_id}: {e}"))?;
         let mut rows = stmt
-            .query(params![tenant_id.trim(), connector_id.trim(), now_rfc3339(&now)])
+            .query(params![
+                tenant_id.trim(),
+                connector_id.trim(),
+                now_rfc3339(&now)
+            ])
             .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
@@ -460,7 +473,10 @@ impl SQLiteStore {
     }
 
     /// Go `SaveSlackEventEvidence`.
-    pub fn save_slack_event_evidence(&self, record: &SlackEventEvidenceRecord) -> Result<(), String> {
+    pub fn save_slack_event_evidence(
+        &self,
+        record: &SlackEventEvidenceRecord,
+    ) -> Result<(), String> {
         let record = normalize_event_evidence(record.clone());
         let document = serde_json::to_string(&record)
             .map_err(|e| format!("marshal slack event evidence: {e}"))?;
@@ -506,7 +522,11 @@ impl SQLiteStore {
         now: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<SlackEventEvidenceRecord>, String> {
-        let limit = if limit <= 0 || limit > 100 { 100 } else { limit };
+        let limit = if limit <= 0 || limit > 100 {
+            100
+        } else {
+            limit
+        };
         let mut stmt = self
             .conn
             .prepare(
@@ -518,7 +538,12 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("list slack event evidence: {e}"))?;
         let mut rows = stmt
-            .query(params![tenant_id.trim(), connector_id.trim(), now_rfc3339(&now), limit])
+            .query(params![
+                tenant_id.trim(),
+                connector_id.trim(),
+                now_rfc3339(&now),
+                limit
+            ])
             .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {

@@ -244,23 +244,37 @@ pub enum ProvidersError {
 }
 
 impl Default for Family {
-    fn default() -> Self { Family::BuiltinEcho }
+    fn default() -> Self {
+        Family::BuiltinEcho
+    }
 }
 impl Default for AuthMode {
-    fn default() -> Self { AuthMode::None }
+    fn default() -> Self {
+        AuthMode::None
+    }
 }
 impl Default for Source {
-    fn default() -> Self { Source::Builtin }
+    fn default() -> Self {
+        Source::Builtin
+    }
 }
 impl Default for ModelSelectionMode {
-    fn default() -> Self { ModelSelectionMode::Fixed }
+    fn default() -> Self {
+        ModelSelectionMode::Fixed
+    }
 }
 impl Default for AuthStatus {
-    fn default() -> Self { AuthStatus::Unknown }
+    fn default() -> Self {
+        AuthStatus::Unknown
+    }
 }
 impl Default for CheckStatus {
-    fn default() -> Self { CheckStatus::Passed }
+    fn default() -> Self {
+        CheckStatus::Passed
+    }
 }
 impl Default for CheckErrorClass {
-    fn default() -> Self { CheckErrorClass::Config }
+    fn default() -> Self {
+        CheckErrorClass::Config
+    }
 }

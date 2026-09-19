@@ -7,7 +7,10 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::{ambiguous_fault, feishu_code_fault, http_status_fault, FaultKind, ProviderFault, DEFAULT_BASE_URL};
+use crate::{
+    DEFAULT_BASE_URL, FaultKind, ProviderFault, ambiguous_fault, feishu_code_fault,
+    http_status_fault,
+};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(25);
 
@@ -68,7 +71,9 @@ impl Client {
                 let mut reader = resp.into_reader();
                 if reader.read_to_end(&mut buf).is_err() {
                     if write {
-                        return Err(ambiguous_fault("provider response truncated after acknowledgement"));
+                        return Err(ambiguous_fault(
+                            "provider response truncated after acknowledgement",
+                        ));
                     }
                     return Err(ProviderFault {
                         kind: FaultKind::Unavailable,
@@ -85,7 +90,9 @@ impl Client {
             }
             Err(ureq::Error::Transport(_)) => {
                 if write {
-                    return Err(ambiguous_fault("provider connection broke before acknowledgement"));
+                    return Err(ambiguous_fault(
+                        "provider connection broke before acknowledgement",
+                    ));
                 }
                 return Err(ProviderFault {
                     kind: FaultKind::Unavailable,

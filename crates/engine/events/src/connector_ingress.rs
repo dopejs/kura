@@ -26,8 +26,14 @@ pub fn connector_inbound_duplicate_detected(input: ConnectorInboundDuplicateInpu
         tenant_id: input.tenant_id.clone(),
         category: "connector".to_string(),
         name: "connector.inbound_duplicate_detected".to_string(),
-        scope: Scope { connector_id: input.connector_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "connector_message".to_string(), id: input.existing_delivery_id.clone() },
+        scope: Scope {
+            connector_id: input.connector_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "connector_message".to_string(),
+            id: input.existing_delivery_id.clone(),
+        },
         payload: payload![
             "tenantId" => input.tenant_id,
             "connectorId" => input.connector_id,
@@ -71,8 +77,14 @@ pub fn connector_route_outcome_recorded(input: ConnectorRouteOutcomeInput) -> Ev
         tenant_id: input.tenant_id.clone(),
         category: "connector".to_string(),
         name: "connector.route_outcome_recorded".to_string(),
-        scope: Scope { connector_id: input.connector_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "connector_route_outcome".to_string(), id: resource_id },
+        scope: Scope {
+            connector_id: input.connector_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "connector_route_outcome".to_string(),
+            id: resource_id,
+        },
         payload: payload![
             "tenantId" => input.tenant_id,
             "connectorId" => input.connector_id,

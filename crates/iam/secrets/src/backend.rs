@@ -83,9 +83,8 @@ impl ValueBackend for LocalBackend {
             }
             let tenant_segment = safe_path_segment(tenant_id);
             let tenant_dir = self.root.join(&tenant_segment);
-            fs::create_dir_all(&tenant_dir).map_err(|err| {
-                SecretsError::Backend(format!("create tenant secret dir: {err}"))
-            })?;
+            fs::create_dir_all(&tenant_dir)
+                .map_err(|err| SecretsError::Backend(format!("create tenant secret dir: {err}")))?;
             #[cfg(unix)]
             set_dir_permissions(&tenant_dir)?;
             let name = format!(
@@ -270,7 +269,10 @@ mod tests {
         let dir = TestDir::new("backend-validate");
         let backend = LocalBackend::new(dir.path()).expect("backend");
         assert_eq!(
-            backend.put("", "sec_1", "secver_1", "v").await.expect_err("tenant"),
+            backend
+                .put("", "sec_1", "secver_1", "v")
+                .await
+                .expect_err("tenant"),
             SecretsError::TenantRequired
         );
         assert_eq!(
@@ -300,7 +302,11 @@ mod tests {
     fn random_hex_has_expected_shape() {
         let value = random_hex(12);
         assert_eq!(value.len(), 24);
-        assert!(value.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(
+            value
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
         assert_ne!(random_hex(8), random_hex(8));
     }
 

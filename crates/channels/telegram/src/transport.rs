@@ -2,8 +2,8 @@
 //! client over ureq plus the fake transport used by tests.
 
 use std::io::Read;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -11,13 +11,13 @@ use kura_connectors::RedactionStatus;
 use kura_im::ReplySender;
 use kura_imtypes::{OutboundReply, ReplyCapabilities, SentReply};
 use parking_lot::Mutex;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use crate::TelegramError;
 use crate::allowment::{ConversationType, InboundUpdate, RouteDecision};
 use crate::readiness::{AccountBinding, PermissionState};
-use crate::TelegramError;
 
 /// Telegram channel transport boundary (Go `Transport`). Extends
 /// [`ReplySender`] so the runtime can hand the transport directly to the
@@ -91,7 +91,9 @@ impl BotApiTransport {
             base_url
         };
         let agent = cfg.http_client.unwrap_or_else(|| {
-            ureq::AgentBuilder::new().timeout(Duration::from_secs(35)).build()
+            ureq::AgentBuilder::new()
+                .timeout(Duration::from_secs(35))
+                .build()
         });
         let poll_interval = if cfg.poll_interval <= Duration::ZERO {
             Duration::from_secs(1)
@@ -160,7 +162,13 @@ impl BotApiTransport {
         payload: Option<&Value>,
         out: &mut T,
     ) -> Result<(), TelegramApiError> {
-        call_inner(&self.agent, &self.method_url(api_method), method, payload, out)
+        call_inner(
+            &self.agent,
+            &self.method_url(api_method),
+            method,
+            payload,
+            out,
+        )
     }
 }
 
@@ -182,7 +190,9 @@ impl ReplySender for BotApiTransport {
             }
             .to_string());
         }
-        Ok(SentReply { external_message_id: response.result.message_id.to_string() })
+        Ok(SentReply {
+            external_message_id: response.result.message_id.to_string(),
+        })
     }
 }
 impl Transport for BotApiTransport {
@@ -404,11 +414,12 @@ pub fn inbound_from_telegram_update(update: &TelegramUpdate) -> Option<InboundUp
     if update.message.message_id == 0 || update.message.chat.id == 0 {
         return None;
     }
-    let conversation = if update.message.chat.type_ == "group" || update.message.chat.type_ == "supergroup" {
-        ConversationType::Group
-    } else {
-        ConversationType::Direct
-    };
+    let conversation =
+        if update.message.chat.type_ == "group" || update.message.chat.type_ == "supergroup" {
+            ConversationType::Group
+        } else {
+            ConversationType::Direct
+        };
     let unsupported = if update.message.voice.is_some() {
         "voice"
     } else if update.message.document.is_some() {
@@ -491,7 +502,11 @@ impl FakeTransport {
     /// Go `LastRouteOutcome`.
     #[must_use]
     pub fn last_route_outcome(&self) -> RouteDecision {
-        self.route_outcomes.lock().last().cloned().unwrap_or_default()
+        self.route_outcomes
+            .lock()
+            .last()
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// All recorded route outcomes.
@@ -519,7 +534,9 @@ impl ReplySender for FakeTransport {
         }
         let mut replies = self.replies.lock();
         replies.push(reply);
-        Ok(SentReply { external_message_id: format!("telegram_reply_{}", replies.len()) })
+        Ok(SentReply {
+            external_message_id: format!("telegram_reply_{}", replies.len()),
+        })
     }
 }
 
@@ -551,8 +568,8 @@ mod tests {
     use crate::diagnostics::diagnostic_reason_for_error;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::{SocketAddr, TcpListener, TcpStream};
-    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
     use std::sync::Arc as StdArc;
+    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
     use std::thread::{self, JoinHandle};
 
     struct HttpRequest {
@@ -598,7 +615,11 @@ mod tests {
                     }
                 }
             });
-            TestHttpServer { addr, shutdown, thread: Some(thread) }
+            TestHttpServer {
+                addr,
+                shutdown,
+                thread: Some(thread),
+            }
         }
 
         fn base_url(&self) -> String {
@@ -667,7 +688,9 @@ mod tests {
     }
 
     fn agent() -> ureq::Agent {
-        ureq::AgentBuilder::new().timeout(Duration::from_secs(10)).build()
+        ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(10))
+            .build()
     }
 
     // Go TestBotAPITransportValidatesCredentialAndSendsReply.
@@ -704,7 +727,9 @@ mod tests {
         })
         .expect("new transport");
 
-        let binding = transport.validate_credential().expect("validate credential");
+        let binding = transport
+            .validate_credential()
+            .expect("validate credential");
         assert_eq!(binding.connector_account_id, "telegram_bot_42");
         assert_eq!(binding.provider_account_label, "kura_test_bot");
         assert_eq!(binding.permission_state, PermissionState::Valid);
@@ -744,7 +769,9 @@ mod tests {
         })
         .expect("new transport");
 
-        let err = transport.validate_credential().expect_err("validation must fail");
+        let err = transport
+            .validate_credential()
+            .expect_err("validation must fail");
         assert_eq!(
             diagnostic_reason_for_error(&err),
             kura_connectors::DiagnosticReasonCode::AuthMissing

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["foundation/protocol", "engine/model-provider", "engine/core", "surface/cli", "surface/tui", "foundation/config", "iam/identity", "channels/im", "foundation/telemetry", "domains/billing", "foundation/bindings", "engine/llm", "engine/profiles", "engine/threads", "engine/router", "iam/secrets", "foundation/contracts", "domains/activation", "surface/api", "domains/capabilities", "domains/inventory", "domains/setupwizard", "channels/imtypes", "domains/livevalidation", "modeling/providers", "modeling/adapterrpc", "modeling/adapterprovider", "modeling/adapterref", "domains/integrations", "domains/policy", "domains/calendar", "domains/mail", "engine/runtime", "channels/feishulark", "modeling/opsreadiness", "domains/computeruse", "domains/artifacts", "domains/sandbox", "domains/delivery", "persistence/store", "engine/checkpoints", "engine/events", "channels/connectors", "channels/discord", "channels/matrix", "channels/slack", "channels/telegram", "domains/evaluation", "domains/audit", "domains/orchestration", "domains/skills", "domains/catalog", "domains/evidence", "domains/execprofile", "domains/triage", "domains/routine", "domains/reminders", "domains/webhook", "domains/memory", "domains/scheduler", "iam/tenancy", "persistence/migrationfixture", "domains/mcp", "domains/chat", "modeling/managedproviders", "surface/app", "foundation/plugin", "domains/session", "domains/context", "domains/improvement"]
+members = ["foundation/protocol", "engine/model-provider", "engine/core", "surface/cli", "surface/tui", "foundation/config", "iam/identity", "channels/im", "foundation/telemetry", "domains/billing", "foundation/bindings", "engine/llm", "engine/profiles", "engine/threads", "engine/router", "iam/secrets", "foundation/contracts", "domains/activation", "surface/api", "domains/capabilities", "domains/inventory", "domains/setupwizard", "channels/imtypes", "domains/livevalidation", "modeling/providers", "modeling/adapterrpc", "modeling/adapterprovider", "modeling/adapterref", "domains/integrations", "domains/policy", "domains/calendar", "domains/mail", "engine/runtime", "channels/feishulark", "modeling/opsreadiness", "domains/computeruse", "domains/artifacts", "domains/sandbox", "domains/delivery", "persistence/store", "engine/checkpoints", "engine/events", "channels/connectors", "channels/discord", "channels/matrix", "channels/slack", "channels/telegram", "domains/evaluation", "domains/audit", "domains/orchestration", "domains/skills", "domains/catalog", "domains/evidence", "domains/execprofile", "domains/triage", "domains/routine", "domains/reminders", "domains/webhook", "domains/memory", "domains/scheduler", "iam/tenancy", "persistence/migrationfixture", "domains/mcp", "domains/chat", "modeling/managedproviders", "surface/app", "foundation/plugin", "domains/session", "domains/context", "domains/improvement", "domains/tools", "foundation/egress", "domains/swarm", "modeling/openaiprovider"]
 
 [workspace.package]
 edition = "2024"
@@ -52,6 +52,10 @@ kura-audit = { path = "domains/audit" }
 kura-orchestration = { path = "domains/orchestration" }
 kura-skills = { path = "domains/skills" }
 kura-catalog = { path = "domains/catalog" }
+kura-tools = { path = "domains/tools" }
+kura-egress = { path = "foundation/egress" }
+kura-swarm = { path = "domains/swarm" }
+kura-openai-provider = { path = "modeling/openaiprovider" }
 kura-evidence = { path = "domains/evidence" }
 kura-execprofile = { path = "domains/execprofile" }
 kura-triage = { path = "domains/triage" }

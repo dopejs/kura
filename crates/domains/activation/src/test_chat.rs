@@ -9,22 +9,22 @@ use serde_json::Value;
 
 use crate::audit::AuditRecord;
 use crate::diagnostics::readiness_item_ids_for_state;
-use crate::error::activation_error;
 use crate::error::ActivationError;
+use crate::error::activation_error;
 use crate::readiness::first_non_empty;
 use crate::service::Service;
-use crate::types::default_test_chat_first_action;
 use crate::types::FailureReason;
 use crate::types::FailureStage;
 use crate::types::ReasonCode;
 use crate::types::RemediationOwner;
+use crate::types::STEP_COMPLETED;
+use crate::types::STEP_TEST_CHAT;
+use crate::types::STEP_TEST_CHAT_COMPLETED;
 use crate::types::State;
 use crate::types::Status;
 use crate::types::TestChatMetadata;
 use crate::types::TestChatStatus;
-use crate::types::STEP_COMPLETED;
-use crate::types::STEP_TEST_CHAT;
-use crate::types::STEP_TEST_CHAT_COMPLETED;
+use crate::types::default_test_chat_first_action;
 
 const DEFAULT_ACTIVATION_TEST_CHAT_MESSAGE: &str = "Run a safe hosted activation test.";
 
@@ -138,11 +138,15 @@ impl Service {
             || !state.blocking_reason_codes.is_empty()
             || !state.first_action.available
         {
-            let (reason, stage) = if has_blocking_reason(&state, ReasonCode::QUOTA_BASELINE_UNAVAILABLE) {
-                (ReasonCode::QUOTA_BASELINE_UNAVAILABLE, FailureStage::QUOTA_BASELINE)
-            } else {
-                (ReasonCode::TEST_CHAT_UNAVAILABLE, FailureStage::TEST_CHAT)
-            };
+            let (reason, stage) =
+                if has_blocking_reason(&state, ReasonCode::QUOTA_BASELINE_UNAVAILABLE) {
+                    (
+                        ReasonCode::QUOTA_BASELINE_UNAVAILABLE,
+                        FailureStage::QUOTA_BASELINE,
+                    )
+                } else {
+                    (ReasonCode::TEST_CHAT_UNAVAILABLE, FailureStage::TEST_CHAT)
+                };
             return Err(fail(activation_error(
                 reason.into(),
                 stage.into(),
@@ -267,7 +271,8 @@ impl Service {
 
         state.status = Status::FIRST_ACTION_COMPLETED.into();
         state.current_step_id = STEP_COMPLETED.to_string();
-        state.completed_step_ids = append_unique_step(&state.completed_step_ids, STEP_TEST_CHAT_COMPLETED);
+        state.completed_step_ids =
+            append_unique_step(&state.completed_step_ids, STEP_TEST_CHAT_COMPLETED);
         state.blocking_reason_codes = Vec::new();
         state.test_chat = Some(metadata.clone());
         state.failure_reason = None;
@@ -310,7 +315,11 @@ fn quota_baseline_status_for_audit(state: &State) -> String {
 }
 
 fn has_blocking_reason(state: &State, reason: &str) -> bool {
-    if state.blocking_reason_codes.iter().any(|item| item.as_str() == reason) {
+    if state
+        .blocking_reason_codes
+        .iter()
+        .any(|item| item.as_str() == reason)
+    {
         return true;
     }
     state
@@ -360,21 +369,22 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::error::reason_code_from_error;
-    use crate::testutil::*;
     use crate::ActivateInput;
     use crate::Dependencies;
     use crate::GetInput;
     use crate::RunTestChatInput;
     use crate::StateStore;
+    use crate::error::reason_code_from_error;
+    use crate::testutil::*;
 
     #[tokio::test]
     async fn test_chat_failure_persists_recoverable_state_and_audit() {
         let now = test_now();
         let repo = Arc::new(MemoryIdentityRepository::default());
-        repo.principals
-            .lock()
-            .insert("prn_chat_fail".to_string(), active_principal("prn_chat_fail", now));
+        repo.principals.lock().insert(
+            "prn_chat_fail".to_string(),
+            active_principal("prn_chat_fail", now),
+        );
         let state_store = Arc::new(MemoryStateStore::default());
         let audit_sink = Arc::new(RecordingAuditSink::default());
         let svc = Service::new(Dependencies {
@@ -420,7 +430,10 @@ mod tests {
             .expect("persisted recoverable activation state");
         assert_eq!(persisted.status, Status::ACTIVE);
         assert_eq!(persisted.current_step_id, STEP_TEST_CHAT);
-        assert!(persisted.first_action.available, "expected active retryable activation state");
+        assert!(
+            persisted.first_action.available,
+            "expected active retryable activation state"
+        );
         let failure_reason = persisted.failure_reason.as_ref().expect("failure reason");
         assert_eq!(failure_reason.reason_code, ReasonCode::TEST_CHAT_FAILED);
         assert!(failure_reason.retryable);
@@ -434,7 +447,11 @@ mod tests {
             })
             .await
             .expect("diagnostics");
-        assert_eq!(diagnostics.len(), 1, "expected test chat diagnostic: {diagnostics:?}");
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "expected test chat diagnostic: {diagnostics:?}"
+        );
         assert_eq!(diagnostics[0].stage, FailureStage::TEST_CHAT);
         assert_eq!(diagnostics[0].reason_code, ReasonCode::TEST_CHAT_FAILED);
         assert!(diagnostics[0].test_chat.is_some());
@@ -453,9 +470,10 @@ mod tests {
     async fn test_chat_persists_metadata_only() {
         let now = test_now();
         let repo = Arc::new(MemoryIdentityRepository::default());
-        repo.principals
-            .lock()
-            .insert("prn_redaction".to_string(), active_principal("prn_redaction", now));
+        repo.principals.lock().insert(
+            "prn_redaction".to_string(),
+            active_principal("prn_redaction", now),
+        );
         let state_store = Arc::new(MemoryStateStore::default());
         let audit_sink = Arc::new(RecordingAuditSink::default());
         let chat = Arc::new(RecordingChatRunner {
@@ -471,7 +489,10 @@ mod tests {
                     ("transcript".to_string(), json!("forbidden transcript")),
                     ("delta".to_string(), json!("forbidden delta")),
                     ("prompt".to_string(), json!("forbidden prompt")),
-                    ("rawProviderPayload".to_string(), json!("forbidden raw payload")),
+                    (
+                        "rawProviderPayload".to_string(),
+                        json!("forbidden raw payload"),
+                    ),
                     ("authorization".to_string(), json!("Bearer forbidden")),
                     ("accessToken".to_string(), json!("token")),
                     ("refreshToken".to_string(), json!("refresh")),
@@ -504,7 +525,11 @@ mod tests {
         let (completed, metadata) = svc
             .run_test_chat(RunTestChatInput {
                 token: active_token("tok_redaction", "prn_redaction"),
-                tenant_context: tenant_context("prn_redaction", &started.tenant_id, "tok_redaction"),
+                tenant_context: tenant_context(
+                    "prn_redaction",
+                    &started.tenant_id,
+                    "tok_redaction",
+                ),
                 message: "Never persist this test chat message.".to_string(),
             })
             .await

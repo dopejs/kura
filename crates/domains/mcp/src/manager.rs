@@ -71,9 +71,15 @@ pub trait AttachedExecutionStarter: Send + Sync {
         &self,
         request: &kura_sandbox::ExecutionRequest,
     ) -> Result<(kura_sandbox::Execution, Option<AttachedExecution>), String>;
-    fn cancel_execution(&self, execution_id: &str) -> Result<(kura_sandbox::Execution, bool), String>;
+    fn cancel_execution(
+        &self,
+        execution_id: &str,
+    ) -> Result<(kura_sandbox::Execution, bool), String>;
     fn get_execution(&self, execution_id: &str) -> Option<kura_sandbox::Execution>;
-    fn persist_consumer_view(&self, view: &kura_sandbox::ConsumerContractView) -> Result<(), String>;
+    fn persist_consumer_view(
+        &self,
+        view: &kura_sandbox::ConsumerContractView,
+    ) -> Result<(), String>;
     fn get_profile(&self, profile_id: &str) -> Option<kura_sandbox::Profile>;
 }
 
@@ -126,6 +132,7 @@ impl Default for Manager {
     fn default() -> Self {
         Self::new(
             kura_config::Config {
+                store: Default::default(),
                 environment: kura_config::Environment::Test,
                 bind_addr: "127.0.0.1:19192".to_string(),
                 data_dir: "~/.kura-test".to_string(),
@@ -133,6 +140,7 @@ impl Default for Manager {
                 version: "dev".to_string(),
                 llm: Default::default(),
                 connectors: Default::default(),
+                egress: Default::default(),
             },
             None,
             None,
@@ -207,7 +215,9 @@ impl Manager {
                 ],
                 environment_scope: environment.clone(),
                 daemon_managed_reconnect: false,
-                recovery_summary: "stdio sessions restart through the existing daemon-owned lifecycle path".to_string(),
+                recovery_summary:
+                    "stdio sessions restart through the existing daemon-owned lifecycle path"
+                        .to_string(),
                 ..TransportCapability::default()
             },
             TransportCapability {
@@ -220,7 +230,8 @@ impl Manager {
                 ],
                 environment_scope: environment.clone(),
                 daemon_managed_reconnect: false,
-                recovery_summary: "streamable-http sessions restart through the normal lifecycle path".to_string(),
+                recovery_summary:
+                    "streamable-http sessions restart through the normal lifecycle path".to_string(),
                 ..TransportCapability::default()
             },
             TransportCapability {
@@ -237,7 +248,8 @@ impl Manager {
                     WebsocketAuthMode::Header.as_str().to_string(),
                 ],
                 daemon_managed_reconnect: true,
-                recovery_summary: "daemon manages bounded websocket reconnect and restore history".to_string(),
+                recovery_summary: "daemon manages bounded websocket reconnect and restore history"
+                    .to_string(),
                 ..TransportCapability::default()
             },
         ];
@@ -292,29 +304,41 @@ impl Manager {
         let server_records = lock()?.list_mcp_servers().map_err(McpError::Store)?;
         let state_records = lock()?.list_mcp_server_states().map_err(McpError::Store)?;
         let tool_records = lock()?.list_mcp_tools("").map_err(McpError::Store)?;
-        let exposure_records = lock()?.list_mcp_tool_exposure_rules("").map_err(McpError::Store)?;
+        let exposure_records = lock()?
+            .list_mcp_tool_exposure_rules("")
+            .map_err(McpError::Store)?;
 
         let mut servers: HashMap<String, Server> = HashMap::new();
         let mut server_ids: Vec<String> = Vec::new();
         let mut states: HashMap<String, ServerState> = HashMap::new();
         let mut tools: HashMap<String, HashMap<String, Tool>> = HashMap::new();
-        let mut exposure: HashMap<String, HashMap<String, HashMap<String, ToolExposureRule>>> = HashMap::new();
+        let mut exposure: HashMap<String, HashMap<String, HashMap<String, ToolExposureRule>>> =
+            HashMap::new();
 
         for record in server_records {
-            let server: Server = serde_json::from_str(&record.document)
-                .map_err(|e| McpError::Store(format!("decode mcp server {}: {e}", record.server_id)))?;
+            let server: Server = serde_json::from_str(&record.document).map_err(|e| {
+                McpError::Store(format!("decode mcp server {}: {e}", record.server_id))
+            })?;
             servers.insert(server.server_id.clone(), server.clone());
             server_ids.push(server.server_id.clone());
         }
         for record in state_records {
-            let state: ServerState = serde_json::from_str(&record.document)
-                .map_err(|e| McpError::Store(format!("decode mcp server state {}: {e}", record.server_id)))?;
+            let state: ServerState = serde_json::from_str(&record.document).map_err(|e| {
+                McpError::Store(format!("decode mcp server state {}: {e}", record.server_id))
+            })?;
             states.insert(state.server_id.clone(), state);
         }
         for record in tool_records {
-            let tool: Tool = serde_json::from_str(&record.document)
-                .map_err(|e| McpError::Store(format!("decode mcp tool {}/{}: {e}", record.server_id, record.tool_name)))?;
-            tools.entry(tool.server_id.clone()).or_default().insert(tool.tool_name.clone(), tool);
+            let tool: Tool = serde_json::from_str(&record.document).map_err(|e| {
+                McpError::Store(format!(
+                    "decode mcp tool {}/{}: {e}",
+                    record.server_id, record.tool_name
+                ))
+            })?;
+            tools
+                .entry(tool.server_id.clone())
+                .or_default()
+                .insert(tool.tool_name.clone(), tool);
         }
         for record in exposure_records {
             let rule: ToolExposureRule = serde_json::from_str(&record.document).map_err(|e| {
@@ -333,16 +357,22 @@ impl Manager {
 
         for server_id in &server_ids {
             if !states.contains_key(server_id) {
-                states.insert(server_id.clone(), default_state_for_server(&servers[server_id]));
+                states.insert(
+                    server_id.clone(),
+                    default_state_for_server(&servers[server_id]),
+                );
                 continue;
             }
             let server = &servers[server_id];
             let mut state = states[server_id].clone();
             if !server.enabled {
                 state.status = LifecycleStatus::Disabled;
-            } else if state.status != LifecycleStatus::Stopped && state.status != LifecycleStatus::Disabled {
+            } else if state.status != LifecycleStatus::Stopped
+                && state.status != LifecycleStatus::Disabled
+            {
                 state.status = LifecycleStatus::Stopped;
-                state.health_reason = "daemon restart cleared in-memory MCP session state".to_string();
+                state.health_reason =
+                    "daemon restart cleared in-memory MCP session state".to_string();
                 state.last_execution_id = String::new();
             }
             state.updated_at = Utc::now();
@@ -364,7 +394,9 @@ impl Manager {
                 }
             }
             for server_id in &server_ids {
-                let Some(map) = guard.tools.get(server_id) else { continue };
+                let Some(map) = guard.tools.get(server_id) else {
+                    continue;
+                };
                 if map.is_empty() {
                     continue;
                 }
@@ -445,7 +477,12 @@ impl Manager {
     /// Go `GetServer`.
     #[must_use]
     pub fn get_server(&self, server_id: &str) -> Option<Server> {
-        self.inner.state.read().servers.get(server_id.trim()).cloned()
+        self.inner
+            .state
+            .read()
+            .servers
+            .get(server_id.trim())
+            .cloned()
     }
 
     /// Go `GetServerForTenant`.
@@ -469,7 +506,11 @@ impl Manager {
 
     /// Go `GetServerResourceForTenant`.
     #[must_use]
-    pub fn get_server_resource_for_tenant(&self, server_id: &str, tenant_id: &str) -> Option<ServerResource> {
+    pub fn get_server_resource_for_tenant(
+        &self,
+        server_id: &str,
+        tenant_id: &str,
+    ) -> Option<ServerResource> {
         let guard = self.inner.state.read();
         let server = guard.servers.get(server_id.trim())?;
         let tenant_id = tenant_id.trim().to_string();
@@ -497,7 +538,11 @@ impl Manager {
     }
 
     /// Go `ListToolsForTenant`.
-    pub fn list_tools_for_tenant(&self, server_id: &str, tenant_id: &str) -> Result<Vec<ToolResource>, McpError> {
+    pub fn list_tools_for_tenant(
+        &self,
+        server_id: &str,
+        tenant_id: &str,
+    ) -> Result<Vec<ToolResource>, McpError> {
         let guard = self.inner.state.read();
         let server = guard
             .servers
@@ -518,12 +563,19 @@ impl Manager {
     }
 
     /// Go `CreateServer`.
-    pub fn create_server(&self, input: CreateServerInput) -> Result<(ServerResource, bool), McpError> {
+    pub fn create_server(
+        &self,
+        input: CreateServerInput,
+    ) -> Result<(ServerResource, bool), McpError> {
         self.upsert_server(input, None)
     }
 
     /// Go `UpdateServer`.
-    pub fn update_server(&self, server_id: &str, input: &UpdateServerInput) -> Result<ServerResource, McpError> {
+    pub fn update_server(
+        &self,
+        server_id: &str,
+        input: &UpdateServerInput,
+    ) -> Result<ServerResource, McpError> {
         let (resource, _) = self.upsert_server(
             CreateServerInput::default(),
             Some(UpdateOperation {
@@ -592,8 +644,14 @@ impl Manager {
         let mut payload = Map::new();
         payload.insert("serverId".to_string(), Value::String(server_id.clone()));
         payload.insert("toolName".to_string(), Value::String(tool_name.clone()));
-        payload.insert("runtimeSurface".to_string(), Value::String(rule.runtime_surface.clone()));
-        payload.insert("exposureMode".to_string(), Value::String(rule.exposure_mode.as_str().to_string()));
+        payload.insert(
+            "runtimeSurface".to_string(),
+            Value::String(rule.runtime_surface.clone()),
+        );
+        payload.insert(
+            "exposureMode".to_string(),
+            Value::String(rule.exposure_mode.as_str().to_string()),
+        );
         payload.insert("active".to_string(), Value::Bool(rule.active));
         payload.insert("reason".to_string(), Value::String(rule.reason.clone()));
         self.publish_event(
@@ -708,7 +766,11 @@ impl Manager {
             });
         }
 
-        let policy = self.inner.policy.as_ref().ok_or(McpError::PolicyNotConfigured)?;
+        let policy = self
+            .inner
+            .policy
+            .as_ref()
+            .ok_or(McpError::PolicyNotConfigured)?;
         let approval_resource_id = format!("{server_id}:{tool_name}:{runtime_surface}");
         let requested_by = first_non_empty(&[input.requested_by.trim(), "mcp"]);
         if input.approval_id.trim().is_empty() {
@@ -734,7 +796,9 @@ impl Manager {
             record.decision = kura_sandbox::DecisionResolution::Ask;
             record.approval_status = kura_sandbox::DecisionApprovalStatus::Pending;
             record.status = kura_sandbox::PolicyRecordStatus::ApprovalPending;
-            record.failure_class = kura_sandbox::ErrorClass::ApprovalRequired.as_str().to_string();
+            record.failure_class = kura_sandbox::ErrorClass::ApprovalRequired
+                .as_str()
+                .to_string();
             self.persist_approval(&approval)?;
             self.persist_decision(&decision)?;
             self.persist_consumer_view(&consumer)?;
@@ -811,7 +875,9 @@ impl Manager {
                 record.decision = kura_sandbox::DecisionResolution::Deny;
                 record.approval_status = kura_sandbox::DecisionApprovalStatus::Rejected;
                 record.status = kura_sandbox::PolicyRecordStatus::Denied;
-                record.failure_class = kura_sandbox::ErrorClass::ApprovalRejected.as_str().to_string();
+                record.failure_class = kura_sandbox::ErrorClass::ApprovalRejected
+                    .as_str()
+                    .to_string();
                 self.persist_consumer_view(&consumer)?;
                 Ok(ToolAuthorizationResponse {
                     status: ToolAuthorizationStatus::Rejected,
@@ -831,7 +897,9 @@ impl Manager {
                 record.decision = kura_sandbox::DecisionResolution::Ask;
                 record.approval_status = kura_sandbox::DecisionApprovalStatus::Pending;
                 record.status = kura_sandbox::PolicyRecordStatus::ApprovalPending;
-                record.failure_class = kura_sandbox::ErrorClass::ApprovalRequired.as_str().to_string();
+                record.failure_class = kura_sandbox::ErrorClass::ApprovalRequired
+                    .as_str()
+                    .to_string();
                 self.persist_consumer_view(&consumer)?;
                 Ok(ToolAuthorizationResponse {
                     status: ToolAuthorizationStatus::Pending,
@@ -853,12 +921,23 @@ impl Manager {
         input: &CatalogInstallInput,
         method: InstallMethod,
     ) -> Result<CatalogInstallResult, McpError> {
-        let entry = self.get_catalog_entry(entry_id).ok_or(McpError::ServerNotFound)?;
-        let install_id = format!("mcp_install_{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let entry = self
+            .get_catalog_entry(entry_id)
+            .ok_or(McpError::ServerNotFound)?;
+        let install_id = format!(
+            "mcp_install_{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let mut requested_payload = Map::new();
         requested_payload.insert("installId".to_string(), Value::String(install_id.clone()));
-        requested_payload.insert("catalogEntryId".to_string(), Value::String(entry.id.clone()));
-        requested_payload.insert("method".to_string(), Value::String(method.as_str().to_string()));
+        requested_payload.insert(
+            "catalogEntryId".to_string(),
+            Value::String(entry.id.clone()),
+        );
+        requested_payload.insert(
+            "method".to_string(),
+            Value::String(method.as_str().to_string()),
+        );
         requested_payload.insert(
             "environment".to_string(),
             Value::String(environment_scope(self.inner.cfg.environment)),
@@ -872,7 +951,8 @@ impl Manager {
             requested_payload,
         )?;
 
-        let create_input = merge_catalog_install_input(&entry, input, method, self.inner.cfg.environment);
+        let create_input =
+            merge_catalog_install_input(&entry, input, method, self.inner.cfg.environment);
         let (install_availability, install_reason) = evaluate_catalog_install_spec_availability(
             &self.inner.cfg,
             &create_input,
@@ -891,8 +971,14 @@ impl Manager {
             };
             let mut failed_payload = Map::new();
             failed_payload.insert("installId".to_string(), Value::String(install_id.clone()));
-            failed_payload.insert("catalogEntryId".to_string(), Value::String(entry.id.clone()));
-            failed_payload.insert("method".to_string(), Value::String(method.as_str().to_string()));
+            failed_payload.insert(
+                "catalogEntryId".to_string(),
+                Value::String(entry.id.clone()),
+            );
+            failed_payload.insert(
+                "method".to_string(),
+                Value::String(method.as_str().to_string()),
+            );
             failed_payload.insert("status".to_string(), Value::String(result.status.clone()));
             failed_payload.insert(
                 "availabilityStatus".to_string(),
@@ -929,9 +1015,18 @@ impl Manager {
                 };
                 let mut failed_payload = Map::new();
                 failed_payload.insert("installId".to_string(), Value::String(install_id.clone()));
-                failed_payload.insert("catalogEntryId".to_string(), Value::String(entry.id.clone()));
-                failed_payload.insert("serverId".to_string(), Value::String(existing.server_id.clone()));
-                failed_payload.insert("method".to_string(), Value::String(method.as_str().to_string()));
+                failed_payload.insert(
+                    "catalogEntryId".to_string(),
+                    Value::String(entry.id.clone()),
+                );
+                failed_payload.insert(
+                    "serverId".to_string(),
+                    Value::String(existing.server_id.clone()),
+                );
+                failed_payload.insert(
+                    "method".to_string(),
+                    Value::String(method.as_str().to_string()),
+                );
                 failed_payload.insert("status".to_string(), Value::String(result.status.clone()));
                 failed_payload.insert(
                     "availabilityStatus".to_string(),
@@ -968,8 +1063,14 @@ impl Manager {
             Err(err) => {
                 let mut failed_payload = Map::new();
                 failed_payload.insert("installId".to_string(), Value::String(install_id.clone()));
-                failed_payload.insert("catalogEntryId".to_string(), Value::String(entry.id.clone()));
-                failed_payload.insert("method".to_string(), Value::String(method.as_str().to_string()));
+                failed_payload.insert(
+                    "catalogEntryId".to_string(),
+                    Value::String(entry.id.clone()),
+                );
+                failed_payload.insert(
+                    "method".to_string(),
+                    Value::String(method.as_str().to_string()),
+                );
                 failed_payload.insert("status".to_string(), Value::String("failed".to_string()));
                 failed_payload.insert("reason".to_string(), Value::String(err.to_string()));
                 let _ = self.publish_audit_event(
@@ -996,9 +1097,18 @@ impl Manager {
         };
         let mut completed_payload = Map::new();
         completed_payload.insert("installId".to_string(), Value::String(install_id.clone()));
-        completed_payload.insert("catalogEntryId".to_string(), Value::String(entry.id.clone()));
-        completed_payload.insert("serverId".to_string(), Value::String(resource.server.server_id.clone()));
-        completed_payload.insert("method".to_string(), Value::String(method.as_str().to_string()));
+        completed_payload.insert(
+            "catalogEntryId".to_string(),
+            Value::String(entry.id.clone()),
+        );
+        completed_payload.insert(
+            "serverId".to_string(),
+            Value::String(resource.server.server_id.clone()),
+        );
+        completed_payload.insert(
+            "method".to_string(),
+            Value::String(method.as_str().to_string()),
+        );
         completed_payload.insert("status".to_string(), Value::String(result.status.clone()));
         completed_payload.insert(
             "availabilityStatus".to_string(),
@@ -1016,45 +1126,73 @@ impl Manager {
             },
             completed_payload,
         ) {
-            result.audit_event_ids.push(completed_event.event_id.clone());
+            result
+                .audit_event_ids
+                .push(completed_event.event_id.clone());
         }
         Ok(result)
     }
 
     /// Go `RefreshCatalogServer`.
-    pub fn refresh_catalog_server(&self, server_id: &str) -> Result<CatalogLifecycleResult, McpError> {
+    pub fn refresh_catalog_server(
+        &self,
+        server_id: &str,
+    ) -> Result<CatalogLifecycleResult, McpError> {
         self.run_catalog_lifecycle_action(server_id, CatalogAction::Refresh)
     }
 
     /// Go `ReinstallCatalogServer`.
-    pub fn reinstall_catalog_server(&self, server_id: &str) -> Result<CatalogLifecycleResult, McpError> {
+    pub fn reinstall_catalog_server(
+        &self,
+        server_id: &str,
+    ) -> Result<CatalogLifecycleResult, McpError> {
         self.run_catalog_lifecycle_action(server_id, CatalogAction::Reinstall)
     }
 
     /// Go `UninstallCatalogServer`.
-    pub fn uninstall_catalog_server(&self, server_id: &str) -> Result<CatalogLifecycleResult, McpError> {
+    pub fn uninstall_catalog_server(
+        &self,
+        server_id: &str,
+    ) -> Result<CatalogLifecycleResult, McpError> {
         self.run_catalog_lifecycle_action(server_id, CatalogAction::Uninstall)
     }
 
     /// Go `RevalidateCatalogServer`.
-    pub fn revalidate_catalog_server(&self, server_id: &str) -> Result<CatalogRevalidationResult, McpError> {
+    pub fn revalidate_catalog_server(
+        &self,
+        server_id: &str,
+    ) -> Result<CatalogRevalidationResult, McpError> {
         let started_at = Instant::now();
         let server_id = server_id.trim().to_string();
         if server_id.is_empty() {
             return Err(McpError::ServerIDRequired);
         }
-        let server = self.get_server(&server_id).ok_or(McpError::ServerNotFound)?;
+        let server = self
+            .get_server(&server_id)
+            .ok_or(McpError::ServerNotFound)?;
         let mut result = CatalogRevalidationResult {
-            action_id: format!("mcp_revalidate_{}", Utc::now().timestamp_nanos_opt().unwrap_or(0)),
+            action_id: format!(
+                "mcp_revalidate_{}",
+                Utc::now().timestamp_nanos_opt().unwrap_or(0)
+            ),
             action: CatalogAction::Revalidate,
             server_id: server.server_id.clone(),
             catalog_entry_id: server.catalog_entry_id.clone(),
             ..CatalogRevalidationResult::default()
         };
         let mut requested_payload = Map::new();
-        requested_payload.insert("actionId".to_string(), Value::String(result.action_id.clone()));
-        requested_payload.insert("action".to_string(), Value::String(result.action.as_str().to_string()));
-        requested_payload.insert("serverId".to_string(), Value::String(server.server_id.clone()));
+        requested_payload.insert(
+            "actionId".to_string(),
+            Value::String(result.action_id.clone()),
+        );
+        requested_payload.insert(
+            "action".to_string(),
+            Value::String(result.action.as_str().to_string()),
+        );
+        requested_payload.insert(
+            "serverId".to_string(),
+            Value::String(server.server_id.clone()),
+        );
         requested_payload.insert(
             "catalogEntryId".to_string(),
             Value::String(server.catalog_entry_id.clone()),
@@ -1071,13 +1209,19 @@ impl Manager {
             },
             requested_payload,
         )?;
-        result.audit_event_ids.push(requested_event.event_id.clone());
+        result
+            .audit_event_ids
+            .push(requested_event.event_id.clone());
 
         if let Some(blocked) = self.catalog_target_block_result(&server) {
-            return Ok(self.catalog_revalidation_blocked_result(&server, &result, &blocked, started_at));
+            return Ok(
+                self.catalog_revalidation_blocked_result(&server, &result, &blocked, started_at)
+            );
         }
         if let Some(blocked) = self.catalog_revalidation_busy_block_result(&server)? {
-            return Ok(self.catalog_revalidation_blocked_result(&server, &result, &blocked, started_at));
+            return Ok(
+                self.catalog_revalidation_blocked_result(&server, &result, &blocked, started_at)
+            );
         }
 
         let management = self.build_catalog_management_locked(&server);
@@ -1115,20 +1259,35 @@ impl Manager {
             result.server = Some(resource);
         }
         let mut completed_payload = Map::new();
-        completed_payload.insert("actionId".to_string(), Value::String(result.action_id.clone()));
-        completed_payload.insert("action".to_string(), Value::String(result.action.as_str().to_string()));
-        completed_payload.insert("serverId".to_string(), Value::String(server.server_id.clone()));
+        completed_payload.insert(
+            "actionId".to_string(),
+            Value::String(result.action_id.clone()),
+        );
+        completed_payload.insert(
+            "action".to_string(),
+            Value::String(result.action.as_str().to_string()),
+        );
+        completed_payload.insert(
+            "serverId".to_string(),
+            Value::String(server.server_id.clone()),
+        );
         completed_payload.insert(
             "catalogEntryId".to_string(),
             Value::String(server.catalog_entry_id.clone()),
         );
-        completed_payload.insert("status".to_string(), Value::String(result.status.as_str().to_string()));
+        completed_payload.insert(
+            "status".to_string(),
+            Value::String(result.status.as_str().to_string()),
+        );
         completed_payload.insert(
             "classification".to_string(),
             Value::String(result.classification.as_str().to_string()),
         );
         completed_payload.insert("reason".to_string(), Value::String(result.reason.clone()));
-        completed_payload.insert("issues".to_string(), Value::Array(redacted_issues(&result.issues)));
+        completed_payload.insert(
+            "issues".to_string(),
+            Value::Array(redacted_issues(&result.issues)),
+        );
         completed_payload.insert(
             "environment".to_string(),
             Value::String(environment_scope(self.inner.cfg.environment)),
@@ -1141,7 +1300,9 @@ impl Manager {
             },
             completed_payload,
         ) {
-            result.audit_event_ids.push(completed_event.event_id.clone());
+            result
+                .audit_event_ids
+                .push(completed_event.event_id.clone());
         }
         Ok(result)
     }
@@ -1165,7 +1326,10 @@ impl Manager {
         if authorization.status != ToolAuthorizationStatus::Allowed {
             return Ok(ToolInvocationResult {
                 failure_class: "blocked".to_string(),
-                error: first_non_empty(&[authorization.message.as_str(), "tool use is not allowed"]),
+                error: first_non_empty(&[
+                    authorization.message.as_str(),
+                    "tool use is not allowed",
+                ]),
                 ..ToolInvocationResult::default()
             });
         }
@@ -1232,7 +1396,11 @@ impl Manager {
     /// streamable-http/websocket via the transport), discovers tools, and marks the
     /// server healthy. The transport mux dispatches on the server's transport kind and
     /// a failed open surfaces as `transport_runtime_failure`.
-    pub fn start(&self, server_id: &str, requested_by: &str) -> Result<LifecycleResponse, McpError> {
+    pub fn start(
+        &self,
+        server_id: &str,
+        requested_by: &str,
+    ) -> Result<LifecycleResponse, McpError> {
         let started_at = Instant::now();
         let server_id = server_id.trim().to_string();
         if server_id.is_empty() {
@@ -1409,7 +1577,13 @@ impl Manager {
                             "launch_failed",
                         );
                     } else {
-                        self.record_failure(&server_id, &mut state, LifecycleStatus::Failed, &err, "launch_failed");
+                        self.record_failure(
+                            &server_id,
+                            &mut state,
+                            LifecycleStatus::Failed,
+                            &err,
+                            "launch_failed",
+                        );
                     }
                     let resource = self.get_server_resource(&server_id).unwrap_or_default();
                     return Ok(LifecycleResponse {
@@ -1602,10 +1776,19 @@ impl Manager {
         self.persist_tool_map(&server_id, &persisted_tools)?;
         let mut start_payload = Map::new();
         start_payload.insert("serverId".to_string(), Value::String(server_id.clone()));
-        start_payload.insert("status".to_string(), Value::String(state.status.as_str().to_string()));
-        start_payload.insert("executionId".to_string(), Value::String(execution_id.clone()));
+        start_payload.insert(
+            "status".to_string(),
+            Value::String(state.status.as_str().to_string()),
+        );
+        start_payload.insert(
+            "executionId".to_string(),
+            Value::String(execution_id.clone()),
+        );
         start_payload.insert("sessionId".to_string(), Value::String(session_id.clone()));
-        start_payload.insert("toolCount".to_string(), Value::Number(persisted_tools.len().into()));
+        start_payload.insert(
+            "toolCount".to_string(),
+            Value::Number(persisted_tools.len().into()),
+        );
         start_payload.insert(
             "transportKind".to_string(),
             Value::String(server.transport_kind.as_str().to_string()),
@@ -1628,7 +1811,10 @@ impl Manager {
                 Value::String(server.transport_kind.as_str().to_string()),
             );
             restore_payload.insert("sessionId".to_string(), Value::String(session_id.clone()));
-            restore_payload.insert("toolCount".to_string(), Value::Number(persisted_tools.len().into()));
+            restore_payload.insert(
+                "toolCount".to_string(),
+                Value::Number(persisted_tools.len().into()),
+            );
             self.publish_event(
                 "mcp",
                 "mcp.server_restore_completed",
@@ -1643,7 +1829,9 @@ impl Manager {
         let this = self.clone();
         let watcher_server_id = server_id.clone();
         let watcher_execution_id = execution_id.clone();
-        std::thread::spawn(move || this.watch_session(&watcher_server_id, &watcher_execution_id, session));
+        std::thread::spawn(move || {
+            this.watch_session(&watcher_server_id, &watcher_execution_id, session)
+        });
 
         let resource = self.get_server_resource(&server_id).unwrap_or_default();
         Ok(LifecycleResponse {
@@ -1668,7 +1856,11 @@ impl Manager {
     }
 
     /// Go `Restart`.
-    pub fn restart(&self, server_id: &str, requested_by: &str) -> Result<LifecycleResponse, McpError> {
+    pub fn restart(
+        &self,
+        server_id: &str,
+        requested_by: &str,
+    ) -> Result<LifecycleResponse, McpError> {
         match self.stop_or_cancel(server_id, false) {
             Ok(_) => {}
             Err(McpError::ServerNotFound) => {}
@@ -1706,7 +1898,14 @@ impl Manager {
                 .as_ref()
                 .map(|a| a.transport_kind)
                 .unwrap_or(TransportKind::Stdio);
-            (active, server, state, stop_requested, cancel_requested, transport_kind)
+            (
+                active,
+                server,
+                state,
+                stop_requested,
+                cancel_requested,
+                transport_kind,
+            )
         };
         let _ = active;
         let Some(server) = server else {
@@ -1719,13 +1918,20 @@ impl Manager {
                 state.status = LifecycleStatus::Stopped;
                 state.last_stopped_at = Some(now);
                 state.updated_at = now;
-                self.inner.state.write().states.insert(server_id.to_string(), state.clone());
+                self.inner
+                    .state
+                    .write()
+                    .states
+                    .insert(server_id.to_string(), state.clone());
                 let _ = self.persist_state(&state);
                 let _ = self.publish_health_changed(server_id, state.status, &state.health_reason);
                 return;
             }
             if let Err(err) = &done {
-                if transport_kind == TransportKind::Websocket && server.enabled && server.auto_restart {
+                if transport_kind == TransportKind::Websocket
+                    && server.enabled
+                    && server.auto_restart
+                {
                     self.schedule_websocket_reconnect(server_id, &state, Some(err));
                     return;
                 }
@@ -1775,7 +1981,11 @@ impl Manager {
         state.status = LifecycleStatus::BackingOff;
         state.next_restart_at = Some(next);
         state.updated_at = Utc::now();
-        self.inner.state.write().states.insert(server_id.to_string(), state.clone());
+        self.inner
+            .state
+            .write()
+            .states
+            .insert(server_id.to_string(), state.clone());
         let _ = self.persist_state(&state);
         let _ = self.publish_health_changed(server_id, state.status, &state.health_reason);
 
@@ -1788,7 +1998,12 @@ impl Manager {
     }
 
     /// Go `scheduleWebsocketReconnect`: bounded daemon-managed reconnect with backoff.
-    fn schedule_websocket_reconnect(&self, server_id: &str, state: &ServerState, cause: Option<&String>) {
+    fn schedule_websocket_reconnect(
+        &self,
+        server_id: &str,
+        state: &ServerState,
+        cause: Option<&String>,
+    ) {
         let now = Utc::now();
         let attempt = state.reconnect_attempt_count + 1;
         let reason = first_non_empty(&[
@@ -1804,7 +2019,11 @@ impl Manager {
             state.last_recovery_class = "reconnect_failed".to_string();
             state.next_reconnect_at = None;
             state.updated_at = now;
-            self.inner.state.write().states.insert(server_id.to_string(), state.clone());
+            self.inner
+                .state
+                .write()
+                .states
+                .insert(server_id.to_string(), state.clone());
             let _ = self.persist_state(&state);
             let mut payload = Map::new();
             payload.insert("serverId".to_string(), Value::String(server_id.to_string()));
@@ -1817,7 +2036,10 @@ impl Manager {
                 Value::Number(state.reconnect_attempt_count.into()),
             );
             payload.insert("reason".to_string(), Value::String(reason.clone()));
-            payload.insert("failureClass".to_string(), Value::String("reconnect_exhausted".to_string()));
+            payload.insert(
+                "failureClass".to_string(),
+                Value::String("reconnect_exhausted".to_string()),
+            );
             let _ = self.publish_event(
                 "mcp",
                 "mcp.server_reconnect_failed",
@@ -1841,7 +2063,11 @@ impl Manager {
         state.last_recovery_class = "reconnect_scheduled".to_string();
         state.next_reconnect_at = Some(next);
         state.updated_at = now;
-        self.inner.state.write().states.insert(server_id.to_string(), state.clone());
+        self.inner
+            .state
+            .write()
+            .states
+            .insert(server_id.to_string(), state.clone());
         let _ = self.persist_state(&state);
         let mut payload = Map::new();
         payload.insert("serverId".to_string(), Value::String(server_id.to_string()));
@@ -1851,10 +2077,7 @@ impl Manager {
         );
         payload.insert("attempt".to_string(), Value::Number(attempt.into()));
         payload.insert("reason".to_string(), Value::String(reason.clone()));
-        payload.insert(
-            "nextRetryAt".to_string(),
-            Value::String(rfc3339_nano(next)),
-        );
+        payload.insert("nextRetryAt".to_string(), Value::String(rfc3339_nano(next)));
         let _ = self.publish_event(
             "mcp",
             "mcp.server_reconnect_scheduled",
@@ -1878,7 +2101,11 @@ impl Manager {
                 let recovered_at = Utc::now();
                 let mut latest = {
                     let guard = this.inner.state.read();
-                    guard.states.get(&watcher_server_id).cloned().unwrap_or_default()
+                    guard
+                        .states
+                        .get(&watcher_server_id)
+                        .cloned()
+                        .unwrap_or_default()
                 };
                 latest.last_recovery_at = Some(recovered_at);
                 latest.last_recovery_class = "reconnect_succeeded".to_string();
@@ -1892,12 +2119,18 @@ impl Manager {
                     .insert(watcher_server_id.clone(), latest.clone());
                 let _ = this.persist_state(&latest);
                 let mut payload = Map::new();
-                payload.insert("serverId".to_string(), Value::String(watcher_server_id.clone()));
+                payload.insert(
+                    "serverId".to_string(),
+                    Value::String(watcher_server_id.clone()),
+                );
                 payload.insert(
                     "transportKind".to_string(),
                     Value::String(TransportKind::Websocket.as_str().to_string()),
                 );
-                payload.insert("attempt".to_string(), Value::Number(expected_attempt.into()));
+                payload.insert(
+                    "attempt".to_string(),
+                    Value::Number(expected_attempt.into()),
+                );
                 payload.insert(
                     "sessionId".to_string(),
                     Value::String(latest.last_session_id.clone()),
@@ -1913,7 +2146,9 @@ impl Manager {
                 );
                 return;
             }
-            let resource = this.get_server_resource(&watcher_server_id).unwrap_or_default();
+            let resource = this
+                .get_server_resource(&watcher_server_id)
+                .unwrap_or_default();
             if !resource.server.enabled || !resource.server.auto_restart {
                 return;
             }
@@ -1995,7 +2230,8 @@ impl Manager {
                 server.secret_refs = clean_strings(&create_input.secret_refs);
                 server.auto_restart = create_input.auto_restart;
                 server.operator_modified = create_input.operator_modified;
-                server.catalog_management = clone_catalog_management(&create_input.catalog_management);
+                server.catalog_management =
+                    clone_catalog_management(&create_input.catalog_management);
                 server.source = Source::Api;
                 server.updated_at = now;
                 (server, created)
@@ -2056,7 +2292,8 @@ impl Manager {
                     server.operator_modified = true;
                 }
                 if let Some(websocket_config) = &operation.input.websocket_config {
-                    server.websocket_config = clone_websocket_config(&Some(websocket_config.clone()));
+                    server.websocket_config =
+                        clone_websocket_config(&Some(websocket_config.clone()));
                     server.operator_modified = true;
                 }
                 if let Some(working_dir) = &operation.input.working_dir {
@@ -2078,29 +2315,65 @@ impl Manager {
         // Go: an empty transport kind defaults to stdio; the closed enum cannot be empty.
         server.declaration = normalize_declaration(server.declaration);
         self.validate_server(&server)?;
-        guard.servers.insert(server.server_id.clone(), server.clone());
+        guard
+            .servers
+            .insert(server.server_id.clone(), server.clone());
         if !guard.states.contains_key(&server.server_id) {
-            guard.states.insert(server.server_id.clone(), default_state_for_server(&server));
+            guard
+                .states
+                .insert(server.server_id.clone(), default_state_for_server(&server));
         }
         let resource = self.build_server_resource_locked(&guard, &server);
-        let state = guard.states.get(&server.server_id).cloned().unwrap_or_default();
+        let state = guard
+            .states
+            .get(&server.server_id)
+            .cloned()
+            .unwrap_or_default();
         drop(guard);
 
         self.persist_server(&server)?;
         self.persist_state(&state)?;
         self.persist_declaration_view(&server)?;
 
-        let event_name = if created { "mcp.server_registered" } else { "mcp.server_updated" };
+        let event_name = if created {
+            "mcp.server_registered"
+        } else {
+            "mcp.server_updated"
+        };
         let mut payload = Map::new();
-        payload.insert("serverId".to_string(), Value::String(server.server_id.clone()));
-        payload.insert("displayName".to_string(), Value::String(server.display_name.clone()));
-        payload.insert("originKind".to_string(), Value::String(server.origin_kind.as_str().to_string()));
-        payload.insert("catalogEntryId".to_string(), Value::String(server.catalog_entry_id.clone()));
-        payload.insert("installMethod".to_string(), Value::String(server.install_method.as_str().to_string()));
+        payload.insert(
+            "serverId".to_string(),
+            Value::String(server.server_id.clone()),
+        );
+        payload.insert(
+            "displayName".to_string(),
+            Value::String(server.display_name.clone()),
+        );
+        payload.insert(
+            "originKind".to_string(),
+            Value::String(server.origin_kind.as_str().to_string()),
+        );
+        payload.insert(
+            "catalogEntryId".to_string(),
+            Value::String(server.catalog_entry_id.clone()),
+        );
+        payload.insert(
+            "installMethod".to_string(),
+            Value::String(server.install_method.as_str().to_string()),
+        );
         payload.insert("enabled".to_string(), Value::Bool(server.enabled));
-        payload.insert("sandboxProfileId".to_string(), Value::String(server.sandbox_profile_id.clone()));
-        payload.insert("declarationId".to_string(), Value::String(server.declaration_id.clone()));
-        payload.insert("transportKind".to_string(), Value::String(server.transport_kind.as_str().to_string()));
+        payload.insert(
+            "sandboxProfileId".to_string(),
+            Value::String(server.sandbox_profile_id.clone()),
+        );
+        payload.insert(
+            "declarationId".to_string(),
+            Value::String(server.declaration_id.clone()),
+        );
+        payload.insert(
+            "transportKind".to_string(),
+            Value::String(server.transport_kind.as_str().to_string()),
+        );
         payload.insert(
             "availabilityStatus".to_string(),
             Value::String(resource.availability_status.as_str().to_string()),
@@ -2202,13 +2475,23 @@ impl Manager {
             } else {
                 LifecycleAction::Stop
             };
-            let failure_class = if cancel { "cancelled".to_string() } else { String::new() };
+            let failure_class = if cancel {
+                "cancelled".to_string()
+            } else {
+                String::new()
+            };
             let resource = self.get_server_resource(&server_id).unwrap_or_default();
             let mut payload = Map::new();
             payload.insert("serverId".to_string(), Value::String(server_id.clone()));
-            payload.insert("status".to_string(), Value::String(state.status.as_str().to_string()));
+            payload.insert(
+                "status".to_string(),
+                Value::String(state.status.as_str().to_string()),
+            );
             payload.insert("executionId".to_string(), Value::String(String::new()));
-            payload.insert("sessionId".to_string(), Value::String(active.session_id.clone()));
+            payload.insert(
+                "sessionId".to_string(),
+                Value::String(active.session_id.clone()),
+            );
             payload.insert("cancelled".to_string(), Value::Bool(cancel));
             payload.insert(
                 "transportKind".to_string(),
@@ -2233,11 +2516,10 @@ impl Manager {
             });
         }
 
-        let sandboxes = self
-            .inner
-            .sandboxes
-            .clone()
-            .ok_or_else(|| McpError::Other("mcp sandbox manager is not configured".to_string()))?;
+        let sandboxes =
+            self.inner.sandboxes.clone().ok_or_else(|| {
+                McpError::Other("mcp sandbox manager is not configured".to_string())
+            })?;
         let (execution, _) = sandboxes
             .cancel_execution(&active.execution_id)
             .map_err(McpError::Other)?;
@@ -2246,12 +2528,22 @@ impl Manager {
         } else {
             LifecycleAction::Stop
         };
-        let failure_class = if cancel { "cancelled".to_string() } else { String::new() };
+        let failure_class = if cancel {
+            "cancelled".to_string()
+        } else {
+            String::new()
+        };
         let resource = self.get_server_resource(&server_id).unwrap_or_default();
         let mut payload = Map::new();
         payload.insert("serverId".to_string(), Value::String(server_id.clone()));
-        payload.insert("status".to_string(), Value::String(state.status.as_str().to_string()));
-        payload.insert("executionId".to_string(), Value::String(execution.execution_id.clone()));
+        payload.insert(
+            "status".to_string(),
+            Value::String(state.status.as_str().to_string()),
+        );
+        payload.insert(
+            "executionId".to_string(),
+            Value::String(execution.execution_id.clone()),
+        );
         payload.insert("cancelled".to_string(), Value::Bool(cancel));
         self.publish_event(
             "mcp",
@@ -2293,23 +2585,29 @@ impl Manager {
         match execution.status {
             kura_sandbox::ExecutionStatus::Denied | kura_sandbox::ExecutionStatus::Unsupported => {
                 state.status = lifecycle_status_from_execution(execution);
-                state.health_reason =
-                    first_non_empty(&[execution.result.error.as_str(), execution.decision.explanation.as_str()]);
+                state.health_reason = first_non_empty(&[
+                    execution.result.error.as_str(),
+                    execution.decision.explanation.as_str(),
+                ]);
             }
             kura_sandbox::ExecutionStatus::Cancelled => {
                 state.status = LifecycleStatus::Stopped;
                 if requested_stop {
-                    state.health_reason = first_non_empty(&[state.health_reason.as_str(), "cancelled by operator"]);
-                } else {
                     state.health_reason =
-                        first_non_empty(&[execution.result.error.as_str(), "execution was cancelled"]);
+                        first_non_empty(&[state.health_reason.as_str(), "cancelled by operator"]);
+                } else {
+                    state.health_reason = first_non_empty(&[
+                        execution.result.error.as_str(),
+                        "execution was cancelled",
+                    ]);
                 }
                 state.last_stopped_at = Some(now);
             }
             kura_sandbox::ExecutionStatus::Completed => {
                 if requested_stop {
                     state.status = LifecycleStatus::Stopped;
-                    state.health_reason = first_non_empty(&[state.health_reason.as_str(), "stopped by operator"]);
+                    state.health_reason =
+                        first_non_empty(&[state.health_reason.as_str(), "stopped by operator"]);
                     state.last_stopped_at = Some(now);
                 } else {
                     state.status = LifecycleStatus::Failed;
@@ -2328,10 +2626,17 @@ impl Manager {
             }
             _ => {
                 state.status = LifecycleStatus::Degraded;
-                state.health_reason = first_non_empty(&[execution.result.error.as_str(), "mcp server became unavailable"]);
+                state.health_reason = first_non_empty(&[
+                    execution.result.error.as_str(),
+                    "mcp server became unavailable",
+                ]);
             }
         }
-        self.inner.state.write().states.insert(server_id.to_string(), state.clone());
+        self.inner
+            .state
+            .write()
+            .states
+            .insert(server_id.to_string(), state.clone());
         let _ = self.persist_state(state);
         let _ = self.publish_health_changed(server_id, state.status, &state.health_reason);
     }
@@ -2350,13 +2655,26 @@ impl Manager {
         state.health_reason = reason.trim().to_string();
         state.failure_count += 1;
         state.updated_at = now;
-        self.inner.state.write().states.insert(server_id.to_string(), state.clone());
+        self.inner
+            .state
+            .write()
+            .states
+            .insert(server_id.to_string(), state.clone());
         let _ = self.persist_state(state);
         let mut payload = Map::new();
         payload.insert("serverId".to_string(), Value::String(server_id.to_string()));
-        payload.insert("status".to_string(), Value::String(status.as_str().to_string()));
-        payload.insert("reason".to_string(), Value::String(state.health_reason.clone()));
-        payload.insert("failureClass".to_string(), Value::String(failure_class.to_string()));
+        payload.insert(
+            "status".to_string(),
+            Value::String(status.as_str().to_string()),
+        );
+        payload.insert(
+            "reason".to_string(),
+            Value::String(state.health_reason.clone()),
+        );
+        payload.insert(
+            "failureClass".to_string(),
+            Value::String(failure_class.to_string()),
+        );
         let _ = self.publish_event(
             "mcp",
             "mcp.server_failed",
@@ -2384,16 +2702,29 @@ impl Manager {
         state.last_recovery_class = "restore_failed".to_string();
         state.next_reconnect_at = None;
         state.updated_at = now;
-        self.inner.state.write().states.insert(server.server_id.clone(), state.clone());
+        self.inner
+            .state
+            .write()
+            .states
+            .insert(server.server_id.clone(), state.clone());
         let _ = self.persist_state(state);
         let mut payload = Map::new();
-        payload.insert("serverId".to_string(), Value::String(server.server_id.clone()));
+        payload.insert(
+            "serverId".to_string(),
+            Value::String(server.server_id.clone()),
+        );
         payload.insert(
             "transportKind".to_string(),
             Value::String(server.transport_kind.as_str().to_string()),
         );
-        payload.insert("reason".to_string(), Value::String(state.health_reason.clone()));
-        payload.insert("failureClass".to_string(), Value::String(failure_class.to_string()));
+        payload.insert(
+            "reason".to_string(),
+            Value::String(state.health_reason.clone()),
+        );
+        payload.insert(
+            "failureClass".to_string(),
+            Value::String(failure_class.to_string()),
+        );
         let _ = self.publish_event(
             "mcp",
             "mcp.server_restore_failed",
@@ -2415,8 +2746,14 @@ impl Manager {
         let resource = self.get_server_resource(server_id).unwrap_or_default();
         let mut payload = Map::new();
         payload.insert("serverId".to_string(), Value::String(server_id.to_string()));
-        payload.insert("status".to_string(), Value::String(status.as_str().to_string()));
-        payload.insert("reason".to_string(), Value::String(reason.trim().to_string()));
+        payload.insert(
+            "status".to_string(),
+            Value::String(status.as_str().to_string()),
+        );
+        payload.insert(
+            "reason".to_string(),
+            Value::String(reason.trim().to_string()),
+        );
         payload.insert(
             "availabilityStatus".to_string(),
             Value::String(resource.availability_status.as_str().to_string()),
@@ -2467,7 +2804,10 @@ impl Manager {
         }
         let mut metadata = HashMap::new();
         metadata.insert("mcpServerId".to_string(), server.server_id.clone());
-        metadata.insert("transportKind".to_string(), server.transport_kind.as_str().to_string());
+        metadata.insert(
+            "transportKind".to_string(),
+            server.transport_kind.as_str().to_string(),
+        );
         Ok(kura_sandbox::ExecutionRequest {
             profile_id: server.sandbox_profile_id.clone(),
             command: server.command.clone(),
@@ -2553,7 +2893,9 @@ impl Manager {
                 operation_kind: operation_kind.to_string(),
                 profile_id: server.sandbox_profile_id.clone(),
                 execution_mode: server.declaration.execution_mode,
-                allowed_backend_kinds: clone_backend_kinds(&server.declaration.allowed_backend_kinds),
+                allowed_backend_kinds: clone_backend_kinds(
+                    &server.declaration.allowed_backend_kinds,
+                ),
                 read_roots: clone_strings(&server.declaration.read_roots),
                 write_roots: clone_strings(&server.declaration.write_roots),
                 network_mode: Some(server.declaration.network_mode),
@@ -2671,15 +3013,27 @@ impl Manager {
 
     /// Go `buildServerResourceLocked`. Callers must hold the state lock and pass the
     /// guard's deref.
-    fn build_server_resource_locked(&self, state: &ManagerState, server: &Server) -> ServerResource {
+    fn build_server_resource_locked(
+        &self,
+        state: &ManagerState,
+        server: &Server,
+    ) -> ServerResource {
         let mut projected = server.clone();
         if projected.transport_kind == TransportKind::Websocket {
             projected.endpoint = sanitize_websocket_endpoint_for_projection(&projected.endpoint);
         }
         projected.catalog_management =
             sanitize_catalog_management_projection(self.build_catalog_management_locked(server));
-        let state_obj = state.states.get(&server.server_id).cloned().unwrap_or_default();
-        let tool_count = state.tools.get(&server.server_id).map(|map| map.len()).unwrap_or(0);
+        let state_obj = state
+            .states
+            .get(&server.server_id)
+            .cloned()
+            .unwrap_or_default();
+        let tool_count = state
+            .tools
+            .get(&server.server_id)
+            .map(|map| map.len())
+            .unwrap_or(0);
         let mut tools = Vec::with_capacity(tool_count);
         if let Some(map) = state.tools.get(&server.server_id) {
             for tool in map.values() {
@@ -2703,7 +3057,12 @@ impl Manager {
     }
 
     /// Go `buildToolResourceLocked`. Callers must hold the state lock.
-    fn build_tool_resource_locked(&self, state: &ManagerState, server: &Server, tool: &Tool) -> ToolResource {
+    fn build_tool_resource_locked(
+        &self,
+        state: &ManagerState,
+        server: &Server,
+        tool: &Tool,
+    ) -> ToolResource {
         let mut tool = tool.clone();
         tool.tenant_id = server.tenant_id.clone();
         let mut exposure = Vec::new();
@@ -2853,7 +3212,10 @@ impl Manager {
 
     /// Go `resolveSecretValues`: with no injected resolver, reads
     /// `mcp-secrets.json` from the data dir (the Go nil-secret-manager path).
-    fn resolve_secret_values(&self, secret_refs: &[String]) -> Result<HashMap<String, String>, McpError> {
+    fn resolve_secret_values(
+        &self,
+        secret_refs: &[String],
+    ) -> Result<HashMap<String, String>, McpError> {
         let refs = clean_strings(secret_refs);
         if refs.is_empty() {
             return Ok(HashMap::new());
@@ -2868,7 +3230,11 @@ impl Manager {
                             resolved.insert(secret_ref.clone(), value);
                         }
                         Ok(_) => {}
-                        Err(err) => return Err(McpError::Other(format!("resolve secret {secret_ref}: {err}"))),
+                        Err(err) => {
+                            return Err(McpError::Other(format!(
+                                "resolve secret {secret_ref}: {err}"
+                            )));
+                        }
                     }
                 }
                 Ok(resolved)
@@ -2888,7 +3254,10 @@ impl Manager {
     }
 
     /// Go `persistConsumerView`.
-    fn persist_consumer_view(&self, view: &kura_sandbox::ConsumerContractView) -> Result<(), McpError> {
+    fn persist_consumer_view(
+        &self,
+        view: &kura_sandbox::ConsumerContractView,
+    ) -> Result<(), McpError> {
         if let Some(sandboxes) = &self.inner.sandboxes {
             sandboxes
                 .persist_consumer_view(view)
@@ -2913,8 +3282,9 @@ impl Manager {
         let Some(store) = &self.inner.store else {
             return Ok(());
         };
-        let document = serde_json::to_string(server)
-            .map_err(|e| McpError::Store(format!("marshal mcp server {}: {e}", server.server_id)))?;
+        let document = serde_json::to_string(server).map_err(|e| {
+            McpError::Store(format!("marshal mcp server {}: {e}", server.server_id))
+        })?;
         store
             .lock()
             .map_err(|_| McpError::Store("store lock poisoned".to_string()))?
@@ -2932,8 +3302,9 @@ impl Manager {
         let Some(store) = &self.inner.store else {
             return Ok(());
         };
-        let document = serde_json::to_string(state)
-            .map_err(|e| McpError::Store(format!("marshal mcp server state {}: {e}", state.server_id)))?;
+        let document = serde_json::to_string(state).map_err(|e| {
+            McpError::Store(format!("marshal mcp server state {}: {e}", state.server_id))
+        })?;
         store
             .lock()
             .map_err(|_| McpError::Store("store lock poisoned".to_string()))?
@@ -2954,7 +3325,10 @@ impl Manager {
         let mut records = Vec::with_capacity(tools.len());
         for tool in tools {
             let document = serde_json::to_string(tool).map_err(|e| {
-                McpError::Store(format!("marshal mcp tool {}/{}: {e}", server_id, tool.tool_name))
+                McpError::Store(format!(
+                    "marshal mcp tool {}/{}: {e}",
+                    server_id, tool.tool_name
+                ))
             })?;
             records.push(kura_store::mcp::MCPToolRecord {
                 server_id: tool.server_id.clone(),
@@ -3133,7 +3507,10 @@ impl Manager {
                 if snapshot.status != AvailabilityStatus::Ready {
                     return (
                         snapshot.status,
-                        first_non_empty(&[snapshot.reason.as_str(), "server requires revalidation"]),
+                        first_non_empty(&[
+                            snapshot.reason.as_str(),
+                            "server requires revalidation",
+                        ]),
                     );
                 }
             }
@@ -3185,7 +3562,10 @@ impl Manager {
             if summary.resolution != kura_sandbox::SecretResolution::Resolved.as_str() {
                 return (
                     AvailabilityStatus::Blocked,
-                    format!("{} is unavailable in {}", summary.secret_ref, summary.environment_scope),
+                    format!(
+                        "{} is unavailable in {}",
+                        summary.secret_ref, summary.environment_scope
+                    ),
                 );
             }
         }
@@ -3205,7 +3585,10 @@ impl Manager {
                     );
                 }
                 LifecycleStatus::Disabled => {
-                    return (AvailabilityStatus::Blocked, "server is disabled".to_string());
+                    return (
+                        AvailabilityStatus::Blocked,
+                        "server is disabled".to_string(),
+                    );
                 }
                 _ => {}
             }
@@ -3221,7 +3604,9 @@ impl Manager {
                 let mut summary = server.endpoint.trim().to_string();
                 if let Some(auth) = self.build_websocket_auth_summary(server) {
                     if auth.mode != WebsocketAuthMode::default() {
-                        summary = format!("{} ({})", summary.trim(), auth.mode.as_str()).trim().to_string();
+                        summary = format!("{} ({})", summary.trim(), auth.mode.as_str())
+                            .trim()
+                            .to_string();
                     }
                 }
                 summary
@@ -3267,8 +3652,10 @@ impl Manager {
             }
             summary.resolved = item.resolution == kura_sandbox::SecretResolution::Resolved.as_str();
             if !summary.resolved {
-                summary.blocked_reason =
-                    format!("{} is unavailable in {}", item.secret_ref, item.environment_scope);
+                summary.blocked_reason = format!(
+                    "{} is unavailable in {}",
+                    item.secret_ref, item.environment_scope
+                );
             }
             return Some(summary);
         }
@@ -3281,10 +3668,17 @@ impl Manager {
     }
 
     /// Go `resolveWebsocketHeaders`.
-    fn resolve_websocket_headers(&self, server: &Server) -> Result<HashMap<String, String>, McpError> {
+    fn resolve_websocket_headers(
+        &self,
+        server: &Server,
+    ) -> Result<HashMap<String, String>, McpError> {
         if server.transport_kind != TransportKind::Websocket
             || server.websocket_config.is_none()
-            || server.websocket_config.as_ref().and_then(|c| c.auth.as_ref()).is_none()
+            || server
+                .websocket_config
+                .as_ref()
+                .and_then(|c| c.auth.as_ref())
+                .is_none()
         {
             return Ok(HashMap::new());
         }
@@ -3295,7 +3689,9 @@ impl Manager {
             .expect("auth present");
         let secret_ref = auth.secret_ref.trim().to_string();
         if secret_ref.is_empty() {
-            return Err(McpError::Other("websocket auth secret ref is not configured".to_string()));
+            return Err(McpError::Other(
+                "websocket auth secret ref is not configured".to_string(),
+            ));
         }
         let resolved = self.resolve_secret_values(&[secret_ref.clone()])?;
         let value = resolved
@@ -3313,7 +3709,9 @@ impl Manager {
         }
         let header_name = default_websocket_header_name(auth);
         if header_name.is_empty() {
-            return Err(McpError::Other("websocket auth header name is not configured".to_string()));
+            return Err(McpError::Other(
+                "websocket auth header name is not configured".to_string(),
+            ));
         }
         if auth.mode == WebsocketAuthMode::BearerHeader {
             let value = format!("{} {}", default_websocket_scheme(auth).trim(), value)
@@ -3335,7 +3733,9 @@ impl Manager {
         if server_id.is_empty() {
             return Err(McpError::ServerIDRequired);
         }
-        let server = self.get_server(&server_id).ok_or(McpError::ServerNotFound)?;
+        let server = self
+            .get_server(&server_id)
+            .ok_or(McpError::ServerNotFound)?;
         let mut result = CatalogLifecycleResult {
             action_id: format!(
                 "mcp_catalog_{}_{}",
@@ -3348,9 +3748,18 @@ impl Manager {
             ..CatalogLifecycleResult::default()
         };
         let mut requested_payload = Map::new();
-        requested_payload.insert("actionId".to_string(), Value::String(result.action_id.clone()));
-        requested_payload.insert("action".to_string(), Value::String(action.as_str().to_string()));
-        requested_payload.insert("serverId".to_string(), Value::String(server.server_id.clone()));
+        requested_payload.insert(
+            "actionId".to_string(),
+            Value::String(result.action_id.clone()),
+        );
+        requested_payload.insert(
+            "action".to_string(),
+            Value::String(action.as_str().to_string()),
+        );
+        requested_payload.insert(
+            "serverId".to_string(),
+            Value::String(server.server_id.clone()),
+        );
         requested_payload.insert(
             "catalogEntryId".to_string(),
             Value::String(server.catalog_entry_id.clone()),
@@ -3367,11 +3776,15 @@ impl Manager {
             },
             requested_payload,
         )?;
-        result.audit_event_ids.push(requested_event.event_id.clone());
+        result
+            .audit_event_ids
+            .push(requested_event.event_id.clone());
 
-        if let Some(blocked) =
-            self.catalog_lifecycle_block_result(&server, action, action != CatalogAction::Uninstall)?
-        {
+        if let Some(blocked) = self.catalog_lifecycle_block_result(
+            &server,
+            action,
+            action != CatalogAction::Uninstall,
+        )? {
             return self.catalog_lifecycle_blocked_result(&server, &result, &blocked, started_at);
         }
 
@@ -3415,7 +3828,8 @@ impl Manager {
                             &CatalogLifecycleResult {
                                 status: CatalogActionStatus::Blocked,
                                 failure_class: "conflict".to_string(),
-                                reason: "server is missing catalog install snapshot metadata".to_string(),
+                                reason: "server is missing catalog install snapshot metadata"
+                                    .to_string(),
                                 ..CatalogLifecycleResult::default()
                             },
                             started_at,
@@ -3467,19 +3881,33 @@ impl Manager {
                 }
             }
             _ => {
-                return Err(McpError::Other(format!("unsupported catalog action {action}")));
+                return Err(McpError::Other(format!(
+                    "unsupported catalog action {action}"
+                )));
             }
         }
         result.preflight_ms = started_at.elapsed().as_millis() as i64;
         let mut completed_payload = Map::new();
-        completed_payload.insert("actionId".to_string(), Value::String(result.action_id.clone()));
-        completed_payload.insert("action".to_string(), Value::String(action.as_str().to_string()));
-        completed_payload.insert("serverId".to_string(), Value::String(server.server_id.clone()));
+        completed_payload.insert(
+            "actionId".to_string(),
+            Value::String(result.action_id.clone()),
+        );
+        completed_payload.insert(
+            "action".to_string(),
+            Value::String(action.as_str().to_string()),
+        );
+        completed_payload.insert(
+            "serverId".to_string(),
+            Value::String(server.server_id.clone()),
+        );
         completed_payload.insert(
             "catalogEntryId".to_string(),
             Value::String(server.catalog_entry_id.clone()),
         );
-        completed_payload.insert("status".to_string(), Value::String(result.status.as_str().to_string()));
+        completed_payload.insert(
+            "status".to_string(),
+            Value::String(result.status.as_str().to_string()),
+        );
         completed_payload.insert("removed".to_string(), Value::Bool(result.removed));
         completed_payload.insert(
             "environment".to_string(),
@@ -3493,7 +3921,9 @@ impl Manager {
             },
             completed_payload,
         ) {
-            result.audit_event_ids.push(completed_event.event_id.clone());
+            result
+                .audit_event_ids
+                .push(completed_event.event_id.clone());
         }
         Ok(result)
     }
@@ -3606,15 +4036,30 @@ impl Manager {
             &result.reason,
         )?;
         let mut failed_payload = Map::new();
-        failed_payload.insert("actionId".to_string(), Value::String(result.action_id.clone()));
-        failed_payload.insert("action".to_string(), Value::String(result.action.as_str().to_string()));
-        failed_payload.insert("serverId".to_string(), Value::String(server.server_id.clone()));
+        failed_payload.insert(
+            "actionId".to_string(),
+            Value::String(result.action_id.clone()),
+        );
+        failed_payload.insert(
+            "action".to_string(),
+            Value::String(result.action.as_str().to_string()),
+        );
+        failed_payload.insert(
+            "serverId".to_string(),
+            Value::String(server.server_id.clone()),
+        );
         failed_payload.insert(
             "catalogEntryId".to_string(),
             Value::String(server.catalog_entry_id.clone()),
         );
-        failed_payload.insert("status".to_string(), Value::String(result.status.as_str().to_string()));
-        failed_payload.insert("failureClass".to_string(), Value::String(result.failure_class.clone()));
+        failed_payload.insert(
+            "status".to_string(),
+            Value::String(result.status.as_str().to_string()),
+        );
+        failed_payload.insert(
+            "failureClass".to_string(),
+            Value::String(result.failure_class.clone()),
+        );
         failed_payload.insert("reason".to_string(), Value::String(result.reason.clone()));
         failed_payload.insert(
             "environment".to_string(),
@@ -3686,20 +4131,35 @@ impl Manager {
             &blocked.reason,
         );
         let mut payload = Map::new();
-        payload.insert("actionId".to_string(), Value::String(result.action_id.clone()));
-        payload.insert("action".to_string(), Value::String(result.action.as_str().to_string()));
-        payload.insert("serverId".to_string(), Value::String(server.server_id.clone()));
+        payload.insert(
+            "actionId".to_string(),
+            Value::String(result.action_id.clone()),
+        );
+        payload.insert(
+            "action".to_string(),
+            Value::String(result.action.as_str().to_string()),
+        );
+        payload.insert(
+            "serverId".to_string(),
+            Value::String(server.server_id.clone()),
+        );
         payload.insert(
             "catalogEntryId".to_string(),
             Value::String(server.catalog_entry_id.clone()),
         );
-        payload.insert("status".to_string(), Value::String(result.status.as_str().to_string()));
+        payload.insert(
+            "status".to_string(),
+            Value::String(result.status.as_str().to_string()),
+        );
         payload.insert(
             "classification".to_string(),
             Value::String(result.classification.as_str().to_string()),
         );
         payload.insert("reason".to_string(), Value::String(result.reason.clone()));
-        payload.insert("issues".to_string(), Value::Array(redacted_issues(&result.issues)));
+        payload.insert(
+            "issues".to_string(),
+            Value::Array(redacted_issues(&result.issues)),
+        );
         payload.insert(
             "environment".to_string(),
             Value::String(environment_scope(self.inner.cfg.environment)),
@@ -3771,7 +4231,9 @@ impl Manager {
         if !guard.servers.contains_key(&server.server_id) {
             guard.server_ids.push(server.server_id.clone());
         }
-        guard.servers.insert(server.server_id.clone(), server.clone());
+        guard
+            .servers
+            .insert(server.server_id.clone(), server.clone());
     }
 
     /// Go `collectRevalidationIssues`.
@@ -3779,7 +4241,12 @@ impl Manager {
         &self,
         server: &Server,
         management: Option<&CatalogManagement>,
-    ) -> (Vec<RevalidationIssue>, AvailabilityStatus, RevalidationClassification, String) {
+    ) -> (
+        Vec<RevalidationIssue>,
+        AvailabilityStatus,
+        RevalidationClassification,
+        String,
+    ) {
         let env_scope = environment_scope(self.inner.cfg.environment);
         let mut issues: Vec<RevalidationIssue> = Vec::new();
         let entry = match self.get_catalog_entry(&server.catalog_entry_id) {
@@ -3910,7 +4377,10 @@ impl Manager {
                     kind: "runtime".to_string(),
                     name: state_status.as_str().to_string(),
                     status,
-                    reason: first_non_empty(&[state_health_reason.as_str(), "server is not healthy"]),
+                    reason: first_non_empty(&[
+                        state_health_reason.as_str(),
+                        "server is not healthy",
+                    ]),
                     environment_scope: env_scope.clone(),
                 });
             }
@@ -4077,10 +4547,14 @@ pub fn validate_websocket_endpoint(raw: &str) -> Result<(), McpError> {
     let parsed = url::Url::parse(raw)
         .map_err(|err| McpError::Other(format!("websocket endpoint is invalid: {err}")))?;
     if parsed.scheme() != "ws" && parsed.scheme() != "wss" {
-        return Err(McpError::Other("websocket endpoint must use ws or wss".to_string()));
+        return Err(McpError::Other(
+            "websocket endpoint must use ws or wss".to_string(),
+        ));
     }
     if parsed.host_str().is_none_or(|host| host.trim().is_empty()) {
-        return Err(McpError::Other("websocket endpoint must include a host".to_string()));
+        return Err(McpError::Other(
+            "websocket endpoint must include a host".to_string(),
+        ));
     }
     if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(McpError::Other(
@@ -4132,7 +4606,8 @@ pub fn default_state_for_server(server: &Server) -> ServerState {
 #[must_use]
 pub fn lifecycle_status_from_execution(execution: &kura_sandbox::Execution) -> LifecycleStatus {
     if execution.status == kura_sandbox::ExecutionStatus::Unsupported
-        || execution.decision.selection_outcome == Some(kura_sandbox::BackendSelectionOutcome::Unsupported)
+        || execution.decision.selection_outcome
+            == Some(kura_sandbox::BackendSelectionOutcome::Unsupported)
     {
         return LifecycleStatus::Unsupported;
     }
@@ -4148,7 +4623,9 @@ pub fn lifecycle_status_from_execution(execution: &kura_sandbox::Execution) -> L
 #[must_use]
 pub fn classify_execution_failure(execution: &kura_sandbox::Execution) -> String {
     match execution.result.error_class.as_str() {
-        value if value == kura_sandbox::ErrorClass::LaunchFailed.as_str() => "launch_failed".to_string(),
+        value if value == kura_sandbox::ErrorClass::LaunchFailed.as_str() => {
+            "launch_failed".to_string()
+        }
         value if value == kura_sandbox::ErrorClass::Timeout.as_str() => "timeout".to_string(),
         value if value == kura_sandbox::ErrorClass::Cancelled.as_str() => "cancelled".to_string(),
         value if value == kura_sandbox::ErrorClass::ProcessFailed.as_str() => {
@@ -4366,7 +4843,10 @@ pub fn redacted_issues(issues: &[RevalidationIssue]) -> Vec<Value> {
 #[must_use]
 pub fn catalog_management_payload(management: &CatalogManagement) -> Map<String, Value> {
     let mut payload = Map::new();
-    payload.insert("sourceKind".to_string(), Value::String(management.source_kind.clone()));
+    payload.insert(
+        "sourceKind".to_string(),
+        Value::String(management.source_kind.clone()),
+    );
     payload.insert(
         "installedRevision".to_string(),
         Value::String(management.installed_revision.clone()),
@@ -4379,9 +4859,15 @@ pub fn catalog_management_payload(management: &CatalogManagement) -> Map<String,
         "driftStatus".to_string(),
         Value::String(management.drift_status.as_str().to_string()),
     );
-    payload.insert("driftReason".to_string(), Value::String(management.drift_reason.clone()));
+    payload.insert(
+        "driftReason".to_string(),
+        Value::String(management.drift_reason.clone()),
+    );
     if let Some(installed_at) = management.installed_at {
-        payload.insert("installedAt".to_string(), Value::String(rfc3339_nano(installed_at)));
+        payload.insert(
+            "installedAt".to_string(),
+            Value::String(rfc3339_nano(installed_at)),
+        );
     }
     if let Some(last_maintained_at) = management.last_maintained_at {
         payload.insert(
@@ -4390,10 +4876,16 @@ pub fn catalog_management_payload(management: &CatalogManagement) -> Map<String,
         );
     }
     if let Some(last_action_at) = management.last_action_at {
-        payload.insert("lastActionAt".to_string(), Value::String(rfc3339_nano(last_action_at)));
+        payload.insert(
+            "lastActionAt".to_string(),
+            Value::String(rfc3339_nano(last_action_at)),
+        );
     }
     if let Some(last_action) = management.last_action {
-        payload.insert("lastAction".to_string(), Value::String(last_action.as_str().to_string()));
+        payload.insert(
+            "lastAction".to_string(),
+            Value::String(last_action.as_str().to_string()),
+        );
     }
     if let Some(last_action_status) = management.last_action_status {
         payload.insert(
@@ -4478,11 +4970,9 @@ pub fn redaction_candidates(secret: &str) -> Vec<String> {
         }
     };
     add(trimmed.to_string());
-    add(
-        url::form_urlencoded::byte_serialize(bytes)
-            .collect::<String>()
-            .replace("%20", "+"),
-    );
+    add(url::form_urlencoded::byte_serialize(bytes)
+        .collect::<String>()
+        .replace("%20", "+"));
     add(base64_encode(bytes, STD_ALPHABET, true));
     add(base64_encode(bytes, STD_ALPHABET, false));
     add(base64_encode(bytes, URL_ALPHABET, true));
@@ -4542,7 +5032,9 @@ pub fn session_id(active: Option<&SessionState>) -> String {
 
 /// Go `secretResolution`.
 #[must_use]
-pub fn secret_resolution(items: &[kura_sandbox::SecretScopeOutcome]) -> kura_sandbox::SecretResolution {
+pub fn secret_resolution(
+    items: &[kura_sandbox::SecretScopeOutcome],
+) -> kura_sandbox::SecretResolution {
     if items.is_empty() {
         return kura_sandbox::SecretResolution::NotApplicable;
     }
@@ -4571,9 +5063,18 @@ pub fn consumer_view_map(view: &kura_sandbox::ConsumerContractView) -> Option<Va
 pub fn approval_payload(approval: &kura_policy::Approval) -> Map<String, Value> {
     let mut payload = Map::new();
     payload.insert("action".to_string(), Value::String(approval.action.clone()));
-    payload.insert("resourceKind".to_string(), Value::String(approval.resource_kind.clone()));
-    payload.insert("resourceId".to_string(), Value::String(approval.resource_id.clone()));
-    payload.insert("status".to_string(), Value::String(approval.status.as_str().to_string()));
+    payload.insert(
+        "resourceKind".to_string(),
+        Value::String(approval.resource_kind.clone()),
+    );
+    payload.insert(
+        "resourceId".to_string(),
+        Value::String(approval.resource_id.clone()),
+    );
+    payload.insert(
+        "status".to_string(),
+        Value::String(approval.status.as_str().to_string()),
+    );
     payload.insert(
         "sandbox".to_string(),
         approval.sandbox.clone().unwrap_or(Value::Null),
@@ -4586,10 +5087,22 @@ pub fn approval_payload(approval: &kura_policy::Approval) -> Map<String, Value> 
 pub fn decision_payload(decision: &kura_policy::Decision) -> Map<String, Value> {
     let mut payload = Map::new();
     payload.insert("action".to_string(), Value::String(decision.action.clone()));
-    payload.insert("resourceKind".to_string(), Value::String(decision.resource_kind.clone()));
-    payload.insert("resourceId".to_string(), Value::String(decision.resource_id.clone()));
-    payload.insert("outcome".to_string(), Value::String(decision.outcome.as_str().to_string()));
-    payload.insert("approvalId".to_string(), Value::String(decision.approval_id.clone()));
+    payload.insert(
+        "resourceKind".to_string(),
+        Value::String(decision.resource_kind.clone()),
+    );
+    payload.insert(
+        "resourceId".to_string(),
+        Value::String(decision.resource_id.clone()),
+    );
+    payload.insert(
+        "outcome".to_string(),
+        Value::String(decision.outcome.as_str().to_string()),
+    );
+    payload.insert(
+        "approvalId".to_string(),
+        Value::String(decision.approval_id.clone()),
+    );
     payload.insert(
         "sandbox".to_string(),
         decision.sandbox.clone().unwrap_or(Value::Null),

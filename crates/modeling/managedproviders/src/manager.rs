@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use kura_llm::{Message, MessageRole, ProviderRequest};
-use kura_providers::{AuthMode, AuthState, Check, CheckErrorClass, CheckStatus, Family, Model, Preference};
+use kura_providers::{
+    AuthMode, AuthState, Check, CheckErrorClass, CheckStatus, Family, Model, Preference,
+};
 use kura_store::SQLiteStore;
 use parking_lot::Mutex;
 
@@ -102,7 +104,10 @@ impl Manager {
     }
 
     /// Completes managed auth for a provider and persists the result.
-    pub fn complete_managed_auth(&self, provider_id: &str) -> Result<(AuthState, Vec<Model>), Error> {
+    pub fn complete_managed_auth(
+        &self,
+        provider_id: &str,
+    ) -> Result<(AuthState, Vec<Model>), Error> {
         let bridge = self.require_bridge(provider_id)?;
         let (state, models) = bridge.complete(&kura_llm::CancelToken::new())?;
         self.persist_managed_state(&state, &models)?;
@@ -110,7 +115,10 @@ impl Manager {
     }
 
     /// Refreshes managed auth for a provider and persists the result.
-    pub fn refresh_managed_auth(&self, provider_id: &str) -> Result<(AuthState, Vec<Model>), Error> {
+    pub fn refresh_managed_auth(
+        &self,
+        provider_id: &str,
+    ) -> Result<(AuthState, Vec<Model>), Error> {
         let bridge = self.require_bridge(provider_id)?;
         let (state, models) = bridge.refresh(&kura_llm::CancelToken::new())?;
         self.persist_managed_state(&state, &models)?;
@@ -130,7 +138,9 @@ impl Manager {
     /// tenantless write paths are used (the same paths the Go daemon uses when
     /// no tenant context is attached).
     pub fn persist_managed_state(&self, state: &AuthState, models: &[Model]) -> Result<(), Error> {
-        let Some(store) = &self.store else { return Ok(()) };
+        let Some(store) = &self.store else {
+            return Ok(());
+        };
         let store = store.lock();
         store
             .upsert_provider_auth_state(state)
@@ -145,19 +155,28 @@ impl Manager {
 
     /// Lists persisted provider auth states (to seed `kura_providers::Manager`).
     pub fn restore_auth_states(&self) -> Result<Vec<AuthState>, Error> {
-        let Some(store) = &self.store else { return Ok(Vec::new()) };
-        store.lock().list_provider_auth_states().map_err(Error::Store)
+        let Some(store) = &self.store else {
+            return Ok(Vec::new());
+        };
+        store
+            .lock()
+            .list_provider_auth_states()
+            .map_err(Error::Store)
     }
 
     /// Lists persisted provider models.
     pub fn restore_models(&self) -> Result<Vec<Model>, Error> {
-        let Some(store) = &self.store else { return Ok(Vec::new()) };
+        let Some(store) = &self.store else {
+            return Ok(Vec::new());
+        };
         store.lock().list_provider_models().map_err(Error::Store)
     }
 
     /// Lists models for one provider.
     pub fn restore_models_by_provider(&self, provider_id: &str) -> Result<Vec<Model>, Error> {
-        let Some(store) = &self.store else { return Ok(Vec::new()) };
+        let Some(store) = &self.store else {
+            return Ok(Vec::new());
+        };
         store
             .lock()
             .list_provider_models_by_provider(provider_id)
@@ -166,15 +185,22 @@ impl Manager {
 
     /// Lists persisted provider preferences.
     pub fn restore_preferences(&self) -> Result<Vec<Preference>, Error> {
-        let Some(store) = &self.store else { return Ok(Vec::new()) };
-        store.lock().list_provider_preferences().map_err(Error::Store)
+        let Some(store) = &self.store else {
+            return Ok(Vec::new());
+        };
+        store
+            .lock()
+            .list_provider_preferences()
+            .map_err(Error::Store)
     }
 
     // -- preferences ---------------------------------------------------------
 
     /// Persists a provider preference (Go API `default-model` handler).
     pub fn upsert_preference(&self, preference: &Preference) -> Result<(), Error> {
-        let Some(store) = &self.store else { return Ok(()) };
+        let Some(store) = &self.store else {
+            return Ok(());
+        };
         store
             .lock()
             .upsert_provider_preference(preference)
@@ -195,7 +221,10 @@ impl Manager {
         }
         let bridge = self.require_bridge(provider_id)?;
         let known = bridge.models(false);
-        if !known.iter().any(|item| item.model_id.eq_ignore_ascii_case(model)) {
+        if !known
+            .iter()
+            .any(|item| item.model_id.eq_ignore_ascii_case(model))
+        {
             return Err(Error::Other(format!(
                 "model {model:?} is not supported by provider {provider_id}"
             )));
@@ -253,7 +282,11 @@ impl Manager {
         let request = ProviderRequest {
             provider: bridge.provider_id(),
             model: effective_model.clone(),
-            messages: vec![Message { role: MessageRole::User, content: prompt }],
+            messages: vec![Message {
+                role: MessageRole::User,
+                content: prompt,
+                ..Message::default()
+            }],
             ..ProviderRequest::default()
         };
         let response = futures::executor::block_on(bridge.provider().complete(request));
@@ -288,7 +321,9 @@ impl Manager {
 
     /// Lists persisted checks for a provider.
     pub fn list_checks(&self, provider_id: &str) -> Result<Vec<Check>, Error> {
-        let Some(store) = &self.store else { return Ok(Vec::new()) };
+        let Some(store) = &self.store else {
+            return Ok(Vec::new());
+        };
         store
             .lock()
             .list_provider_checks(provider_id)
@@ -297,7 +332,9 @@ impl Manager {
 
     /// Gets one persisted check.
     pub fn get_check(&self, provider_id: &str, check_id: &str) -> Result<Option<Check>, Error> {
-        let Some(store) = &self.store else { return Ok(None) };
+        let Some(store) = &self.store else {
+            return Ok(None);
+        };
         store
             .lock()
             .get_provider_check(provider_id, check_id)
@@ -314,7 +351,8 @@ impl Manager {
         session: &kura_setupwizard::SetupSession,
         capability: &str,
     ) -> kura_setupwizard::DependentUseDecision {
-        let service = kura_setupwizard::new_service(kura_setupwizard::ServiceDependencies::default());
+        let service =
+            kura_setupwizard::new_service(kura_setupwizard::ServiceDependencies::default());
         service.dependent_use_decision(session, capability)
     }
 
@@ -330,7 +368,9 @@ impl Manager {
     ) -> Result<kura_setupwizard::DependentUseDecision, Error> {
         let decision = self.setup_dependent_use_decision(session, capability);
         if decision.safe_use_mode == kura_setupwizard::SafeUseMode::Blocked {
-            return Err(Error::Other("tenant provider auth is unavailable".to_string()));
+            return Err(Error::Other(
+                "tenant provider auth is unavailable".to_string(),
+            ));
         }
         let effective_provider = if provider_id.trim().is_empty() {
             self.default_provider_id()
@@ -341,7 +381,10 @@ impl Manager {
         let model = model.trim();
         if !model.is_empty() {
             let known = bridge.models(false);
-            if !known.iter().any(|item| item.model_id.eq_ignore_ascii_case(model)) {
+            if !known
+                .iter()
+                .any(|item| item.model_id.eq_ignore_ascii_case(model))
+            {
                 return Err(Error::Other(format!(
                     "model {model:?} is not supported by provider {effective_provider}"
                 )));
@@ -366,19 +409,20 @@ impl Manager {
     }
 
     fn require_bridge(&self, provider_id: &str) -> Result<Arc<dyn Bridge>, Error> {
-        self.registry
-            .get(provider_id)
-            .ok_or_else(|| {
-                Error::Other(format!(
-                    "managed auth is not supported by provider: {}",
-                    provider_id.trim()
-                ))
-            })
+        self.registry.get(provider_id).ok_or_else(|| {
+            Error::Other(format!(
+                "managed auth is not supported by provider: {}",
+                provider_id.trim()
+            ))
+        })
     }
 
     fn persist_check(&self, check: Check) -> Result<Check, Error> {
         if let Some(store) = &self.store {
-            store.lock().upsert_provider_check(&check).map_err(Error::Store)?;
+            store
+                .lock()
+                .upsert_provider_check(&check)
+                .map_err(Error::Store)?;
         }
         Ok(check)
     }
@@ -432,7 +476,10 @@ pub fn classify_dispatch_failure(code: &str) -> CheckErrorClass {
     match code {
         "upstream_auth_failed" => CheckErrorClass::Auth,
         "upstream_transport_error" => CheckErrorClass::Transport,
-        "timeout" | "connect_timeout" | "first_chunk_timeout" | "idle_timeout"
+        "timeout"
+        | "connect_timeout"
+        | "first_chunk_timeout"
+        | "idle_timeout"
         | "max_duration_exceeded" => CheckErrorClass::Timeout,
         "upstream_invalid_request" => CheckErrorClass::Config,
         _ => CheckErrorClass::Upstream,

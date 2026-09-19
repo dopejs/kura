@@ -37,8 +37,8 @@ pub fn load() -> Result<Config, ConfigError> {
     apply_env_overrides(&mut cfg);
     resolve_secret_refs(&mut cfg);
 
-    cfg.data_dir =
-        resolve_dir(&cfg.data_dir).map_err(|err| ConfigError::ResolveEffectiveDataDir(Box::new(err)))?;
+    cfg.data_dir = resolve_dir(&cfg.data_dir)
+        .map_err(|err| ConfigError::ResolveEffectiveDataDir(Box::new(err)))?;
     ensure_dir(&cfg.data_dir).map_err(ConfigError::InitEffectiveDataDir)?;
 
     Ok(cfg)

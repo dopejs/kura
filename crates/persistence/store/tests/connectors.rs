@@ -9,12 +9,12 @@ use std::collections::HashMap;
 
 use chrono::{Duration, Utc};
 use kura_connectors::{
-    Connector, ConnectorDiagnosticState, ConformanceResult, ConformanceResultStatus,
+    ConformanceResult, ConformanceResultStatus, Connector, ConnectorDiagnosticState,
     DiagnosticReasonCode, FreshnessState, LifecycleState, RedactionStatus, RemediationOwner,
     RetrySafety, Status,
 };
 use kura_imtypes::{DeliveryDirection, DeliveryStatus, MessageRecord};
-use kura_store::{connectors::ConnectorDeliveryBoundaryRecord, SQLiteStore};
+use kura_store::{SQLiteStore, connectors::ConnectorDeliveryBoundaryRecord};
 
 fn temp_dir(name: &str) -> String {
     let dir = std::env::temp_dir().join(format!("kura_store_{name}_{}", std::process::id()));
@@ -71,7 +71,9 @@ fn connector_message_round_trips_through_sqlite() {
 
     // Parent connector row (no FK in the ported schema, but the port contract expects
     // connector_messages to reference an existing connector).
-    store.upsert_connector(&connector_fixture("conn_slack", now)).unwrap();
+    store
+        .upsert_connector(&connector_fixture("conn_slack", now))
+        .unwrap();
 
     let mut message = MessageRecord {
         delivery_id: "dlv_1".to_string(),
@@ -127,16 +129,32 @@ fn connector_message_round_trips_through_sqlite() {
         .unwrap()
         .expect("found by standard identity");
     assert_eq!(by_identity.delivery_id, "dlv_1");
-    assert_eq!(by_identity.equivalent_rule_id, "standard_provider_message_id");
+    assert_eq!(
+        by_identity.equivalent_rule_id,
+        "standard_provider_message_id"
+    );
 
-    assert!(store
-        .get_connector_message_by_external_id("conn_slack", DeliveryDirection::Inbound, "missing")
-        .unwrap()
-        .is_none());
-    assert!(store
-        .get_connector_message_by_external_id_for_tenant("", "conn_slack", DeliveryDirection::Inbound, "")
-        .unwrap()
-        .is_none());
+    assert!(
+        store
+            .get_connector_message_by_external_id(
+                "conn_slack",
+                DeliveryDirection::Inbound,
+                "missing"
+            )
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .get_connector_message_by_external_id_for_tenant(
+                "",
+                "conn_slack",
+                DeliveryDirection::Inbound,
+                ""
+            )
+            .unwrap()
+            .is_none()
+    );
 
     // A duplicate standard identity (same provider message, new delivery id) resolves
     // to the existing row with created = false.
@@ -189,7 +207,9 @@ fn conformance_result_round_trips_through_sqlite() {
     result.result = ConformanceResultStatus::Limited;
     store.save_connector_conformance_result(&result).unwrap();
 
-    let listed = store.list_connector_conformance_results("", "conn_slack", now).unwrap();
+    let listed = store
+        .list_connector_conformance_results("", "conn_slack", now)
+        .unwrap();
     assert_eq!(listed.len(), 1);
     let got = &listed[0];
     assert_eq!(got.conformance_result_id, "cr_1");
@@ -215,12 +235,16 @@ fn conformance_result_round_trips_through_sqlite() {
         ..ConformanceResult::default()
     };
     store.save_connector_conformance_result(&generated).unwrap();
-    let listed = store.list_connector_conformance_results("", "conn_slack", now).unwrap();
+    let listed = store
+        .list_connector_conformance_results("", "conn_slack", now)
+        .unwrap();
     assert_eq!(listed.len(), 2);
     assert!(listed.iter().any(|r| r.conformance_result_id == "cr_1"));
-    assert!(listed
-        .iter()
-        .any(|r| r.conformance_result_id.starts_with("conformance_result_")));
+    assert!(
+        listed
+            .iter()
+            .any(|r| r.conformance_result_id.starts_with("conformance_result_"))
+    );
 }
 
 #[test]
@@ -251,7 +275,9 @@ fn diagnostic_state_round_trips_through_sqlite() {
     state.status = LifecycleState::RateLimited;
     store.save_connector_diagnostic_state(&state).unwrap();
 
-    let listed = store.list_connector_diagnostic_states("", "conn_slack", now).unwrap();
+    let listed = store
+        .list_connector_diagnostic_states("", "conn_slack", now)
+        .unwrap();
     assert_eq!(listed.len(), 1);
     let got = &listed[0];
     assert_eq!(got.diagnostic_state_id, "ds_1");
@@ -291,7 +317,9 @@ fn diagnostic_state_freshness_recomputed_on_read() {
     };
     store.save_connector_diagnostic_state(&stale).unwrap();
 
-    let listed = store.list_connector_diagnostic_states("", "conn_slack", now).unwrap();
+    let listed = store
+        .list_connector_diagnostic_states("", "conn_slack", now)
+        .unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].freshness_state, FreshnessState::Stale);
 }
@@ -330,8 +358,12 @@ fn diagnostic_state_writes_redaction_failure_row() {
         redaction_failure_id: "rf_1".to_string(),
         ..state.clone()
     };
-    store.save_connector_diagnostic_state(&with_failure).unwrap();
-    store.save_connector_diagnostic_state(&with_failure).unwrap();
+    store
+        .save_connector_diagnostic_state(&with_failure)
+        .unwrap();
+    store
+        .save_connector_diagnostic_state(&with_failure)
+        .unwrap();
 }
 
 #[test]

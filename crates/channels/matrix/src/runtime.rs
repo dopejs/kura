@@ -13,24 +13,23 @@ use std::sync::Arc;
 
 use chrono::{Duration, Utc};
 use kura_connectors::{
-    Connector, DiagnosticReasonCode, RegisterInput, RedactionStatus, Status, Supervisor,
-    MATRIX_DURABLE_IDENTITY_RULE_ID,
+    Connector, DiagnosticReasonCode, MATRIX_DURABLE_IDENTITY_RULE_ID, RedactionStatus,
+    RegisterInput, Status, Supervisor,
 };
 use kura_events::{Bus, Event, Resource, Scope};
 use kura_im::MessageLoop;
 use kura_imtypes::InboundMessage;
 use kura_router::SessionKind;
-use kura_store::matrix_setup::MatrixEventEvidenceRecord;
 use kura_store::SQLiteStore;
+use kura_store::matrix_setup::MatrixEventEvidenceRecord;
 use parking_lot::Mutex;
 
 use crate::is_unset_time;
 use crate::routes::{decide_route, normalize_route_policy};
 use crate::transport::{FakeTransport, Transport, TransportReplySender};
 use crate::types::{
-    Config, ConversationRoute, ConversationType, InboundEvent, MessageKind, RouteDecision,
-    RouteOutcome, RoutePolicy, RoutePolicyState, RoomSelectionState, TerminalState,
-    CONNECTOR_KIND,
+    CONNECTOR_KIND, Config, ConversationRoute, ConversationType, InboundEvent, MessageKind,
+    RoomSelectionState, RouteDecision, RouteOutcome, RoutePolicy, RoutePolicyState, TerminalState,
 };
 
 /// Go `Runtime`.
@@ -163,12 +162,12 @@ impl Runtime {
         if decision.outcome != RouteOutcome::Accepted {
             return (InboundMessage::default(), false);
         }
-        let (kind, peer_id, direct) =
-            if event.conversation_type == ConversationType::DirectMessage {
-                (SessionKind::Direct, event.sender_id.clone(), true)
-            } else {
-                (SessionKind::Group, event.conversation_id.clone(), false)
-            };
+        let (kind, peer_id, direct) = if event.conversation_type == ConversationType::DirectMessage
+        {
+            (SessionKind::Direct, event.sender_id.clone(), true)
+        } else {
+            (SessionKind::Group, event.conversation_id.clone(), false)
+        };
         (
             InboundMessage {
                 connector_id: event.connector_id.clone(),
@@ -213,7 +212,9 @@ impl Runtime {
             Err(_) => {
                 return Some(RouteDecision {
                     outcome: RouteOutcome::Failed,
-                    reason_code: DiagnosticReasonCode::UnknownConnectorFailure.as_str().to_string(),
+                    reason_code: DiagnosticReasonCode::UnknownConnectorFailure
+                        .as_str()
+                        .to_string(),
                     surface: event.conversation_type.as_str().to_string(),
                     ..RouteDecision::default()
                 });
@@ -252,7 +253,9 @@ impl Runtime {
         };
         let cancel = kura_chat::CancellationToken::new();
         let sender = TransportReplySender(self.transport.as_ref());
-        let _ = self.message_loop.process_single_turn(&connector, &inbound, &sender, &cancel);
+        let _ = self
+            .message_loop
+            .process_single_turn(&connector, &inbound, &sender, &cancel);
     }
 
     /// Go `markDuplicate`: in-memory dedupe of the durable event identity.
@@ -314,7 +317,10 @@ impl Runtime {
             retention_expires_at: received_at + Duration::days(90),
             redaction_status: RedactionStatus::Redacted.as_str().to_string(),
             safe_evidence: std::collections::HashMap::from([
-                ("identityRule".to_string(), MATRIX_DURABLE_IDENTITY_RULE_ID.to_string()),
+                (
+                    "identityRule".to_string(),
+                    MATRIX_DURABLE_IDENTITY_RULE_ID.to_string(),
+                ),
                 ("surface".to_string(), decision.surface.clone()),
             ]),
         });
@@ -327,17 +333,50 @@ impl Runtime {
             return;
         };
         let mut payload = serde_json::Map::new();
-        payload.insert("tenantId".to_string(), serde_json::Value::String(event.tenant_id.clone()));
-        payload.insert("connectorId".to_string(), serde_json::Value::String(event.connector_id.clone()));
-        payload.insert("homeserverId".to_string(), serde_json::Value::String(event.homeserver_id.clone()));
-        payload.insert("conversationId".to_string(), serde_json::Value::String(event.conversation_id.clone()));
-        payload.insert("matrixEventId".to_string(), serde_json::Value::String(event.matrix_event_id.clone()));
-        payload.insert("syncBatchId".to_string(), serde_json::Value::String(event.sync_batch_id.clone()));
-        payload.insert("transactionId".to_string(), serde_json::Value::String(event.transaction_id.clone()));
-        payload.insert("outcome".to_string(), serde_json::Value::String(decision.outcome.as_str().to_string()));
-        payload.insert("reasonCode".to_string(), serde_json::Value::String(decision.reason_code.clone()));
-        payload.insert("surface".to_string(), serde_json::Value::String(decision.surface.clone()));
-        payload.insert("redactionStatus".to_string(), serde_json::Value::String("redacted".to_string()));
+        payload.insert(
+            "tenantId".to_string(),
+            serde_json::Value::String(event.tenant_id.clone()),
+        );
+        payload.insert(
+            "connectorId".to_string(),
+            serde_json::Value::String(event.connector_id.clone()),
+        );
+        payload.insert(
+            "homeserverId".to_string(),
+            serde_json::Value::String(event.homeserver_id.clone()),
+        );
+        payload.insert(
+            "conversationId".to_string(),
+            serde_json::Value::String(event.conversation_id.clone()),
+        );
+        payload.insert(
+            "matrixEventId".to_string(),
+            serde_json::Value::String(event.matrix_event_id.clone()),
+        );
+        payload.insert(
+            "syncBatchId".to_string(),
+            serde_json::Value::String(event.sync_batch_id.clone()),
+        );
+        payload.insert(
+            "transactionId".to_string(),
+            serde_json::Value::String(event.transaction_id.clone()),
+        );
+        payload.insert(
+            "outcome".to_string(),
+            serde_json::Value::String(decision.outcome.as_str().to_string()),
+        );
+        payload.insert(
+            "reasonCode".to_string(),
+            serde_json::Value::String(decision.reason_code.clone()),
+        );
+        payload.insert(
+            "surface".to_string(),
+            serde_json::Value::String(decision.surface.clone()),
+        );
+        payload.insert(
+            "redactionStatus".to_string(),
+            serde_json::Value::String("redacted".to_string()),
+        );
         bus.publish(Event {
             category: "connector".to_string(),
             name: "connector.route_outcome_recorded".to_string(),

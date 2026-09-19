@@ -5,8 +5,8 @@
 use std::time::Duration;
 
 use kura_integrations::Resource;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::{
     AccountProjection, AdapterFailure, AvailabilityQuery, Backend, BusyFreeInput, CalendarError,
@@ -26,7 +26,11 @@ impl AdapterBackend {
     /// Build a calendar adapter backend over the given RPC client. A zero deadline uses the
     /// client default.
     pub fn new(client: kura_adapterrpc::Client, deadline: Duration) -> Self {
-        AdapterBackend { client, deadline, provider_kind: String::new() }
+        AdapterBackend {
+            client,
+            deadline,
+            provider_kind: String::new(),
+        }
     }
 
     /// Record the diagnostics provider kind this adapter serves (e.g. "feishu_lark").
@@ -53,9 +57,17 @@ impl AdapterBackend {
         O: DeserializeOwned,
     {
         let result = if self.deadline.is_zero() {
-            self.client.dispatch(DOMAIN_CALENDAR, operation, resource, payload, out)
+            self.client
+                .dispatch(DOMAIN_CALENDAR, operation, resource, payload, out)
         } else {
-            self.client.dispatch_with_timeout(self.deadline, DOMAIN_CALENDAR, operation, resource, payload, out)
+            self.client.dispatch_with_timeout(
+                self.deadline,
+                DOMAIN_CALENDAR,
+                operation,
+                resource,
+                payload,
+                out,
+            )
         };
         self.map_err(result)
     }
@@ -105,56 +117,131 @@ fn stable_failure_class(ae: &kura_adapterrpc::AdapterError) -> String {
 impl Backend for AdapterBackend {
     fn project_account(&self, resource: &Resource) -> Result<AccountProjection, CalendarError> {
         let mut out = AccountProjection::default();
-        self.dispatch::<Resource, serde_json::Value, AccountProjection>("ProjectAccount", Some(resource), None, Some(&mut out))?;
+        self.dispatch::<Resource, serde_json::Value, AccountProjection>(
+            "ProjectAccount",
+            Some(resource),
+            None,
+            Some(&mut out),
+        )?;
         Ok(out)
     }
 
-    fn list_events(&self, resource: &Resource, account: &AccountProjection, input: &ListEventsInput) -> Result<Vec<Event>, CalendarError> {
+    fn list_events(
+        &self,
+        resource: &Resource,
+        account: &AccountProjection,
+        input: &ListEventsInput,
+    ) -> Result<Vec<Event>, CalendarError> {
         let mut out: Vec<Event> = Vec::new();
         let payload = serde_json::json!({ "account": account, "input": input });
-        self.dispatch::<Resource, serde_json::Value, Vec<Event>>("ListEvents", Some(resource), Some(&payload), Some(&mut out))?;
+        self.dispatch::<Resource, serde_json::Value, Vec<Event>>(
+            "ListEvents",
+            Some(resource),
+            Some(&payload),
+            Some(&mut out),
+        )?;
         Ok(out)
     }
 
-    fn get_event(&self, resource: &Resource, account: &AccountProjection, event_id: &str) -> Result<Event, CalendarError> {
+    fn get_event(
+        &self,
+        resource: &Resource,
+        account: &AccountProjection,
+        event_id: &str,
+    ) -> Result<Event, CalendarError> {
         let mut out = Event::default();
         let payload = serde_json::json!({ "account": account, "eventId": event_id });
-        self.dispatch::<Resource, serde_json::Value, Event>("GetEvent", Some(resource), Some(&payload), Some(&mut out))?;
+        self.dispatch::<Resource, serde_json::Value, Event>(
+            "GetEvent",
+            Some(resource),
+            Some(&payload),
+            Some(&mut out),
+        )?;
         Ok(out)
     }
 
-    fn busy_free(&self, resource: &Resource, account: &AccountProjection, input: &BusyFreeInput) -> Result<AvailabilityQuery, CalendarError> {
+    fn busy_free(
+        &self,
+        resource: &Resource,
+        account: &AccountProjection,
+        input: &BusyFreeInput,
+    ) -> Result<AvailabilityQuery, CalendarError> {
         let mut out = AvailabilityQuery::default();
         let payload = serde_json::json!({ "account": account, "input": input });
-        self.dispatch::<Resource, serde_json::Value, AvailabilityQuery>("BusyFree", Some(resource), Some(&payload), Some(&mut out))?;
+        self.dispatch::<Resource, serde_json::Value, AvailabilityQuery>(
+            "BusyFree",
+            Some(resource),
+            Some(&payload),
+            Some(&mut out),
+        )?;
         Ok(out)
     }
 
-    fn create_event(&self, resource: &Resource, account: &AccountProjection, input: &CreateEventInput) -> Result<Event, CalendarError> {
+    fn create_event(
+        &self,
+        resource: &Resource,
+        account: &AccountProjection,
+        input: &CreateEventInput,
+    ) -> Result<Event, CalendarError> {
         let mut out = Event::default();
         let payload = serde_json::json!({ "account": account, "input": input });
-        self.dispatch::<Resource, serde_json::Value, Event>("CreateEvent", Some(resource), Some(&payload), Some(&mut out))?;
+        self.dispatch::<Resource, serde_json::Value, Event>(
+            "CreateEvent",
+            Some(resource),
+            Some(&payload),
+            Some(&mut out),
+        )?;
         Ok(out)
     }
 
-    fn update_event(&self, resource: &Resource, account: &AccountProjection, input: &UpdateEventInput) -> Result<Event, CalendarError> {
+    fn update_event(
+        &self,
+        resource: &Resource,
+        account: &AccountProjection,
+        input: &UpdateEventInput,
+    ) -> Result<Event, CalendarError> {
         let mut out = Event::default();
         let payload = serde_json::json!({ "account": account, "input": input });
-        self.dispatch::<Resource, serde_json::Value, Event>("UpdateEvent", Some(resource), Some(&payload), Some(&mut out))?;
+        self.dispatch::<Resource, serde_json::Value, Event>(
+            "UpdateEvent",
+            Some(resource),
+            Some(&payload),
+            Some(&mut out),
+        )?;
         Ok(out)
     }
 
-    fn cancel_event(&self, resource: &Resource, account: &AccountProjection, input: &CancelEventInput) -> Result<Event, CalendarError> {
+    fn cancel_event(
+        &self,
+        resource: &Resource,
+        account: &AccountProjection,
+        input: &CancelEventInput,
+    ) -> Result<Event, CalendarError> {
         let mut out = Event::default();
         let payload = serde_json::json!({ "account": account, "input": input });
-        self.dispatch::<Resource, serde_json::Value, Event>("CancelEvent", Some(resource), Some(&payload), Some(&mut out))?;
+        self.dispatch::<Resource, serde_json::Value, Event>(
+            "CancelEvent",
+            Some(resource),
+            Some(&payload),
+            Some(&mut out),
+        )?;
         Ok(out)
     }
 
-    fn update_attendees(&self, resource: &Resource, account: &AccountProjection, input: &UpdateAttendeesInput) -> Result<Event, CalendarError> {
+    fn update_attendees(
+        &self,
+        resource: &Resource,
+        account: &AccountProjection,
+        input: &UpdateAttendeesInput,
+    ) -> Result<Event, CalendarError> {
         let mut out = Event::default();
         let payload = serde_json::json!({ "account": account, "input": input });
-        self.dispatch::<Resource, serde_json::Value, Event>("UpdateAttendees", Some(resource), Some(&payload), Some(&mut out))?;
+        self.dispatch::<Resource, serde_json::Value, Event>(
+            "UpdateAttendees",
+            Some(resource),
+            Some(&payload),
+            Some(&mut out),
+        )?;
         Ok(out)
     }
 

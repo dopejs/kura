@@ -15,12 +15,12 @@
 //! lifecycle event (or a validation_failed denial event) through the store
 //! event table and publish to the bus, exactly like Go publishBindingEvent.
 
+use axum::Json as AxumJson;
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
-use axum::Router;
-use axum::Json as AxumJson;
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -28,7 +28,7 @@ use kura_bindings::{
     BindingError, SetVisibilityRequest, VisibilityScopeKind, WorkspaceResource,
     to_binding_resource, to_capability_visibility_resource, to_workspace_resource,
 };
-use kura_identity::{has_permission, Permission};
+use kura_identity::{Permission, has_permission};
 
 use crate::error::ApiError;
 use crate::middleware::TenantContext;
@@ -41,7 +41,10 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         // Workspaces.
-        .route("/v1/workspaces", get(list_workspaces).post(create_workspace))
+        .route(
+            "/v1/workspaces",
+            get(list_workspaces).post(create_workspace),
+        )
         .route(
             "/v1/workspaces/{workspace_id}",
             get(get_workspace).patch(update_workspace),
@@ -50,7 +53,9 @@ pub fn router() -> Router<AppState> {
         .route("/v1/bindings", get(list_bindings).post(create_binding))
         .route(
             "/v1/bindings/{binding_id}",
-            get(get_binding).patch(update_binding).delete(delete_binding),
+            get(get_binding)
+                .patch(update_binding)
+                .delete(delete_binding),
         )
         .route("/v1/bindings/{binding_id}/repair", post(repair_binding))
         // Capability visibility.
@@ -96,15 +101,19 @@ async fn list_workspaces(
     tenant: Option<Extension<TenantContext>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<WorkspaceListResponse>, ApiError> {
-    let tc = require_binding_permission(tenant.as_ref().map(|e| &e.0), Permission::BindingsInspect)?;
+    let tc =
+        require_binding_permission(tenant.as_ref().map(|e| &e.0), Permission::BindingsInspect)?;
     let limit = parse_limit(params.get("limit"));
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_workspaces(&tc.tenant_id, limit)
         .map_err(ApiError::from_store)?;
     let resources = items.iter().map(to_workspace_resource).collect();
-    Ok(Json(WorkspaceListResponse { tenant_id: tc.tenant_id.clone(), workspaces: resources }))
+    Ok(Json(WorkspaceListResponse {
+        tenant_id: tc.tenant_id.clone(),
+        workspaces: resources,
+    }))
 }
 
 /// GET /v1/workspaces/{workspace_id} — one workspace (Go handleGetWorkspace).
@@ -113,10 +122,11 @@ async fn get_workspace(
     tenant: Option<Extension<TenantContext>>,
     Path(workspace_id): Path<String>,
 ) -> Result<Json<WorkspaceResource>, ApiError> {
-    let tc = require_binding_permission(tenant.as_ref().map(|e| &e.0), Permission::BindingsInspect)?;
+    let tc =
+        require_binding_permission(tenant.as_ref().map(|e| &e.0), Permission::BindingsInspect)?;
     let ws = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_workspace(&tc.tenant_id, &workspace_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("workspace not found".to_string()))?;
@@ -198,15 +208,19 @@ async fn list_bindings(
     tenant: Option<Extension<TenantContext>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<BindingListResponse>, ApiError> {
-    let tc = require_binding_permission(tenant.as_ref().map(|e| &e.0), Permission::BindingsInspect)?;
+    let tc =
+        require_binding_permission(tenant.as_ref().map(|e| &e.0), Permission::BindingsInspect)?;
     let limit = parse_limit(params.get("limit"));
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_binding_rules(&tc.tenant_id, limit)
         .map_err(ApiError::from_store)?;
     let resources = items.iter().map(to_binding_resource).collect();
-    Ok(Json(BindingListResponse { tenant_id: tc.tenant_id.clone(), bindings: resources }))
+    Ok(Json(BindingListResponse {
+        tenant_id: tc.tenant_id.clone(),
+        bindings: resources,
+    }))
 }
 
 /// GET /v1/bindings/{binding_id} — one binding rule (Go handleGetBinding).
@@ -215,10 +229,11 @@ async fn get_binding(
     tenant: Option<Extension<TenantContext>>,
     Path(binding_id): Path<String>,
 ) -> Result<Json<kura_bindings::BindingResource>, ApiError> {
-    let tc = require_binding_permission(tenant.as_ref().map(|e| &e.0), Permission::BindingsInspect)?;
+    let tc =
+        require_binding_permission(tenant.as_ref().map(|e| &e.0), Permission::BindingsInspect)?;
     let rule = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_binding_rule(&tc.tenant_id, &binding_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("binding not found".to_string()))?;
@@ -392,19 +407,34 @@ async fn list_capability_visibility(
     tenant: Option<Extension<TenantContext>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<CapabilityVisibilityListResponse>, ApiError> {
-    let tc = require_binding_permission(tenant.as_ref().map(|e| &e.0), Permission::BindingsInspect)?;
-    let scope_kind = VisibilityScopeKind::new(params.get("scopeKind").cloned().unwrap_or_default().trim());
+    let tc =
+        require_binding_permission(tenant.as_ref().map(|e| &e.0), Permission::BindingsInspect)?;
+    let scope_kind =
+        VisibilityScopeKind::new(params.get("scopeKind").cloned().unwrap_or_default().trim());
     if scope_kind != VisibilityScopeKind::PROFILE && scope_kind != VisibilityScopeKind::WORKSPACE {
-        return Err(ApiError::BadRequest("scopeKind must be profile or workspace".to_string()));
+        return Err(ApiError::BadRequest(
+            "scopeKind must be profile or workspace".to_string(),
+        ));
     }
-    let scope_ref = params.get("scopeRef").cloned().unwrap_or_default().trim().to_string();
+    let scope_ref = params
+        .get("scopeRef")
+        .cloned()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_capability_visibility(&tc.tenant_id, &scope_kind, &scope_ref)
         .map_err(ApiError::from_store)?;
-    let resources = items.iter().map(to_capability_visibility_resource).collect();
-    Ok(Json(CapabilityVisibilityListResponse { tenant_id: tc.tenant_id.clone(), policies: resources }))
+    let resources = items
+        .iter()
+        .map(to_capability_visibility_resource)
+        .collect();
+    Ok(Json(CapabilityVisibilityListResponse {
+        tenant_id: tc.tenant_id.clone(),
+        policies: resources,
+    }))
 }
 
 /// PUT /v1/capability-visibility — set one capability visibility policy
@@ -550,7 +580,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use axum::http::header::CONTENT_TYPE;
     use kura_identity::TenantContext as IdentityTenantContext;
@@ -560,6 +590,7 @@ mod tests {
 
     fn test_config() -> kura_config::Config {
         kura_config::Config {
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-workspace-bindings".to_string(),
@@ -567,16 +598,30 @@ mod tests {
             version: "0.1.0".to_string(),
             llm: kura_config::LlmConfig::default(),
             connectors: kura_config::ConnectorConfig {
-                discord: kura_config::DiscordConnectorConfig { enabled: false, ..Default::default() },
-                telegram: kura_config::TelegramConnectorConfig { enabled: false, ..Default::default() },
-                slack: kura_config::SlackConnectorConfig { enabled: false, ..Default::default() },
-                matrix: kura_config::MatrixConnectorConfig { enabled: false, ..Default::default() },
+                discord: kura_config::DiscordConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                telegram: kura_config::TelegramConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                slack: kura_config::SlackConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                matrix: kura_config::MatrixConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
             },
+            egress: Default::default(),
         }
     }
 
     fn test_state() -> AppState {
-        let dir = std::env::temp_dir().join(format!("kura-api-workspace-bindings-{}", Uuid::now_v7()));
+        let dir =
+            std::env::temp_dir().join(format!("kura-api-workspace-bindings-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let store = Arc::new(Mutex::new(
             kura_store::SQLiteStore::new(dir.to_str().expect("path")).expect("store"),
@@ -590,7 +635,9 @@ mod tests {
             .uri(uri)
             .header(CONTENT_TYPE, "application/json");
         let req = match body {
-            Some(payload) => builder.body(Body::from(payload.to_string())).expect("request"),
+            Some(payload) => builder
+                .body(Body::from(payload.to_string()))
+                .expect("request"),
             None => builder.body(Body::empty()).expect("request"),
         };
         req
@@ -604,19 +651,22 @@ mod tests {
         permissions: Vec<Permission>,
     ) -> Request<Body> {
         let mut req = request(method, uri, body);
-        req.extensions_mut().insert(TenantContext(IdentityTenantContext {
-            tenant_id: tenant_id.to_string(),
-            principal_id: format!("prn_{tenant_id}"),
-            permissions,
-            ..Default::default()
-        }));
+        req.extensions_mut()
+            .insert(TenantContext(IdentityTenantContext {
+                tenant_id: tenant_id.to_string(),
+                principal_id: format!("prn_{tenant_id}"),
+                permissions,
+                ..Default::default()
+            }));
         req
     }
 
     async fn send(app: &axum::Router, req: Request<Body>) -> (StatusCode, serde_json::Value) {
         let response = app.clone().oneshot(req).await.expect("oneshot");
         let status = response.status();
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let json = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -649,7 +699,10 @@ mod tests {
         let workspaces = json["workspaces"].as_array().expect("workspaces array");
         assert_eq!(workspaces.len(), 1);
         assert_eq!(workspaces[0]["isDefault"], true);
-        let default_workspace_id = workspaces[0]["workspaceId"].as_str().expect("id").to_string();
+        let default_workspace_id = workspaces[0]["workspaceId"]
+            .as_str()
+            .expect("id")
+            .to_string();
 
         // Create a binding (manage).
         let profile_id = {
@@ -670,7 +723,13 @@ mod tests {
         .to_string();
         let (status, json) = send(
             &app,
-            tenant_request("POST", "/v1/bindings", Some(&body), "ten_bindings", admin.clone()),
+            tenant_request(
+                "POST",
+                "/v1/bindings",
+                Some(&body),
+                "ten_bindings",
+                admin.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "create binding: {json}");
@@ -679,7 +738,13 @@ mod tests {
         // Create denied for a viewer (no existence leak — pure 403).
         let (status, _) = send(
             &app,
-            tenant_request("POST", "/v1/bindings", Some(&body), "ten_bindings", viewer.clone()),
+            tenant_request(
+                "POST",
+                "/v1/bindings",
+                Some(&body),
+                "ten_bindings",
+                viewer.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
@@ -687,7 +752,13 @@ mod tests {
         // Inspect denied for a viewer.
         let (status, _) = send(
             &app,
-            tenant_request("GET", &format!("/v1/bindings/{binding_id}"), None, "ten_bindings", viewer.clone()),
+            tenant_request(
+                "GET",
+                &format!("/v1/bindings/{binding_id}"),
+                None,
+                "ten_bindings",
+                viewer.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
@@ -695,7 +766,13 @@ mod tests {
         // Disable the binding.
         let (status, json) = send(
             &app,
-            tenant_request("PATCH", &format!("/v1/bindings/{binding_id}"), Some(r#"{"disable":true}"#), "ten_bindings", admin.clone()),
+            tenant_request(
+                "PATCH",
+                &format!("/v1/bindings/{binding_id}"),
+                Some(r#"{"disable":true}"#),
+                "ten_bindings",
+                admin.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "disable: {json}");
@@ -711,7 +788,13 @@ mod tests {
         .to_string();
         let (status, json) = send(
             &app,
-            tenant_request("PUT", "/v1/capability-visibility", Some(&vis_body), "ten_bindings", admin.clone()),
+            tenant_request(
+                "PUT",
+                "/v1/capability-visibility",
+                Some(&vis_body),
+                "ten_bindings",
+                admin.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "set visibility: {json}");
@@ -722,7 +805,9 @@ mod tests {
             &app,
             tenant_request(
                 "GET",
-                &format!("/v1/capability-visibility?scopeKind=workspace&scopeRef={default_workspace_id}"),
+                &format!(
+                    "/v1/capability-visibility?scopeKind=workspace&scopeRef={default_workspace_id}"
+                ),
                 None,
                 "ten_bindings",
                 admin.clone(),
@@ -735,15 +820,22 @@ mod tests {
         // Remove the binding (204).
         let (status, _) = send(
             &app,
-            tenant_request("DELETE", &format!("/v1/bindings/{binding_id}"), None, "ten_bindings", admin.clone()),
+            tenant_request(
+                "DELETE",
+                &format!("/v1/bindings/{binding_id}"),
+                None,
+                "ten_bindings",
+                admin.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::NO_CONTENT);
 
         // Binding lifecycle events were recorded.
-        let events = state
-            .event_bus
-            .list(&kura_events::Filter { category: "binding".to_string(), ..Default::default() });
+        let events = state.event_bus.list(&kura_events::Filter {
+            category: "binding".to_string(),
+            ..Default::default()
+        });
         assert!(!events.is_empty(), "expected binding lifecycle events");
     }
 
@@ -779,7 +871,13 @@ mod tests {
         let admin = vec![Permission::BindingsInspect, Permission::BindingsManage];
         let (status, json) = send(
             &app,
-            tenant_request("GET", "/v1/bindings/b_missing", None, "ten_bindings", admin.clone()),
+            tenant_request(
+                "GET",
+                "/v1/bindings/b_missing",
+                None,
+                "ten_bindings",
+                admin.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "body: {json}");
@@ -787,7 +885,13 @@ mod tests {
 
         let (status, json) = send(
             &app,
-            tenant_request("GET", "/v1/workspaces/ws_missing", None, "ten_bindings", admin.clone()),
+            tenant_request(
+                "GET",
+                "/v1/workspaces/ws_missing",
+                None,
+                "ten_bindings",
+                admin.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "body: {json}");
@@ -800,8 +904,12 @@ mod tests {
         let state = test_state();
         {
             let store = state.store.lock();
-            store.ensure_default_agent_profile("ten_a").expect("profile a");
-            store.ensure_default_agent_profile("ten_b").expect("profile b");
+            store
+                .ensure_default_agent_profile("ten_a")
+                .expect("profile a");
+            store
+                .ensure_default_agent_profile("ten_b")
+                .expect("profile b");
         }
         let app = crate::routes::router(state.clone());
         let admin_a = vec![Permission::BindingsInspect, Permission::BindingsManage];
@@ -813,12 +921,21 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        let ws_id = json["workspaces"][0]["workspaceId"].as_str().expect("id").to_string();
+        let ws_id = json["workspaces"][0]["workspaceId"]
+            .as_str()
+            .expect("id")
+            .to_string();
 
         // ten_b cannot read ten_a workspace.
         let (status, _) = send(
             &app,
-            tenant_request("GET", &format!("/v1/workspaces/{ws_id}"), None, "ten_b", admin_b.clone()),
+            tenant_request(
+                "GET",
+                &format!("/v1/workspaces/{ws_id}"),
+                None,
+                "ten_b",
+                admin_b.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);

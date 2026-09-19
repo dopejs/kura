@@ -369,15 +369,23 @@ pub fn shell_escape(value: &str) -> String {
 /// Go `SummarizeOutput`: JSON-serializes a value and truncates to 160 chars.
 #[must_use]
 pub fn summarize_output(value: Option<&serde_json::Value>) -> String {
-    let Some(value) = value else { return String::new(); };
+    let Some(value) = value else {
+        return String::new();
+    };
     let text = serde_json::to_string(value).unwrap_or_else(|_| format!("{value:?}"));
     text.chars().take(160).collect()
 }
 
 /// Go `WorkflowStepByID`.
 #[must_use]
-pub fn workflow_step_by_id<'a>(workflow: &'a Workflow, workflow_step_id: &str) -> Option<&'a WorkflowStep> {
-    workflow.steps.iter().find(|step| step.workflow_step_id == workflow_step_id)
+pub fn workflow_step_by_id<'a>(
+    workflow: &'a Workflow,
+    workflow_step_id: &str,
+) -> Option<&'a WorkflowStep> {
+    workflow
+        .steps
+        .iter()
+        .find(|step| step.workflow_step_id == workflow_step_id)
 }
 
 /// Go `DependenciesMissing`: dependency ids whose upstream step has not yet
@@ -511,14 +519,20 @@ pub fn start_step_attempt(
     runtime_step_id: &str,
     now: DateTime<Utc>,
 ) -> Workflow {
-    if let Some(step) = workflow.steps.iter_mut().find(|step| step.workflow_step_id == workflow_step_id) {
+    if let Some(step) = workflow
+        .steps
+        .iter_mut()
+        .find(|step| step.workflow_step_id == workflow_step_id)
+    {
         step.runtime_step_id = runtime_step_id.to_string();
         step.attempt_count += 1;
         step.status = StepStatus::Running;
         step.updated_at = now;
     }
     for handoff in &mut workflow.handoffs {
-        if handoff.to_workflow_step_id == workflow_step_id && handoff.status == HandoffStatus::Available {
+        if handoff.to_workflow_step_id == workflow_step_id
+            && handoff.status == HandoffStatus::Available
+        {
             handoff.status = HandoffStatus::Consumed;
             handoff.consumed_at = Some(now);
         }
@@ -536,7 +550,11 @@ pub fn bind_tool_call(
     tool_call: &kura_runtime::ToolCall,
     now: DateTime<Utc>,
 ) -> Workflow {
-    if let Some(step) = workflow.steps.iter_mut().find(|step| step.workflow_step_id == workflow_step_id) {
+    if let Some(step) = workflow
+        .steps
+        .iter_mut()
+        .find(|step| step.workflow_step_id == workflow_step_id)
+    {
         step.active_tool_call_id = tool_call.tool_call_id.clone();
         step.runtime_step_id = tool_call.step_id.clone();
         step.integration_bindings = tool_call.integration_bindings.clone();
@@ -559,7 +577,11 @@ pub fn apply_tool_call_result(
     blocked_reason: &str,
     now: DateTime<Utc>,
 ) -> Workflow {
-    if let Some(step) = workflow.steps.iter_mut().find(|step| step.workflow_step_id == tool_call.workflow_step_id) {
+    if let Some(step) = workflow
+        .steps
+        .iter_mut()
+        .find(|step| step.workflow_step_id == tool_call.workflow_step_id)
+    {
         step.active_tool_call_id = tool_call.tool_call_id.clone();
         step.runtime_step_id = tool_call.step_id.clone();
         step.integration_bindings = tool_call.integration_bindings.clone();
@@ -587,7 +609,9 @@ pub fn apply_tool_call_result(
             }
             kura_runtime::ToolCallStatus::Failed => {
                 step.last_failure_class = tool_call.failure_class.clone();
-                if tool_call.failure_class == "approval_rejected" || tool_call.failure_class.contains("approval") {
+                if tool_call.failure_class == "approval_rejected"
+                    || tool_call.failure_class.contains("approval")
+                {
                     step.status = StepStatus::Blocked;
                     step.blocked_reason =
                         first_non_empty(&[blocked_reason, BlockedReason::ApprovalDenied.as_str()]);
@@ -649,7 +673,9 @@ pub fn reconcile_status(mut workflow: Workflow, now: DateTime<Utc>) -> Workflow 
             }
         }
     }
-    if workflow.status != WorkflowStatus::Cancelled && workflow.status != WorkflowStatus::Interrupted {
+    if workflow.status != WorkflowStatus::Cancelled
+        && workflow.status != WorkflowStatus::Interrupted
+    {
         if has_running {
             workflow.status = WorkflowStatus::Running;
         } else if has_blocked {
@@ -684,7 +710,11 @@ pub fn apply_computer_use_projection(
     artifacts: &[kura_computeruse::Artifact],
     now: DateTime<Utc>,
 ) -> Workflow {
-    if let Some(step) = workflow.steps.iter_mut().find(|step| step.workflow_step_id == workflow_step_id) {
+    if let Some(step) = workflow
+        .steps
+        .iter_mut()
+        .find(|step| step.workflow_step_id == workflow_step_id)
+    {
         step.computer_use_session_id = session_id.trim().to_string();
         step.computer_use_action_ids = actions.to_vec();
         step.computer_use_artifacts = artifacts.to_vec();
@@ -728,7 +758,8 @@ pub fn plan_workflow(
 
     if let Some(calendar_action) = &input.calendar_action {
         let calendar_step = pick_calendar_workflow_step(calendar_action, now);
-        workflow.plan_summary = "Plan one calendar domain step on the normal workflow runtime.".to_string();
+        workflow.plan_summary =
+            "Plan one calendar domain step on the normal workflow runtime.".to_string();
         workflow.steps = vec![calendar_step];
         workflow.status = WorkflowStatus::Planned;
         for (idx, step) in workflow.steps.iter_mut().enumerate() {
@@ -743,7 +774,8 @@ pub fn plan_workflow(
     }
     if let Some(mail_action) = &input.mail_action {
         let mail_step = pick_mail_workflow_step(mail_action, now);
-        workflow.plan_summary = "Plan one mail domain step on the normal workflow runtime.".to_string();
+        workflow.plan_summary =
+            "Plan one mail domain step on the normal workflow runtime.".to_string();
         workflow.steps = vec![mail_step];
         workflow.status = WorkflowStatus::Planned;
         for (idx, step) in workflow.steps.iter_mut().enumerate() {
@@ -759,11 +791,15 @@ pub fn plan_workflow(
 
     let (mcp_step, has_mcp) = pick_mcp_workflow_step(&workflow.goal, mcp_source, now);
     let (skill_step, has_skill) = pick_skill_workflow_step(&workflow.goal, skill_source, now);
-    let (computer_use_step, has_computer_use) = pick_computer_use_workflow_step(&workflow.goal, now);
-    let (local_step, has_local) = pick_local_workflow_step(cfg, &workflow.goal, capability_supervisor, now);
+    let (computer_use_step, has_computer_use) =
+        pick_computer_use_workflow_step(&workflow.goal, now);
+    let (local_step, has_local) =
+        pick_local_workflow_step(cfg, &workflow.goal, capability_supervisor, now);
 
     if has_computer_use && has_skill {
-        workflow.plan_summary = "Plan one browser-first computer-use step followed by one executable skill handoff.".to_string();
+        workflow.plan_summary =
+            "Plan one browser-first computer-use step followed by one executable skill handoff."
+                .to_string();
         workflow.steps = vec![computer_use_step.clone(), skill_step.clone()];
         workflow.dependencies = vec![Dependency {
             dependency_id: new_workflow_dependency_id(),
@@ -784,7 +820,8 @@ pub fn plan_workflow(
             ..Handoff::default()
         }];
     } else if has_mcp && has_skill {
-        workflow.plan_summary = "Plan one MCP step followed by one executable skill handoff.".to_string();
+        workflow.plan_summary =
+            "Plan one MCP step followed by one executable skill handoff.".to_string();
         workflow.steps = vec![mcp_step.clone(), skill_step.clone()];
         workflow.dependencies = vec![Dependency {
             dependency_id: new_workflow_dependency_id(),
@@ -818,7 +855,9 @@ pub fn plan_workflow(
         workflow.steps = vec![local_step.clone()];
     } else {
         workflow.status = WorkflowStatus::PlanningFailed;
-        workflow.failure_summary = "No executable workflow consumers are available for the current daemon state.".to_string();
+        workflow.failure_summary =
+            "No executable workflow consumers are available for the current daemon state."
+                .to_string();
         return workflow;
     }
 
@@ -861,7 +900,9 @@ fn pick_mcp_workflow_step(
     mcp_source: Option<&dyn MCPPlanningSource>,
     now: DateTime<Utc>,
 ) -> (WorkflowStep, bool) {
-    let Some(mcp_source) = mcp_source else { return (WorkflowStep::default(), false); };
+    let Some(mcp_source) = mcp_source else {
+        return (WorkflowStep::default(), false);
+    };
     for server in mcp_source.list_servers() {
         let mut tools = server.tools.clone();
         if tools.is_empty() {
@@ -902,7 +943,9 @@ fn pick_skill_workflow_step(
     skill_source: Option<&dyn SkillPlanningSource>,
     now: DateTime<Utc>,
 ) -> (WorkflowStep, bool) {
-    let Some(skill_source) = skill_source else { return (WorkflowStep::default(), false); };
+    let Some(skill_source) = skill_source else {
+        return (WorkflowStep::default(), false);
+    };
     for skill in skill_source.list_skills() {
         if !skill.executable || !skill.available {
             continue;
@@ -938,7 +981,10 @@ fn pick_computer_use_workflow_step(goal: &str, now: DateTime<Utc>) -> (WorkflowS
     if normalized.is_empty() {
         return (WorkflowStep::default(), false);
     }
-    if !normalized.contains("browser") && !normalized.contains("computer-use") && !normalized.contains("computer use") {
+    if !normalized.contains("browser")
+        && !normalized.contains("computer-use")
+        && !normalized.contains("computer use")
+    {
         return (WorkflowStep::default(), false);
     }
     (
@@ -979,7 +1025,11 @@ fn pick_calendar_workflow_step(action: &kura_calendar::Action, now: DateTime<Utc
     };
     let consumer_id = {
         let trimmed = action.integration_id.trim().to_string();
-        if trimmed.is_empty() { "calendar".to_string() } else { trimmed }
+        if trimmed.is_empty() {
+            "calendar".to_string()
+        } else {
+            trimmed
+        }
     };
     WorkflowStep {
         workflow_step_id: new_workflow_step_id(),
@@ -1014,7 +1064,11 @@ fn pick_mail_workflow_step(action: &kura_mail::Action, now: DateTime<Utc>) -> Wo
     };
     let consumer_id = {
         let trimmed = action.integration_id.trim().to_string();
-        if trimmed.is_empty() { "mail".to_string() } else { trimmed }
+        if trimmed.is_empty() {
+            "mail".to_string()
+        } else {
+            trimmed
+        }
     };
     WorkflowStep {
         workflow_step_id: new_workflow_step_id(),
@@ -1038,7 +1092,9 @@ fn pick_local_workflow_step(
     capability_supervisor: Option<&kura_capabilities::Supervisor>,
     now: DateTime<Utc>,
 ) -> (WorkflowStep, bool) {
-    let Some(supervisor) = capability_supervisor else { return (WorkflowStep::default(), false); };
+    let Some(supervisor) = capability_supervisor else {
+        return (WorkflowStep::default(), false);
+    };
     for capability in supervisor.list() {
         if capability.status == kura_capabilities::Status::Failed {
             continue;
@@ -1116,12 +1172,18 @@ impl Default for Manager {
 impl Manager {
     #[must_use]
     pub fn new() -> Self {
-        Manager { inner: parking_lot::RwLock::new(ManagerInner::default()) }
+        Manager {
+            inner: parking_lot::RwLock::new(ManagerInner::default()),
+        }
     }
 
     /// Creates a skeleton workflow in Planning status for the run. The
     /// calendar/mail action inputs are consumed by `plan` instead.
-    pub fn create_workflow(&self, run_id: &str, input: CreateWorkflowInput) -> Result<Workflow, OrchestrationError> {
+    pub fn create_workflow(
+        &self,
+        run_id: &str,
+        input: CreateWorkflowInput,
+    ) -> Result<Workflow, OrchestrationError> {
         let now = Utc::now();
         let workflow = Workflow {
             workflow_id: new_workflow_id(),
@@ -1133,7 +1195,9 @@ impl Manager {
             ..Workflow::default()
         };
         let mut inner = self.inner.write();
-        inner.by_id.insert(workflow.workflow_id.clone(), workflow.clone());
+        inner
+            .by_id
+            .insert(workflow.workflow_id.clone(), workflow.clone());
         inner.workflow_ids.push(workflow.workflow_id.clone());
         Ok(workflow)
     }
@@ -1148,9 +1212,18 @@ impl Manager {
         skill_source: Option<&dyn SkillPlanningSource>,
         mcp_source: Option<&dyn MCPPlanningSource>,
     ) -> Workflow {
-        let workflow = plan_workflow(cfg, run, input, capability_supervisor, skill_source, mcp_source);
+        let workflow = plan_workflow(
+            cfg,
+            run,
+            input,
+            capability_supervisor,
+            skill_source,
+            mcp_source,
+        );
         let mut inner = self.inner.write();
-        inner.by_id.insert(workflow.workflow_id.clone(), workflow.clone());
+        inner
+            .by_id
+            .insert(workflow.workflow_id.clone(), workflow.clone());
         inner.workflow_ids.push(workflow.workflow_id.clone());
         workflow
     }
@@ -1159,7 +1232,12 @@ impl Manager {
     #[must_use]
     pub fn list_workflows(&self) -> Vec<Workflow> {
         let inner = self.inner.read();
-        inner.workflow_ids.iter().filter_map(|id| inner.by_id.get(id)).cloned().collect()
+        inner
+            .workflow_ids
+            .iter()
+            .filter_map(|id| inner.by_id.get(id))
+            .cloned()
+            .collect()
     }
 
     /// Returns a workflow by id.
@@ -1169,7 +1247,11 @@ impl Manager {
     }
 
     /// Appends a planned step to the workflow, assigning position and ids.
-    pub fn add_step(&self, workflow_id: &str, input: AddWorkflowStepInput) -> Result<WorkflowStep, OrchestrationError> {
+    pub fn add_step(
+        &self,
+        workflow_id: &str,
+        input: AddWorkflowStepInput,
+    ) -> Result<WorkflowStep, OrchestrationError> {
         if input.title.trim().is_empty() {
             return Err(OrchestrationError::TitleRequired);
         }
@@ -1180,9 +1262,16 @@ impl Manager {
             return Err(OrchestrationError::ConsumerIDRequired);
         }
         let mut inner = self.inner.write();
-        let workflow = inner.by_id.get_mut(workflow_id).ok_or(OrchestrationError::WorkflowNotFound)?;
+        let workflow = inner
+            .by_id
+            .get_mut(workflow_id)
+            .ok_or(OrchestrationError::WorkflowNotFound)?;
         let now = Utc::now();
-        let position = if input.position > 0 { input.position } else { (workflow.steps.len() + 1) as i64 };
+        let position = if input.position > 0 {
+            input.position
+        } else {
+            (workflow.steps.len() + 1) as i64
+        };
         let step = WorkflowStep {
             workflow_step_id: new_workflow_step_id(),
             workflow_id: workflow_id.to_string(),
@@ -1195,7 +1284,11 @@ impl Manager {
             status: StepStatus::Planned,
             approval_mode_expected: input.approval_mode_expected,
             attempt_count: 0,
-            max_attempts: if input.max_attempts > 0 { input.max_attempts } else { 1 },
+            max_attempts: if input.max_attempts > 0 {
+                input.max_attempts
+            } else {
+                1
+            },
             created_at: now,
             updated_at: now,
             ..WorkflowStep::default()
@@ -1207,10 +1300,19 @@ impl Manager {
 
     /// Appends a dependency and wires its id into the target step's
     /// `dependency_ids`.
-    pub fn add_dependency(&self, workflow_id: &str, input: AddDependencyInput) -> Result<Dependency, OrchestrationError> {
+    pub fn add_dependency(
+        &self,
+        workflow_id: &str,
+        input: AddDependencyInput,
+    ) -> Result<Dependency, OrchestrationError> {
         let mut inner = self.inner.write();
-        let workflow = inner.by_id.get_mut(workflow_id).ok_or(OrchestrationError::WorkflowNotFound)?;
-        if input.from_workflow_step_id.trim().is_empty() || input.to_workflow_step_id.trim().is_empty() {
+        let workflow = inner
+            .by_id
+            .get_mut(workflow_id)
+            .ok_or(OrchestrationError::WorkflowNotFound)?;
+        if input.from_workflow_step_id.trim().is_empty()
+            || input.to_workflow_step_id.trim().is_empty()
+        {
             return Err(OrchestrationError::StepIDRequired);
         }
         if workflow_step_by_id(workflow, &input.from_workflow_step_id).is_none()
@@ -1226,7 +1328,11 @@ impl Manager {
             dependency_type: input.dependency_type,
             reason: input.reason,
         };
-        if let Some(step) = workflow.steps.iter_mut().find(|step| step.workflow_step_id == dependency.to_workflow_step_id) {
+        if let Some(step) = workflow
+            .steps
+            .iter_mut()
+            .find(|step| step.workflow_step_id == dependency.to_workflow_step_id)
+        {
             step.dependency_ids.push(dependency.dependency_id.clone());
         }
         workflow.dependencies.push(dependency.clone());
@@ -1235,12 +1341,21 @@ impl Manager {
     }
 
     /// Appends a pending handoff between two steps.
-    pub fn add_handoff(&self, workflow_id: &str, input: AddHandoffInput) -> Result<Handoff, OrchestrationError> {
-        if input.from_workflow_step_id.trim().is_empty() || input.to_workflow_step_id.trim().is_empty() {
+    pub fn add_handoff(
+        &self,
+        workflow_id: &str,
+        input: AddHandoffInput,
+    ) -> Result<Handoff, OrchestrationError> {
+        if input.from_workflow_step_id.trim().is_empty()
+            || input.to_workflow_step_id.trim().is_empty()
+        {
             return Err(OrchestrationError::StepIDRequired);
         }
         let mut inner = self.inner.write();
-        let workflow = inner.by_id.get_mut(workflow_id).ok_or(OrchestrationError::WorkflowNotFound)?;
+        let workflow = inner
+            .by_id
+            .get_mut(workflow_id)
+            .ok_or(OrchestrationError::WorkflowNotFound)?;
         if workflow_step_by_id(workflow, &input.from_workflow_step_id).is_none()
             || workflow_step_by_id(workflow, &input.to_workflow_step_id).is_none()
         {
@@ -1262,18 +1377,34 @@ impl Manager {
     }
 
     /// Go `InitializeExecution` applied to the stored workflow.
-    pub fn initialize_execution(&self, workflow_id: &str, now: DateTime<Utc>) -> Result<Workflow, OrchestrationError> {
+    pub fn initialize_execution(
+        &self,
+        workflow_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Workflow, OrchestrationError> {
         let mut inner = self.inner.write();
-        let workflow = inner.by_id.get(workflow_id).cloned().ok_or(OrchestrationError::WorkflowNotFound)?;
+        let workflow = inner
+            .by_id
+            .get(workflow_id)
+            .cloned()
+            .ok_or(OrchestrationError::WorkflowNotFound)?;
         let updated = initialize_execution(workflow, now);
         inner.by_id.insert(workflow_id.to_string(), updated.clone());
         Ok(updated)
     }
 
     /// Go `AdvanceReadySteps` applied to the stored workflow.
-    pub fn advance_ready_steps(&self, workflow_id: &str, now: DateTime<Utc>) -> Result<(Workflow, bool), OrchestrationError> {
+    pub fn advance_ready_steps(
+        &self,
+        workflow_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(Workflow, bool), OrchestrationError> {
         let mut inner = self.inner.write();
-        let workflow = inner.by_id.get(workflow_id).cloned().ok_or(OrchestrationError::WorkflowNotFound)?;
+        let workflow = inner
+            .by_id
+            .get(workflow_id)
+            .cloned()
+            .ok_or(OrchestrationError::WorkflowNotFound)?;
         let (updated, changed) = advance_ready_steps(workflow, now);
         inner.by_id.insert(workflow_id.to_string(), updated.clone());
         Ok((updated, changed))
@@ -1288,7 +1419,11 @@ impl Manager {
         now: DateTime<Utc>,
     ) -> Result<Workflow, OrchestrationError> {
         let mut inner = self.inner.write();
-        let workflow = inner.by_id.get(workflow_id).cloned().ok_or(OrchestrationError::WorkflowNotFound)?;
+        let workflow = inner
+            .by_id
+            .get(workflow_id)
+            .cloned()
+            .ok_or(OrchestrationError::WorkflowNotFound)?;
         let updated = start_step_attempt(workflow, workflow_step_id, runtime_step_id, now);
         inner.by_id.insert(workflow_id.to_string(), updated.clone());
         Ok(updated)
@@ -1303,7 +1438,11 @@ impl Manager {
         now: DateTime<Utc>,
     ) -> Result<Workflow, OrchestrationError> {
         let mut inner = self.inner.write();
-        let workflow = inner.by_id.get(workflow_id).cloned().ok_or(OrchestrationError::WorkflowNotFound)?;
+        let workflow = inner
+            .by_id
+            .get(workflow_id)
+            .cloned()
+            .ok_or(OrchestrationError::WorkflowNotFound)?;
         let updated = bind_tool_call(workflow, workflow_step_id, tool_call, now);
         inner.by_id.insert(workflow_id.to_string(), updated.clone());
         Ok(updated)
@@ -1319,16 +1458,29 @@ impl Manager {
         now: DateTime<Utc>,
     ) -> Result<Workflow, OrchestrationError> {
         let mut inner = self.inner.write();
-        let workflow = inner.by_id.get(workflow_id).cloned().ok_or(OrchestrationError::WorkflowNotFound)?;
-        let updated = apply_tool_call_result(workflow, tool_call, hinted_status, blocked_reason, now);
+        let workflow = inner
+            .by_id
+            .get(workflow_id)
+            .cloned()
+            .ok_or(OrchestrationError::WorkflowNotFound)?;
+        let updated =
+            apply_tool_call_result(workflow, tool_call, hinted_status, blocked_reason, now);
         inner.by_id.insert(workflow_id.to_string(), updated.clone());
         Ok(updated)
     }
 
     /// Go `ReconcileStatus` applied to the stored workflow.
-    pub fn reconcile_status(&self, workflow_id: &str, now: DateTime<Utc>) -> Result<Workflow, OrchestrationError> {
+    pub fn reconcile_status(
+        &self,
+        workflow_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Workflow, OrchestrationError> {
         let mut inner = self.inner.write();
-        let workflow = inner.by_id.get(workflow_id).cloned().ok_or(OrchestrationError::WorkflowNotFound)?;
+        let workflow = inner
+            .by_id
+            .get(workflow_id)
+            .cloned()
+            .ok_or(OrchestrationError::WorkflowNotFound)?;
         let updated = reconcile_status(workflow, now);
         inner.by_id.insert(workflow_id.to_string(), updated.clone());
         Ok(updated)
@@ -1345,8 +1497,19 @@ impl Manager {
         now: DateTime<Utc>,
     ) -> Result<Workflow, OrchestrationError> {
         let mut inner = self.inner.write();
-        let workflow = inner.by_id.get(workflow_id).cloned().ok_or(OrchestrationError::WorkflowNotFound)?;
-        let updated = apply_computer_use_projection(workflow, workflow_step_id, session_id, actions, artifacts, now);
+        let workflow = inner
+            .by_id
+            .get(workflow_id)
+            .cloned()
+            .ok_or(OrchestrationError::WorkflowNotFound)?;
+        let updated = apply_computer_use_projection(
+            workflow,
+            workflow_step_id,
+            session_id,
+            actions,
+            artifacts,
+            now,
+        );
         inner.by_id.insert(workflow_id.to_string(), updated.clone());
         Ok(updated)
     }

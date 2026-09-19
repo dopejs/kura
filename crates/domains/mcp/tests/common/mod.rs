@@ -17,6 +17,7 @@ pub fn fake_mcp_server_bin() -> &'static str {
 }
 
 /// Builds the fake RPC response for one request (shared by all three servers).
+#[allow(dead_code)]
 pub fn fake_response(request: &RpcRequest) -> RpcResponse {
     let id = request.id.clone();
     match request.method.as_str() {
@@ -175,14 +176,9 @@ pub fn spawn_mcp_ws_server() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind ws server");
     let addr = listener.local_addr().expect("ws server addr");
     std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else {
-                break;
-            };
-            if handle_ws_connection(&mut stream).is_err() {
-                break;
-            }
-            break;
+        // Exactly one connection: accept it and serve it, nothing more.
+        if let Some(Ok(mut stream)) = listener.incoming().next() {
+            let _ = handle_ws_connection(&mut stream);
         }
     });
     addr
@@ -310,8 +306,7 @@ fn ws_accept_key(key: &str) -> String {
 }
 
 fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for chunk in input.chunks(3) {
         let b0 = chunk[0] as u32;

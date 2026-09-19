@@ -87,6 +87,10 @@ pub struct QueryResult {
     pub continuity_applied: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuity_status: Option<ContinuityStatus>,
+    /// Stage 9.0: every tool call the turn made, in order. Empty when the
+    /// model answered without tools.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_trace: Vec<crate::tools::ToolTraceEntry>,
     #[serde(default)]
     pub continuity_included_count: i64,
     #[serde(default)]
@@ -178,6 +182,11 @@ pub struct Service {
     /// The plugin hook bus (pluginization phase 2). Absent = no hook points
     /// run and the pipeline behaves exactly as before.
     pub(crate) hooks: Option<Arc<kura_plugin::HookBus>>,
+    /// Stage 9.0: the tool seam. Absent = the model is offered no tools and
+    /// the turn is exactly one dispatch, as before.
+    pub(crate) tool_host: Option<Arc<dyn crate::tools::ToolHost>>,
+    /// Bound on tool rounds per turn (see `DEFAULT_MAX_TOOL_ROUNDS`).
+    pub(crate) max_tool_rounds: usize,
 }
 
 impl Service {
@@ -199,7 +208,21 @@ impl Service {
             event_bus,
             store,
             hooks: None,
+            tool_host: None,
+            max_tool_rounds: crate::tools::DEFAULT_MAX_TOOL_ROUNDS,
         }
+    }
+
+    /// Attaches the tool host (Stage 9.0). `max_rounds` bounds tool rounds
+    /// per turn; `0` falls back to the default rather than meaning
+    /// "unbounded".
+    pub fn set_tool_host(&mut self, host: Arc<dyn crate::tools::ToolHost>, max_rounds: usize) {
+        self.tool_host = Some(host);
+        self.max_tool_rounds = if max_rounds == 0 {
+            crate::tools::DEFAULT_MAX_TOOL_ROUNDS
+        } else {
+            max_rounds
+        };
     }
 
     /// Attaches the plugin hook bus; the `chat/turn-start`,

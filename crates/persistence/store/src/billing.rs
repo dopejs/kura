@@ -18,10 +18,10 @@
 //! document_json snapshot, and reads decode only the explicit columns.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
-use crate::crud::{now_rfc3339, null_string, opt_time_string, parse_opt_rfc3339, parse_rfc3339};
 use crate::SQLiteStore;
+use crate::crud::{now_rfc3339, null_string, opt_time_string, parse_opt_rfc3339, parse_rfc3339};
 
 /// Result alias for the billing repository trait surface (kura_billing does not
 /// re-export its error Result alias).
@@ -274,7 +274,10 @@ const MANUAL_ADJUSTMENT_COLUMNS: &str = "adjustment_id, tenant_id, category, quo
 const ABUSE_RESTRICTION_COLUMNS: &str = "restriction_id, tenant_id, status, affected_category, recovery_action, visible_reason_code, source_audit_ref, support_contact_allowed, started_at, expires_at, document_json";
 
 impl SQLiteStore {
-    pub fn billing_active_plan(&self, tenant_id: &str) -> Result<Option<kura_billing::TenantPlan>, String> {
+    pub fn billing_active_plan(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Option<kura_billing::TenantPlan>, String> {
         let at = Utc::now();
         let mut stmt = self
             .conn
@@ -307,7 +310,8 @@ impl SQLiteStore {
             plan.status = kura_billing::PlanStatus::from(kura_billing::PlanStatus::ACTIVE);
         }
         if plan.enforcement_mode.is_empty() {
-            plan.enforcement_mode = kura_billing::EnforcementMode::from(kura_billing::EnforcementMode::ENFORCED);
+            plan.enforcement_mode =
+                kura_billing::EnforcementMode::from(kura_billing::EnforcementMode::ENFORCED);
         }
         if is_go_zero_time(&plan.effective_at) {
             plan.effective_at = Utc::now();
@@ -361,7 +365,8 @@ impl SQLiteStore {
             ],
         )
         .map_err(|e| format!("save billing tenant plan: {e}"))?;
-        tx.commit().map_err(|e| format!("commit billing plan save: {e}"))
+        tx.commit()
+            .map_err(|e| format!("commit billing plan save: {e}"))
     }
 
     pub fn billing_quota_override(
@@ -395,7 +400,10 @@ impl SQLiteStore {
         scan_quota_override(row).map(Some)
     }
 
-    pub fn billing_save_quota_override(&self, mut override_: kura_billing::QuotaOverride) -> Result<(), String> {
+    pub fn billing_save_quota_override(
+        &self,
+        mut override_: kura_billing::QuotaOverride,
+    ) -> Result<(), String> {
         if override_.quota_override_id.is_empty() {
             override_.quota_override_id = new_billing_id("quota_override");
         }
@@ -502,7 +510,11 @@ impl SQLiteStore {
             ))
             .map_err(|e| format!("billing usage counter: {e}"))?;
         let mut rows = stmt
-            .query(params![tenant_id.trim(), category.as_str(), quota_period_id.trim()])
+            .query(params![
+                tenant_id.trim(),
+                category.as_str(),
+                quota_period_id.trim()
+            ])
             .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
@@ -538,20 +550,24 @@ impl SQLiteStore {
             return Ok(None);
         };
         let period = scan_quota_period(row)?;
-        let counter = match self.billing_usage_counter(tenant_id, category, &period.quota_period_id)? {
-            Some(counter) => counter,
-            None => kura_billing::UsageCounter {
-                tenant_id: tenant_id.trim().to_string(),
-                category: category.clone(),
-                quota_period_id: period.quota_period_id.clone(),
-                updated_at: *before,
-                ..Default::default()
-            },
-        };
+        let counter =
+            match self.billing_usage_counter(tenant_id, category, &period.quota_period_id)? {
+                Some(counter) => counter,
+                None => kura_billing::UsageCounter {
+                    tenant_id: tenant_id.trim().to_string(),
+                    category: category.clone(),
+                    quota_period_id: period.quota_period_id.clone(),
+                    updated_at: *before,
+                    ..Default::default()
+                },
+            };
         Ok(Some((period, counter)))
     }
 
-    pub fn billing_save_usage_counter(&self, mut counter: kura_billing::UsageCounter) -> Result<(), String> {
+    pub fn billing_save_usage_counter(
+        &self,
+        mut counter: kura_billing::UsageCounter,
+    ) -> Result<(), String> {
         if counter.usage_counter_id.is_empty() {
             counter.usage_counter_id = new_billing_id("usage_counter");
         }
@@ -601,7 +617,11 @@ impl SQLiteStore {
             ))
             .map_err(|e| format!("billing reservation by operation: {e}"))?;
         let mut rows = stmt
-            .query(params![tenant_id.trim(), category.as_str(), operation_key.trim()])
+            .query(params![
+                tenant_id.trim(),
+                category.as_str(),
+                operation_key.trim()
+            ])
             .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
@@ -631,7 +651,10 @@ impl SQLiteStore {
         scan_usage_reservation(row).map(Some)
     }
 
-    pub fn billing_save_reservation(&self, mut reservation: kura_billing::UsageReservation) -> Result<(), String> {
+    pub fn billing_save_reservation(
+        &self,
+        mut reservation: kura_billing::UsageReservation,
+    ) -> Result<(), String> {
         if reservation.reservation_id.is_empty() {
             reservation.reservation_id = new_billing_id("reservation");
         }
@@ -684,7 +707,10 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn billing_append_usage_event(&self, mut event: kura_billing::UsageEvent) -> Result<(), String> {
+    pub fn billing_append_usage_event(
+        &self,
+        mut event: kura_billing::UsageEvent,
+    ) -> Result<(), String> {
         if event.usage_event_id.is_empty() {
             event.usage_event_id = new_billing_id("usage_event");
         }
@@ -746,7 +772,10 @@ impl SQLiteStore {
         Ok(refs)
     }
 
-    pub fn billing_append_quota_denial(&self, mut denial: kura_billing::QuotaDenial) -> Result<(), String> {
+    pub fn billing_append_quota_denial(
+        &self,
+        mut denial: kura_billing::QuotaDenial,
+    ) -> Result<(), String> {
         if denial.denial_id.is_empty() {
             denial.denial_id = new_billing_id("denial");
         }
@@ -776,7 +805,10 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn billing_save_manual_adjustment(&self, mut adjustment: kura_billing::ManualAdjustment) -> Result<(), String> {
+    pub fn billing_save_manual_adjustment(
+        &self,
+        mut adjustment: kura_billing::ManualAdjustment,
+    ) -> Result<(), String> {
         if adjustment.adjustment_id.is_empty() {
             adjustment.adjustment_id = new_billing_id("manual_adjustment");
         }
@@ -812,7 +844,9 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn billing_list_pending_reservations(&self) -> Result<Vec<kura_billing::UsageReservation>, String> {
+    pub fn billing_list_pending_reservations(
+        &self,
+    ) -> Result<Vec<kura_billing::UsageReservation>, String> {
         let mut stmt = self
             .conn
             .prepare(&format!(
@@ -881,15 +915,21 @@ impl SQLiteStore {
         scan_quota_denial(row).map(Some)
     }
 
-    pub fn billing_save_abuse_restriction(&self, mut record: kura_billing::AbuseRestrictionRecord) -> Result<(), String> {
+    pub fn billing_save_abuse_restriction(
+        &self,
+        mut record: kura_billing::AbuseRestrictionRecord,
+    ) -> Result<(), String> {
         if record.restriction_id.is_empty() {
             record.restriction_id = new_billing_id("abuse_restriction");
         }
         if record.status.is_empty() {
-            record.status = kura_billing::AbuseRestrictionStatus::from(kura_billing::AbuseRestrictionStatus::ACTIVE);
+            record.status = kura_billing::AbuseRestrictionStatus::from(
+                kura_billing::AbuseRestrictionStatus::ACTIVE,
+            );
         }
         if record.recovery_action.is_empty() {
-            record.recovery_action = kura_billing::RecoveryAction::from(kura_billing::RecoveryAction::CONTACT_SUPPORT);
+            record.recovery_action =
+                kura_billing::RecoveryAction::from(kura_billing::RecoveryAction::CONTACT_SUPPORT);
         }
         if is_go_zero_time(&record.started_at) {
             record.started_at = Utc::now();
@@ -1150,7 +1190,10 @@ impl kura_billing::Repository for BillingRepositoryHandle {
         })
     }
 
-    fn save_plan<'a>(&'a self, plan: kura_billing::TenantPlan) -> kura_billing::BoxFuture<'a, BillingResult<()>> {
+    fn save_plan<'a>(
+        &'a self,
+        plan: kura_billing::TenantPlan,
+    ) -> kura_billing::BoxFuture<'a, BillingResult<()>> {
         Box::pin(async move {
             self.0
                 .lock()
@@ -1231,7 +1274,10 @@ impl kura_billing::Repository for BillingRepositoryHandle {
         tenant_id: &str,
         category: &kura_billing::Category,
         before: DateTime<Utc>,
-    ) -> kura_billing::BoxFuture<'a, BillingResult<Option<(kura_billing::QuotaPeriod, kura_billing::UsageCounter)>>> {
+    ) -> kura_billing::BoxFuture<
+        'a,
+        BillingResult<Option<(kura_billing::QuotaPeriod, kura_billing::UsageCounter)>>,
+    > {
         let tenant_id = tenant_id.to_string();
         let category = category.clone();
         Box::pin(async move {

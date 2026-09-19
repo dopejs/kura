@@ -23,22 +23,48 @@ use crate::fixtures::{
 };
 use crate::runtime_recorder::{ReplayRecordInput, RuntimeRecorder};
 use crate::types::*;
-use crate::util::{append_reasons, first_non_empty, new_id, replay_mode_default, zero_time_default};
+use crate::util::{
+    append_reasons, first_non_empty, new_id, replay_mode_default, zero_time_default,
+};
 
 /// Go [Store] interface. Implementations map onto kura-store's evaluation
 /// DAO methods (see rs/store/src/evaluation.rs).
 pub trait Store: Send + Sync {
     fn upsert_replay_candidate(&self, item: ReplayCandidate) -> Result<(), EvaluationError>;
-    fn list_replay_candidates(&self, filter: &CandidateFilter) -> Result<Vec<ReplayCandidate>, EvaluationError>;
-    fn get_replay_candidate(&self, environment_scope: &str, candidate_id: &str) -> Result<Option<ReplayCandidate>, EvaluationError>;
+    fn list_replay_candidates(
+        &self,
+        filter: &CandidateFilter,
+    ) -> Result<Vec<ReplayCandidate>, EvaluationError>;
+    fn get_replay_candidate(
+        &self,
+        environment_scope: &str,
+        candidate_id: &str,
+    ) -> Result<Option<ReplayCandidate>, EvaluationError>;
     fn upsert_replay_attempt(&self, item: ReplayAttempt) -> Result<(), EvaluationError>;
-    fn list_replay_attempts(&self, filter: &AttemptFilter) -> Result<Vec<ReplayAttempt>, EvaluationError>;
-    fn get_replay_attempt(&self, environment_scope: &str, attempt_id: &str) -> Result<Option<ReplayAttempt>, EvaluationError>;
+    fn list_replay_attempts(
+        &self,
+        filter: &AttemptFilter,
+    ) -> Result<Vec<ReplayAttempt>, EvaluationError>;
+    fn get_replay_attempt(
+        &self,
+        environment_scope: &str,
+        attempt_id: &str,
+    ) -> Result<Option<ReplayAttempt>, EvaluationError>;
     fn upsert_comparison_result(&self, item: ComparisonResult) -> Result<(), EvaluationError>;
-    fn list_comparison_results(&self, filter: &ComparisonFilter) -> Result<Vec<ComparisonResult>, EvaluationError>;
-    fn get_comparison_result(&self, environment_scope: &str, comparison_id: &str) -> Result<Option<ComparisonResult>, EvaluationError>;
+    fn list_comparison_results(
+        &self,
+        filter: &ComparisonFilter,
+    ) -> Result<Vec<ComparisonResult>, EvaluationError>;
+    fn get_comparison_result(
+        &self,
+        environment_scope: &str,
+        comparison_id: &str,
+    ) -> Result<Option<ComparisonResult>, EvaluationError>;
     fn upsert_regression_fixture(&self, item: RegressionFixture) -> Result<(), EvaluationError>;
-    fn list_regression_fixtures(&self, filter: &FixtureFilter) -> Result<Vec<RegressionFixture>, EvaluationError>;
+    fn list_regression_fixtures(
+        &self,
+        filter: &FixtureFilter,
+    ) -> Result<Vec<RegressionFixture>, EvaluationError>;
 }
 
 /// Go [Dependencies].
@@ -81,7 +107,9 @@ impl Manager {
     }
 
     fn store(&self) -> Result<Arc<dyn Store>, EvaluationError> {
-        self.store.clone().ok_or(EvaluationError::StoreNotConfigured)
+        self.store
+            .clone()
+            .ok_or(EvaluationError::StoreNotConfigured)
     }
 
     fn clock_now(&self) -> DateTime<Utc> {
@@ -113,7 +141,8 @@ impl Manager {
         mut candidate: ReplayCandidate,
     ) -> Result<(), EvaluationError> {
         let now = self.clock_now();
-        candidate.environment_scope = first_non_empty(&[&candidate.environment_scope, &self.environment_scope]);
+        candidate.environment_scope =
+            first_non_empty(&[&candidate.environment_scope, &self.environment_scope]);
         candidate.default_replay_mode = replay_mode_default(Some(candidate.default_replay_mode));
         candidate.created_at = zero_time_default(candidate.created_at, now);
         candidate.updated_at = zero_time_default(candidate.updated_at, now);
@@ -138,14 +167,18 @@ impl Manager {
     ) -> Result<Vec<ReplayCandidate>, EvaluationError> {
         let store = self.store()?;
         let mut filter = filter.clone();
-        filter.environment_scope = first_non_empty(&[&filter.environment_scope, &self.environment_scope]);
+        filter.environment_scope =
+            first_non_empty(&[&filter.environment_scope, &self.environment_scope]);
         let mut items = store.list_replay_candidates(&filter)?;
         items.sort_by(|a, b| {
             a.created_at
                 .cmp(&b.created_at)
                 .then_with(|| a.candidate_id.cmp(&b.candidate_id))
         });
-        Ok(normalize_replay_candidates(limit_candidates(items, filter.limit)))
+        Ok(normalize_replay_candidates(limit_candidates(
+            items,
+            filter.limit,
+        )))
     }
 
     /// Go [GetReplayCandidate].
@@ -263,7 +296,9 @@ impl Manager {
                 attempt.blocked_reasons = vec![evidence_err.to_string()];
             }
         }
-        attempt.blocked_reasons.extend(evidence.blocked_reasons.clone());
+        attempt
+            .blocked_reasons
+            .extend(evidence.blocked_reasons.clone());
         attempt.blocked_reasons.extend(evidence.limitations.clone());
         if mode == ReplayMode::LiveValidation {
             attempt.status = ReplayAttemptStatus::Blocked;
@@ -303,7 +338,8 @@ impl Manager {
                     .await;
                 match record {
                     Ok(record) => {
-                        attempt.result_run_id = first_non_empty(&[&record.run_id, &attempt.result_run_id]);
+                        attempt.result_run_id =
+                            first_non_empty(&[&record.run_id, &attempt.result_run_id]);
                         attempt.result_workflow_id =
                             first_non_empty(&[&record.workflow_id, &attempt.result_workflow_id]);
                         attempt.evidence_refs.extend(record.evidence_refs);
@@ -311,7 +347,8 @@ impl Manager {
                     Err(err) => {
                         attempt.status = ReplayAttemptStatus::Failed;
                         attempt.completed_at = Some(self.clock_now());
-                        attempt.updated_at = attempt.completed_at.unwrap_or_else(|| self.clock_now());
+                        attempt.updated_at =
+                            attempt.completed_at.unwrap_or_else(|| self.clock_now());
                         attempt
                             .blocked_reasons
                             .push(format!("record replay runtime run: {err}"));
@@ -352,14 +389,18 @@ impl Manager {
     ) -> Result<Vec<ReplayAttempt>, EvaluationError> {
         let store = self.store()?;
         let mut filter = filter.clone();
-        filter.environment_scope = first_non_empty(&[&filter.environment_scope, &self.environment_scope]);
+        filter.environment_scope =
+            first_non_empty(&[&filter.environment_scope, &self.environment_scope]);
         let mut items = store.list_replay_attempts(&filter)?;
         items.sort_by(|a, b| {
             a.created_at
                 .cmp(&b.created_at)
                 .then_with(|| a.attempt_id.cmp(&b.attempt_id))
         });
-        Ok(normalize_replay_attempts(limit_attempts(items, filter.limit)))
+        Ok(normalize_replay_attempts(limit_attempts(
+            items,
+            filter.limit,
+        )))
     }
 
     /// Go [GetReplayAttempt].
@@ -443,14 +484,18 @@ impl Manager {
     ) -> Result<Vec<ComparisonResult>, EvaluationError> {
         let store = self.store()?;
         let mut filter = filter.clone();
-        filter.environment_scope = first_non_empty(&[&filter.environment_scope, &self.environment_scope]);
+        filter.environment_scope =
+            first_non_empty(&[&filter.environment_scope, &self.environment_scope]);
         let mut items = store.list_comparison_results(&filter)?;
         items.sort_by(|a, b| {
             a.generated_at
                 .cmp(&b.generated_at)
                 .then_with(|| a.comparison_id.cmp(&b.comparison_id))
         });
-        Ok(normalize_comparisons(limit_comparisons(items, filter.limit)))
+        Ok(normalize_comparisons(limit_comparisons(
+            items,
+            filter.limit,
+        )))
     }
 
     /// Go [GetComparison].
@@ -470,7 +515,8 @@ impl Manager {
     ) -> Result<Vec<RegressionFixture>, EvaluationError> {
         let store = self.store()?;
         let mut filter = filter.clone();
-        filter.environment_scope = first_non_empty(&[&filter.environment_scope, &self.environment_scope]);
+        filter.environment_scope =
+            first_non_empty(&[&filter.environment_scope, &self.environment_scope]);
         let mut items = store.list_regression_fixtures(&filter)?;
         items.sort_by(|a, b| {
             a.domain_class
@@ -493,15 +539,17 @@ async fn reserve_evaluation_attempt_quota(
     let Some(manager) = manager else {
         if hosted {
             let denial = new_quota_state_unavailable_denial(tenant_id, &operation_key);
-            return Err(EvaluationError::BillingReservation(BillingReservationError {
-                result: ReserveResult {
-                    allowed: false,
-                    denial: Some(denial),
-                    failure: Some(BillingError::QuotaStateUnavailable),
-                    ..Default::default()
+            return Err(EvaluationError::BillingReservation(
+                BillingReservationError {
+                    result: ReserveResult {
+                        allowed: false,
+                        denial: Some(denial),
+                        failure: Some(BillingError::QuotaStateUnavailable),
+                        ..Default::default()
+                    },
+                    error: BillingError::QuotaStateUnavailable,
                 },
-                error: BillingError::QuotaStateUnavailable,
-            }));
+            ));
         }
         return Ok(ReserveResult {
             allowed: true,
@@ -511,7 +559,9 @@ async fn reserve_evaluation_attempt_quota(
     let result = manager
         .reserve(ReserveInput {
             tenant_id: tenant_id.to_string(),
-            category: kura_billing::Category::from(kura_billing::Category::REPLAY_EVALUATION_ATTEMPTS),
+            category: kura_billing::Category::from(
+                kura_billing::Category::REPLAY_EVALUATION_ATTEMPTS,
+            ),
             amount: 1,
             operation_key,
             reservation_point: "replay/evaluation attempt creation before work starts".to_string(),
@@ -523,14 +573,18 @@ async fn reserve_evaluation_attempt_quota(
         .await;
     match result {
         Ok(result) if result.failure.is_none() => Ok(result),
-        Ok(result) => Err(EvaluationError::BillingReservation(BillingReservationError {
-            result: result.clone(),
-            error: result.failure.clone().unwrap_or(BillingError::QuotaDenied),
-        })),
-        Err(err) => Err(EvaluationError::BillingReservation(BillingReservationError {
-            result: ReserveResult::default(),
-            error: err,
-        })),
+        Ok(result) => Err(EvaluationError::BillingReservation(
+            BillingReservationError {
+                result: result.clone(),
+                error: result.failure.clone().unwrap_or(BillingError::QuotaDenied),
+            },
+        )),
+        Err(err) => Err(EvaluationError::BillingReservation(
+            BillingReservationError {
+                result: ReserveResult::default(),
+                error: err,
+            },
+        )),
     }
 }
 
@@ -540,7 +594,9 @@ async fn release_evaluation_attempt_reservation(
     reservation: &UsageReservation,
     reason: &str,
 ) {
-    let Some(manager) = manager else { return; };
+    let Some(manager) = manager else {
+        return;
+    };
     if reservation.reservation_id.trim().is_empty() {
         return;
     }
@@ -563,7 +619,9 @@ async fn commit_evaluation_attempt_reservation(
     reservation: &UsageReservation,
     reason: &str,
 ) -> Result<(), EvaluationError> {
-    let Some(manager) = manager else { return Ok(()); };
+    let Some(manager) = manager else {
+        return Ok(());
+    };
     if reservation.reservation_id.trim().is_empty() {
         return Ok(());
     }

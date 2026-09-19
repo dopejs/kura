@@ -3,7 +3,10 @@
 //! Minimal structured logger mirroring the Go package: a level-gated text
 //! writer (slog TextHandler compatible format) emitting to stdout.
 
+pub mod metrics;
+
 use std::io::Write;
+use std::sync::OnceLock;
 
 use chrono::{SecondsFormat, Utc};
 use parking_lot::Mutex;
@@ -108,7 +111,11 @@ impl Logger {
 /// `time=<rfc3339-ms> level=<LEVEL> msg=<value>\n`.
 fn format_record(level: Level, msg: &str) -> String {
     let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    format!("time={ts} level={} msg={}\n", level.as_str(), quote_value(msg))
+    format!(
+        "time={ts} level={} msg={}\n",
+        level.as_str(),
+        quote_value(msg)
+    )
 }
 
 /// slog quotes values that are empty or contain spaces, `"`, `=`, or
@@ -224,4 +231,45 @@ mod tests {
         assert_eq!(quote_value("say \"hi\""), "\"say \\\"hi\\\"\"");
         assert_eq!(quote_value("a\nb"), "\"a\\nb\"");
     }
+}
+
+static GLOBAL_LOGGER: OnceLock<Logger> = OnceLock::new();
+
+/// Installs the process-global logger (Stage 10.3). Later calls are ignored:
+/// the first installer (the daemon's serve path) wins, so a test cannot
+/// redirect production output.
+pub fn install_global_logger(logger: Logger) {
+    let _ = GLOBAL_LOGGER.set(logger);
+}
+
+/// The process-global logger; an info-level stdout logger until installed.
+pub fn global_logger() -> &'static Logger {
+    GLOBAL_LOGGER.get_or_init(|| Logger::new("info"))
+}
+
+/// One structured access-log record (Stage 10.3): slog text layout with the
+/// request id, tenant, route template, status and latency, so a request can
+/// be correlated across the daemon's log and the `x-request-id` a client
+/// saw. `tenant` is empty for single-user and unauthenticated requests.
+pub fn access_log(
+    request_id: &str,
+    tenant: &str,
+    method: &str,
+    route: &str,
+    status: u16,
+    duration_ms: u128,
+) {
+    let logger = global_logger();
+    if !logger.enabled(Level::Info) {
+        return;
+    }
+    logger.info(&format!(
+        "http.request request_id={} tenant={} method={} route={} status={} duration_ms={}",
+        quote_value(request_id),
+        quote_value(tenant),
+        method,
+        quote_value(route),
+        status,
+        duration_ms
+    ));
 }

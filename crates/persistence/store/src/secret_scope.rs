@@ -2,7 +2,7 @@
 //! (UpsertSecretScopeBinding, ListSecretScopeBindings). The tenant column is written as NULL
 //! until the tenancy package is ported; `document_json` holds the whole document.
 
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
 use crate::SQLiteStore;
 
@@ -45,7 +45,10 @@ fn scan_secret_scope_binding(row: &Row) -> Result<SecretScopeBindingRecord, Stri
 }
 
 impl SQLiteStore {
-    pub fn upsert_secret_scope_binding(&self, record: &SecretScopeBindingRecord) -> Result<(), String> {
+    pub fn upsert_secret_scope_binding(
+        &self,
+        record: &SecretScopeBindingRecord,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 r#"INSERT INTO secret_scope_bindings (
@@ -93,7 +96,9 @@ impl SQLiteStore {
                 ORDER BY secret_ref ASC, binding_id ASC"#,
             )
             .map_err(|e| format!("list secret scope bindings for {consumer_kind}/{consumer_id}: {e}"))?;
-        let mut rows = stmt.query(params![consumer_kind, consumer_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![consumer_kind, consumer_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_secret_scope_binding(row)?);

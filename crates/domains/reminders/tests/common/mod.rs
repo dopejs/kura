@@ -6,8 +6,8 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -29,7 +29,9 @@ pub struct FakeClock {
 impl FakeClock {
     #[must_use]
     pub fn new(now: DateTime<Utc>) -> Self {
-        FakeClock { now: Mutex::new(now) }
+        FakeClock {
+            now: Mutex::new(now),
+        }
     }
 
     pub fn set(&self, now: DateTime<Utc>) {
@@ -190,5 +192,10 @@ pub fn harness(opts: HarnessOptions) -> Harness {
         clock: Some(clock.clone() as Arc<dyn Clock>),
         tick_interval: opts.tick_interval,
     });
-    Harness { manager, delivery, clock, store }
+    Harness {
+        manager,
+        delivery,
+        clock,
+        store,
+    }
 }

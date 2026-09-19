@@ -52,7 +52,11 @@ pub fn sanitize_id(value: &str) -> String {
         })
         .collect();
     let trimmed = out.trim_matches('_');
-    out = if trimmed.is_empty() { "unknown".to_string() } else { trimmed.to_string() };
+    out = if trimmed.is_empty() {
+        "unknown".to_string()
+    } else {
+        trimmed.to_string()
+    };
     out
 }
 
@@ -73,7 +77,9 @@ pub fn safe_use_for_state(session: &SetupSession) -> SafeUseMode {
     match session.state {
         SetupState::Ready => SafeUseMode::Normal,
         SetupState::Degraded => {
-            if !session.allowed_capabilities.is_empty() && !session.diagnostic_allowed_use.is_empty() {
+            if !session.allowed_capabilities.is_empty()
+                && !session.diagnostic_allowed_use.is_empty()
+            {
                 SafeUseMode::LimitedSafe
             } else {
                 SafeUseMode::Blocked
@@ -110,7 +116,10 @@ pub fn retry_safety_for_state(state: SetupState) -> RetrySafety {
 
 #[must_use]
 pub fn remediation_owner_for_state(state: SetupState, reason: &str) -> RemediationOwner {
-    if reason == REASON_PROVIDER_UNAVAILABLE || reason == REASON_NETWORK_FAILED || reason == REASON_RATE_LIMITED {
+    if reason == REASON_PROVIDER_UNAVAILABLE
+        || reason == REASON_NETWORK_FAILED
+        || reason == REASON_RATE_LIMITED
+    {
         return RemediationOwner::Provider;
     }
     if reason == REASON_REDACTION_FAILED_CLOSED || reason == REASON_UNSUPPORTED_TARGET {
@@ -140,7 +149,10 @@ pub fn first_non_empty(values: &[&str]) -> String {
 
 #[must_use]
 pub fn first_redaction(value: RedactionStatus) -> RedactionStatus {
-    if value == RedactionStatus::Redacted || value == RedactionStatus::Suppressed || value == RedactionStatus::FailedClosed {
+    if value == RedactionStatus::Redacted
+        || value == RedactionStatus::Suppressed
+        || value == RedactionStatus::FailedClosed
+    {
         value
     } else {
         RedactionStatus::Redacted
@@ -214,9 +226,15 @@ const FORBIDDEN_EVIDENCE_FIELD_NAMES: [&str; 10] = [
 ];
 
 #[must_use]
-pub fn redacted_secret_evidence(secret_ref: &str, display_name: &str) -> std::collections::HashMap<String, String> {
+pub fn redacted_secret_evidence(
+    secret_ref: &str,
+    display_name: &str,
+) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
-    out.insert("redactionRule".to_string(), "secret_metadata_only".to_string());
+    out.insert(
+        "redactionRule".to_string(),
+        "secret_metadata_only".to_string(),
+    );
     out.insert("secretRef".to_string(), secret_ref.trim().to_string());
     let trimmed = display_name.trim();
     if !trimmed.is_empty() {
@@ -226,10 +244,19 @@ pub fn redacted_secret_evidence(secret_ref: &str, display_name: &str) -> std::co
 }
 
 #[must_use]
-pub fn redacted_oauth_evidence(result: OAuthResult, account_label: &str) -> std::collections::HashMap<String, String> {
+pub fn redacted_oauth_evidence(
+    result: OAuthResult,
+    account_label: &str,
+) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
-    out.insert("redactionRule".to_string(), "oauth_metadata_only".to_string());
-    out.insert("authorizationStatus".to_string(), result.as_str().to_string());
+    out.insert(
+        "redactionRule".to_string(),
+        "oauth_metadata_only".to_string(),
+    );
+    out.insert(
+        "authorizationStatus".to_string(),
+        result.as_str().to_string(),
+    );
     let trimmed = account_label.trim();
     if !trimmed.is_empty() {
         out.insert("accountLabel".to_string(), trimmed.to_string());

@@ -16,7 +16,7 @@ use kura_activation as activation;
 use kura_identity::{LifecycleStatus, TokenAuthority};
 
 use crate::error::ApiError;
-use crate::middleware::{auth_token_authority, AuthenticatedToken, TenantContext};
+use crate::middleware::{AuthenticatedToken, TenantContext, auth_token_authority};
 use crate::state::AppState;
 
 const ACTIVATION_NOT_IMPLEMENTED: &str = "activation_not_implemented";
@@ -68,7 +68,10 @@ async fn get_activation(
         Ok(value) => value,
         Err(err) => return activation_result(err),
     };
-    Ok((StatusCode::OK, AxumJson(serde_json::json!({ "activation": state_value }))))
+    Ok((
+        StatusCode::OK,
+        AxumJson(serde_json::json!({ "activation": state_value })),
+    ))
 }
 
 /// POST /v1/activation — start (or refresh) activation for the caller.
@@ -111,7 +114,10 @@ async fn start_activation(
         Ok(value) => value,
         Err(err) => return activation_result(err),
     };
-    Ok((StatusCode::OK, AxumJson(serde_json::json!({ "activation": state_value }))))
+    Ok((
+        StatusCode::OK,
+        AxumJson(serde_json::json!({ "activation": state_value })),
+    ))
 }
 
 /// POST /v1/activation/test-chat — run the metadata-only activation chat.
@@ -135,10 +141,13 @@ async fn test_chat(
         Ok(tuple) => tuple,
         Err(failure) => return activation_result(failure.source),
     };
-    Ok((StatusCode::OK, AxumJson(serde_json::json!({
-        "activation": state_value,
-        "testChat": test_chat_metadata,
-    }))))
+    Ok((
+        StatusCode::OK,
+        AxumJson(serde_json::json!({
+            "activation": state_value,
+            "testChat": test_chat_metadata,
+        })),
+    ))
 }
 
 /// GET /v1/activation/diagnostics — failure diagnostics for the activation.
@@ -159,7 +168,10 @@ async fn activation_diagnostics(
         Ok(items) => items,
         Err(err) => return activation_result(err),
     };
-    Ok((StatusCode::OK, AxumJson(serde_json::json!({ "items": items }))))
+    Ok((
+        StatusCode::OK,
+        AxumJson(serde_json::json!({ "items": items })),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -180,7 +192,9 @@ fn activation_not_implemented() -> (StatusCode, AxumJson<serde_json::Value>) {
 
 /// Go writeActivationError: domain failures carry the stable reason payload
 /// at 403; dependency failures surface as 500.
-fn activation_result(err: activation::ActivationError) -> Result<(StatusCode, AxumJson<serde_json::Value>), ApiError> {
+fn activation_result(
+    err: activation::ActivationError,
+) -> Result<(StatusCode, AxumJson<serde_json::Value>), ApiError> {
     match err {
         activation::ActivationError::Domain(domain) => Ok((
             StatusCode::FORBIDDEN,
@@ -199,7 +213,9 @@ fn activation_result(err: activation::ActivationError) -> Result<(StatusCode, Ax
 
 /// Requires a resolved tenant context (Go tenantContextFromContext, missing →
 /// 403 tenant denial).
-fn tenant_or_deny(tenant: Option<&kura_identity::TenantContext>) -> Result<kura_identity::TenantContext, ApiError> {
+fn tenant_or_deny(
+    tenant: Option<&kura_identity::TenantContext>,
+) -> Result<kura_identity::TenantContext, ApiError> {
     tenant
         .cloned()
         .ok_or_else(|| ApiError::Forbidden("tenant access denied".to_string()))
@@ -236,17 +252,21 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use parking_lot::Mutex;
     use tower::ServiceExt;
     use uuid::Uuid;
 
     use kura_identity as identity;
-    use kura_identity::{Membership, MembershipFilter, Principal, PrincipalFilter, Tenant, TenantFilter, TokenTenantGrant};
+    use kura_identity::{
+        Membership, MembershipFilter, Principal, PrincipalFilter, Tenant, TenantFilter,
+        TokenTenantGrant,
+    };
 
     fn test_config() -> kura_config::Config {
         kura_config::Config {
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-activation-test".to_string(),
@@ -254,11 +274,24 @@ mod tests {
             version: "0.1.0".to_string(),
             llm: kura_config::LlmConfig::default(),
             connectors: kura_config::ConnectorConfig {
-                discord: kura_config::DiscordConnectorConfig { enabled: false, ..Default::default() },
-                telegram: kura_config::TelegramConnectorConfig { enabled: false, ..Default::default() },
-                slack: kura_config::SlackConnectorConfig { enabled: false, ..Default::default() },
-                matrix: kura_config::MatrixConnectorConfig { enabled: false, ..Default::default() },
+                discord: kura_config::DiscordConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                telegram: kura_config::TelegramConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                slack: kura_config::SlackConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                matrix: kura_config::MatrixConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
             },
+            egress: Default::default(),
         }
     }
 
@@ -292,7 +325,8 @@ mod tests {
         fn get_activation_state(
             &self,
             activation_id: &str,
-        ) -> activation::BoxFuture<'_, Result<Option<activation::State>, activation::StoreError>> {
+        ) -> activation::BoxFuture<'_, Result<Option<activation::State>, activation::StoreError>>
+        {
             let states = self.states.clone();
             let activation_id = activation_id.to_string();
             Box::pin(async move { Ok(states.lock().get(&activation_id).cloned()) })
@@ -302,7 +336,8 @@ mod tests {
             &self,
             principal_id: &str,
             tenant_id: &str,
-        ) -> activation::BoxFuture<'_, Result<Option<activation::State>, activation::StoreError>> {
+        ) -> activation::BoxFuture<'_, Result<Option<activation::State>, activation::StoreError>>
+        {
             let states = self.states.clone();
             let (principal_id, tenant_id) = (principal_id.to_string(), tenant_id.to_string());
             Box::pin(async move {
@@ -310,7 +345,7 @@ mod tests {
                     .lock()
                     .values()
                     .find(|s| s.principal_id == principal_id && s.tenant_id == tenant_id)
-                    .cloned(),)
+                    .cloned())
             })
         }
     }
@@ -349,7 +384,9 @@ mod tests {
         ) -> activation::BoxFuture<'_, Result<(), activation::StoreError>> {
             let repo = self.clone();
             Box::pin(async move {
-                repo.principals.lock().insert(principal.principal_id.clone(), principal);
+                repo.principals
+                    .lock()
+                    .insert(principal.principal_id.clone(), principal);
                 Ok(())
             })
         }
@@ -396,7 +433,9 @@ mod tests {
         ) -> activation::BoxFuture<'_, Result<(), activation::StoreError>> {
             let repo = self.clone();
             Box::pin(async move {
-                repo.memberships.lock().insert(membership.membership_id.clone(), membership);
+                repo.memberships
+                    .lock()
+                    .insert(membership.membership_id.clone(), membership);
                 Ok(())
             })
         }
@@ -404,7 +443,8 @@ mod tests {
         fn list_token_tenant_grants(
             &self,
             token_id: &str,
-        ) -> activation::BoxFuture<'_, Result<Vec<TokenTenantGrant>, activation::StoreError>> {
+        ) -> activation::BoxFuture<'_, Result<Vec<TokenTenantGrant>, activation::StoreError>>
+        {
             let repo = self.clone();
             let token_id = token_id.to_string();
             Box::pin(async move {
@@ -414,7 +454,7 @@ mod tests {
                     .values()
                     .filter(|g| g.token_id == token_id)
                     .cloned()
-                    .collect(),)
+                    .collect())
             })
         }
 
@@ -440,7 +480,8 @@ mod tests {
         fn append_tenant_audit_event(
             &self,
             event: identity::TenantAuditEvent,
-        ) -> activation::BoxFuture<'_, Result<identity::TenantAuditEvent, activation::StoreError>> {
+        ) -> activation::BoxFuture<'_, Result<identity::TenantAuditEvent, activation::StoreError>>
+        {
             let events = self.events.clone();
             Box::pin(async move {
                 events.lock().push(event.event_kind.clone());
@@ -449,7 +490,12 @@ mod tests {
         }
     }
 
-    fn configured_service() -> (activation::Service, FakeStateStore, FakeIdentityRepository, FakeAuditSink) {
+    fn configured_service() -> (
+        activation::Service,
+        FakeStateStore,
+        FakeIdentityRepository,
+        FakeAuditSink,
+    ) {
         let state_store = FakeStateStore::default();
         let identity_repo = FakeIdentityRepository::default();
         let audit = FakeAuditSink::default();
@@ -474,7 +520,9 @@ mod tests {
         if body.is_some() {
             builder = builder.header(axum::http::header::CONTENT_TYPE, "application/json");
         }
-        let mut req = builder.body(Body::from(body.unwrap_or("").to_string())).expect("request");
+        let mut req = builder
+            .body(Body::from(body.unwrap_or("").to_string()))
+            .expect("request");
         if let Some((principal_id, token_id, tenant_id)) = tenant {
             let ctx = identity::TenantContext {
                 principal_id: principal_id.to_string(),
@@ -486,7 +534,9 @@ mod tests {
         }
         let response = app.clone().oneshot(req).await.expect("oneshot");
         let status = response.status();
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
         (status, json)
     }
@@ -514,18 +564,27 @@ mod tests {
         let (status, _) = request_json(&app, "PATCH", "/v1/activation", Some("{}"), tenant).await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 
-        let (status, json) = request_json(&app, "POST", "/v1/activation/test-chat", Some("{}"), tenant).await;
+        let (status, json) =
+            request_json(&app, "POST", "/v1/activation/test-chat", Some("{}"), tenant).await;
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
         assert_eq!(json["error"], "activation_not_implemented");
 
         let (status, _) = request_json(&app, "GET", "/v1/activation/test-chat", None, tenant).await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 
-        let (status, json) = request_json(&app, "GET", "/v1/activation/diagnostics", None, tenant).await;
+        let (status, json) =
+            request_json(&app, "GET", "/v1/activation/diagnostics", None, tenant).await;
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
         assert_eq!(json["error"], "activation_not_implemented");
 
-        let (status, _) = request_json(&app, "POST", "/v1/activation/diagnostics", Some("{}"), tenant).await;
+        let (status, _) = request_json(
+            &app,
+            "POST",
+            "/v1/activation/diagnostics",
+            Some("{}"),
+            tenant,
+        )
+        .await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     }
 
@@ -553,7 +612,9 @@ mod tests {
     #[tokio::test]
     async fn activation_get_unconfigured_service_fails_closed() {
         let mut state = test_state();
-        state.activation = Some(Arc::new(activation::Service::new(activation::Dependencies::default())));
+        state.activation = Some(Arc::new(activation::Service::new(
+            activation::Dependencies::default(),
+        )));
         let app = router().with_state(state);
 
         let (status, json) = request_json(
@@ -588,7 +649,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        let first_tenant = first["activation"]["tenantId"].as_str().expect("tenant id").to_string();
+        let first_tenant = first["activation"]["tenantId"]
+            .as_str()
+            .expect("tenant id")
+            .to_string();
         assert!(!first_tenant.is_empty());
         assert_eq!(first["activation"]["status"], "active");
 
@@ -601,8 +665,14 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(second["activation"]["tenantId"], first_tenant, "expected stable tenant");
-        assert_eq!(second["activation"]["activationId"], first["activation"]["activationId"]);
+        assert_eq!(
+            second["activation"]["tenantId"], first_tenant,
+            "expected stable tenant"
+        );
+        assert_eq!(
+            second["activation"]["activationId"],
+            first["activation"]["activationId"]
+        );
 
         let events = audit.events.lock().clone();
         assert!(events.contains(&"tenant.activation_started".to_string()));
@@ -644,7 +714,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
-        assert_eq!(json["reasonCode"], "activation_denied:tenant_access_revoked");
+        assert_eq!(
+            json["reasonCode"],
+            "activation_denied:tenant_access_revoked"
+        );
     }
 
     #[tokio::test]
@@ -669,7 +742,9 @@ mod tests {
     #[tokio::test]
     async fn activation_diagnostics_unconfigured_fails_closed() {
         let mut state = test_state();
-        state.activation = Some(Arc::new(activation::Service::new(activation::Dependencies::default())));
+        state.activation = Some(Arc::new(activation::Service::new(
+            activation::Dependencies::default(),
+        )));
         let app = router().with_state(state);
 
         let (status, json) = request_json(

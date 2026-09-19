@@ -147,6 +147,11 @@ pub struct AppState {
     /// daemon shares the store across goroutines behind its own lock, so the
     /// mutex is the Rust equivalent.
     pub store: Arc<Mutex<SQLiteStore>>,
+    /// Stage 10.2: the connection pool over `store` (its writer) plus
+    /// query-only readers. Read-only handlers take `store_pool.read()` so
+    /// they run concurrently with writes under WAL; mutations keep using
+    /// `store` (the same connection as `store_pool.write()`).
+    pub store_pool: Arc<kura_store::StorePool>,
     /// Go Dependencies.Checkpoints.
     ///
     pub checkpoints: Option<Arc<CheckpointsManager>>,
@@ -171,6 +176,16 @@ pub struct AppState {
     pub embedder: Option<Arc<dyn kura_context::Embedder>>,
     /// Audited self-improvement proposals (the `self-improve` plugin).
     pub improvement: Option<Arc<kura_improvement::Manager>>,
+    /// The guarded tool call path (quota reserve -> egress check -> provider
+    /// -> commit/release). Families are invoked through this, never directly.
+    pub tool_runtime: Option<Arc<kura_tools::ToolRuntime>>,
+    /// Bounded concurrent sub-agents (Stage 4); disabled until opted in.
+    pub swarm: Option<Arc<kura_swarm::Manager>>,
+    /// Per-child spend bound for swarm runs, reserved before each child spawns.
+    pub swarm_quota: Option<Arc<dyn kura_swarm::ChildQuotaGate>>,
+    /// Tool provider profiles (Stage 9.1b). Credentials are not here: a
+    /// profile holds a `secretRef` resolved through [`Self::secrets`].
+    pub tools: Option<Arc<kura_tools::Manager>>,
 }
 
 impl AppState {
@@ -212,6 +227,7 @@ impl AppState {
             billing: None,
             activation: None,
             setup_wizard: None,
+            store_pool: Arc::new(kura_store::StorePool::writer_only(store.clone())),
             store,
             checkpoints: None,
             evaluation: None,
@@ -222,6 +238,10 @@ impl AppState {
             hooks: None,
             embedder: None,
             improvement: None,
+            tool_runtime: None,
+            swarm: None,
+            swarm_quota: None,
+            tools: None,
         }
     }
 }

@@ -20,7 +20,6 @@ use kura_identity::TokenAuthority;
 use kura_identity::TokenTenantGrant;
 use parking_lot::Mutex;
 
-use crate::service::BoxFuture;
 use crate::AuditSink;
 use crate::BillingProjector;
 use crate::ChatRunFailure;
@@ -30,10 +29,13 @@ use crate::StateStore;
 use crate::StoreError;
 use crate::TestChatInput;
 use crate::TestChatResult;
+use crate::service::BoxFuture;
 
 /// Fixed timestamp used by the Go tests: 2026-05-06T10:00:00Z.
 pub(crate) fn test_now() -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2026, 5, 6, 10, 0, 0).single().unwrap_or_else(Utc::now)
+    Utc.with_ymd_and_hms(2026, 5, 6, 10, 0, 0)
+        .single()
+        .unwrap_or_else(Utc::now)
 }
 
 pub(crate) fn active_token(token_id: &str, principal_id: &str) -> TokenAuthority {
@@ -80,20 +82,25 @@ pub(crate) struct MemoryStateStore {
 }
 
 impl StateStore for MemoryStateStore {
-    fn upsert_activation_state(&self, state: crate::State) -> BoxFuture<'_, Result<(), StoreError>> {
+    fn upsert_activation_state(
+        &self,
+        state: crate::State,
+    ) -> BoxFuture<'_, Result<(), StoreError>> {
         Box::pin(async move {
             self.states_by_id
                 .lock()
                 .insert(state.activation_id.clone(), state.clone());
-            self.states_by_key.lock().insert(
-                format!("{}|{}", state.principal_id, state.tenant_id),
-                state,
-            );
+            self.states_by_key
+                .lock()
+                .insert(format!("{}|{}", state.principal_id, state.tenant_id), state);
             Ok(())
         })
     }
 
-    fn get_activation_state(&self, activation_id: &str) -> BoxFuture<'_, Result<Option<crate::State>, StoreError>> {
+    fn get_activation_state(
+        &self,
+        activation_id: &str,
+    ) -> BoxFuture<'_, Result<Option<crate::State>, StoreError>> {
         let activation_id = activation_id.to_string();
         Box::pin(async move { Ok(self.states_by_id.lock().get(&activation_id).cloned()) })
     }
@@ -117,19 +124,29 @@ pub(crate) struct MemoryIdentityRepository {
 }
 
 impl IdentityRepository for MemoryIdentityRepository {
-    fn get_principal(&self, principal_id: &str) -> BoxFuture<'_, Result<Option<Principal>, StoreError>> {
+    fn get_principal(
+        &self,
+        principal_id: &str,
+    ) -> BoxFuture<'_, Result<Option<Principal>, StoreError>> {
         let principal_id = principal_id.to_string();
         Box::pin(async move { Ok(self.principals.lock().get(&principal_id).cloned()) })
     }
 
-    fn list_principals(&self, filter: &PrincipalFilter) -> BoxFuture<'_, Result<Vec<Principal>, StoreError>> {
+    fn list_principals(
+        &self,
+        filter: &PrincipalFilter,
+    ) -> BoxFuture<'_, Result<Vec<Principal>, StoreError>> {
         let filter = filter.clone();
         Box::pin(async move {
             Ok(self
                 .principals
                 .lock()
                 .values()
-                .filter(|principal| filter.status.is_none_or(|status| principal.status == status))
+                .filter(|principal| {
+                    filter
+                        .status
+                        .is_none_or(|status| principal.status == status)
+                })
                 .cloned()
                 .collect())
         })
@@ -137,7 +154,9 @@ impl IdentityRepository for MemoryIdentityRepository {
 
     fn upsert_principal(&self, principal: Principal) -> BoxFuture<'_, Result<(), StoreError>> {
         Box::pin(async move {
-            self.principals.lock().insert(principal.principal_id.clone(), principal);
+            self.principals
+                .lock()
+                .insert(principal.principal_id.clone(), principal);
             Ok(())
         })
     }
@@ -147,7 +166,10 @@ impl IdentityRepository for MemoryIdentityRepository {
         Box::pin(async move { Ok(self.tenants.lock().get(&tenant_id).cloned()) })
     }
 
-    fn list_tenants(&self, filter: &TenantFilter) -> BoxFuture<'_, Result<Vec<Tenant>, StoreError>> {
+    fn list_tenants(
+        &self,
+        filter: &TenantFilter,
+    ) -> BoxFuture<'_, Result<Vec<Tenant>, StoreError>> {
         let filter = filter.clone();
         Box::pin(async move {
             Ok(self
@@ -155,7 +177,9 @@ impl IdentityRepository for MemoryIdentityRepository {
                 .lock()
                 .values()
                 .filter(|tenant| {
-                    filter.tenant_kind.is_none_or(|kind| tenant.tenant_kind == kind)
+                    filter
+                        .tenant_kind
+                        .is_none_or(|kind| tenant.tenant_kind == kind)
                         && filter.status.is_none_or(|status| tenant.status == status)
                 })
                 .cloned()
@@ -170,7 +194,10 @@ impl IdentityRepository for MemoryIdentityRepository {
         })
     }
 
-    fn list_memberships(&self, filter: &MembershipFilter) -> BoxFuture<'_, Result<Vec<Membership>, StoreError>> {
+    fn list_memberships(
+        &self,
+        filter: &MembershipFilter,
+    ) -> BoxFuture<'_, Result<Vec<Membership>, StoreError>> {
         let filter = filter.clone();
         Box::pin(async move {
             Ok(self
@@ -179,7 +206,9 @@ impl IdentityRepository for MemoryIdentityRepository {
                 .values()
                 .filter(|membership| {
                     (filter.tenant_id.is_empty() || membership.tenant_id == filter.tenant_id)
-                        && filter.status.is_none_or(|status| membership.status == status)
+                        && filter
+                            .status
+                            .is_none_or(|status| membership.status == status)
                 })
                 .cloned()
                 .collect())
@@ -188,12 +217,17 @@ impl IdentityRepository for MemoryIdentityRepository {
 
     fn upsert_membership(&self, membership: Membership) -> BoxFuture<'_, Result<(), StoreError>> {
         Box::pin(async move {
-            self.memberships.lock().insert(membership.membership_id.clone(), membership);
+            self.memberships
+                .lock()
+                .insert(membership.membership_id.clone(), membership);
             Ok(())
         })
     }
 
-    fn list_token_tenant_grants(&self, token_id: &str) -> BoxFuture<'_, Result<Vec<TokenTenantGrant>, StoreError>> {
+    fn list_token_tenant_grants(
+        &self,
+        token_id: &str,
+    ) -> BoxFuture<'_, Result<Vec<TokenTenantGrant>, StoreError>> {
         let token_id = token_id.to_string();
         Box::pin(async move {
             Ok(self
@@ -206,7 +240,10 @@ impl IdentityRepository for MemoryIdentityRepository {
         })
     }
 
-    fn upsert_token_tenant_grant(&self, grant: TokenTenantGrant) -> BoxFuture<'_, Result<(), StoreError>> {
+    fn upsert_token_tenant_grant(
+        &self,
+        grant: TokenTenantGrant,
+    ) -> BoxFuture<'_, Result<(), StoreError>> {
         Box::pin(async move {
             self.grants.lock().insert(grant.grant_id.clone(), grant);
             Ok(())

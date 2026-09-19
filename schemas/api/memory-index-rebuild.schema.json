@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/memory-index-rebuild.schema.json",
+  "title": "MemoryIndexRebuildResult",
+  "description": "Result of dropping a tenant's derived retrieval index. Conversation truth and the memory assets themselves are untouched; the vectors are recomputed lazily by subsequent retrievals.",
+  "type": "object",
+  "required": ["tenantId", "clearedEmbeddings"],
+  "additionalProperties": false,
+  "properties": {
+    "tenantId": { "type": "string" },
+    "clearedEmbeddings": { "type": "integer", "minimum": 0 }
+  }
+}

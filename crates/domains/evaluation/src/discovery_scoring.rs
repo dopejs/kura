@@ -109,12 +109,27 @@ pub fn candidate_explanation_fields(
     now: DateTime<Utc>,
 ) -> serde_json::Map<String, serde_json::Value> {
     let mut fields = serde_json::Map::new();
-    fields.insert("failureRecurrence".to_string(), serde_json::json!(input.failure_recurrence));
-    fields.insert("driftSignal".to_string(), serde_json::json!(input.drift_signal));
-    fields.insert("workflowCoverage".to_string(), serde_json::json!(input.workflow_coverage));
-    fields.insert("operatorRelevance".to_string(), serde_json::json!(input.operator_relevance));
+    fields.insert(
+        "failureRecurrence".to_string(),
+        serde_json::json!(input.failure_recurrence),
+    );
+    fields.insert(
+        "driftSignal".to_string(),
+        serde_json::json!(input.drift_signal),
+    );
+    fields.insert(
+        "workflowCoverage".to_string(),
+        serde_json::json!(input.workflow_coverage),
+    );
+    fields.insert(
+        "operatorRelevance".to_string(),
+        serde_json::json!(input.operator_relevance),
+    );
     if !input.tool_call_class.trim().is_empty() {
-        fields.insert("toolCallClass".to_string(), serde_json::json!(input.tool_call_class.trim()));
+        fields.insert(
+            "toolCallClass".to_string(),
+            serde_json::json!(input.tool_call_class.trim()),
+        );
     }
     if !input.live_validation_outcome.trim().is_empty() {
         fields.insert(
@@ -125,9 +140,16 @@ pub fn candidate_explanation_fields(
     if !is_zero_time(input.observed_at) {
         fields.insert(
             "observedAt".to_string(),
-            serde_json::json!(input.observed_at.to_rfc3339_opts(SecondsFormat::Nanos, true)),
+            serde_json::json!(
+                input
+                    .observed_at
+                    .to_rfc3339_opts(SecondsFormat::Nanos, true)
+            ),
         );
-        fields.insert("ageHours".to_string(), serde_json::json!((now - input.observed_at).num_hours()));
+        fields.insert(
+            "ageHours".to_string(),
+            serde_json::json!((now - input.observed_at).num_hours()),
+        );
     }
     fields
 }
@@ -156,7 +178,10 @@ pub fn redaction_status_default(status: RedactionStatus) -> RedactionStatus {
 
 /// Go `readinessStatusDefault`.
 #[must_use]
-pub fn readiness_status_default(status: ReadinessStatus, redaction_status: RedactionStatus) -> ReadinessStatus {
+pub fn readiness_status_default(
+    status: ReadinessStatus,
+    redaction_status: RedactionStatus,
+) -> ReadinessStatus {
     if redaction_status == RedactionStatus::Failed {
         return ReadinessStatus::Blocked;
     }

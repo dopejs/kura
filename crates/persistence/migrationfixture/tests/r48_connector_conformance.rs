@@ -19,7 +19,10 @@ fn head_store() -> (kura_store::SQLiteStore, String) {
 fn r48_seeds_two_tenants_per_table() {
     let (store, _dir) = head_store();
     let fixture = seed_r48_connector_conformance_rows(&store).unwrap();
-    assert_eq!(fixture.tenant_ids, vec!["ten_connector_alpha", "ten_connector_beta"]);
+    assert_eq!(
+        fixture.tenant_ids,
+        vec!["ten_connector_alpha", "ten_connector_beta"]
+    );
 
     let counts = count_r48_connector_conformance_rows(&store).unwrap();
     for (table, expected) in &fixture.expected_row_count {
@@ -67,7 +70,13 @@ fn r48_seeded_ids_and_documents_load_back() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!(failure, ("r48_connector_1".to_string(), "redaction_failed_closed".to_string()));
+    assert_eq!(
+        failure,
+        (
+            "r48_connector_1".to_string(),
+            "redaction_failed_closed".to_string()
+        )
+    );
 
     let boundary: (String, String, String, String) = conn
         .query_row(

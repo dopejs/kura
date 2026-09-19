@@ -2,10 +2,10 @@
 //! (UpsertIntegration, ListIntegrations). The tenant column is written as NULL until the
 //! tenancy package is ported; `document_json` holds the whole resource, matching Go.
 
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
-use crate::crud::{enum_str, now_rfc3339, null_string, parse_rfc3339};
 use crate::SQLiteStore;
+use crate::crud::{enum_str, now_rfc3339, null_string, parse_rfc3339};
 
 fn scan_integration(row: &Row) -> Result<kura_integrations::Resource, String> {
     // Go scans the explicit columns for queryability, then unmarshals document_json into
@@ -51,7 +51,12 @@ impl SQLiteStore {
                     item.integration_id,
                     item.domain_kind,
                     item.environment_scope,
-                    null_string(item.account_binding.as_ref().map(|b| b.account_key.as_str()).unwrap_or_default()),
+                    null_string(
+                        item.account_binding
+                            .as_ref()
+                            .map(|b| b.account_key.as_str())
+                            .unwrap_or_default()
+                    ),
                     enum_str(&item.backend_binding.backend_kind),
                     enum_str(&item.readiness_status),
                     item.canonical_default,
@@ -64,7 +69,10 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn list_integrations(&self, environment_scope: &str) -> Result<Vec<kura_integrations::Resource>, String> {
+    pub fn list_integrations(
+        &self,
+        environment_scope: &str,
+    ) -> Result<Vec<kura_integrations::Resource>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -74,7 +82,9 @@ impl SQLiteStore {
                 ORDER BY updated_at ASC, integration_id ASC"#,
             )
             .map_err(|e| format!("list integrations for {environment_scope}: {e}"))?;
-        let mut rows = stmt.query(params![environment_scope.trim()]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![environment_scope.trim()])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_integration(row)?);

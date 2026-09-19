@@ -33,15 +33,15 @@ use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::time::Duration;
 
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::routing::{get, post};
-use axum::Router;
 use chrono::{DateTime, Utc};
-use futures::stream::{self, Stream};
 use futures::StreamExt;
+use futures::stream::{self, Stream};
 
 use kura_calendar as calendar;
 use kura_computeruse as computeruse;
@@ -59,7 +59,9 @@ use kura_scheduler as scheduler;
 use kura_store::SQLiteStore;
 
 use crate::error::ApiError;
-use crate::middleware::{environment_scope_from_config, guard_resource_for_tenant, AuthenticatedToken, TenantContext};
+use crate::middleware::{
+    AuthenticatedToken, TenantContext, environment_scope_from_config, guard_resource_for_tenant,
+};
 use crate::response::Json;
 use crate::state::AppState;
 use crate::types::{
@@ -228,7 +230,14 @@ pub async fn get_run(
     method: Method,
     uri: Uri,
 ) -> Result<Json<runtime::Run>, ApiError> {
-    guard_run_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), &run_id).await?;
+    guard_run_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        &run_id,
+    )
+    .await?;
     let manager = runtime_manager(&state)?;
     let mut run = manager
         .get_run(&run_id)
@@ -328,7 +337,11 @@ fn persist_run(state: &AppState, run: &runtime::Run, tenant_id: &str) -> Result<
     result.map_err(map_persist_error)
 }
 
-fn persist_session(state: &AppState, session: &router::Session, tenant_id: &str) -> Result<(), ApiError> {
+fn persist_session(
+    state: &AppState,
+    session: &router::Session,
+    tenant_id: &str,
+) -> Result<(), ApiError> {
     let store = state.store.lock();
     let result = if tenant_id.is_empty() {
         store.upsert_session(session)
@@ -359,15 +372,41 @@ fn publish_session_route_events(
         let mut payload = serde_json::Map::new();
         payload.insert("kind".to_string(), serde_json::json!(session.kind.as_str()));
         payload.insert("channel".to_string(), serde_json::json!(session.channel));
-        payload.insert("routingKey".to_string(), serde_json::json!(session.routing_key));
-        payload.insert("generation".to_string(), serde_json::json!(session.generation));
+        payload.insert(
+            "routingKey".to_string(),
+            serde_json::json!(session.routing_key),
+        );
+        payload.insert(
+            "generation".to_string(),
+            serde_json::json!(session.generation),
+        );
         payload.insert("source".to_string(), serde_json::json!("run.create"));
         payload
     };
     if created_session {
-        publish_event(state, events::Event {
+        publish_event(
+            state,
+            events::Event {
+                category: "session".to_string(),
+                name: "session.created".to_string(),
+                scope: events::Scope {
+                    session_id: session.session_id.clone(),
+                    ..events::Scope::default()
+                },
+                resource: events::Resource {
+                    kind: "session".to_string(),
+                    id: session.session_id.clone(),
+                },
+                payload: payload(),
+                ..events::Event::default()
+            },
+        )?;
+    }
+    publish_event(
+        state,
+        events::Event {
             category: "session".to_string(),
-            name: "session.created".to_string(),
+            name: "session.routed".to_string(),
             scope: events::Scope {
                 session_id: session.session_id.clone(),
                 ..events::Scope::default()
@@ -378,22 +417,8 @@ fn publish_session_route_events(
             },
             payload: payload(),
             ..events::Event::default()
-        })?;
-    }
-    publish_event(state, events::Event {
-        category: "session".to_string(),
-        name: "session.routed".to_string(),
-        scope: events::Scope {
-            session_id: session.session_id.clone(),
-            ..events::Scope::default()
         },
-        resource: events::Resource {
-            kind: "session".to_string(),
-            id: session.session_id.clone(),
-        },
-        payload: payload(),
-        ..events::Event::default()
-    })
+    )
 }
 
 /// Go publishEvent for run.created.
@@ -402,21 +427,24 @@ fn publish_run_created_event(state: &AppState, run: &runtime::Run) -> Result<(),
     payload.insert("entrypoint".to_string(), serde_json::json!(run.entrypoint));
     payload.insert("goal".to_string(), serde_json::json!(run.goal));
     payload.insert("status".to_string(), serde_json::json!(run.status.as_str()));
-    publish_event(state, events::Event {
-        category: "run".to_string(),
-        name: "run.created".to_string(),
-        scope: events::Scope {
-            session_id: run.session_id.clone(),
-            run_id: run.run_id.clone(),
-            ..events::Scope::default()
+    publish_event(
+        state,
+        events::Event {
+            category: "run".to_string(),
+            name: "run.created".to_string(),
+            scope: events::Scope {
+                session_id: run.session_id.clone(),
+                run_id: run.run_id.clone(),
+                ..events::Scope::default()
+            },
+            resource: events::Resource {
+                kind: "run".to_string(),
+                id: run.run_id.clone(),
+            },
+            payload,
+            ..events::Event::default()
         },
-        resource: events::Resource {
-            kind: "run".to_string(),
-            id: run.run_id.clone(),
-        },
-        payload,
-        ..events::Event::default()
-    })
+    )
 }
 
 /// Appends the event to the store ledger and fans it out on the bus (Go
@@ -470,7 +498,10 @@ fn project_run_delivery_summaries(
     Ok(items)
 }
 
-fn project_run_delivery_summary(state: &AppState, run: runtime::Run) -> Result<runtime::Run, String> {
+fn project_run_delivery_summary(
+    state: &AppState,
+    run: runtime::Run,
+) -> Result<runtime::Run, String> {
     let Some(manager) = state.delivery.as_deref() else {
         return Ok(run);
     };
@@ -548,7 +579,14 @@ pub async fn get_schedule(
     method: Method,
     uri: Uri,
 ) -> Result<Json<scheduler::Schedule>, ApiError> {
-    guard_schedule_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), &schedule_id).await?;
+    guard_schedule_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        &schedule_id,
+    )
+    .await?;
     let manager = scheduler_manager(&state)?;
     let mut item = manager
         .get(&schedule_id)
@@ -569,7 +607,14 @@ pub async fn pause_schedule(
     method: Method,
     uri: Uri,
 ) -> Result<Json<scheduler::Schedule>, ApiError> {
-    guard_schedule_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), &schedule_id).await?;
+    guard_schedule_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        &schedule_id,
+    )
+    .await?;
     let manager = scheduler_manager(&state)?;
     let item = manager
         .pause(&schedule_id)
@@ -587,7 +632,14 @@ pub async fn resume_schedule(
     method: Method,
     uri: Uri,
 ) -> Result<Json<scheduler::Schedule>, ApiError> {
-    guard_schedule_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), &schedule_id).await?;
+    guard_schedule_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        &schedule_id,
+    )
+    .await?;
     let manager = scheduler_manager(&state)?;
     let item = manager
         .resume(&schedule_id)
@@ -605,7 +657,14 @@ pub async fn cancel_schedule(
     method: Method,
     uri: Uri,
 ) -> Result<Json<scheduler::Schedule>, ApiError> {
-    guard_schedule_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), &schedule_id).await?;
+    guard_schedule_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        &schedule_id,
+    )
+    .await?;
     let manager = scheduler_manager(&state)?;
     let item = manager
         .cancel(&schedule_id)
@@ -653,7 +712,8 @@ fn build_schedule_workflow_target(
     };
     let calendar_action =
         build_calendar_action(request.calendar_action.as_ref()).map_err(ApiError::BadRequest)?;
-    let mail_action = build_mail_action(request.mail_action.as_ref()).map_err(ApiError::BadRequest)?;
+    let mail_action =
+        build_mail_action(request.mail_action.as_ref()).map_err(ApiError::BadRequest)?;
     Ok(Some(scheduler::WorkflowTarget {
         session_id: request.session_id.clone(),
         entrypoint: request.entrypoint.clone(),
@@ -767,8 +827,8 @@ fn project_schedule_calendar_summaries(
         ..kura_store::calendar::CalendarOperationFilter::default()
     };
     let operations = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_calendar_operations(&schedule.environment_scope, &filter)?;
     for attempt in &mut schedule.attempts {
         let filtered = operations
@@ -807,8 +867,8 @@ fn project_schedule_mail_summaries(
         ..kura_store::mail::MailOperationFilter::default()
     };
     let operations = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_mail_operations(&schedule.environment_scope, &filter)?;
     for attempt in &mut schedule.attempts {
         let filtered = operations
@@ -821,7 +881,9 @@ fn project_schedule_mail_summaries(
     Ok(schedule)
 }
 
-fn summarize_calendar_operations(mut items: Vec<calendar::Operation>) -> Vec<calendar::OperationSummary> {
+fn summarize_calendar_operations(
+    mut items: Vec<calendar::Operation>,
+) -> Vec<calendar::OperationSummary> {
     if items.is_empty() {
         return Vec::new();
     }
@@ -926,7 +988,14 @@ pub async fn get_delivery_target(
     method: Method,
     uri: Uri,
 ) -> Result<Json<delivery::DeliveryTarget>, ApiError> {
-    guard_delivery_target_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), &target_id).await?;
+    guard_delivery_target_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        &target_id,
+    )
+    .await?;
     let manager = delivery_manager(&state)?;
     let (target, ok) = manager.get_target(&target_id).map_err(ApiError::internal)?;
     if !ok {
@@ -945,7 +1014,14 @@ pub async fn activate_delivery_target(
     method: Method,
     uri: Uri,
 ) -> Result<Json<delivery::DeliveryTarget>, ApiError> {
-    guard_delivery_target_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), &target_id).await?;
+    guard_delivery_target_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        &target_id,
+    )
+    .await?;
     let manager = delivery_manager(&state)?;
     let (target, ok) = manager
         .update_target_status(&target_id, delivery::TargetStatus::Active)
@@ -966,7 +1042,14 @@ pub async fn disable_delivery_target(
     method: Method,
     uri: Uri,
 ) -> Result<Json<delivery::DeliveryTarget>, ApiError> {
-    guard_delivery_target_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), &target_id).await?;
+    guard_delivery_target_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        &target_id,
+    )
+    .await?;
     let manager = delivery_manager(&state)?;
     let (target, ok) = manager
         .update_target_status(&target_id, delivery::TargetStatus::Disabled)
@@ -1021,8 +1104,14 @@ pub async fn get_delivery_preference(
     method: Method,
     uri: Uri,
 ) -> Result<Json<delivery::DeliveryPreference>, ApiError> {
-    guard_delivery_preference_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), &preference_id)
-        .await?;
+    guard_delivery_preference_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        &preference_id,
+    )
+    .await?;
     let manager = delivery_manager(&state)?;
     let (item, ok) = manager
         .get_preference(&preference_id)
@@ -1052,7 +1141,8 @@ pub async fn list_deliveries(
         target_id: query_param(&params, "targetId"),
     };
     let mut items = manager.list_outcomes(filter).map_err(ApiError::internal)?;
-    items = project_delivery_outcomes_calendar_linkage(&state, items).map_err(ApiError::from_store)?;
+    items =
+        project_delivery_outcomes_calendar_linkage(&state, items).map_err(ApiError::from_store)?;
     items = project_delivery_outcomes_mail_linkage(&state, items).map_err(ApiError::from_store)?;
     Ok(Json(DeliveryOutcomeListResponse { items }))
 }
@@ -1067,9 +1157,18 @@ pub async fn get_delivery(
     method: Method,
     uri: Uri,
 ) -> Result<Json<delivery::DeliveryOutcome>, ApiError> {
-    guard_delivery_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), &delivery_id).await?;
+    guard_delivery_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        &delivery_id,
+    )
+    .await?;
     let manager = delivery_manager(&state)?;
-    let (mut item, ok) = manager.get_outcome(&delivery_id).map_err(ApiError::internal)?;
+    let (mut item, ok) = manager
+        .get_outcome(&delivery_id)
+        .map_err(ApiError::internal)?;
     if !ok {
         return Err(ApiError::NotFound("not found".to_string()));
     }
@@ -1098,8 +1197,14 @@ pub async fn get_delivery_window(
     method: Method,
     uri: Uri,
 ) -> Result<Json<delivery::SummaryWindow>, ApiError> {
-    guard_delivery_window_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), &summary_window_id)
-        .await?;
+    guard_delivery_window_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        &summary_window_id,
+    )
+    .await?;
     let manager = delivery_manager(&state)?;
     let (item, ok) = manager
         .get_summary_window(&summary_window_id)
@@ -1250,8 +1355,8 @@ fn project_delivery_outcome_calendar_linkage(
         filter.run_id = outcome.run_id.clone();
     }
     let operations = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_calendar_operations(&outcome.environment_scope, &filter)?;
     outcome.calendar_operation_summaries = summarize_calendar_operations(operations);
     outcome.calendar_operation_ids = outcome
@@ -1294,8 +1399,8 @@ fn project_delivery_outcome_mail_linkage(
         filter.run_id = outcome.run_id.clone();
     }
     let operations = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_mail_operations(&outcome.environment_scope, &filter)?;
     outcome.mail_operation_summaries = summarize_mail_operations(operations);
     outcome.mail_operation_ids = outcome
@@ -1370,15 +1475,19 @@ pub async fn stream_events(
     let live_stream = stream::unfold(
         (receiver, unsubscribe),
         |(mut receiver, unsubscribe)| async move {
-            receiver
-                .recv()
-                .await
-                .map(|event| (Ok::<_, Infallible>(to_sse_event(&event)), (receiver, unsubscribe)))
+            receiver.recv().await.map(|event| {
+                (
+                    Ok::<_, Infallible>(to_sse_event(&event)),
+                    (receiver, unsubscribe),
+                )
+            })
         },
     );
-    let events = stream::iter([Ok::<SseEvent, Infallible>(SseEvent::default().comment("stream-open"))])
-        .chain(history_stream)
-        .chain(live_stream);
+    let events = stream::iter([Ok::<SseEvent, Infallible>(
+        SseEvent::default().comment("stream-open"),
+    )])
+    .chain(history_stream)
+    .chain(live_stream);
     Ok(Sse::new(events).keep_alive(
         KeepAlive::default()
             .interval(Duration::from_secs(15))
@@ -1431,7 +1540,10 @@ pub(crate) fn parse_event_cursor(
 
 /// Go listEvents: tenant-aware store read when a tenant id is resolved, else
 /// the plain ledger read.
-pub(crate) fn read_events(state: &AppState, filter: &events::Filter) -> Result<Vec<events::Event>, ApiError> {
+pub(crate) fn read_events(
+    state: &AppState,
+    filter: &events::Filter,
+) -> Result<Vec<events::Event>, ApiError> {
     let store = state.store.lock();
     if !filter.tenant_owned_tenant_id.is_empty() {
         store
@@ -1537,7 +1649,11 @@ fn parse_operator_limit(raw: &str, fallback: usize) -> usize {
 // Operator projection builder (Go operator_projection.go)
 // ---------------------------------------------------------------------------
 
-fn build_onboarding(state: &AppState, token_id: &str, authenticated: bool) -> OperatorOnboardingResponse {
+fn build_onboarding(
+    state: &AppState,
+    token_id: &str,
+    authenticated: bool,
+) -> OperatorOnboardingResponse {
     let now = Utc::now();
     let environment_scope = environment_scope_from_config(&state.config);
     let mut readiness_items: Vec<crate::types::OperatorReadinessItem> = Vec::new();
@@ -1564,7 +1680,8 @@ fn build_onboarding(state: &AppState, token_id: &str, authenticated: bool) -> Op
     };
     if !authenticated {
         auth_item.status = "blocked".to_string();
-        auth_item.reason = "Authentication is required before the operator shell can load.".to_string();
+        auth_item.reason =
+            "Authentication is required before the operator shell can load.".to_string();
         auth_item.required_operator_action = "Pair or reuse a local access token.".to_string();
         blocking_item_ids.push(auth_item.item_id.clone());
     } else {
@@ -1624,8 +1741,9 @@ fn build_onboarding(state: &AppState, token_id: &str, authenticated: bool) -> Op
             diagnostic_freshness: String::new(),
             remediation_owner: String::new(),
             retry_safety: String::new(),
-            required_operator_action: "Configure or authenticate a chat-capable provider to unlock test queries."
-                .to_string(),
+            required_operator_action:
+                "Configure or authenticate a chat-capable provider to unlock test queries."
+                    .to_string(),
             required_for_selected_action: false,
             detail_route: "/v1/providers".to_string(),
             environment_scope: environment_scope.clone(),
@@ -1724,7 +1842,11 @@ fn optional_integration_readiness(
     let mut items = Vec::new();
     for item in manager.list() {
         let (status, health_state) = map_integration_readiness(&item);
-        let status = if status == "ready" { "optional".to_string() } else { status };
+        let status = if status == "ready" {
+            "optional".to_string()
+        } else {
+            status
+        };
         items.push(crate::types::OperatorReadinessItem {
             item_id: format!("integration-{}", item.integration_id),
             item_kind: "integration".to_string(),
@@ -1837,7 +1959,8 @@ fn has_recorded_shell_test_run(state: &AppState) -> bool {
         return false;
     };
     manager.list_runs().iter().any(|run| {
-        run.entrypoint == OPERATOR_SHELL_TEST_ENTRYPOINT && run.status != runtime::RunStatus::Cancelled
+        run.entrypoint == OPERATOR_SHELL_TEST_ENTRYPOINT
+            && run.status != runtime::RunStatus::Cancelled
     })
 }
 
@@ -2053,7 +2176,8 @@ fn build_diagnostics(state: &AppState) -> Result<OperatorDiagnosticListResponse,
                 severity: severity_for_schedule(&item),
                 status: item.status.as_str().to_string(),
                 reason: schedule_summary(&item),
-                recommended_action: "Inspect the schedule target and its latest attempt.".to_string(),
+                recommended_action: "Inspect the schedule target and its latest attempt."
+                    .to_string(),
                 detail_route: format!("/v1/schedules/{}", item.schedule_id),
                 related_resource_refs: build_schedule_refs(&item),
                 environment_scope: environment_scope.clone(),
@@ -2149,8 +2273,8 @@ fn build_diagnostics(state: &AppState) -> Result<OperatorDiagnosticListResponse,
                 severity: severity_for_delivery(&item),
                 status: item.status.as_str().to_string(),
                 reason: delivery_summary(&item),
-                recommended_action: "Inspect delivery attempts, target state, and source execution."
-                    .to_string(),
+                recommended_action:
+                    "Inspect delivery attempts, target state, and source execution.".to_string(),
                 detail_route: format!("/v1/deliveries/{}", item.delivery_id),
                 related_resource_refs: build_delivery_refs(&item),
                 environment_scope: environment_scope.clone(),
@@ -2183,7 +2307,8 @@ fn computer_use_findings(
         if step.computer_use_session_id.is_empty() {
             continue;
         }
-        let Ok(Some(session)) = computer_use.get_session(&workflow.run_id, &step.computer_use_session_id)
+        let Ok(Some(session)) =
+            computer_use.get_session(&workflow.run_id, &step.computer_use_session_id)
         else {
             continue;
         };
@@ -2199,7 +2324,8 @@ fn computer_use_findings(
                     severity: "critical".to_string(),
                     status: session.status.as_str().to_string(),
                     reason: "Computer-use session needs operator attention.".to_string(),
-                    recommended_action: "Inspect the browser session and its latest action.".to_string(),
+                    recommended_action: "Inspect the browser session and its latest action."
+                        .to_string(),
                     detail_route: format!(
                         "/v1/runs/{}/computer-use/sessions/{}",
                         workflow.run_id, session.computer_use_session_id,
@@ -2231,7 +2357,8 @@ fn map_integration_readiness(item: &integrations::Resource) -> (String, String) 
             "blocked".to_string(),
             first_non_empty(&[&item.health_state, "unavailable"]),
         ),
-        integrations::ReadinessStatus::AuthPending | integrations::ReadinessStatus::NotConfigured => (
+        integrations::ReadinessStatus::AuthPending
+        | integrations::ReadinessStatus::NotConfigured => (
             "missing_configuration".to_string(),
             first_non_empty(&[&item.health_state, "unknown"]),
         ),
@@ -2268,9 +2395,9 @@ fn connector_operator_action(item: &connectors::Connector) -> String {
         connectors::Status::Degraded => {
             "Inspect connector health and recover the downstream transport.".to_string()
         }
-        connectors::Status::Healthy | connectors::Status::Registered | connectors::Status::Disabled => {
-            String::new()
-        }
+        connectors::Status::Healthy
+        | connectors::Status::Registered
+        | connectors::Status::Disabled => String::new(),
     }
 }
 
@@ -2285,9 +2412,7 @@ fn capability_operator_action(item: &kura_capabilities::Capability) -> String {
         kura_capabilities::Status::Degraded => {
             "Inspect capability health and recover the degraded dependency.".to_string()
         }
-        kura_capabilities::Status::Healthy | kura_capabilities::Status::Registered => {
-            String::new()
-        }
+        kura_capabilities::Status::Healthy | kura_capabilities::Status::Registered => String::new(),
     }
 }
 
@@ -2461,7 +2586,10 @@ fn build_schedule_refs(item: &scheduler::Schedule) -> Vec<crate::types::Operator
             refs.push(crate::types::OperatorResourceRef {
                 kind: "workflow".to_string(),
                 id: attempt.workflow_id.clone(),
-                route: format!("/v1/runs/{}/workflows/{}", attempt.run_id, attempt.workflow_id),
+                route: format!(
+                    "/v1/runs/{}/workflows/{}",
+                    attempt.run_id, attempt.workflow_id
+                ),
             });
         }
         if !attempt.latest_delivery_id.is_empty() {
@@ -2557,7 +2685,12 @@ fn operator_activity_record_from_event(
 
 fn operator_source_kind_for_event(event: &events::Event) -> String {
     match event.resource.kind.as_str() {
-        "approval" | "schedule" | "run" | "workflow" | "delivery" | "computer_use_session"
+        "approval"
+        | "schedule"
+        | "run"
+        | "workflow"
+        | "delivery"
+        | "computer_use_session"
         | "computer_use_action" => event.resource.kind.clone(),
         "decision" => "approval".to_string(),
         _ => match event.category.as_str() {
@@ -2644,7 +2777,10 @@ fn operator_detail_route_for_event(event: &events::Event) -> String {
         "run" => format!("/v1/runs/{}", event.resource.id),
         "workflow" => {
             if !event.scope.run_id.is_empty() {
-                format!("/v1/runs/{}/workflows/{}", event.scope.run_id, event.resource.id)
+                format!(
+                    "/v1/runs/{}/workflows/{}",
+                    event.scope.run_id, event.resource.id
+                )
             } else {
                 String::new()
             }
@@ -2724,11 +2860,7 @@ fn build_calendar_action(
             .iter()
             .filter_map(|attendee| {
                 let email = attendee.trim().to_string();
-                if email.is_empty() {
-                    None
-                } else {
-                    Some(email)
-                }
+                if email.is_empty() { None } else { Some(email) }
             })
             .collect(),
         reason: request.reason.trim().to_string(),
@@ -2804,19 +2936,17 @@ mod tests {
     use axum::body::Body;
     use axum::body::to_bytes;
     use axum::http::Request as HttpRequest;
+    use futures::StreamExt;
     use kura_delivery::{
         DeliveryAdapter, DeliveryOutcome, DeliveryTarget, Manager as DeliveryManager, SendResult,
         TargetKind, TestSinkAdapter,
     };
     use kura_events::Bus;
     use kura_identity::TenantContext as IdentityTenantContext;
-    use kura_runtime::Manager as RuntimeManager;
     use kura_router::SessionRouter;
-    use kura_scheduler::{
-        Dependencies as SchedulerDependencies, Scheduler,
-    };
+    use kura_runtime::Manager as RuntimeManager;
+    use kura_scheduler::{Dependencies as SchedulerDependencies, Scheduler};
     use kura_store::SQLiteStore;
-    use futures::StreamExt;
     use parking_lot::Mutex;
     use tower::ServiceExt;
     use uuid::Uuid;
@@ -2847,6 +2977,8 @@ mod tests {
                     ..Default::default()
                 },
             },
+            egress: Default::default(),
+            store: Default::default(),
         }
     }
 
@@ -2912,10 +3044,7 @@ mod tests {
             .expect("request")
     }
 
-    async fn send(
-        app: &axum::Router,
-        req: HttpRequest<Body>,
-    ) -> (StatusCode, serde_json::Value) {
+    async fn send(app: &axum::Router, req: HttpRequest<Body>) -> (StatusCode, serde_json::Value) {
         let response = app.clone().oneshot(req).await.expect("oneshot");
         let status = response.status();
         let bytes = to_bytes(response.into_body(), usize::MAX)
@@ -2995,11 +3124,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "list body: {json}");
         assert_eq!(json["items"][0]["runId"], run_id);
 
-        let (status, json) = send(
-            &app,
-            request("GET", &format!("/v1/runs/{run_id}"), None),
-        )
-        .await;
+        let (status, json) = send(&app, request("GET", &format!("/v1/runs/{run_id}"), None)).await;
         assert_eq!(status, StatusCode::OK, "get body: {json}");
         assert_eq!(json["runId"], run_id);
 
@@ -3010,7 +3135,11 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "events body: {json}");
         let items = json["items"].as_array().expect("items");
-        assert_eq!(items.len(), 1, "expected 1 run-scoped event after run create");
+        assert_eq!(
+            items.len(),
+            1,
+            "expected 1 run-scoped event after run create"
+        );
         assert_eq!(items[0]["name"], "run.created");
     }
 
@@ -3097,7 +3226,11 @@ mod tests {
             tenant_request("GET", &format!("/v1/runs/{}", run.run_id), "ten_b"),
         )
         .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "cross-tenant 404 body: {json}");
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "cross-tenant 404 body: {json}"
+        );
     }
 
     // -- schedules ------------------------------------------------------------
@@ -3130,11 +3263,7 @@ mod tests {
         let body = format!(
             r#"{{"trigger":{{"kind":"once","fireAt":"{fire_at}"}},"target":{{"kind":"run","run":{{"entrypoint":"operator","goal":"dispatch one test run"}}}},"retryPolicy":{{"maxRetries":2,"backoffKind":"fixed","baseDelaySeconds":5,"maxDelaySeconds":5}}}}"#
         );
-        let (status, json) = send(
-            &app,
-            request("POST", "/v1/schedules", Some(&body)),
-        )
-        .await;
+        let (status, json) = send(&app, request("POST", "/v1/schedules", Some(&body))).await;
         assert_eq!(status, StatusCode::CREATED, "create body: {json}");
         let schedule_id = json["scheduleId"].as_str().expect("scheduleId").to_string();
         assert_eq!(json["status"], "scheduled");
@@ -3159,20 +3288,12 @@ mod tests {
         let body = format!(
             r#"{{"trigger":{{"kind":"once","fireAt":"{fire_at}"}},"target":{{"kind":"run","run":{{"entrypoint":"operator","goal":"cancel via api"}}}},"retryPolicy":{{"maxRetries":0,"backoffKind":"fixed","baseDelaySeconds":5,"maxDelaySeconds":5}}}}"#
         );
-        let (status, json) = send(
-            &app,
-            request("POST", "/v1/schedules", Some(&body)),
-        )
-        .await;
+        let (status, json) = send(&app, request("POST", "/v1/schedules", Some(&body))).await;
         assert_eq!(status, StatusCode::CREATED, "create body: {json}");
         let schedule_id = json["scheduleId"].as_str().expect("scheduleId").to_string();
         let (status, json) = send(
             &app,
-            request(
-                "POST",
-                &format!("/v1/schedules/{schedule_id}/cancel"),
-                None,
-            ),
+            request("POST", &format!("/v1/schedules/{schedule_id}/cancel"), None),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "cancel body: {json}");
@@ -3220,7 +3341,10 @@ mod tests {
         let (status, json) = send(&app, request("GET", "/v1/schedules", None)).await;
         assert_eq!(status, StatusCode::OK, "list body: {json}");
         assert_eq!(
-            json["items"].as_array().map(|items| items.len()).unwrap_or(0),
+            json["items"]
+                .as_array()
+                .map(|items| items.len())
+                .unwrap_or(0),
             0,
             "expected no cross-environment schedules"
         );
@@ -3315,7 +3439,12 @@ mod tests {
         let items = json["items"].as_array().expect("items");
         assert_eq!(items.len(), 1, "expected one delivery outcome");
         assert_eq!(items[0]["status"], "suppressed");
-        assert!(!items[0]["suppressionReason"].as_str().unwrap_or("").is_empty());
+        assert!(
+            !items[0]["suppressionReason"]
+                .as_str()
+                .unwrap_or("")
+                .is_empty()
+        );
 
         let names: Vec<String> = store
             .lock()
@@ -3386,17 +3515,9 @@ mod tests {
         // maps to 400.
         let state = AppState::new(test_config(), Arc::new(Bus::new()), new_store());
         let app = crate::routes::router(state);
-        let (status, json) = send(
-            &app,
-            request("GET", "/v1/events?cursor=-1", None),
-        )
-        .await;
+        let (status, json) = send(&app, request("GET", "/v1/events?cursor=-1", None)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "body: {json}");
-        let (status, _) = send(
-            &app,
-            request("GET", "/v1/events?cursor=abc", None),
-        )
-        .await;
+        let (status, _) = send(&app, request("GET", "/v1/events?cursor=abc", None)).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
@@ -3439,7 +3560,11 @@ mod tests {
             .expect("payload object"),
             ..events::Event::default()
         };
-        let stored = state.store.lock().append_event(&event).expect("append event");
+        let stored = state
+            .store
+            .lock()
+            .append_event(&event)
+            .expect("append event");
         bus.publish(stored);
         let app = crate::routes::router(state);
 
@@ -3557,7 +3682,12 @@ mod tests {
     }
 
     impl OperatorHarness {
-        fn seed_run(&self, entrypoint: &str, goal: &str, status: runtime::RunStatus) -> runtime::Run {
+        fn seed_run(
+            &self,
+            entrypoint: &str,
+            goal: &str,
+            status: runtime::RunStatus,
+        ) -> runtime::Run {
             let mut run = self
                 .runtime
                 .create_run(runtime::CreateRunInput {
@@ -3719,7 +3849,9 @@ mod tests {
     #[tokio::test]
     async fn operator_onboarding_projects_readiness_and_first_actions() {
         // Port of Go TestOperatorOnboardingRouteProjectsReadinessAndFirstActions.
-        let h = operator_harness(vec![Arc::new(TestSinkAdapter::new()) as Arc<dyn DeliveryAdapter>]);
+        let h = operator_harness(vec![
+            Arc::new(TestSinkAdapter::new()) as Arc<dyn DeliveryAdapter>
+        ]);
         h.state
             .integrations
             .as_ref()
@@ -3796,20 +3928,23 @@ mod tests {
                 },
             )
             .expect("report capability health");
-        h.seed_run(OPERATOR_SHELL_TEST_ENTRYPOINT, "operator smoke", runtime::RunStatus::Queued);
+        h.seed_run(
+            OPERATOR_SHELL_TEST_ENTRYPOINT,
+            "operator smoke",
+            runtime::RunStatus::Queued,
+        );
 
         let app = crate::routes::router(h.state.clone());
-        let (status, json) = send(
-            &app,
-            authenticated_request("/v1/operator/onboarding"),
-        )
-        .await;
+        let (status, json) = send(&app, authenticated_request("/v1/operator/onboarding")).await;
         assert_eq!(status, StatusCode::OK, "onboarding body: {json}");
         assert_eq!(json["environmentScope"], "test");
         assert_eq!(json["status"], "completed");
         assert_eq!(json["recommendedActionId"], "test_run");
         assert_eq!(
-            json["blockingItemIds"].as_array().map(|items| items.len()).unwrap_or(0),
+            json["blockingItemIds"]
+                .as_array()
+                .map(|items| items.len())
+                .unwrap_or(0),
             0,
         );
 
@@ -3916,8 +4051,7 @@ mod tests {
         let mut found_event_backed_delivery = false;
         for item in items {
             assert_ne!(
-                item["attentionLevel"],
-                "info",
+                item["attentionLevel"], "info",
                 "expected attentionOnly filter to remove info items: {item}"
             );
             match item["sourceKind"].as_str() {
@@ -3934,7 +4068,10 @@ mod tests {
                 Some("workflow") => {
                     found_workflow = item["sourceId"] == workflow.workflow_id
                         && item["detailRoute"]
-                            == format!("/v1/runs/{}/workflows/{}", run.run_id, workflow.workflow_id);
+                            == format!(
+                                "/v1/runs/{}/workflows/{}",
+                                run.run_id, workflow.workflow_id
+                            );
                 }
                 Some("delivery") => {
                     if item["sourceId"] == failed_outcome.delivery_id
@@ -4027,11 +4164,7 @@ mod tests {
         let failed_outcome = h.seed_failed_delivery(&run, &workflow);
 
         let app = crate::routes::router(h.state.clone());
-        let (status, json) = send(
-            &app,
-            request("GET", "/v1/operator/diagnostics", None),
-        )
-        .await;
+        let (status, json) = send(&app, request("GET", "/v1/operator/diagnostics", None)).await;
         assert_eq!(status, StatusCode::OK, "diagnostics body: {json}");
         let all_findings = json["items"].as_array().expect("items");
         assert!(
@@ -4066,4 +4199,3 @@ mod tests {
         );
     }
 }
-

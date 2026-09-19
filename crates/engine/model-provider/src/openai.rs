@@ -1,8 +1,8 @@
 use async_stream::try_stream;
-use kura_protocol::ResponseItem;
-use kura_protocol::Role;
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use kura_protocol::ResponseItem;
+use kura_protocol::Role;
 use serde_json::Value;
 use serde_json::json;
 

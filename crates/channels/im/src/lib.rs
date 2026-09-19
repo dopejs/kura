@@ -12,8 +12,8 @@
 
 use std::collections::HashMap;
 use std::error::Error;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -30,11 +30,11 @@ use kura_runtime::{
     CreateRunInput, CreateStepInput, Manager as RuntimeManager, Run, Step, StepStatus,
     UpdateStepStatusInput,
 };
+use kura_store::SQLiteStore;
 use kura_store::channel_management::{
     ForegroundReplyOutcome, route_policy_allows_conversation, route_policy_allows_sender,
     route_policy_is_valid,
 };
-use kura_store::SQLiteStore;
 use kura_threads::{
     ConversationShape, ConversationShapeResolutionInput, LifecycleState, ParticipationDecision,
     ParticipationDecisionValue, ParticipationEvaluationInput, RedactionStatus, RoutingOutcome,
@@ -72,7 +72,6 @@ pub trait ReplyProgressor: ReplySender {
     fn reply_capabilities(&self) -> ReplyCapabilities;
     fn send_thinking(&self, signal: ThinkingSignal) -> Result<(), String>;
     fn edit_reply(&self, edit: ReplyEdit) -> Result<(), String>;
-
 }
 
 // ---------------------------------------------------------------------------
@@ -93,7 +92,10 @@ pub struct ClassifiedError {
 impl ClassifiedError {
     /// Wraps source under the error class class.
     pub fn new(class: impl Into<String>, source: Box<dyn Error + Send + Sync>) -> Self {
-        ClassifiedError { class: class.into(), source }
+        ClassifiedError {
+            class: class.into(),
+            source,
+        }
     }
 
     /// Go ErrorClass() — the trimmed class.
@@ -245,7 +247,11 @@ pub fn inbound_connector_account_id(inbound: &InboundMessage) -> String {
 /// Go inboundChannelOrConversationID.
 #[must_use]
 pub fn inbound_channel_or_conversation_id(inbound: &InboundMessage) -> String {
-    coalesce_trimmed(&[&inbound.channel_or_conversation_id, &inbound.channel_id, &inbound.peer_id])
+    coalesce_trimmed(&[
+        &inbound.channel_or_conversation_id,
+        &inbound.channel_id,
+        &inbound.peer_id,
+    ])
 }
 
 /// Go inboundProviderMessageID.
@@ -376,7 +382,11 @@ pub fn thread_id_for_source(key: &SourceContinuationKey) -> String {
 pub fn thread_source_linkage_id(record: &MessageRecord, outcome: RoutingOutcome) -> String {
     format!(
         "src_{}",
-        short_thread_hash(&format!("{}:{}", record.delivery_id, routing_outcome_str(outcome)))
+        short_thread_hash(&format!(
+            "{}:{}",
+            record.delivery_id,
+            routing_outcome_str(outcome)
+        ))
     )
 }
 
@@ -585,7 +595,11 @@ impl MessageLoop {
             return Err("content is required".to_string());
         }
 
-        let now = if is_unset_time(&inbound.received_at) { Utc::now() } else { inbound.received_at };
+        let now = if is_unset_time(&inbound.received_at) {
+            Utc::now()
+        } else {
+            inbound.received_at
+        };
 
         let inbound_record = MessageRecord {
             delivery_id: new_delivery_id(),
@@ -707,8 +721,8 @@ impl MessageLoop {
         }
         persisted_inbound.updated_at = Utc::now();
         self.store.upsert_connector_message(&persisted_inbound)?;
-        let (participation_decision, participation_enforced) =
-            self.apply_group_room_participation_policy(
+        let (participation_decision, participation_enforced) = self
+            .apply_group_room_participation_policy(
                 connector,
                 inbound,
                 &thread,
@@ -732,7 +746,13 @@ impl MessageLoop {
             });
         }
         self.publish_session_route_events(connector, &session, created_session, inbound)?;
-        self.publish_matrix_route_outcome(connector, &session, &persisted_inbound, "accepted", "accepted")?;
+        self.publish_matrix_route_outcome(
+            connector,
+            &session,
+            &persisted_inbound,
+            "accepted",
+            "accepted",
+        )?;
         self.publish_connector_event(
             "connector.ingress_accepted",
             connector,
@@ -765,12 +785,18 @@ impl MessageLoop {
         self.update_step_status(
             &run.run_id,
             &step.step_id,
-            UpdateStepStatusInput { status: StepStatus::Planning, output: None },
+            UpdateStepStatusInput {
+                status: StepStatus::Planning,
+                output: None,
+            },
         )?;
         self.update_step_status(
             &run.run_id,
             &step.step_id,
-            UpdateStepStatusInput { status: StepStatus::CallingModel, output: None },
+            UpdateStepStatusInput {
+                status: StepStatus::CallingModel,
+                output: None,
+            },
         )?;
 
         let event_scope = Scope {
@@ -785,8 +811,16 @@ impl MessageLoop {
             capabilities = progressor.reply_capabilities();
         }
         let stop_flag = Arc::new(AtomicBool::new(false));
-        let thinking_started =
-            self.start_thinking_progress(connector, &session, &run.run_id, &step.step_id, inbound, progressor, &capabilities, &stop_flag);
+        let thinking_started = self.start_thinking_progress(
+            connector,
+            &session,
+            &run.run_id,
+            &step.step_id,
+            inbound,
+            progressor,
+            &capabilities,
+            &stop_flag,
+        );
 
         std::thread::scope(|thread_scope| -> Result<ProcessResult, String> {
             if thinking_started {
@@ -808,12 +842,22 @@ impl MessageLoop {
                 let channel_id = inbound.channel_id.clone();
                 thread_scope.spawn(move || {
                     tick_thinking(
-                        bus, connector_id, session_id, run_id, step_id, message_id,
-                        channel_id, progressor_ref, signal, flag,
+                        bus,
+                        connector_id,
+                        session_id,
+                        run_id,
+                        step_id,
+                        message_id,
+                        channel_id,
+                        progressor_ref,
+                        signal,
+                        flag,
                     );
                 });
             }
-            let stop = ThinkingStop { flag: Arc::clone(&stop_flag) };
+            let stop = ThinkingStop {
+                flag: Arc::clone(&stop_flag),
+            };
             let (query_result, outbound_record, send_err) = self.execute_reply_path(
                 connector,
                 &session,
@@ -861,7 +905,10 @@ impl MessageLoop {
                     })).into()),
                 },
             )?;
-            let run = self.runtime.get_run(&run.run_id).unwrap_or_else(|| run.clone());
+            let run = self
+                .runtime
+                .get_run(&run.run_id)
+                .unwrap_or_else(|| run.clone());
             self.record_thread_runtime_projections(
                 &thread,
                 &segment_id,
@@ -919,13 +966,16 @@ impl MessageLoop {
             &step.step_id,
             UpdateStepStatusInput {
                 status: StepStatus::Failed,
-                output: Some(object(serde_json::json!({
-                    "reply": query_result.dispatch.output,
-                    "partial": partial_reply,
-                    "replyStatus": outbound_record.status.as_str(),
-                    "reasonCode": safe_reason,
-                    "errorClass": error_class,
-                })).into()),
+                output: Some(
+                    object(serde_json::json!({
+                        "reply": query_result.dispatch.output,
+                        "partial": partial_reply,
+                        "replyStatus": outbound_record.status.as_str(),
+                        "reasonCode": safe_reason,
+                        "errorClass": error_class,
+                    }))
+                    .into(),
+                ),
             },
         );
         persisted_inbound.status = if partial_reply {
@@ -1107,7 +1157,10 @@ impl MessageLoop {
             partial_evidence: false,
         })?;
         self.save_thread_source_linkage(&SourceLinkage {
-            source_linkage_id: thread_source_linkage_id(persisted_inbound, RoutingOutcome::Accepted),
+            source_linkage_id: thread_source_linkage_id(
+                persisted_inbound,
+                RoutingOutcome::Accepted,
+            ),
             thread_id: current.thread_id.clone(),
             tenant_id: current.tenant_id.clone(),
             source_kind: SourceKind::Channel,
@@ -1154,7 +1207,8 @@ impl MessageLoop {
         segment_id: &str,
         persisted_inbound: &MessageRecord,
     ) -> Result<(ParticipationDecision, bool), String> {
-        let shape = conversation_shape_for_ingress_source(SourceKind::Channel, &connector.kind, inbound);
+        let shape =
+            conversation_shape_for_ingress_source(SourceKind::Channel, &connector.kind, inbound);
         if shape != ConversationShape::Group && shape != ConversationShape::Room {
             return Ok((zero_participation_decision(), false));
         }
@@ -1201,7 +1255,10 @@ impl MessageLoop {
             return Ok((false, false, String::new()));
         }
         let tenant_id = coalesce_trimmed(&[&inbound.tenant_id, &connector.tenant_id]);
-        let policy = match self.store.get_channel_route_policy(&tenant_id, &connector.connector_id)? {
+        let policy = match self
+            .store
+            .get_channel_route_policy(&tenant_id, &connector.connector_id)?
+        {
             Some(policy) => policy,
             None => return Ok((false, false, String::new())),
         };
@@ -1211,7 +1268,11 @@ impl MessageLoop {
         let source_conversation_id = inbound_channel_or_conversation_id(inbound);
         let allowlist_eligible = route_policy_allows_conversation(&policy, &source_conversation_id);
         let permission_allowed = route_policy_allows_sender(&policy, inbound.author_id.trim());
-        Ok((allowlist_eligible, permission_allowed, policy.route_policy_id))
+        Ok((
+            allowlist_eligible,
+            permission_allowed,
+            policy.route_policy_id,
+        ))
     }
 
     /// Go recordDuplicateThreadEvidence: records the duplicate source linkage
@@ -1239,7 +1300,10 @@ impl MessageLoop {
             None => return Ok(()),
         };
         self.save_thread_source_linkage(&SourceLinkage {
-            source_linkage_id: thread_source_linkage_id(persisted_inbound, RoutingOutcome::Duplicate),
+            source_linkage_id: thread_source_linkage_id(
+                persisted_inbound,
+                RoutingOutcome::Duplicate,
+            ),
             thread_id: current.thread_id.clone(),
             tenant_id: current.tenant_id.clone(),
             source_kind: SourceKind::Channel,
@@ -1276,7 +1340,11 @@ impl MessageLoop {
         let thread = Thread {
             thread_id: format!(
                 "thr_ingress_{}",
-                short_thread_hash(&format!("{}{}", persisted_inbound.delivery_id, routing_outcome_str(outcome)))
+                short_thread_hash(&format!(
+                    "{}{}",
+                    persisted_inbound.delivery_id,
+                    routing_outcome_str(outcome)
+                ))
             ),
             tenant_id: tenant_id.clone(),
             lifecycle_state: LifecycleState::Active,
@@ -1580,13 +1648,31 @@ impl MessageLoop {
     ) -> Result<(QueryResult, MessageRecord, Option<String>), String> {
         if capabilities.supports_streaming && progressor.is_some() {
             return self.execute_streaming_reply(
-                connector, session, run, step, inbound, persisted_inbound,
-                progressor.expect("checked above"), capabilities, scope, stop_thinking, cancel,
+                connector,
+                session,
+                run,
+                step,
+                inbound,
+                persisted_inbound,
+                progressor.expect("checked above"),
+                capabilities,
+                scope,
+                stop_thinking,
+                cancel,
             );
         }
         self.execute_final_reply(
-            connector, session, run, step, inbound, persisted_inbound, replies,
-            capabilities, scope, stop_thinking, cancel,
+            connector,
+            session,
+            run,
+            step,
+            inbound,
+            persisted_inbound,
+            replies,
+            capabilities,
+            scope,
+            stop_thinking,
+            cancel,
         )
     }
 
@@ -1638,7 +1724,10 @@ impl MessageLoop {
         self.update_step_status(
             &run.run_id,
             &step.step_id,
-            UpdateStepStatusInput { status: StepStatus::ExecutingTool, output: None },
+            UpdateStepStatusInput {
+                status: StepStatus::ExecutingTool,
+                output: None,
+            },
         )?;
 
         let mut reply_parts = split_reply_content(
@@ -1652,7 +1741,14 @@ impl MessageLoop {
         let mut outbound_record = MessageRecord::default();
         let mut reply_message_ids: Vec<String> = Vec::new();
         for (index, reply_part) in reply_parts.iter().enumerate() {
-            let mut record = new_outbound_record(connector, session, run, inbound, persisted_inbound, reply_part);
+            let mut record = new_outbound_record(
+                connector,
+                session,
+                run,
+                inbound,
+                persisted_inbound,
+                reply_part,
+            );
             self.store.upsert_connector_message(&record)?;
 
             let sent_reply = replies.send_reply(OutboundReply {
@@ -1669,7 +1765,8 @@ impl MessageLoop {
             stop_thinking.stop();
             record.external_message_id = sent.external_message_id.clone();
             record.status = DeliveryStatus::Replied;
-            record.foreground_outcome_status = foreground_reply_outcome_status(record.status).to_string();
+            record.foreground_outcome_status =
+                foreground_reply_outcome_status(record.status).to_string();
             record.updated_at = Utc::now();
             self.store.upsert_connector_message(&record)?;
             if index == 0 {
@@ -1778,32 +1875,66 @@ impl MessageLoop {
         let query_result = execution.result;
         if let Some(query_err) = execution.exec_error.map(chat_exec_error_text) {
             if query_result.dispatch.partial && !query_result.dispatch.output.trim().is_empty() {
-                if let Err(err) = progress.complete_partial(&query_result.dispatch.output, &query_err) {
-                    self.apply_deferred(connector, session, &run.run_id, &step.step_id, progress.pending)?;
+                if let Err(err) =
+                    progress.complete_partial(&query_result.dispatch.output, &query_err)
+                {
+                    self.apply_deferred(
+                        connector,
+                        session,
+                        &run.run_id,
+                        &step.step_id,
+                        progress.pending,
+                    )?;
                     return Ok((query_result, progress.record.clone(), Some(err)));
                 }
             }
-            self.apply_deferred(connector, session, &run.run_id, &step.step_id, progress.pending)?;
+            self.apply_deferred(
+                connector,
+                session,
+                &run.run_id,
+                &step.step_id,
+                progress.pending,
+            )?;
             return Ok((query_result, progress.record.clone(), Some(query_err)));
         }
 
         self.update_step_status(
             &run.run_id,
             &step.step_id,
-            UpdateStepStatusInput { status: StepStatus::ExecutingTool, output: None },
+            UpdateStepStatusInput {
+                status: StepStatus::ExecutingTool,
+                output: None,
+            },
         )?;
         if let Err(err) = progress.complete(&query_result.dispatch.output) {
-            self.apply_deferred(connector, session, &run.run_id, &step.step_id, progress.pending)?;
+            self.apply_deferred(
+                connector,
+                session,
+                &run.run_id,
+                &step.step_id,
+                progress.pending,
+            )?;
             return Ok((query_result, progress.record.clone(), Some(err)));
         }
         if let Some(progress_err) = progress_err {
-            self.apply_deferred(connector, session, &run.run_id, &step.step_id, progress.pending)?;
+            self.apply_deferred(
+                connector,
+                session,
+                &run.run_id,
+                &step.step_id,
+                progress.pending,
+            )?;
             return Ok((query_result, progress.record.clone(), Some(progress_err)));
         }
-        self.apply_deferred(connector, session, &run.run_id, &step.step_id, progress.pending)?;
+        self.apply_deferred(
+            connector,
+            session,
+            &run.run_id,
+            &step.step_id,
+            progress.pending,
+        )?;
         Ok((query_result, progress.record.clone(), None))
     }
-
 }
 
 /// Go newOutboundRecord: builds the outbound delivery record for one reply
@@ -1817,32 +1948,32 @@ pub fn new_outbound_record(
     persisted_inbound: &MessageRecord,
     content: &str,
 ) -> MessageRecord {
-        let now = Utc::now();
-        MessageRecord {
-            delivery_id: new_delivery_id(),
-            tenant_id: persisted_inbound.tenant_id.clone(),
-            connector_id: connector.connector_id.clone(),
-            direction: DeliveryDirection::Outbound,
-            session_id: session.session_id.clone(),
-            run_id: run.run_id.clone(),
-            channel_id: inbound.channel_id.clone(),
-            peer_id: inbound.peer_id.clone(),
-            thread_id: persisted_inbound.thread_id.clone(),
-            thread_session_segment_id: persisted_inbound.thread_session_segment_id.clone(),
-            content: content.to_string(),
-            status: DeliveryStatus::Processing,
-            foreground_outcome_status: foreground_reply_outcome_status(DeliveryStatus::Processing)
-                .to_string(),
-            response_to_delivery_id: persisted_inbound.delivery_id.clone(),
-            reply_to_external_message_id: reply_to_external_message_id(inbound),
-            created_at: now,
-            updated_at: now,
-            ..MessageRecord::default()
-        }
+    let now = Utc::now();
+    MessageRecord {
+        delivery_id: new_delivery_id(),
+        tenant_id: persisted_inbound.tenant_id.clone(),
+        connector_id: connector.connector_id.clone(),
+        direction: DeliveryDirection::Outbound,
+        session_id: session.session_id.clone(),
+        run_id: run.run_id.clone(),
+        channel_id: inbound.channel_id.clone(),
+        peer_id: inbound.peer_id.clone(),
+        thread_id: persisted_inbound.thread_id.clone(),
+        thread_session_segment_id: persisted_inbound.thread_session_segment_id.clone(),
+        content: content.to_string(),
+        status: DeliveryStatus::Processing,
+        foreground_outcome_status: foreground_reply_outcome_status(DeliveryStatus::Processing)
+            .to_string(),
+        response_to_delivery_id: persisted_inbound.delivery_id.clone(),
+        reply_to_external_message_id: reply_to_external_message_id(inbound),
+        created_at: now,
+        updated_at: now,
+        ..MessageRecord::default()
     }
+}
 
 impl MessageLoop {
-/// Go startThinkingProgress: sends the initial thinking indicator and
+    /// Go startThinkingProgress: sends the initial thinking indicator and
     /// returns whether the periodic keep-alive ticker should run.
     fn start_thinking_progress(
         &self,
@@ -1901,7 +2032,10 @@ impl MessageLoop {
     }
 
     /// Go routeSession.
-    fn route_session(&self, inbound: &InboundMessage) -> Result<(Session, bool), kura_router::RouterError> {
+    fn route_session(
+        &self,
+        inbound: &InboundMessage,
+    ) -> Result<(Session, bool), kura_router::RouterError> {
         self.router.route(RouteInput {
             kind: inbound.kind,
             channel: inbound.connector_kind.clone(),
@@ -2009,7 +2143,10 @@ impl MessageLoop {
         self.persist_checkpoint(run_id)?;
 
         let run = self.runtime.get_run(run_id);
-        let run_session_id = run.as_ref().map(|run| run.session_id.clone()).unwrap_or_default();
+        let run_session_id = run
+            .as_ref()
+            .map(|run| run.session_id.clone())
+            .unwrap_or_default();
         self.publish_runtime_event(
             "step.status_changed",
             "step",
@@ -2156,7 +2293,14 @@ impl MessageLoop {
             connector_id: connector.connector_id.clone(),
             ..Scope::default()
         };
-        self.publish_event("connector", name, "connector", &connector.connector_id, scope, payload)
+        self.publish_event(
+            "connector",
+            name,
+            "connector",
+            &connector.connector_id,
+            scope,
+            payload,
+        )
     }
 
     /// Go recordChannelForegroundReplyOutcome.
@@ -2184,18 +2328,19 @@ impl MessageLoop {
             record.delivery_id.clone()
         };
         let now = Utc::now();
-        self.store.save_channel_foreground_reply_outcome(&ForegroundReplyOutcome {
-            reply_outcome_id: outcome_id,
-            tenant_id,
-            connector_id: connector.connector_id.clone(),
-            routing_decision_id: String::new(),
-            status: status.to_string(),
-            reason_code: reason_code.to_string(),
-            occurred_at: now,
-            safe_evidence,
-            redaction_status: ConnectorRedactionStatus::Redacted,
-            retention_expires_at: now + chrono::Duration::days(90),
-        })?;
+        self.store
+            .save_channel_foreground_reply_outcome(&ForegroundReplyOutcome {
+                reply_outcome_id: outcome_id,
+                tenant_id,
+                connector_id: connector.connector_id.clone(),
+                routing_decision_id: String::new(),
+                status: status.to_string(),
+                reason_code: reason_code.to_string(),
+                occurred_at: now,
+                safe_evidence,
+                redaction_status: ConnectorRedactionStatus::Redacted,
+                retention_expires_at: now + chrono::Duration::days(90),
+            })?;
         Ok(())
     }
 
@@ -2251,7 +2396,6 @@ impl MessageLoop {
         Ok(bus.publish(event))
     }
 
-
     /// Applies deferred streaming side effects: upserts outbound records,
     /// publishes connector events, and saves foreground reply outcomes.
     fn apply_deferred(
@@ -2272,7 +2416,12 @@ impl MessageLoop {
                         &name, connector, session, run_id, step_id, payload,
                     );
                 }
-                DeferredOp::ReplyOutcome { record, status, reason, evidence } => {
+                DeferredOp::ReplyOutcome {
+                    record,
+                    status,
+                    reason,
+                    evidence,
+                } => {
                     let _ = self.record_channel_foreground_reply_outcome(
                         connector, session, &record, &status, &reason, evidence,
                     );
@@ -2457,7 +2606,8 @@ impl<'a> stream_reply_progress<'a> {
         }
         if !force
             && self.last_flush_at != DateTime::<Utc>::MIN_UTC
-            && Utc::now().signed_duration_since(self.last_flush_at) < chrono::Duration::from_std(self.flush_interval).unwrap_or_default()
+            && Utc::now().signed_duration_since(self.last_flush_at)
+                < chrono::Duration::from_std(self.flush_interval).unwrap_or_default()
         {
             return Ok(());
         }
@@ -2566,7 +2716,10 @@ impl<'a> stream_reply_progress<'a> {
                 "error".to_string(),
                 Value::String(partial_delivery_error(self.partial_err.as_deref())),
             );
-            payload.insert("errorClass".to_string(), Value::String(classify_error(None)));
+            payload.insert(
+                "errorClass".to_string(),
+                Value::String(classify_error(None)),
+            );
         }
         self.pending.push(DeferredOp::ConnectorEvent {
             name: event_name.to_string(),

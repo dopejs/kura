@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/skill-search-hit.schema.json",
+  "title": "SkillSearchHit",
+  "description": "One ranked answer to 'which skill covers this', with the skill's usage record so an installed-but-never-used or always-corrected skill is visible where it is chosen.",
+  "type": "object",
+  "required": ["skillId", "name", "description", "rank", "usage"],
+  "additionalProperties": false,
+  "properties": {
+    "skillId": { "type": "string" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "rank": { "type": "integer", "minimum": 1 },
+    "usage": { "$ref": "skill-usage.schema.json" }
+  }
+}

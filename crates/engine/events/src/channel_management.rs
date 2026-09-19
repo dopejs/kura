@@ -26,26 +26,48 @@ pub struct ConnectorManagementEventInput {
 
 /// Go: `ConnectorManagementSupportEvidenceGenerated`.
 #[must_use]
-pub fn connector_management_support_evidence_generated(input: ConnectorManagementEventInput) -> Event {
-    connector_management_event(CONNECTOR_EVENT_SUPPORT_EVIDENCE_GENERATED, "channel_support_evidence", input)
+pub fn connector_management_support_evidence_generated(
+    input: ConnectorManagementEventInput,
+) -> Event {
+    connector_management_event(
+        CONNECTOR_EVENT_SUPPORT_EVIDENCE_GENERATED,
+        "channel_support_evidence",
+        input,
+    )
 }
 
 /// Go: `ConnectorManagementRedactionFailed`.
 #[must_use]
 pub fn connector_management_redaction_failed(input: ConnectorManagementEventInput) -> Event {
-    connector_management_event(CONNECTOR_EVENT_MANAGEMENT_REDACTION_FAILED, "channel_management_redaction_failure", input)
+    connector_management_event(
+        CONNECTOR_EVENT_MANAGEMENT_REDACTION_FAILED,
+        "channel_management_redaction_failure",
+        input,
+    )
 }
 
 /// Go: `ConnectorManagementRetentionApplied`.
 #[must_use]
 pub fn connector_management_retention_applied(input: ConnectorManagementEventInput) -> Event {
-    connector_management_event(CONNECTOR_EVENT_MANAGEMENT_RETENTION_APPLIED, "channel_management_retention", input)
+    connector_management_event(
+        CONNECTOR_EVENT_MANAGEMENT_RETENTION_APPLIED,
+        "channel_management_retention",
+        input,
+    )
 }
 
 /// Go: `connectorManagementEvent` — action/outcome default to the event name
 /// and `"succeeded"` respectively when left empty.
-fn connector_management_event(name: &str, resource_kind: &str, input: ConnectorManagementEventInput) -> Event {
-    let occurred_at = if is_go_zero_time(input.occurred_at) { now_utc() } else { input.occurred_at };
+fn connector_management_event(
+    name: &str,
+    resource_kind: &str,
+    input: ConnectorManagementEventInput,
+) -> Event {
+    let occurred_at = if is_go_zero_time(input.occurred_at) {
+        now_utc()
+    } else {
+        input.occurred_at
+    };
     let action = first_non_empty(&[input.action.as_str(), name]);
     let outcome = first_non_empty(&[input.outcome.as_str(), "succeeded"]);
     Event {
@@ -53,8 +75,14 @@ fn connector_management_event(name: &str, resource_kind: &str, input: ConnectorM
         category: "connector".to_string(),
         name: name.to_string(),
         occurred_at,
-        scope: Scope { connector_id: input.connector_id.clone(), ..Scope::default() },
-        resource: Resource { kind: resource_kind.to_string(), id: input.evidence_id.clone() },
+        scope: Scope {
+            connector_id: input.connector_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: resource_kind.to_string(),
+            id: input.evidence_id.clone(),
+        },
         payload: payload![
             "tenantId" => input.tenant_id,
             "connectorId" => input.connector_id,

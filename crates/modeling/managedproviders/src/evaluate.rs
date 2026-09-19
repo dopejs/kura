@@ -12,9 +12,10 @@ use kura_sandbox::{
     AccessRequest, ApprovalMode, BackendKind, ConsumerContractView, ConsumerKind,
     ConsumerPolicyRecord, ConsumerRequirementDeclaration, DecisionApprovalStatus,
     DecisionResolution, ExecutionFinalization, ExecutionStatus, ManagedProviderActionKind,
-    ManagedProviderOperation, ManagedProviderOperationStatus, ManagedProviderRequirementDeclaration,
-    PolicyRecordStatus, SecretDefaultSource, SecretEnvironmentScope, SecretResolution,
-    SecretScopeOutcome, SensitiveLocalStateAccessSummary, Source,
+    ManagedProviderOperation, ManagedProviderOperationStatus,
+    ManagedProviderRequirementDeclaration, PolicyRecordStatus, SecretDefaultSource,
+    SecretEnvironmentScope, SecretResolution, SecretScopeOutcome, SensitiveLocalStateAccessSummary,
+    Source,
 };
 
 use crate::bridge::{RunResult, SandboxManager};
@@ -78,9 +79,18 @@ pub fn evaluate_managed_provider_operation(
             action_kind: operation.action,
             profile_id: operation.profile_id.trim().to_string(),
             backend_kind: BackendKind::Subprocess,
-            read_roots: clone_roots(&first_non_empty_roots(&operation.declared_read, &operation.access.read_roots)),
-            write_roots: clone_roots(&first_non_empty_roots(&operation.declared_write, &operation.access.write_roots)),
-            network_mode: operation.access.network_mode.unwrap_or(kura_sandbox::NetworkMode::Deny),
+            read_roots: clone_roots(&first_non_empty_roots(
+                &operation.declared_read,
+                &operation.access.read_roots,
+            )),
+            write_roots: clone_roots(&first_non_empty_roots(
+                &operation.declared_write,
+                &operation.access.write_roots,
+            )),
+            network_mode: operation
+                .access
+                .network_mode
+                .unwrap_or(kura_sandbox::NetworkMode::Deny),
             allowed_hosts: clone_strings(&operation.access.allowed_hosts),
             allowed_ports: clone_ints(&operation.access.allowed_ports),
             approval_mode: ApprovalMode::Allow,
@@ -108,7 +118,10 @@ pub fn evaluate_managed_provider_operation(
         },
         ..ManagedProviderOperationEvaluation::default()
     };
-    evaluation.consumer = Some(build_managed_provider_consumer_view(operation, Some(&evaluation)));
+    evaluation.consumer = Some(build_managed_provider_consumer_view(
+        operation,
+        Some(&evaluation),
+    ));
 
     if let Some(manager) = manager {
         let decision = manager
@@ -118,32 +131,39 @@ pub fn evaluate_managed_provider_operation(
         evaluation.operation.approval_status = decision.approval_status;
         if decision.resolution == DecisionResolution::Deny {
             evaluation.operation.status = ManagedProviderOperationStatus::Denied;
-            evaluation.operation.failure_class = kura_sandbox::ErrorClass::PolicyDenied.as_str().to_string();
+            evaluation.operation.failure_class =
+                kura_sandbox::ErrorClass::PolicyDenied.as_str().to_string();
         }
         if decision.resolution == DecisionResolution::Ask {
             evaluation.operation.status = ManagedProviderOperationStatus::Denied;
-            evaluation.operation.failure_class =
-                kura_sandbox::ErrorClass::ApprovalRequired.as_str().to_string();
+            evaluation.operation.failure_class = kura_sandbox::ErrorClass::ApprovalRequired
+                .as_str()
+                .to_string();
         }
         if let Some(profile) = manager.get_profile(&operation.profile_id) {
             evaluation.declaration.backend_kind = profile.backend_kind;
             evaluation.declaration.approval_mode = profile.approval_policy.mode;
-            evaluation.declaration.enforcement_strength = first_non_empty(&[
-                &profile.network_policy.enforcement_mode,
-                "declared_only",
-            ]);
+            evaluation.declaration.enforcement_strength =
+                first_non_empty(&[&profile.network_policy.enforcement_mode, "declared_only"]);
             evaluation.operation.enforcement_strength =
                 evaluation.declaration.enforcement_strength.clone();
         }
     }
 
     if evaluation.operation.decision == DecisionResolution::Allow {
-        let reads_within = paths_within_declared(&operation.access.read_roots, &evaluation.declaration.read_roots);
-        let writes_within = paths_within_declared(&operation.access.write_roots, &evaluation.declaration.write_roots);
+        let reads_within = paths_within_declared(
+            &operation.access.read_roots,
+            &evaluation.declaration.read_roots,
+        );
+        let writes_within = paths_within_declared(
+            &operation.access.write_roots,
+            &evaluation.declaration.write_roots,
+        );
         if !reads_within || !writes_within {
             evaluation.operation.decision = DecisionResolution::Deny;
             evaluation.operation.status = ManagedProviderOperationStatus::Denied;
-            evaluation.operation.failure_class = kura_sandbox::ErrorClass::PolicyDenied.as_str().to_string();
+            evaluation.operation.failure_class =
+                kura_sandbox::ErrorClass::PolicyDenied.as_str().to_string();
         }
     }
 
@@ -171,12 +191,30 @@ pub fn evaluate_managed_provider_operation(
 #[must_use]
 pub fn operation_metadata(operation: &ManagedProviderOperation) -> HashMap<String, String> {
     let mut metadata = HashMap::new();
-    metadata.insert(METADATA_PROVIDER_ID.to_string(), operation.provider_id.trim().to_string());
-    metadata.insert(METADATA_ACTION.to_string(), operation.action_kind.as_str().to_string());
-    metadata.insert(METADATA_OPERATION_ID.to_string(), operation.operation_id.trim().to_string());
-    metadata.insert(METADATA_PROFILE_ID.to_string(), operation.requirement_profile_id.trim().to_string());
-    metadata.insert(METADATA_DECISION.to_string(), operation.decision.as_str().to_string());
-    metadata.insert(METADATA_STRENGTH.to_string(), operation.enforcement_strength.trim().to_string());
+    metadata.insert(
+        METADATA_PROVIDER_ID.to_string(),
+        operation.provider_id.trim().to_string(),
+    );
+    metadata.insert(
+        METADATA_ACTION.to_string(),
+        operation.action_kind.as_str().to_string(),
+    );
+    metadata.insert(
+        METADATA_OPERATION_ID.to_string(),
+        operation.operation_id.trim().to_string(),
+    );
+    metadata.insert(
+        METADATA_PROFILE_ID.to_string(),
+        operation.requirement_profile_id.trim().to_string(),
+    );
+    metadata.insert(
+        METADATA_DECISION.to_string(),
+        operation.decision.as_str().to_string(),
+    );
+    metadata.insert(
+        METADATA_STRENGTH.to_string(),
+        operation.enforcement_strength.trim().to_string(),
+    );
     if !operation.sensitive_state_classes.is_empty() {
         metadata.insert(
             METADATA_SENSITIVE_STATES.to_string(),
@@ -184,7 +222,10 @@ pub fn operation_metadata(operation: &ManagedProviderOperation) -> HashMap<Strin
         );
     }
     if !operation.failure_class.trim().is_empty() {
-        metadata.insert(METADATA_FAILURE_CLASS.to_string(), operation.failure_class.trim().to_string());
+        metadata.insert(
+            METADATA_FAILURE_CLASS.to_string(),
+            operation.failure_class.trim().to_string(),
+        );
     }
     if !operation.local_state_access_summaries.is_empty() {
         if let Ok(encoded) = serde_json::to_string(&operation.local_state_access_summaries) {
@@ -196,7 +237,9 @@ pub fn operation_metadata(operation: &ManagedProviderOperation) -> HashMap<Strin
 
 /// Go `operationMetadataFromPlan`.
 #[must_use]
-pub fn operation_metadata_from_plan(plan: &ManagedProviderOperationPlan) -> HashMap<String, String> {
+pub fn operation_metadata_from_plan(
+    plan: &ManagedProviderOperationPlan,
+) -> HashMap<String, String> {
     let operation = ManagedProviderOperation {
         operation_id: first_non_empty(&[&plan.operation_id, &new_managed_provider_operation_id()]),
         provider_id: plan.provider_id.clone(),
@@ -224,8 +267,14 @@ pub fn build_managed_provider_consumer_view(
     let consumer_id = operation.provider_id.trim().to_string();
     let operation_kind = operation.action.as_str().to_string();
     let declaration_id = format!("managed_provider:{consumer_id}:{operation_kind}");
-    let read_roots = clone_roots(&first_non_empty_roots(&operation.declared_read, &operation.access.read_roots));
-    let write_roots = clone_roots(&first_non_empty_roots(&operation.declared_write, &operation.access.write_roots));
+    let read_roots = clone_roots(&first_non_empty_roots(
+        &operation.declared_read,
+        &operation.access.read_roots,
+    ));
+    let write_roots = clone_roots(&first_non_empty_roots(
+        &operation.declared_write,
+        &operation.access.write_roots,
+    ));
 
     let mut secret_scope = Vec::new();
     for item in &operation.local_state {
@@ -249,14 +298,19 @@ pub fn build_managed_provider_consumer_view(
     let mut required_strength = "declared_only".to_string();
     if let Some(evaluation) = evaluation {
         approval_mode = evaluation.declaration.approval_mode;
-        required_strength =
-            first_non_empty(&[&evaluation.declaration.enforcement_strength, &required_strength]);
+        required_strength = first_non_empty(&[
+            &evaluation.declaration.enforcement_strength,
+            &required_strength,
+        ]);
     }
 
     let mut policy_record = ConsumerPolicyRecord {
         policy_record_id: format!(
             "policy_{}",
-            first_non_empty(&[&operation.operation_id, &new_managed_provider_operation_id()])
+            first_non_empty(&[
+                &operation.operation_id,
+                &new_managed_provider_operation_id()
+            ])
         ),
         consumer_kind: ConsumerKind::ManagedProvider,
         consumer_id: consumer_id.clone(),
@@ -335,7 +389,10 @@ pub fn finalize_managed_provider_metadata(
     if failure_class.trim().is_empty() {
         updated.remove(METADATA_FAILURE_CLASS);
     } else {
-        updated.insert(METADATA_FAILURE_CLASS.to_string(), failure_class.trim().to_string());
+        updated.insert(
+            METADATA_FAILURE_CLASS.to_string(),
+            failure_class.trim().to_string(),
+        );
     }
     updated
 }
@@ -370,7 +427,9 @@ pub fn finalize_managed_provider_execution_failure(
     }
     let mut finalization = ExecutionFinalization {
         status: Some(ExecutionStatus::Failed),
-        error_class: kura_sandbox::ErrorClass::ProviderFailed.as_str().to_string(),
+        error_class: kura_sandbox::ErrorClass::ProviderFailed
+            .as_str()
+            .to_string(),
         error_code: "provider_error".to_string(),
         error: err.to_string().trim().to_string(),
     };
@@ -388,7 +447,10 @@ pub fn finalize_managed_provider_execution_failure(
 /// separators.
 #[must_use]
 pub fn new_managed_provider_operation_id() -> String {
-    let stamp = Utc::now().format("%Y%m%d%H%M%S%.9f").to_string().replace('.', "");
+    let stamp = Utc::now()
+        .format("%Y%m%d%H%M%S%.9f")
+        .to_string()
+        .replace('.', "");
     format!("managed_provider_op_{stamp}")
 }
 
@@ -453,7 +515,9 @@ pub fn clone_access_request(access: &AccessRequest) -> AccessRequest {
 /// Go `withManagedProviderOperation` clone semantics applied to a plan before
 /// it is handed to a runner (deep-copies access, local state, sensitive kinds).
 #[must_use]
-pub fn clone_operation_plan(operation: &ManagedProviderOperationPlan) -> ManagedProviderOperationPlan {
+pub fn clone_operation_plan(
+    operation: &ManagedProviderOperationPlan,
+) -> ManagedProviderOperationPlan {
     ManagedProviderOperationPlan {
         operation_id: operation.operation_id.clone(),
         provider_id: operation.provider_id.clone(),
@@ -484,4 +548,3 @@ pub fn denied_evaluation(evaluation: ManagedProviderOperationEvaluation) -> Erro
         },
     })
 }
-

@@ -63,4 +63,32 @@ describe("memory plane SDK methods (Roadmap 78, spec 058)", () => {
     expect(urls.some((u) => u.includes("/v1/memory/assets/mem_1/drilldown"))).toBe(true);
     expect(urls.some((u) => u.includes("/v1/memory/consolidate"))).toBe(true);
   });
+
+  it("reads the tenant memory overview and rebuilds the derived index", async () => {
+    const overview = {
+      tenantId: "ten_1",
+      counts: [
+        { layer: "l1", status: "ready", count: 12 },
+        { layer: "l1", status: "revoked", count: 3 },
+      ],
+      derivedEmbeddings: 12,
+      recentlyRemembered: [{ assetId: "mem_1", layer: "l1", status: "ready", title: "reply language", updatedAt: "t" }],
+      recentlyForgotten: [{ assetId: "mem_2", layer: "l1", status: "revoked", title: "stale fact", updatedAt: "t" }],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(overview))
+      .mockResolvedValueOnce(jsonResponse({ tenantId: "ten_1", clearedEmbeddings: 12 }));
+    const client = createKuraClient({ baseURL: "https://daemon.test", fetchImpl: fetchMock });
+
+    const read = await client.getMemoryOverview({ tenantId: "ten_1" });
+    expect(read.derivedEmbeddings).toBe(12);
+    expect(read.recentlyForgotten[0].assetId).toBe("mem_2");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/v1/memory/overview?tenantId=ten_1");
+
+    const rebuilt = await client.rebuildMemoryIndexes({ tenantId: "ten_1" });
+    expect(rebuilt.clearedEmbeddings).toBe(12);
+    expect(String(fetchMock.mock.calls[1][0])).toContain("/v1/memory/indexes/rebuild?tenantId=ten_1");
+    expect(fetchMock.mock.calls[1][1].method).toBe("POST");
+  });
 });

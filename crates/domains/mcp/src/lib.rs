@@ -121,23 +121,22 @@ pub enum McpError {
 pub use manager::{
     AttachedExecution, AttachedExecutionStarter, Manager, SecretResolver, SessionState,
 };
-pub use types::{
-    AuthorizeToolInput, AvailabilityStatus, CatalogAction, CatalogActionStatus,
-    CatalogDriftStatus, CatalogEntry, CatalogInstallInput, CatalogInstallResult,
-    CatalogInstallSnapshot, CatalogInstallSupport, CatalogLifecycleResult,
-    CatalogManagement, CatalogPrerequisite, CatalogRevalidationResult,
-    CatalogSecretRequirement, CreateServerInput, Declaration, DiscoveryStatus,
-    ExposureMode, InstallMethod, LifecycleAction, LifecycleResponse, LifecycleStatus,
-    OriginKind, RevalidationClassification, RevalidationIssue, RevalidationIssueStatus,
-    RevalidationSnapshot, SecretSummary, Server, ServerResource, ServerState, Source,
-    Tool, ToolAuthorizationResponse, ToolAuthorizationStatus, ToolExposureRule,
-    ToolInvocationResult, ToolResource, TransportCapability, TransportHealthStatus,
-    TransportKind, UpdateExposureInput, UpdateServerInput, WebsocketAuthConfig,
-    WebsocketAuthMode, WebsocketAuthSummary, WebsocketConfig,
-};
 pub use transport::{
     Session, SessionPipes, StdioTransport, StreamableHTTPTransport, Transport, TransportMux,
     WebsocketTransport,
+};
+pub use types::{
+    AuthorizeToolInput, AvailabilityStatus, CatalogAction, CatalogActionStatus, CatalogDriftStatus,
+    CatalogEntry, CatalogInstallInput, CatalogInstallResult, CatalogInstallSnapshot,
+    CatalogInstallSupport, CatalogLifecycleResult, CatalogManagement, CatalogPrerequisite,
+    CatalogRevalidationResult, CatalogSecretRequirement, CreateServerInput, Declaration,
+    DiscoveryStatus, ExposureMode, InstallMethod, LifecycleAction, LifecycleResponse,
+    LifecycleStatus, OriginKind, RevalidationClassification, RevalidationIssue,
+    RevalidationIssueStatus, RevalidationSnapshot, SecretSummary, Server, ServerResource,
+    ServerState, Source, Tool, ToolAuthorizationResponse, ToolAuthorizationStatus,
+    ToolExposureRule, ToolInvocationResult, ToolResource, TransportCapability,
+    TransportHealthStatus, TransportKind, UpdateExposureInput, UpdateServerInput,
+    WebsocketAuthConfig, WebsocketAuthMode, WebsocketAuthSummary, WebsocketConfig,
 };
 
 /// Go resourceKindServer.
@@ -171,7 +170,8 @@ pub fn environment_scope(environment: kura_config::Environment) -> String {
 /// the default live-validation support matrix.
 #[must_use]
 pub fn live_validation_matrix_rows() -> Vec<kura_livevalidation::MatrixRow> {
-    let tool_class = kura_livevalidation::ToolClass::from(kura_livevalidation::ToolClass::MCP_TOOL_CALL);
+    let tool_class =
+        kura_livevalidation::ToolClass::from(kura_livevalidation::ToolClass::MCP_TOOL_CALL);
     match kura_livevalidation::default_matrix_row(&tool_class) {
         Some(row) => vec![row],
         None => Vec::new(),
@@ -216,7 +216,9 @@ pub fn clone_strings(items: &[String]) -> Vec<String> {
 
 /// Go cloneStringMap.
 #[must_use]
-pub fn clone_string_map(items: &std::collections::HashMap<String, String>) -> std::collections::HashMap<String, String> {
+pub fn clone_string_map(
+    items: &std::collections::HashMap<String, String>,
+) -> std::collections::HashMap<String, String> {
     items.clone()
 }
 
@@ -290,7 +292,8 @@ impl Drop for SessionStartTimeoutGuard {
 
 /// Go SetSessionStartTimeoutForTest.
 pub fn set_session_start_timeout_for_test(timeout: Duration) -> SessionStartTimeoutGuard {
-    let previous = MCP_SESSION_START_TIMEOUT_NANOS.swap(timeout.as_nanos() as u64, Ordering::Relaxed);
+    let previous =
+        MCP_SESSION_START_TIMEOUT_NANOS.swap(timeout.as_nanos() as u64, Ordering::Relaxed);
     SessionStartTimeoutGuard { previous }
 }
 

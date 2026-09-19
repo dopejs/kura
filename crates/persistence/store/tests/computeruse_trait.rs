@@ -14,7 +14,8 @@ use kura_runtime::{Run, RunStatus};
 use kura_store::{ComputerUseStoreHandle, SQLiteStore};
 
 fn temp_dir(name: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("kura_store_cu_trait_{name}_{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("kura_store_cu_trait_{name}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir.to_string_lossy().to_string()
 }
@@ -69,7 +70,10 @@ fn make_session(now: DateTime<Utc>) -> Session {
 
 fn make_action(now: DateTime<Utc>, waiting_approval: bool) -> Action {
     let mut input = serde_json::Map::new();
-    input.insert("url".to_string(), serde_json::json!("https://example.com/page"));
+    input.insert(
+        "url".to_string(),
+        serde_json::json!("https://example.com/page"),
+    );
     Action {
         computer_use_action_id: "cuact_1".to_string(),
         environment_scope: "test".to_string(),
@@ -80,9 +84,17 @@ fn make_action(now: DateTime<Utc>, waiting_approval: bool) -> Action {
         workflow_id: "wf_1".to_string(),
         workflow_step_id: "wfs_1".to_string(),
         action_kind: ActionKind::Navigate,
-        status: if waiting_approval { ActionStatus::WaitingApproval } else { ActionStatus::Running },
+        status: if waiting_approval {
+            ActionStatus::WaitingApproval
+        } else {
+            ActionStatus::Running
+        },
         risk_level: RiskLevel::High,
-        approval_id: if waiting_approval { "apr_1".to_string() } else { String::new() },
+        approval_id: if waiting_approval {
+            "apr_1".to_string()
+        } else {
+            String::new()
+        },
         target_match_context: Some(TargetMatchContext {
             match_strategy: "css".to_string(),
             expected_page_url: "https://example.com/page".to_string(),
@@ -153,7 +165,9 @@ fn computer_use_store_trait_round_trip() {
     // Actions through the trait.
     let action = make_action(now, true);
     handle.upsert_computer_use_action(&action).unwrap();
-    let actions = handle.list_computer_use_actions("test", "run_cu", "cusess_1").unwrap();
+    let actions = handle
+        .list_computer_use_actions("test", "run_cu", "cusess_1")
+        .unwrap();
     assert_eq!(actions.len(), 1);
     assert_eq!(actions[0].action_kind, ActionKind::Navigate);
     let got_action = handle
@@ -176,7 +190,10 @@ fn computer_use_store_trait_round_trip() {
         .unwrap();
     assert_eq!(artifacts.len(), 1);
     assert_eq!(artifacts[0].kind, ArtifactKind::Screenshot);
-    let got_artifact = handle.get_computer_use_artifact("test", "cuart_1").unwrap().expect("artifact present");
+    let got_artifact = handle
+        .get_computer_use_artifact("test", "cuart_1")
+        .unwrap()
+        .expect("artifact present");
     assert_eq!(got_artifact.sha256, "abc123");
 }
 

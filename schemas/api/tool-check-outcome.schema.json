@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/tool-check-outcome.schema.json",
+  "title": "ToolCheckOutcome",
+  "description": "Preflight result for a tool profile. Error classes mirror the LLM provider check vocabulary so operators read one set of words.",
+  "type": "object",
+  "required": ["profileId", "passed", "checkedAt"],
+  "additionalProperties": false,
+  "properties": {
+    "profileId": { "type": "string" },
+    "passed": { "type": "boolean" },
+    "errorClass": { "type": "string", "enum": ["config_error", "auth_error", "transport_error", "upstream_error", "quota_error", "timeout"] },
+    "detail": { "type": "string" },
+    "checkedAt": { "type": "string", "format": "date-time" }
+  }
+}

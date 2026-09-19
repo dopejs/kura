@@ -8,11 +8,13 @@
 use std::collections::HashMap;
 
 use chrono::{Duration, TimeZone, Utc};
-use kura_connectors::{ManagementActionKind, ManagementTerminalState, RedactionStatus, RetrySafety};
+use kura_connectors::{
+    ManagementActionKind, ManagementTerminalState, RedactionStatus, RetrySafety,
+};
 use kura_store::{
     BackgroundDeliveryOutcome, ConnectorAuditRecord, EnablementState, ForegroundReplyOutcome,
-    ManagementState, RepairAction, RouteDecisionOutcome, RoutePolicy, RoutingDecision,
-    SQLiteStore, SupportEvidenceBundle,
+    ManagementState, RepairAction, RouteDecisionOutcome, RoutePolicy, RoutingDecision, SQLiteStore,
+    SupportEvidenceBundle,
 };
 
 fn temp_dir(name: &str) -> String {
@@ -65,7 +67,12 @@ fn route_policy_saves_with_snapshot_and_round_trips() {
     assert_eq!(got.eligible_rooms, vec!["room_redacted".to_string()]);
     assert!(got.background_delivery_eligible);
 
-    assert!(store.get_channel_route_policy("ten_other", "matrix-main").unwrap().is_none());
+    assert!(
+        store
+            .get_channel_route_policy("ten_other", "matrix-main")
+            .unwrap()
+            .is_none()
+    );
 
     // Saving the same route_policy_id upserts its single snapshot row (Go writes
     // both tables, keyed by route_policy_id); a distinct policy id gets its own row.
@@ -87,7 +94,11 @@ fn route_policy_saves_with_snapshot_and_round_trips() {
         })
         .unwrap();
     let all_snapshots: i64 = conn
-        .query_row("SELECT COUNT(*) FROM channel_route_policy_snapshots", [], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM channel_route_policy_snapshots",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(all_snapshots, 2);
 }
@@ -156,23 +167,37 @@ fn routing_reply_and_delivery_outcomes_persist_with_retention() {
         .unwrap();
 
     // Expired rows are filtered out; only the active one is listed.
-    let decisions = store.list_channel_routing_decisions("ten_channels", "matrix-main", now).unwrap();
+    let decisions = store
+        .list_channel_routing_decisions("ten_channels", "matrix-main", now)
+        .unwrap();
     assert_eq!(decisions.len(), 1);
     assert_eq!(decisions[0].routing_decision_id, "route_active");
     assert_eq!(decisions[0].outcome, RouteDecisionOutcome::Accepted);
-    assert_eq!(decisions[0].safe_evidence.get("connector"), Some(&"matrix-main".to_string()));
+    assert_eq!(
+        decisions[0].safe_evidence.get("connector"),
+        Some(&"matrix-main".to_string())
+    );
 
-    let replies = store.list_channel_foreground_reply_outcomes("ten_channels", "matrix-main", now).unwrap();
+    let replies = store
+        .list_channel_foreground_reply_outcomes("ten_channels", "matrix-main", now)
+        .unwrap();
     assert_eq!(replies.len(), 1);
     assert_eq!(replies[0].routing_decision_id, "route_active");
     assert_eq!(replies[0].status, "failed");
 
-    let deliveries = store.list_channel_background_delivery_outcomes("ten_channels", "matrix-main", now).unwrap();
+    let deliveries = store
+        .list_channel_background_delivery_outcomes("ten_channels", "matrix-main", now)
+        .unwrap();
     assert_eq!(deliveries.len(), 1);
     assert_eq!(deliveries[0].delivery_target_id, "target_redacted");
 
     // Cross-tenant list is empty.
-    assert!(store.list_channel_routing_decisions("ten_other", "matrix-main", now).unwrap().is_empty());
+    assert!(
+        store
+            .list_channel_routing_decisions("ten_other", "matrix-main", now)
+            .unwrap()
+            .is_empty()
+    );
 
     // List ordering: newest occurred_at first.
     store
@@ -183,7 +208,9 @@ fn routing_reply_and_delivery_outcomes_persist_with_retention() {
             ..decision.clone()
         })
         .unwrap();
-    let ordered = store.list_channel_routing_decisions("ten_channels", "matrix-main", now).unwrap();
+    let ordered = store
+        .list_channel_routing_decisions("ten_channels", "matrix-main", now)
+        .unwrap();
     assert_eq!(ordered[0].routing_decision_id, "route_newer");
     assert_eq!(ordered[1].routing_decision_id, "route_active");
 }
@@ -227,7 +254,10 @@ fn support_evidence_retention_separates_latest_and_expired() {
         .expect("latest active bundle");
     assert_eq!(latest.support_evidence_id, "support_active");
     assert_eq!(latest.current_state, ManagementState::Ready);
-    assert_eq!(latest.safe_evidence.get("connector"), Some(&"discord-main".to_string()));
+    assert_eq!(
+        latest.safe_evidence.get("connector"),
+        Some(&"discord-main".to_string())
+    );
 
     let expired_list = store
         .list_expired_channel_support_evidence("ten_channels", "discord-main", now)
@@ -281,7 +311,9 @@ fn enablement_state_persists_across_restart() {
     let mut updated = state.clone();
     updated.state = "enabled".to_string();
     updated.audit_event_id = "audit_enable".to_string();
-    reopened.save_channel_connector_enablement_state(&updated).unwrap();
+    reopened
+        .save_channel_connector_enablement_state(&updated)
+        .unwrap();
     let got = reopened
         .get_channel_connector_enablement_state("ten_channels", "discord-main")
         .unwrap()
@@ -290,10 +322,12 @@ fn enablement_state_persists_across_restart() {
     assert_eq!(got.audit_event_id, "audit_enable");
 
     // Unknown tenant/connector pair is absent.
-    assert!(reopened
-        .get_channel_connector_enablement_state("ten_other", "discord-main")
-        .unwrap()
-        .is_none());
+    assert!(
+        reopened
+            .get_channel_connector_enablement_state("ten_other", "discord-main")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -326,7 +360,9 @@ fn repair_actions_list_newest_first() {
     store.save_channel_repair_action(&older).unwrap();
     store.save_channel_repair_action(&newer).unwrap();
 
-    let items = store.list_channel_repair_actions("ten_channels", "discord-main").unwrap();
+    let items = store
+        .list_channel_repair_actions("ten_channels", "discord-main")
+        .unwrap();
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].repair_action_id, "repair_newer");
     assert_eq!(items[1].repair_action_id, "repair_older");
@@ -334,7 +370,12 @@ fn repair_actions_list_newest_first() {
     assert_eq!(items[0].status, ManagementTerminalState::ActionRequired);
     assert_eq!(items[0].retry_safety, Some(RetrySafety::Retryable));
 
-    assert!(store.list_channel_repair_actions("ten_other", "discord-main").unwrap().is_empty());
+    assert!(
+        store
+            .list_channel_repair_actions("ten_other", "discord-main")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -373,7 +414,9 @@ fn management_audit_records_round_trip_newest_first() {
         })
         .unwrap();
 
-    let items = store.list_channel_management_audit_records("ten_channels", "discord-main").unwrap();
+    let items = store
+        .list_channel_management_audit_records("ten_channels", "discord-main")
+        .unwrap();
     assert_eq!(items.len(), 2);
     // Newest created_at first.
     assert_eq!(items[0].audit_event_id, "audit_disable_2");
@@ -382,8 +425,10 @@ fn management_audit_records_round_trip_newest_first() {
     assert_eq!(items[1].outcome, "allowed");
     assert_eq!(items[1].principal_id, "prn_channels");
 
-    assert!(store
-        .list_channel_management_audit_records("ten_other", "discord-main")
-        .unwrap()
-        .is_empty());
+    assert!(
+        store
+            .list_channel_management_audit_records("ten_other", "discord-main")
+            .unwrap()
+            .is_empty()
+    );
 }

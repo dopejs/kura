@@ -393,7 +393,6 @@ pub struct DependentUseDecision {
     pub checked_at: DateTime<Utc>,
 }
 
-
 impl Default for SetupState {
     fn default() -> Self {
         SetupState::NotStarted

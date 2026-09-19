@@ -1,5 +1,18 @@
 //! Tenancy accessor layer: tenant-aware *ForTenant helpers over the store RAW primitives.
 //!
+//! **Status (recorded 2026-09-19, Stage 8.7):** no production route calls
+//! these accessors. Each takes an `SQLiteStore` by value, while the API holds
+//! one shared `Arc<Mutex<SQLiteStore>>`, so Stage 8.2 implemented tenant
+//! scoping at the API layer against the raw store methods directly. The
+//! decision — recorded rather than left as two parallel mechanisms — is that
+//! **the API-layer helpers are the production path** and this crate is the
+//! executable specification of the cross-tenant semantics (fail-closed reads,
+//! audited by-id denials, refused cross-tenant writes) that those helpers and
+//! the store's `*_for_tenant_raw` / `bind_row_tenant` methods must honour. Its
+//! tests are the contract; its structs are not to be wired. Migrating the API
+//! onto these structs would require re-plumbing a shared handle through 16
+//! accessors for no behavioural gain and was rejected.
+//!
 //! Port of daemon/internal/store/tenancy. The Runtime accessor (runs, sessions, steps,
 //! tool_calls, llm_dispatches, checkpoints) and the per-domain accessors (approvals,
 //! bindings, calendar, computer_use, delivery, events, integrations, mail, profiles,
@@ -41,8 +54,8 @@ pub mod workflows;
 
 use std::fmt;
 
-pub use kura_store::SQLiteStore;
 pub use bindings::BindingAccessScope;
+pub use kura_store::SQLiteStore;
 pub use profiles::ProfileAccessScope;
 pub use threads::ThreadAccessScope;
 
@@ -68,7 +81,10 @@ impl fmt::Display for TenancyError {
         match self {
             TenancyError::TenantContextRequired => write!(f, "tenant context required"),
             TenancyError::CrossTenantWrite => {
-                write!(f, "tenancy: refused write to row owned by a different tenant")
+                write!(
+                    f,
+                    "tenancy: refused write to row owned by a different tenant"
+                )
             }
             TenancyError::Store(e) => write!(f, "{e}"),
         }
@@ -80,7 +96,9 @@ impl std::error::Error for TenancyError {}
 impl From<kura_identity::IdentityError> for TenancyError {
     fn from(e: kura_identity::IdentityError) -> Self {
         match e {
-            kura_identity::IdentityError::TenantContextRequired => TenancyError::TenantContextRequired,
+            kura_identity::IdentityError::TenantContextRequired => {
+                TenancyError::TenantContextRequired
+            }
             other => TenancyError::Store(other.to_string()),
         }
     }
@@ -107,7 +125,11 @@ pub fn must() -> String {
 
 /// Emits the cross-tenant access denial audit event when an emitter is wired. Mirrors
 /// the Go accessor emit(ctx, surface, resourceKind) -> audit.cross_tenant_access_denied.
-pub(crate) fn emit_denial(emitter: &Option<kura_audit::Emitter>, surface: &str, resource_kind: &str) {
+pub(crate) fn emit_denial(
+    emitter: &Option<kura_audit::Emitter>,
+    surface: &str,
+    resource_kind: &str,
+) {
     if let Some(emitter) = emitter {
         let _ = emitter.emit(surface, resource_kind);
     }

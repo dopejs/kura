@@ -8,8 +8,8 @@
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 
-use crate::crud::{enum_str, null_string};
 use crate::SQLiteStore;
+use crate::crud::{enum_str, null_string};
 
 fn new_store_id(prefix: &str) -> String {
     let hex = uuid::Uuid::new_v4().simple().to_string();
@@ -31,13 +31,18 @@ fn scan_handoff_link(raw: &str) -> Result<kura_threads::HandoffLink, String> {
     serde_json::from_str(raw).map_err(|e| format!("decode handoff link document: {e}"))
 }
 
-fn scan_handoff_source_reference(raw: &str) -> Result<kura_threads::HandoffSourceReference, String> {
+fn scan_handoff_source_reference(
+    raw: &str,
+) -> Result<kura_threads::HandoffSourceReference, String> {
     serde_json::from_str(raw).map_err(|e| format!("decode handoff source reference document: {e}"))
 }
 
 impl SQLiteStore {
     /// Go `SaveHandoffLink` (upsert on handoff_link_id).
-    pub fn save_handoff_link(&self, mut link: kura_threads::HandoffLink) -> Result<kura_threads::HandoffLink, String> {
+    pub fn save_handoff_link(
+        &self,
+        mut link: kura_threads::HandoffLink,
+    ) -> Result<kura_threads::HandoffLink, String> {
         if link.handoff_link_id.is_empty() {
             link.handoff_link_id = new_store_id("handoff");
         }
@@ -47,9 +52,12 @@ impl SQLiteStore {
         if link.created_at.is_none() || link.created_at.is_some_and(|t| is_unset_time(&t)) {
             link.created_at = Some(Utc::now());
         }
-        if link.retention_expires_at.is_none() || link.retention_expires_at.is_some_and(|t| is_unset_time(&t)) {
+        if link.retention_expires_at.is_none()
+            || link.retention_expires_at.is_some_and(|t| is_unset_time(&t))
+        {
             let created_at = link.created_at.unwrap_or_else(Utc::now);
-            link.retention_expires_at = Some(self.thread_retention_expiry(&link.tenant_id, created_at)?);
+            link.retention_expires_at =
+                Some(self.thread_retention_expiry(&link.tenant_id, created_at)?);
         }
         let document_json = serde_json::to_string(&link)
             .map_err(|e| format!("marshal handoff link {}: {e}", link.handoff_link_id))?;
@@ -115,15 +123,26 @@ impl SQLiteStore {
             if reference.handoff_source_reference_id.is_empty() {
                 reference.handoff_source_reference_id = new_store_id("href");
             }
-            if reference.created_at.is_none() || reference.created_at.is_some_and(|t| is_unset_time(&t)) {
+            if reference.created_at.is_none()
+                || reference.created_at.is_some_and(|t| is_unset_time(&t))
+            {
                 reference.created_at = Some(Utc::now());
             }
-            if reference.retention_expires_at.is_none() || reference.retention_expires_at.is_some_and(|t| is_unset_time(&t)) {
+            if reference.retention_expires_at.is_none()
+                || reference
+                    .retention_expires_at
+                    .is_some_and(|t| is_unset_time(&t))
+            {
                 let created_at = reference.created_at.unwrap_or_else(Utc::now);
-                reference.retention_expires_at = Some(self.thread_retention_expiry(&reference.tenant_id, created_at)?);
+                reference.retention_expires_at =
+                    Some(self.thread_retention_expiry(&reference.tenant_id, created_at)?);
             }
-            let document_json = serde_json::to_string(&reference)
-                .map_err(|e| format!("marshal handoff source reference {}: {e}", reference.handoff_source_reference_id))?;
+            let document_json = serde_json::to_string(&reference).map_err(|e| {
+                format!(
+                    "marshal handoff source reference {}: {e}",
+                    reference.handoff_source_reference_id
+                )
+            })?;
             self.conn
                 .execute(
                     r#"INSERT INTO thread_handoff_source_references (
@@ -160,7 +179,12 @@ impl SQLiteStore {
     }
 
     /// Go `ListHandoffLinksForThread`: links where the thread is source or destination.
-    pub fn list_handoff_links(&self, tenant_id: &str, thread_id: &str, limit: i64) -> Result<Vec<kura_threads::HandoffLink>, String> {
+    pub fn list_handoff_links(
+        &self,
+        tenant_id: &str,
+        thread_id: &str,
+        limit: i64,
+    ) -> Result<Vec<kura_threads::HandoffLink>, String> {
         let limit = if limit <= 0 { 20 } else { limit };
         let mut stmt = self
             .conn
@@ -170,7 +194,9 @@ impl SQLiteStore {
                  ORDER BY created_at DESC, handoff_link_id DESC LIMIT ?3",
             )
             .map_err(|e| format!("list handoff links {tenant_id}/{thread_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, thread_id, limit]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, thread_id, limit])
+            .map_err(|e| e.to_string())?;
         let mut links = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
@@ -180,12 +206,18 @@ impl SQLiteStore {
     }
 
     /// Go `GetHandoffLink`.
-    pub fn get_handoff_link(&self, tenant_id: &str, handoff_link_id: &str) -> Result<Option<kura_threads::HandoffLink>, String> {
+    pub fn get_handoff_link(
+        &self,
+        tenant_id: &str,
+        handoff_link_id: &str,
+    ) -> Result<Option<kura_threads::HandoffLink>, String> {
         let mut stmt = self
             .conn
             .prepare("SELECT document_json FROM thread_handoff_links WHERE tenant_id = ?1 AND handoff_link_id = ?2")
             .map_err(|e| format!("get handoff link {handoff_link_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, handoff_link_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, handoff_link_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -206,8 +238,12 @@ impl SQLiteStore {
                  WHERE tenant_id = ?1 AND handoff_link_id = ?2
                  ORDER BY created_at ASC, handoff_source_reference_id ASC",
             )
-            .map_err(|e| format!("list handoff source references {tenant_id}/{handoff_link_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, handoff_link_id]).map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                format!("list handoff source references {tenant_id}/{handoff_link_id}: {e}")
+            })?;
+        let mut rows = stmt
+            .query(params![tenant_id, handoff_link_id])
+            .map_err(|e| e.to_string())?;
         let mut refs = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
@@ -240,8 +276,12 @@ impl SQLiteStore {
             if reference.decision == kura_threads::HandoffSourceReferenceDecision::Referenced {
                 reference.decision = kura_threads::HandoffSourceReferenceDecision::Consumed;
             }
-            let document_json = serde_json::to_string(&reference)
-                .map_err(|e| format!("marshal handoff source reference {}: {e}", reference.handoff_source_reference_id))?;
+            let document_json = serde_json::to_string(&reference).map_err(|e| {
+                format!(
+                    "marshal handoff source reference {}: {e}",
+                    reference.handoff_source_reference_id
+                )
+            })?;
             self.conn
                 .execute(
                     "UPDATE thread_handoff_source_references
@@ -255,7 +295,12 @@ impl SQLiteStore {
                         reference.handoff_source_reference_id,
                     ],
                 )
-                .map_err(|e| format!("consume handoff source reference {}: {e}", reference.handoff_source_reference_id))?;
+                .map_err(|e| {
+                    format!(
+                        "consume handoff source reference {}: {e}",
+                        reference.handoff_source_reference_id
+                    )
+                })?;
         }
         Ok(())
     }

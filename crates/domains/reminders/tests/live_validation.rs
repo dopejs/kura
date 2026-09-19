@@ -8,9 +8,7 @@ use std::time::Duration;
 
 use common::temp_dir;
 use kura_livevalidation::{FakeOutcome, SafetyClass, ToolClass};
-use kura_reminders::{
-    live_validation_matrix_rows, Dependencies, Manager,
-};
+use kura_reminders::{Dependencies, Manager, live_validation_matrix_rows};
 use kura_store::SQLiteStore;
 use parking_lot::Mutex;
 
@@ -37,7 +35,8 @@ fn manager_without_backend() -> Manager {
 #[test]
 fn reminder_lifecycle_live_validation_fake_outcomes() {
     let manager = manager_without_backend();
-    let duplicate = manager.run_live_validation_outcome(&FakeOutcome::from(FakeOutcome::DUPLICATE_RETRY));
+    let duplicate =
+        manager.run_live_validation_outcome(&FakeOutcome::from(FakeOutcome::DUPLICATE_RETRY));
     assert_eq!(
         duplicate.outcome.to_string(),
         "completed",
@@ -45,7 +44,8 @@ fn reminder_lifecycle_live_validation_fake_outcomes() {
     );
     assert!(duplicate.automatic_retry_allowed);
 
-    let unknown = manager.run_live_validation_outcome(&FakeOutcome::from(FakeOutcome::SUBMIT_UNKNOWN));
+    let unknown =
+        manager.run_live_validation_outcome(&FakeOutcome::from(FakeOutcome::SUBMIT_UNKNOWN));
     assert_eq!(
         unknown.outcome.to_string(),
         "operator_action_needed",

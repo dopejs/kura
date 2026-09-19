@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::{header, Request, StatusCode};
+use axum::http::{Request, StatusCode, header};
 use parking_lot::Mutex;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -34,6 +34,8 @@ fn test_state() -> kura_api::AppState {
         version: "0.1.0".to_string(),
         llm: kura_config::LlmConfig::default(),
         connectors: kura_config::ConnectorConfig::default(),
+        egress: Default::default(),
+        store: Default::default(),
     };
     kura_api::AppState::new(config, Arc::new(kura_events::Bus::new()), store)
 }

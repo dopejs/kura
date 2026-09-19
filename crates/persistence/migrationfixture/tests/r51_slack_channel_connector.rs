@@ -20,7 +20,10 @@ fn head_store() -> (kura_store::SQLiteStore, String) {
 fn r51_seeds_two_tenants_per_table() {
     let (store, _dir) = head_store();
     let fixture = seed_r51_slack_channel_connector_rows(&store).unwrap();
-    assert_eq!(fixture.tenant_ids, vec!["ten_slack_alpha", "ten_slack_beta"]);
+    assert_eq!(
+        fixture.tenant_ids,
+        vec!["ten_slack_alpha", "ten_slack_beta"]
+    );
 
     let counts = count_r51_slack_channel_connector_rows(&store).unwrap();
     for (table, expected) in &fixture.expected_row_count {
@@ -92,7 +95,10 @@ fn r51_route_policy_smoke_event_rows_load_back() {
     assert_eq!(doc["allowedDMUsers"][0], "user_2");
     assert_eq!(doc["allowedDMUserGroups"][0], "group_2");
     assert_eq!(doc["selectedChannels"][0]["conversationId"], "channel_2");
-    assert_eq!(doc["selectedChannels"][0]["selectedChannelState"], "selected");
+    assert_eq!(
+        doc["selectedChannels"][0]["selectedChannelState"],
+        "selected"
+    );
     assert_eq!(doc["selectedChannels"][0]["validationState"], "valid");
     assert_eq!(doc["selectedChannels"][0]["redactionStatus"], "redacted");
     assert_eq!(doc["safeEvidence"]["scope"], "selected_channel_and_dm");
@@ -129,5 +135,8 @@ fn r51_route_policy_smoke_event_rows_load_back() {
     assert_eq!(event.3, "event_1");
     assert_eq!(event.4, "accepted");
     let edoc: serde_json::Value = serde_json::from_str(&event.5).unwrap();
-    assert_eq!(edoc["safeEvidence"]["identityRule"], "slack_workspace_conversation_message_id");
+    assert_eq!(
+        edoc["safeEvidence"]["identityRule"],
+        "slack_workspace_conversation_message_id"
+    );
 }

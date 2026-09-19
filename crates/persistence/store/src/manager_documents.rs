@@ -2,10 +2,10 @@
 //! webhook, catalog, execprofile, evidence). Ported from `daemon/internal/store/manager_documents.go`.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
-use crate::crud::{now_rfc3339, null_string, parse_rfc3339};
 use crate::SQLiteStore;
+use crate::crud::{now_rfc3339, null_string, parse_rfc3339};
 
 /// One manager document row keyed by (doc_kind, doc_id).
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -70,6 +70,94 @@ impl SQLiteStore {
         Ok(())
     }
 
+    /// Binds a manager document to a tenant, mirroring
+    /// [`SQLiteStore::bind_row_tenant`] for the composite-key
+    /// `manager_documents` table. Pre-tenancy rows carry `tenant_id = ''`
+    /// (the managers persisted an empty tenant), so empty counts as unbound
+    /// alongside NULL. A document owned by another tenant refuses the bind
+    /// with [`SQLiteStore::ERR_CROSS_TENANT_ROW`] rather than being
+    /// silently reassigned.
+    /// Returns `false` when no such document exists. Callers must not treat a
+    /// missing document as success: an item whose ownership could not be
+    /// recorded is invisible to every tenant-filtered list, which is silent
+    /// data loss from the caller's point of view.
+    pub fn bind_manager_document_tenant(
+        &self,
+        doc_kind: &str,
+        doc_id: &str,
+        tenant_id: &str,
+    ) -> Result<bool, String> {
+        if tenant_id.is_empty() {
+            return Err("BindManagerDocumentTenant: empty tenantID".to_string());
+        }
+        let affected = self
+            .conn
+            .execute(
+                r#"UPDATE manager_documents SET tenant_id = ?1
+                   WHERE doc_kind = ?2 AND doc_id = ?3
+                     AND (tenant_id IS NULL OR tenant_id = '' OR tenant_id = ?1)"#,
+                params![tenant_id, doc_kind, doc_id],
+            )
+            .map_err(|e| format!("bind tenant for {doc_kind}/{doc_id}: {e}"))?;
+        if affected > 0 {
+            return Ok(true);
+        }
+        match self.lookup_manager_document_tenant(doc_kind, doc_id)? {
+            Some(existing) if !existing.is_empty() && existing != tenant_id => {
+                Err(Self::ERR_CROSS_TENANT_ROW.to_string())
+            }
+            Some(_) => Ok(true),
+            None => Ok(false),
+        }
+    }
+
+    /// The owning tenant of a manager document: `None` when the document does
+    /// not exist, `Some("")` when it predates tenancy.
+    pub fn lookup_manager_document_tenant(
+        &self,
+        doc_kind: &str,
+        doc_id: &str,
+    ) -> Result<Option<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT COALESCE(tenant_id, '') FROM manager_documents WHERE doc_kind = ?1 AND doc_id = ?2",
+            )
+            .map_err(|e| format!("lookup manager document tenant: {e}"))?;
+        let mut rows = stmt
+            .query(params![doc_kind, doc_id])
+            .map_err(|e| e.to_string())?;
+        match rows.next().map_err(|e| e.to_string())? {
+            Some(row) => Ok(Some(row.get::<_, String>(0).map_err(|e| e.to_string())?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Document ids of `doc_kind` owned by `tenant_id`. Pre-tenancy rows
+    /// (`tenant_id` NULL or empty) are excluded: that is the `kura-tenancy`
+    /// read convention — unbound history stops being enumerable, while the
+    /// by-id paths still admit it.
+    pub fn list_manager_document_ids_for_tenant(
+        &self,
+        doc_kind: &str,
+        tenant_id: &str,
+    ) -> Result<Vec<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT doc_id FROM manager_documents WHERE doc_kind = ?1 AND tenant_id = ?2 ORDER BY doc_id",
+            )
+            .map_err(|e| format!("list manager document ids for tenant: {e}"))?;
+        let mut rows = stmt
+            .query(params![doc_kind, tenant_id])
+            .map_err(|e| e.to_string())?;
+        let mut items = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            items.push(row.get::<_, String>(0).map_err(|e| e.to_string())?);
+        }
+        Ok(items)
+    }
+
     pub fn list_manager_documents(&self, doc_kind: &str) -> Result<Vec<ManagerDocument>, String> {
         let mut stmt = self
             .conn
@@ -98,7 +186,8 @@ pub fn put_document<T: serde::Serialize>(
     tenant: &str,
     value: &T,
 ) -> Result<(), String> {
-    let document_json = serde_json::to_string(value).map_err(|e| format!("marshal {kind} document: {e}"))?;
+    let document_json =
+        serde_json::to_string(value).map_err(|e| format!("marshal {kind} document: {e}"))?;
     store.put_manager_document(&ManagerDocument {
         doc_kind: kind.to_string(),
         doc_id: id.to_string(),

@@ -23,7 +23,10 @@ pub struct LatestSummary {
 
 impl ManagerInner {
     /// Port of `LatestSummaryForRun`: the most recently updated outcome for the run source.
-    pub fn latest_summary_for_run(&self, run_id: &str) -> Result<(LatestSummary, bool), DeliveryError> {
+    pub fn latest_summary_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<(LatestSummary, bool), DeliveryError> {
         let items = self.list_outcomes(&OutcomeFilter {
             source_kind: "run".to_string(),
             run_id: run_id.trim().to_string(),
@@ -68,7 +71,10 @@ impl ManagerInner {
             if summaries.contains_key(&item.schedule_attempt_id) {
                 continue;
             }
-            summaries.insert(item.schedule_attempt_id.clone(), latest_summary_from_outcome(&item));
+            summaries.insert(
+                item.schedule_attempt_id.clone(),
+                latest_summary_from_outcome(&item),
+            );
         }
         Ok(summaries)
     }
@@ -84,10 +90,12 @@ pub fn latest_summary_from_outcome(outcome: &DeliveryOutcome) -> LatestSummary {
     }
 }
 
-
 impl crate::Manager {
     /// Port of `LatestSummaryForRun`.
-    pub fn latest_summary_for_run(&self, run_id: &str) -> Result<(LatestSummary, bool), DeliveryError> {
+    pub fn latest_summary_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<(LatestSummary, bool), DeliveryError> {
         self.inner.latest_summary_for_run(run_id)
     }
 
@@ -104,6 +112,7 @@ impl crate::Manager {
         &self,
         schedule_id: &str,
     ) -> Result<HashMap<String, LatestSummary>, DeliveryError> {
-        self.inner.latest_summaries_for_schedule_attempts(schedule_id)
+        self.inner
+            .latest_summaries_for_schedule_attempts(schedule_id)
     }
 }

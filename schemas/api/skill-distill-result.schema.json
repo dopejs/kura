@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/skill-distill-result.schema.json",
+  "title": "SkillDistillResult",
+  "description": "Result of distilling a skill proposal from a conversation. The distillation ran as an ordinary chat turn on distillThreadId, so it is visible and steerable; when the answer parsed, proposal is the Pending skill asset in the review queue.",
+  "type": "object",
+  "required": ["distillThreadId", "dispatchId"],
+  "additionalProperties": false,
+  "properties": {
+    "distillThreadId": { "type": "string" },
+    "dispatchId": { "type": "string" },
+    "proposal": { "type": "object" },
+    "parseError": { "type": "string" }
+  }
+}

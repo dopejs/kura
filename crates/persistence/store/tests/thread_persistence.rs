@@ -7,15 +7,15 @@
 //! TestGroupRoomMigrationAndEvidencePersistence.
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use kura_threads::{
-    build_runtime_projection, AllowlistStatus, ConversationShape, ConversationShapeEvidence,
-    LifecycleState, MentionStatus, ParticipationDecision, ParticipationDecisionValue,
-    RedactionStatus, ResetEvent, ResetEventStatus, RoutingOutcome, RuntimeProjectionInput,
-    RuntimeResourceKind, SessionSegment, ShapeEvidenceStatus, SourceContinuationKey,
-    SourceKind, SourceLinkage, Thread, GROUP_ROOM_REASON_ACCEPTED_QUALIFYING_MENTION,
-    GROUP_ROOM_REASON_DUPLICATE_SOURCE_EVENT, GROUP_ROOM_REASON_SCOPED_RESET_SUCCEEDED,
-};
 use kura_store::{SQLiteStore, ThreadListQuery};
+use kura_threads::{
+    AllowlistStatus, ConversationShape, ConversationShapeEvidence,
+    GROUP_ROOM_REASON_ACCEPTED_QUALIFYING_MENTION, GROUP_ROOM_REASON_DUPLICATE_SOURCE_EVENT,
+    GROUP_ROOM_REASON_SCOPED_RESET_SUCCEEDED, LifecycleState, MentionStatus, ParticipationDecision,
+    ParticipationDecisionValue, RedactionStatus, ResetEvent, ResetEventStatus, RoutingOutcome,
+    RuntimeProjectionInput, RuntimeResourceKind, SessionSegment, ShapeEvidenceStatus,
+    SourceContinuationKey, SourceKind, SourceLinkage, Thread, build_runtime_projection,
+};
 
 fn temp_dir(name: &str) -> String {
     let dir = std::env::temp_dir().join(format!("kura_store_{name}_{}", std::process::id()));
@@ -95,7 +95,10 @@ fn thread_round_trips_and_tenant_filtering() {
     thread.updated_at = now + Duration::minutes(1);
     store.upsert_thread(&thread).unwrap();
 
-    let got = store.get_thread_for_tenant("ten_1", "thr_1").unwrap().expect("found for tenant");
+    let got = store
+        .get_thread_for_tenant("ten_1", "thr_1")
+        .unwrap()
+        .expect("found for tenant");
     assert_eq!(got.thread_id, "thr_1");
     assert_eq!(got.tenant_id, "ten_1");
     assert_eq!(got.lifecycle_state, LifecycleState::Archived);
@@ -106,8 +109,18 @@ fn thread_round_trips_and_tenant_filtering() {
     assert_eq!(got.retention_expires_at, Some(now + Duration::days(90)));
 
     // Cross-tenant lookup must not find the thread.
-    assert!(store.get_thread_for_tenant("ten_2", "thr_1").unwrap().is_none());
-    assert!(store.get_thread_for_tenant("ten_1", "thr_missing").unwrap().is_none());
+    assert!(
+        store
+            .get_thread_for_tenant("ten_2", "thr_1")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .get_thread_for_tenant("ten_1", "thr_missing")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -120,11 +133,21 @@ fn retention_policy_override_affects_expiry() {
     assert_eq!(default_expiry, now + Duration::days(90));
 
     let longer = now + Duration::days(180);
-    store.set_thread_retention_policy("ten_long", longer).unwrap();
-    assert_eq!(store.thread_retention_expiry("ten_long", now).unwrap(), longer);
+    store
+        .set_thread_retention_policy("ten_long", longer)
+        .unwrap();
+    assert_eq!(
+        store.thread_retention_expiry("ten_long", now).unwrap(),
+        longer
+    );
     // A policy shorter than the default horizon is ignored.
-    store.set_thread_retention_policy("ten_short", now + Duration::days(30)).unwrap();
-    assert_eq!(store.thread_retention_expiry("ten_short", now).unwrap(), now + Duration::days(90));
+    store
+        .set_thread_retention_policy("ten_short", now + Duration::days(30))
+        .unwrap();
+    assert_eq!(
+        store.thread_retention_expiry("ten_short", now).unwrap(),
+        now + Duration::days(90)
+    );
 }
 
 #[test]
@@ -164,7 +187,13 @@ fn thread_list_ordering_puts_archived_last() {
     ];
     for thread in &fixtures {
         store.upsert_thread(thread).unwrap();
-        store.upsert_thread_session_segment(&segment_fixture(thread, &format!("sess_{}", thread.thread_id), now)).unwrap();
+        store
+            .upsert_thread_session_segment(&segment_fixture(
+                thread,
+                &format!("sess_{}", thread.thread_id),
+                now,
+            ))
+            .unwrap();
     }
 
     let list = store
@@ -174,7 +203,11 @@ fn thread_list_ordering_puts_archived_last() {
             ..ThreadListQuery::default()
         })
         .unwrap();
-    let order: Vec<String> = list.items.iter().map(|item| item.thread_id.clone()).collect();
+    let order: Vec<String> = list
+        .items
+        .iter()
+        .map(|item| item.thread_id.clone())
+        .collect();
     assert_eq!(order, ["thr_reopened", "thr_reset", "thr_archived_newer"]);
     assert_eq!(list.page.limit, 10);
     assert_eq!(list.page.order, "active_recent_archived_id");
@@ -193,7 +226,9 @@ fn thread_list_ordering_puts_archived_last() {
     assert_eq!(archived_only.items[0].thread_id, "thr_archived_newer");
 
     // Segments are persisted per thread in generation order.
-    let segments = store.list_thread_session_segments("ten_1", "thr_reopened").unwrap();
+    let segments = store
+        .list_thread_session_segments("ten_1", "thr_reopened")
+        .unwrap();
     assert_eq!(segments.len(), 1);
     assert_eq!(segments[0].session_id, "sess_thr_reopened");
 }
@@ -221,12 +256,24 @@ fn source_linkage_current_flag_switches_current_thread() {
     let retention = Some(now + Duration::days(90));
     store
         .save_thread_source_linkage(&linkage_fixture(
-            "src_a", &thread_a, &source, RoutingOutcome::Accepted, true, now, retention,
+            "src_a",
+            &thread_a,
+            &source,
+            RoutingOutcome::Accepted,
+            true,
+            now,
+            retention,
         ))
         .unwrap();
     store
         .save_thread_source_linkage(&linkage_fixture(
-            "src_b", &thread_b, &source, RoutingOutcome::Accepted, true, now, retention,
+            "src_b",
+            &thread_b,
+            &source,
+            RoutingOutcome::Accepted,
+            true,
+            now,
+            retention,
         ))
         .unwrap();
 
@@ -260,7 +307,12 @@ fn source_linkage_current_flag_switches_current_thread() {
         source_account_id: "hs_1".to_string(),
         source_conversation_id: "room_1".to_string(),
     };
-    assert!(store.get_current_thread_for_source(&other).unwrap().is_none());
+    assert!(
+        store
+            .get_current_thread_for_source(&other)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -284,9 +336,33 @@ fn retention_filters_expired_evidence() {
         source_conversation_id: "conv_redacted".to_string(),
     };
     for linkage in [
-        linkage_fixture("src_current", &thread, &source, RoutingOutcome::Accepted, true, now, Some(future)),
-        linkage_fixture("src_expired", &thread, &source, RoutingOutcome::Accepted, false, expired_at, Some(expired_at)),
-        linkage_fixture("src_retained", &thread, &source, RoutingOutcome::Duplicate, false, now, Some(future)),
+        linkage_fixture(
+            "src_current",
+            &thread,
+            &source,
+            RoutingOutcome::Accepted,
+            true,
+            now,
+            Some(future),
+        ),
+        linkage_fixture(
+            "src_expired",
+            &thread,
+            &source,
+            RoutingOutcome::Accepted,
+            false,
+            expired_at,
+            Some(expired_at),
+        ),
+        linkage_fixture(
+            "src_retained",
+            &thread,
+            &source,
+            RoutingOutcome::Duplicate,
+            false,
+            now,
+            Some(future),
+        ),
     ] {
         store.save_thread_source_linkage(&linkage).unwrap();
     }
@@ -308,16 +384,27 @@ fn retention_filters_expired_evidence() {
             redaction_status: None,
         })
     };
-    store.save_thread_runtime_projection(&projection("rtp_expired", expired_at, Some(expired_at))).unwrap();
-    store.save_thread_runtime_projection(&projection("rtp_retained", now, Some(future))).unwrap();
+    store
+        .save_thread_runtime_projection(&projection("rtp_expired", expired_at, Some(expired_at)))
+        .unwrap();
+    store
+        .save_thread_runtime_projection(&projection("rtp_retained", now, Some(future)))
+        .unwrap();
 
-    let linkages = store.list_thread_source_linkages("ten_retention", "thr_retention", now).unwrap();
-    let ids: Vec<String> = linkages.iter().map(|l| l.source_linkage_id.clone()).collect();
+    let linkages = store
+        .list_thread_source_linkages("ten_retention", "thr_retention", now)
+        .unwrap();
+    let ids: Vec<String> = linkages
+        .iter()
+        .map(|l| l.source_linkage_id.clone())
+        .collect();
     assert!(ids.contains(&"src_current".to_string()));
     assert!(ids.contains(&"src_retained".to_string()));
     assert!(!ids.contains(&"src_expired".to_string()));
 
-    let projections = store.list_thread_runtime_projections("ten_retention", "thr_retention", now).unwrap();
+    let projections = store
+        .list_thread_runtime_projections("ten_retention", "thr_retention", now)
+        .unwrap();
     assert_eq!(projections.len(), 1);
     assert_eq!(projections[0].runtime_projection_id, "rtp_retained");
 }
@@ -355,7 +442,9 @@ fn conversation_shape_and_participation_round_trip() {
     let mut updated_shape = shape.clone();
     updated_shape.source_conversation_summary = "Slack / #support".to_string();
     updated_shape.updated_at = Some(now + Duration::minutes(1));
-    store.save_conversation_shape_evidence(&updated_shape).unwrap();
+    store
+        .save_conversation_shape_evidence(&updated_shape)
+        .unwrap();
 
     let got_shape = store
         .get_conversation_shape_for_thread("ten_1", "thr_room")
@@ -408,7 +497,9 @@ fn conversation_shape_and_participation_round_trip() {
     assert_eq!(by_message.decision, ParticipationDecisionValue::Accepted);
     assert!(by_message.created_assistant_work);
 
-    let decisions = store.list_participation_decisions_for_thread("ten_1", "thr_room", 10).unwrap();
+    let decisions = store
+        .list_participation_decisions_for_thread("ten_1", "thr_room", 10)
+        .unwrap();
     assert_eq!(decisions.len(), 1);
     assert_eq!(decisions[0].decision, ParticipationDecisionValue::Accepted);
 
@@ -421,7 +512,13 @@ fn conversation_shape_and_participation_round_trip() {
             ..decision.clone()
         })
         .unwrap();
-    assert_eq!(store.list_participation_decisions_for_thread("ten_1", "thr_room", 10).unwrap().len(), 2);
+    assert_eq!(
+        store
+            .list_participation_decisions_for_thread("ten_1", "thr_room", 10)
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[test]
@@ -458,7 +555,9 @@ fn reset_event_round_trips() {
     updated.completed_at = Some(now + Duration::minutes(1));
     store.save_reset_event(&updated).unwrap();
 
-    let events = store.list_reset_events_for_thread("ten_1", "thr_reset_evt", 10).unwrap();
+    let events = store
+        .list_reset_events_for_thread("ten_1", "thr_reset_evt", 10)
+        .unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].reset_event_id, "reset_1");
     assert_eq!(events[0].conversation_shape, ConversationShape::Room);

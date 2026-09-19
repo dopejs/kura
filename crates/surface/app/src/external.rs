@@ -53,7 +53,11 @@ struct Reply {
 
 impl Default for Reply {
     fn default() -> Self {
-        Reply { outcome: "continue".to_string(), reason: String::new(), payload: None }
+        Reply {
+            outcome: "continue".to_string(),
+            reason: String::new(),
+            payload: None,
+        }
     }
 }
 
@@ -98,7 +102,11 @@ impl ExternalProcessHost {
                 }
             })
             .map_err(|err| format!("spawn reader thread: {err}"))?;
-        Ok(Running { child, stdin, lines })
+        Ok(Running {
+            child,
+            stdin,
+            lines,
+        })
     }
 
     /// One hook round-trip. Serializes calls per process; a dead child is
@@ -115,8 +123,7 @@ impl ExternalProcessHost {
             *guard = Some(self.spawn()?);
         }
         let running = guard.as_mut().expect("spawned above");
-        let request =
-            serde_json::json!({ "point": point, "payload": payload }).to_string();
+        let request = serde_json::json!({ "point": point, "payload": payload }).to_string();
         if let Err(err) = writeln!(running.stdin, "{request}").and_then(|()| running.stdin.flush())
         {
             let _ = running.child.kill();
@@ -124,8 +131,9 @@ impl ExternalProcessHost {
             return Err(format!("write request: {err}"));
         }
         match running.lines.recv_timeout(self.timeout) {
-            Ok(line) => serde_json::from_str::<Reply>(&line)
-                .map_err(|err| format!("parse response: {err}")),
+            Ok(line) => {
+                serde_json::from_str::<Reply>(&line).map_err(|err| format!("parse response: {err}"))
+            }
             Err(_) => {
                 let _ = running.child.kill();
                 *guard = None;
@@ -152,7 +160,11 @@ pub(crate) struct ExternalHook {
 
 impl ExternalHook {
     pub fn new(host: Arc<ExternalProcessHost>, point: &str, on_error: HookErrorPolicy) -> Self {
-        ExternalHook { host, point: point.to_string(), on_error }
+        ExternalHook {
+            host,
+            point: point.to_string(),
+            on_error,
+        }
     }
 }
 
@@ -203,16 +215,19 @@ pub(crate) struct ExternalEmbedder {
 
 impl ExternalEmbedder {
     pub fn new(host: Arc<ExternalProcessHost>) -> Self {
-        ExternalEmbedder { host, fallback: kura_context::HashedNgramEmbedder::default() }
+        ExternalEmbedder {
+            host,
+            fallback: kura_context::HashedNgramEmbedder::default(),
+        }
     }
 }
 
 impl kura_context::Embedder for ExternalEmbedder {
     fn embed(&self, text: &str) -> Vec<f32> {
-        match self
-            .host
-            .call("seam:context.embedder:embed", &serde_json::json!({ "text": text }))
-        {
+        match self.host.call(
+            "seam:context.embedder:embed",
+            &serde_json::json!({ "text": text }),
+        ) {
             Ok(reply) => {
                 let vector = reply
                     .payload
@@ -249,7 +264,10 @@ impl kura_context::Embedder for ExternalEmbedder {
 mod tests {
     use super::*;
 
-    fn plugin_with_script(script: &str, timeout_ms: u64) -> (tempfile_dir::TempDirGuard, ExternalPlugin) {
+    fn plugin_with_script(
+        script: &str,
+        timeout_ms: u64,
+    ) -> (tempfile_dir::TempDirGuard, ExternalPlugin) {
         let dir = tempfile_dir::tempdir();
         std::fs::write(dir.path.join("run.sh"), script).expect("write script");
         let plugin = ExternalPlugin {
@@ -330,7 +348,10 @@ mod tests {
         let host = ExternalProcessHost::new(&plugin);
         let lenient = ExternalHook::new(host.clone(), "chat/turn-end", HookErrorPolicy::Continue);
         let mut payload = serde_json::json!({});
-        assert!(matches!(lenient.handle(&mut payload), HookOutcome::Continue));
+        assert!(matches!(
+            lenient.handle(&mut payload),
+            HookOutcome::Continue
+        ));
 
         let strict = ExternalHook::new(host.clone(), "chat/pre-dispatch", HookErrorPolicy::Veto);
         match strict.handle(&mut payload) {

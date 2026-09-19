@@ -23,29 +23,43 @@ pub struct ResolveInput {
 
 impl Manager {
     pub async fn commit(&self, input: ResolveInput) -> Result<UsageReservation> {
-        self.resolve(input, ReservationStatus::COMMITTED, UsageEventKind::COMMIT).await
+        self.resolve(input, ReservationStatus::COMMITTED, UsageEventKind::COMMIT)
+            .await
     }
 
     pub async fn refund(&self, input: ResolveInput) -> Result<UsageReservation> {
-        self.resolve(input, ReservationStatus::REFUNDED, UsageEventKind::REFUND).await
+        self.resolve(input, ReservationStatus::REFUNDED, UsageEventKind::REFUND)
+            .await
     }
 
     pub async fn release(&self, input: ResolveInput) -> Result<UsageReservation> {
-        self.resolve(input, ReservationStatus::RELEASED, UsageEventKind::RELEASE).await
+        self.resolve(input, ReservationStatus::RELEASED, UsageEventKind::RELEASE)
+            .await
     }
 
-    pub async fn mark_operator_action_needed(&self, input: ResolveInput) -> Result<UsageReservation> {
+    pub async fn mark_operator_action_needed(
+        &self,
+        input: ResolveInput,
+    ) -> Result<UsageReservation> {
         if input.reason.is_empty() {
             return Err(BillingError::ReasonRequired);
         }
-        self.resolve(input, ReservationStatus::OPERATOR_ACTION_NEEDED, UsageEventKind::RECOVERY_DECISION)
-            .await
+        self.resolve(
+            input,
+            ReservationStatus::OPERATOR_ACTION_NEEDED,
+            UsageEventKind::RECOVERY_DECISION,
+        )
+        .await
     }
 
     /// Test helper resolving to an arbitrary status with the event kind
     /// implied by it (Go: the parameterized `resolve` call).
     #[cfg(test)]
-    pub(crate) async fn resolve_to(&self, input: ResolveInput, status: &'static str) -> Result<UsageReservation> {
+    pub(crate) async fn resolve_to(
+        &self,
+        input: ResolveInput,
+        status: &'static str,
+    ) -> Result<UsageReservation> {
         let event_kind = match status {
             ReservationStatus::COMMITTED => UsageEventKind::COMMIT,
             ReservationStatus::REFUNDED => UsageEventKind::REFUND,
@@ -83,16 +97,24 @@ impl Manager {
             .reservation_by_operation(&input.tenant_id, &input.category, &input.operation_key)
             .await?
         else {
-            return Err(BillingError::ReservationNotFound(input.operation_key.clone()));
+            return Err(BillingError::ReservationNotFound(
+                input.operation_key.clone(),
+            ));
         };
         if reservation.status == status {
             return Ok(reservation);
         }
         let Some(mut counter) = repo
-            .usage_counter(&input.tenant_id, &input.category, &reservation.quota_period_id)
+            .usage_counter(
+                &input.tenant_id,
+                &input.category,
+                &reservation.quota_period_id,
+            )
             .await?
         else {
-            return Err(BillingError::CounterNotFound(reservation.reservation_id.clone()));
+            return Err(BillingError::CounterNotFound(
+                reservation.reservation_id.clone(),
+            ));
         };
         let amount = if input.amount <= 0 {
             reservation.amount_reserved

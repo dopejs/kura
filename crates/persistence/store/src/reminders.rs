@@ -5,10 +5,10 @@
 //! the tenancy package is ported; `document_json` holds the whole document, matching Go.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, params_from_iter, Row};
+use rusqlite::{Row, params, params_from_iter};
 
-use crate::crud::{now_rfc3339, null_string, opt_time_string, parse_opt_rfc3339, parse_rfc3339};
 use crate::SQLiteStore;
+use crate::crud::{now_rfc3339, null_string, opt_time_string, parse_opt_rfc3339, parse_rfc3339};
 
 /// Mirrors Go's `ReminderOccurrenceFilter`: non-empty trimmed fields are ANDed into the query.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -188,7 +188,9 @@ impl SQLiteStore {
                 ORDER BY updated_at DESC, reminder_id DESC"#,
             )
             .map_err(|e| format!("list reminders for {environment_scope}: {e}"))?;
-        let mut rows = stmt.query(params![environment_scope.trim()]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![environment_scope.trim()])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_reminder(row)?);
@@ -196,7 +198,11 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn get_reminder(&self, environment_scope: &str, reminder_id: &str) -> Result<Option<ReminderRecord>, String> {
+    pub fn get_reminder(
+        &self,
+        environment_scope: &str,
+        reminder_id: &str,
+    ) -> Result<Option<ReminderRecord>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -214,7 +220,10 @@ impl SQLiteStore {
         scan_reminder(row).map(Some)
     }
 
-    pub fn upsert_reminder_occurrence(&self, record: &ReminderOccurrenceRecord) -> Result<(), String> {
+    pub fn upsert_reminder_occurrence(
+        &self,
+        record: &ReminderOccurrenceRecord,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 r#"INSERT INTO reminder_occurrences (
@@ -297,7 +306,9 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("list reminder occurrences for {environment_scope}: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(args.iter())).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(args.iter()))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_reminder_occurrence(row)?);

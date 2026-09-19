@@ -12,10 +12,10 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use kura_events::Filter;
 use kura_scheduler::{
-    next_due_after, Clock, CreateInput, Dependencies, DispatchAttempt, DispatchStatus,
-    DownstreamStatus, RetryBackoffKind, RetryPolicy, RunTarget, Schedule, ScheduleKind,
-    ScheduleStatus, Scheduler, Target, TargetKind, Trigger, TriggerKind, WorkflowLaunchResult,
-    WorkflowLauncher, WorkflowTarget,
+    Clock, CreateInput, Dependencies, DispatchAttempt, DispatchStatus, DownstreamStatus,
+    RetryBackoffKind, RetryPolicy, RunTarget, Schedule, ScheduleKind, ScheduleStatus, Scheduler,
+    Target, TargetKind, Trigger, TriggerKind, WorkflowLaunchResult, WorkflowLauncher,
+    WorkflowTarget, next_due_after,
 };
 use kura_store::SQLiteStore;
 
@@ -30,7 +30,9 @@ struct FakeClock {
 
 impl FakeClock {
     fn new(now: DateTime<Utc>) -> Self {
-        FakeClock { now: Arc::new(Mutex::new(now)) }
+        FakeClock {
+            now: Arc::new(Mutex::new(now)),
+        }
     }
 
     fn set(&self, now: DateTime<Utc>) {
@@ -48,7 +50,8 @@ fn temp_dir() -> String {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("kura_scheduler_test_{}_{}", std::process::id(), n));
+    let dir =
+        std::env::temp_dir().join(format!("kura_scheduler_test_{}_{}", std::process::id(), n));
     let _ = std::fs::remove_dir_all(&dir);
     dir.to_string_lossy().to_string()
 }
@@ -61,8 +64,13 @@ struct Harness {
     bus: kura_events::Bus,
 }
 
-fn harness_with_launcher(now: DateTime<Utc>, launcher: Option<Arc<dyn WorkflowLauncher>>) -> Harness {
-    let store = Arc::new(parking_lot::Mutex::new(SQLiteStore::new(&temp_dir()).unwrap()));
+fn harness_with_launcher(
+    now: DateTime<Utc>,
+    launcher: Option<Arc<dyn WorkflowLauncher>>,
+) -> Harness {
+    let store = Arc::new(parking_lot::Mutex::new(
+        SQLiteStore::new(&temp_dir()).unwrap(),
+    ));
     let runtime = Arc::new(kura_runtime::Manager::new());
     let bus = kura_events::Bus::new();
     let clock = FakeClock::new(now);
@@ -75,7 +83,13 @@ fn harness_with_launcher(now: DateTime<Utc>, launcher: Option<Arc<dyn WorkflowLa
         clock: Some(Box::new(clock.clone())),
         tick_interval: Duration::from_millis(10),
     });
-    Harness { clock, store, runtime, scheduler, bus }
+    Harness {
+        clock,
+        store,
+        runtime,
+        scheduler,
+        bus,
+    }
 }
 
 fn harness(now: DateTime<Utc>) -> Harness {
@@ -84,7 +98,11 @@ fn harness(now: DateTime<Utc>) -> Harness {
 
 fn one_time_run_input(fire_at: DateTime<Utc>, goal: &str, max_retries: i64) -> CreateInput {
     CreateInput {
-        trigger: Trigger { kind: TriggerKind::Once, fire_at: Some(fire_at), ..Default::default() },
+        trigger: Trigger {
+            kind: TriggerKind::Once,
+            fire_at: Some(fire_at),
+            ..Default::default()
+        },
         target: Target {
             kind: TargetKind::Run,
             run: Some(RunTarget {
@@ -193,9 +211,15 @@ fn wire_format_round_trips() {
         ..Default::default()
     };
     let json = serde_json::to_string(&schedule).unwrap();
-    assert!(json.contains("\"scheduleAttemptId\":\"sched_attempt_wire\""), "{json}");
+    assert!(
+        json.contains("\"scheduleAttemptId\":\"sched_attempt_wire\""),
+        "{json}"
+    );
     assert!(json.contains("\"scheduleId\":\"sched_wire\""), "{json}");
-    assert!(json.contains("\"targetRefId\":\"sched_target_wire\""), "{json}");
+    assert!(
+        json.contains("\"targetRefId\":\"sched_target_wire\""),
+        "{json}"
+    );
     assert!(json.contains("\"retryPolicy\""), "{json}");
     assert!(json.contains("\"backoffKind\":\"exponential\""), "{json}");
     assert!(json.contains("\"kind\":\"one_time\""), "{json}");
@@ -214,8 +238,15 @@ fn wire_format_round_trips() {
         kind: ScheduleKind::OneTime,
         status: ScheduleStatus::Scheduled,
         target_ref_id: "t".to_string(),
-        trigger: Trigger { kind: TriggerKind::Once, ..Default::default() },
-        target: Target { kind: TargetKind::Run, updated_at: now, ..Default::default() },
+        trigger: Trigger {
+            kind: TriggerKind::Once,
+            ..Default::default()
+        },
+        target: Target {
+            kind: TargetKind::Run,
+            updated_at: now,
+            ..Default::default()
+        },
         retry_policy: RetryPolicy::default(),
         created_at: now,
         updated_at: now,
@@ -263,7 +294,10 @@ fn one_time_schedule_dispatches_exactly_once() {
     let runs = h.runtime.list_runs();
     assert_eq!(runs.len(), 1, "expected one dispatched run");
     assert_eq!(runs[0].schedule_id, schedule.schedule_id);
-    assert!(!runs[0].schedule_attempt_id.is_empty(), "expected schedule linkage");
+    assert!(
+        !runs[0].schedule_attempt_id.is_empty(),
+        "expected schedule linkage"
+    );
 
     let got = h.scheduler.get(&schedule.schedule_id).unwrap().unwrap();
     assert_eq!(got.status, ScheduleStatus::Completed);
@@ -272,7 +306,10 @@ fn one_time_schedule_dispatches_exactly_once() {
     assert_eq!(got.attempts.len(), 1);
     assert_eq!(got.attempts[0].dispatch_status, DispatchStatus::Dispatched);
     assert_eq!(got.attempts[0].run_id, runs[0].run_id);
-    assert_eq!(got.attempts[0].trigger_source, kura_scheduler::TriggerSource::Normal);
+    assert_eq!(
+        got.attempts[0].trigger_source,
+        kura_scheduler::TriggerSource::Normal
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -299,8 +336,14 @@ fn cancel_pre_dispatch_records_skipped_history() {
 
     let got = h.scheduler.get(&schedule.schedule_id).unwrap().unwrap();
     assert_eq!(got.status, ScheduleStatus::Cancelled);
-    assert!(!got.attempts.is_empty(), "expected visible cancel/skip history");
-    assert_eq!(got.attempts[0].dispatch_status, DispatchStatus::SkippedCancelled);
+    assert!(
+        !got.attempts.is_empty(),
+        "expected visible cancel/skip history"
+    );
+    assert_eq!(
+        got.attempts[0].dispatch_status,
+        DispatchStatus::SkippedCancelled
+    );
     assert_eq!(got.attempts[0].skipped_reason, "schedule_cancelled");
 }
 
@@ -349,12 +392,25 @@ fn recurring_pause_resume_and_overlap_truth() {
 
     h.clock.set(parse("2026-04-22T12:02:01Z"));
     h.scheduler.tick().unwrap();
-    assert_eq!(h.runtime.list_runs().len(), 1, "expected overlap to skip without new run");
+    assert_eq!(
+        h.runtime.list_runs().len(),
+        1,
+        "expected overlap to skip without new run"
+    );
 
     let mut got = h.scheduler.get(&schedule.schedule_id).unwrap().unwrap();
-    assert!(got.attempts.len() >= 2, "expected visible skipped_overlap history");
-    assert_eq!(got.attempts[0].dispatch_status, DispatchStatus::SkippedOverlap);
-    assert_eq!(got.attempts[0].skipped_reason, "schedule_execution_in_progress");
+    assert!(
+        got.attempts.len() >= 2,
+        "expected visible skipped_overlap history"
+    );
+    assert_eq!(
+        got.attempts[0].dispatch_status,
+        DispatchStatus::SkippedOverlap
+    );
+    assert_eq!(
+        got.attempts[0].skipped_reason,
+        "schedule_execution_in_progress"
+    );
 
     complete_run(&h.runtime, &runs[0].run_id);
 
@@ -362,7 +418,10 @@ fn recurring_pause_resume_and_overlap_truth() {
     h.clock.set(parse("2026-04-22T12:03:01Z"));
     h.scheduler.tick().unwrap();
     got = h.scheduler.get(&schedule.schedule_id).unwrap().unwrap();
-    assert_eq!(got.attempts[0].dispatch_status, DispatchStatus::SkippedPaused);
+    assert_eq!(
+        got.attempts[0].dispatch_status,
+        DispatchStatus::SkippedPaused
+    );
     assert_eq!(got.attempts[0].skipped_reason, "schedule_paused");
 
     h.clock.set(parse("2026-04-22T12:03:10Z"));
@@ -372,7 +431,11 @@ fn recurring_pause_resume_and_overlap_truth() {
 
     h.clock.set(parse("2026-04-22T12:04:01Z"));
     h.scheduler.tick().unwrap();
-    assert_eq!(h.runtime.list_runs().len(), 2, "expected second recurring run after resume");
+    assert_eq!(
+        h.runtime.list_runs().len(),
+        2,
+        "expected second recurring run after resume"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -398,7 +461,10 @@ fn retry_and_exhausted_truth_for_dispatch_failure() {
         .unwrap()
         .unwrap();
     target_record.active = false;
-    h.store.lock().upsert_schedule_target(&target_record).unwrap();
+    h.store
+        .lock()
+        .upsert_schedule_target(&target_record)
+        .unwrap();
 
     h.clock.set(fire_at + chrono::Duration::seconds(1));
     h.scheduler.tick().unwrap();
@@ -406,10 +472,17 @@ fn retry_and_exhausted_truth_for_dispatch_failure() {
     let mut got = h.scheduler.get(&schedule.schedule_id).unwrap().unwrap();
     assert_eq!(got.attempts.len(), 1);
     assert_eq!(got.attempts[0].dispatch_status, DispatchStatus::Failed);
-    assert!(got.attempts[0].next_retry_at.is_some(), "expected retryable failure");
+    assert!(
+        got.attempts[0].next_retry_at.is_some(),
+        "expected retryable failure"
+    );
     assert_eq!(got.attempts[0].retry_count, 1);
     assert_eq!(got.attempts[0].failure_class, "invalid_target");
-    assert_eq!(h.runtime.list_runs().len(), 0, "no downstream run on dispatch failure");
+    assert_eq!(
+        h.runtime.list_runs().len(),
+        0,
+        "no downstream run on dispatch failure"
+    );
 
     let next_retry_at = got.attempts[0].next_retry_at.unwrap();
     h.clock.set(next_retry_at + chrono::Duration::seconds(1));
@@ -459,7 +532,11 @@ fn workflow_target_dispatches_through_launcher() {
     let schedule = h
         .scheduler
         .create(CreateInput {
-            trigger: Trigger { kind: TriggerKind::Once, fire_at: Some(fire_at), ..Default::default() },
+            trigger: Trigger {
+                kind: TriggerKind::Once,
+                fire_at: Some(fire_at),
+                ..Default::default()
+            },
             target: Target {
                 kind: TargetKind::Workflow,
                 workflow: Some(WorkflowTarget {
@@ -495,7 +572,11 @@ fn workflow_target_without_launcher_is_exhausted() {
     let schedule = h
         .scheduler
         .create(CreateInput {
-            trigger: Trigger { kind: TriggerKind::Once, fire_at: Some(fire_at), ..Default::default() },
+            trigger: Trigger {
+                kind: TriggerKind::Once,
+                fire_at: Some(fire_at),
+                ..Default::default()
+            },
             target: Target {
                 kind: TargetKind::Workflow,
                 workflow: Some(WorkflowTarget {
@@ -514,7 +595,10 @@ fn workflow_target_without_launcher_is_exhausted() {
 
     let got = h.scheduler.get(&schedule.schedule_id).unwrap().unwrap();
     assert_eq!(got.attempts[0].dispatch_status, DispatchStatus::Exhausted);
-    assert_eq!(got.attempts[0].failure_class, "workflow_launcher_unavailable");
+    assert_eq!(
+        got.attempts[0].failure_class,
+        "workflow_launcher_unavailable"
+    );
     assert_eq!(got.status, ScheduleStatus::DispatchFailed);
 }
 
@@ -589,7 +673,10 @@ fn cron_triggers_compute_next_due() {
         next_due_after(&trigger, t("2026-04-22T11:00:00Z")).unwrap(),
         Some(t("2026-04-22T12:00:00Z"))
     );
-    assert_eq!(next_due_after(&trigger, t("2026-04-22T13:00:00Z")).unwrap(), None);
+    assert_eq!(
+        next_due_after(&trigger, t("2026-04-22T13:00:00Z")).unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -600,12 +687,22 @@ fn create_validates_trigger() {
     let err = h
         .scheduler
         .create(CreateInput {
-            trigger: Trigger { kind: TriggerKind::Once, ..Default::default() },
-            target: Target { kind: TargetKind::Run, updated_at: now, ..Default::default() },
+            trigger: Trigger {
+                kind: TriggerKind::Once,
+                ..Default::default()
+            },
+            target: Target {
+                kind: TargetKind::Run,
+                updated_at: now,
+                ..Default::default()
+            },
             retry_policy: RetryPolicy::default(),
         })
         .unwrap_err();
-    assert!(err.to_string().contains("one-time trigger requires fireAt"), "{err}");
+    assert!(
+        err.to_string().contains("one-time trigger requires fireAt"),
+        "{err}"
+    );
 
     let cron_input = |expr: &str, timezone: &str| CreateInput {
         trigger: Trigger {
@@ -614,30 +711,59 @@ fn create_validates_trigger() {
             timezone: timezone.to_string(),
             ..Default::default()
         },
-        target: Target { kind: TargetKind::Run, updated_at: now, ..Default::default() },
+        target: Target {
+            kind: TargetKind::Run,
+            updated_at: now,
+            ..Default::default()
+        },
         retry_policy: RetryPolicy::default(),
     };
 
     let err = h.scheduler.create(cron_input("", "UTC")).unwrap_err();
-    assert!(err.to_string().contains("cron expression is required"), "{err}");
+    assert!(
+        err.to_string().contains("cron expression is required"),
+        "{err}"
+    );
 
-    let err = h.scheduler.create(cron_input("*/1 * * *", "UTC")).unwrap_err();
-    assert!(err.to_string().contains("cron expression must have 5 fields"), "{err}");
+    let err = h
+        .scheduler
+        .create(cron_input("*/1 * * *", "UTC"))
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("cron expression must have 5 fields"),
+        "{err}"
+    );
 
-    let err = h.scheduler.create(cron_input("*/1 * * * *", "Mars/Olympus_Mons")).unwrap_err();
+    let err = h
+        .scheduler
+        .create(cron_input("*/1 * * * *", "Mars/Olympus_Mons"))
+        .unwrap_err();
     assert!(err.to_string().contains("load timezone"), "{err}");
 
-    let err = h.scheduler.create(cron_input("*/0 * * * *", "UTC")).unwrap_err();
+    let err = h
+        .scheduler
+        .create(cron_input("*/0 * * * *", "UTC"))
+        .unwrap_err();
     assert!(err.to_string().contains("invalid step"), "{err}");
 
-    let err = h.scheduler.create(cron_input("* * * 13 *", "UTC")).unwrap_err();
+    let err = h
+        .scheduler
+        .create(cron_input("* * * 13 *", "UTC"))
+        .unwrap_err();
     assert!(err.to_string().contains("value 13 out of bounds"), "{err}");
 
-    let err = h.scheduler.create(cron_input("10-20 0 32 * *", "UTC")).unwrap_err();
+    let err = h
+        .scheduler
+        .create(cron_input("10-20 0 32 * *", "UTC"))
+        .unwrap_err();
     assert!(err.to_string().contains("value 32 out of bounds"), "{err}");
 
     // Valid cron create.
-    let schedule = h.scheduler.create(cron_input("*/5 * * * *", "UTC")).unwrap();
+    let schedule = h
+        .scheduler
+        .create(cron_input("*/5 * * * *", "UTC"))
+        .unwrap();
     assert_eq!(schedule.kind, ScheduleKind::Recurring);
     assert_eq!(schedule.status, ScheduleStatus::Active);
     assert_eq!(schedule.next_due_at, Some(parse("2026-04-22T07:00:00Z")));
@@ -664,7 +790,9 @@ fn schedule_persists_across_scheduler_instances() {
         tick_interval: Duration::from_millis(10),
     });
     let fire_at = now + chrono::Duration::seconds(30);
-    let schedule = sched_a.create(one_time_run_input(fire_at, "persist me", 0)).unwrap();
+    let schedule = sched_a
+        .create(one_time_run_input(fire_at, "persist me", 0))
+        .unwrap();
 
     // A second scheduler over the same SQLite database sees the same schedule.
     let clock_b = FakeClock::new(now + chrono::Duration::seconds(60));
@@ -692,7 +820,10 @@ fn schedule_persists_across_scheduler_instances() {
     sched_b.tick().unwrap();
     let got_b = sched_b.get(&schedule.schedule_id).unwrap().unwrap();
     assert_eq!(got_b.attempts.len(), 1);
-    assert_eq!(got_b.attempts[0].dispatch_status, DispatchStatus::Dispatched);
+    assert_eq!(
+        got_b.attempts[0].dispatch_status,
+        DispatchStatus::Dispatched
+    );
     let got_a = sched_a.get(&schedule.schedule_id).unwrap().unwrap();
     assert_eq!(got_a.attempts.len(), 1);
     assert_eq!(got_a.attempts[0].attempt_id, got_b.attempts[0].attempt_id);
@@ -729,7 +860,11 @@ fn catch_up_records_missed_intervals() {
             retry_policy: RetryPolicy::default(),
         })
         .unwrap();
-    assert_eq!(schedule.next_due_at, Some(now), "created due at the current minute");
+    assert_eq!(
+        schedule.next_due_at,
+        Some(now),
+        "created due at the current minute"
+    );
 
     h.clock.set(parse("2026-04-22T12:03:30Z"));
     h.scheduler.catch_up().unwrap();
@@ -738,7 +873,10 @@ fn catch_up_records_missed_intervals() {
     assert!(got.attempts.len() >= 2);
     // attempts[0] is the catch-up dispatch for the current due; attempts[1] the missed record.
     assert_eq!(got.attempts[0].dispatch_status, DispatchStatus::Dispatched);
-    assert_eq!(got.attempts[0].trigger_source, kura_scheduler::TriggerSource::CatchUp);
+    assert_eq!(
+        got.attempts[0].trigger_source,
+        kura_scheduler::TriggerSource::CatchUp
+    );
     assert_eq!(got.attempts[1].dispatch_status, DispatchStatus::Missed);
     assert_eq!(got.attempts[1].missed_count, 3);
     assert_eq!(got.attempts[1].due_at, parse("2026-04-22T12:00:00Z"));
@@ -759,7 +897,10 @@ fn events_published_to_bus() {
         .scheduler
         .create(one_time_run_input(fire_at, "event fan-out", 0))
         .unwrap();
-    let filter = Filter { category: "schedule".to_string(), ..Default::default() };
+    let filter = Filter {
+        category: "schedule".to_string(),
+        ..Default::default()
+    };
     let names: Vec<String> = h.bus.list(&filter).iter().map(|e| e.name.clone()).collect();
     assert!(names.contains(&"schedule.created".to_string()), "{names:?}");
     let created = h
@@ -770,20 +911,37 @@ fn events_published_to_bus() {
         .unwrap();
     assert_eq!(created.scope.schedule_id, schedule.schedule_id);
     assert_eq!(created.resource.kind, "schedule");
-    assert_eq!(created.payload.get("status").unwrap().as_str().unwrap(), "scheduled");
+    assert_eq!(
+        created.payload.get("status").unwrap().as_str().unwrap(),
+        "scheduled"
+    );
 
     h.clock.set(fire_at + chrono::Duration::seconds(1));
     h.scheduler.tick().unwrap();
     let names: Vec<String> = h.bus.list(&filter).iter().map(|e| e.name.clone()).collect();
-    assert!(names.contains(&"schedule.dispatch_attempted".to_string()), "{names:?}");
-    assert!(names.contains(&"schedule.dispatch_recorded".to_string()), "{names:?}");
+    assert!(
+        names.contains(&"schedule.dispatch_attempted".to_string()),
+        "{names:?}"
+    );
+    assert!(
+        names.contains(&"schedule.dispatch_recorded".to_string()),
+        "{names:?}"
+    );
     let recorded = h
         .bus
         .list(&filter)
         .into_iter()
         .find(|e| e.name == "schedule.dispatch_recorded")
         .unwrap();
-    assert_eq!(recorded.payload.get("dispatchStatus").unwrap().as_str().unwrap(), "dispatched");
+    assert_eq!(
+        recorded
+            .payload
+            .get("dispatchStatus")
+            .unwrap()
+            .as_str()
+            .unwrap(),
+        "dispatched"
+    );
     assert!(recorded.payload.contains_key("runId"));
     assert!(recorded.payload.contains_key("scheduleAttemptId"));
 }
@@ -832,7 +990,13 @@ fn pause_resume_cancel_edges() {
     assert_eq!(items[0].schedule_id, schedule.schedule_id);
 
     // Store accessor + lifecycle flags.
-    assert!(h.scheduler.store().lock().data_dir().contains("kura_scheduler_test"));
+    assert!(
+        h.scheduler
+            .store()
+            .lock()
+            .data_dir()
+            .contains("kura_scheduler_test")
+    );
     h.scheduler.start().unwrap();
     h.scheduler.close().unwrap();
     assert_eq!(h.scheduler.tick_interval(), Duration::from_millis(10));
@@ -879,4 +1043,3 @@ fn manager_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<kura_scheduler::Scheduler>();
 }
-

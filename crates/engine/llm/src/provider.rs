@@ -54,7 +54,9 @@ impl CancelToken {
 
 impl fmt::Debug for CancelToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CancelToken").field("cancelled", &self.is_cancelled()).finish()
+        f.debug_struct("CancelToken")
+            .field("cancelled", &self.is_cancelled())
+            .finish()
     }
 }
 
@@ -81,7 +83,11 @@ pub enum ProviderError {
 
 impl ProviderError {
     pub fn provider(code: impl Into<String>, message: impl Into<String>, retryable: bool) -> Self {
-        Self::Provider { code: code.into(), message: message.into(), retryable }
+        Self::Provider {
+            code: code.into(),
+            message: message.into(),
+            retryable,
+        }
     }
 
     pub fn other(message: impl Into<String>) -> Self {
@@ -116,7 +122,11 @@ impl fmt::Display for ProviderError {
             Self::Timeout => write!(f, "context deadline exceeded"),
             // Go's ProviderError.Error(): message if set, otherwise the code.
             Self::Provider { code, message, .. } => {
-                if message.is_empty() { write!(f, "{code}") } else { write!(f, "{message}") }
+                if message.is_empty() {
+                    write!(f, "{code}")
+                } else {
+                    write!(f, "{message}")
+                }
             }
             Self::Other(message) => write!(f, "{message}"),
         }
@@ -139,6 +149,9 @@ pub struct ProviderRequest {
     pub provider: String,
     pub model: String,
     pub messages: Vec<Message>,
+    /// Tools offered on this attempt. Providers that cannot call tools ignore
+    /// the list; the dispatcher then simply sees no `tool_calls` back.
+    pub tools: Vec<crate::types::ToolSpec>,
     pub attempt: i64,
     pub timeout_ms: i64,
     pub stream_first_chunk_timeout_ms: i64,
@@ -152,6 +165,8 @@ pub struct ProviderResponse {
     pub output: String,
     pub finish_reason: String,
     pub usage: Usage,
+    /// Tool calls the model requested (Stage 9.0); empty for text answers.
+    pub tool_calls: Vec<crate::types::ToolCall>,
 }
 
 /// Object-safe provider interface, mirroring Go's `Provider`. Futures are

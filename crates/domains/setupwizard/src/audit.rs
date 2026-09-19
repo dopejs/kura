@@ -2,7 +2,10 @@
 
 use std::sync::Arc;
 
-use kura_identity::{AuditStore, TenantAuditEvent, AUDIT_OUTCOME_DENIED, AUDIT_OUTCOME_FAILED_CLOSED, AUDIT_OUTCOME_SUCCEEDED};
+use kura_identity::{
+    AUDIT_OUTCOME_DENIED, AUDIT_OUTCOME_FAILED_CLOSED, AUDIT_OUTCOME_SUCCEEDED, AuditStore,
+    TenantAuditEvent,
+};
 
 use crate::helpers::{audit_event_suffix, audit_outcome, first_non_empty};
 use crate::service::{AuditRecorder, BoxFuture};
@@ -60,17 +63,32 @@ fn document_map(record: &SetupAuditRecord) -> serde_json::Map<String, serde_json
     document.insert("fromState".to_string(), json!(record.from_state));
     document.insert("toState".to_string(), json!(record.to_state));
     document.insert("retryable".to_string(), json!(record.retryable));
-    document.insert("remediationOwner".to_string(), json!(record.remediation_owner.as_str()));
-    document.insert("safeUseMode".to_string(), json!(record.safe_use_mode.as_str()));
-    document.insert("diagnosticResultId".to_string(), json!(record.diagnostic_result_id));
-    document.insert("redactionStatus".to_string(), json!(record.redaction_status.as_str()));
+    document.insert(
+        "remediationOwner".to_string(),
+        json!(record.remediation_owner.as_str()),
+    );
+    document.insert(
+        "safeUseMode".to_string(),
+        json!(record.safe_use_mode.as_str()),
+    );
+    document.insert(
+        "diagnosticResultId".to_string(),
+        json!(record.diagnostic_result_id),
+    );
+    document.insert(
+        "redactionStatus".to_string(),
+        json!(record.redaction_status.as_str()),
+    );
     document.insert("resourceRefs".to_string(), json!(record.resource_refs));
     document
 }
 
 /// Builds the audit record for a completed transition attempt.
 #[must_use]
-pub fn audit_record_for_attempt(session: &SetupSession, attempt: &SetupAttempt) -> SetupAuditRecord {
+pub fn audit_record_for_attempt(
+    session: &SetupSession,
+    attempt: &SetupAttempt,
+) -> SetupAuditRecord {
     SetupAuditRecord {
         event_kind: format!(
             "credential_setup.{}",
@@ -92,10 +110,7 @@ pub fn audit_record_for_attempt(session: &SetupSession, attempt: &SetupAttempt) 
         diagnostic_result_id: session.diagnostic_result_id.clone(),
         resource_refs: session.resource_refs.clone(),
         redaction_status: attempt.redaction_status,
-        outcome: audit_outcome(
-            attempt.to_state,
-            attempt.redaction_status,
-        ),
+        outcome: audit_outcome(attempt.to_state, attempt.redaction_status),
         created_at: attempt.created_at,
     }
 }

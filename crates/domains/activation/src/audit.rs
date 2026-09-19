@@ -6,8 +6,8 @@ use kura_identity::TenantAuditEvent;
 use serde_json::Map;
 use serde_json::Value;
 
-use crate::error::activation_error;
 use crate::error::ActivationError;
+use crate::error::activation_error;
 use crate::service::Service;
 use crate::types::FailureStage;
 use crate::types::ReasonCode;
@@ -45,7 +45,10 @@ impl Service {
         };
         let now = self.now();
         let mut document = Map::new();
-        document.insert("activationId".to_string(), Value::String(record.activation_id));
+        document.insert(
+            "activationId".to_string(),
+            Value::String(record.activation_id),
+        );
         document.insert(
             "environmentScope".to_string(),
             Value::String(self.environment_scope.clone()),
@@ -55,7 +58,10 @@ impl Service {
             "fromStatus".to_string(),
             Value::String(record.from_status.to_string()),
         );
-        document.insert("toStatus".to_string(), Value::String(record.to_status.to_string()));
+        document.insert(
+            "toStatus".to_string(),
+            Value::String(record.to_status.to_string()),
+        );
         document.insert(
             "reasonCode".to_string(),
             Value::String(record.reason_code.to_string()),
@@ -141,25 +147,26 @@ mod tests {
     use kura_identity::TenantContext;
     use serde_json::json;
 
-    use crate::error::reason_code_from_error;
-    use crate::error::ActivationError;
-    use crate::testutil::*;
-    use crate::types::ReasonCode;
-    use crate::types::RemediationOwner;
-    use crate::types::TestChatStatus;
     use crate::ActivateInput;
     use crate::Dependencies;
     use crate::RunTestChatInput;
     use crate::Service;
     use crate::TestChatResult;
+    use crate::error::ActivationError;
+    use crate::error::reason_code_from_error;
+    use crate::testutil::*;
+    use crate::types::ReasonCode;
+    use crate::types::RemediationOwner;
+    use crate::types::TestChatStatus;
 
     #[tokio::test]
     async fn audit_fail_closed_with_stable_retryable_reason() {
         let now = test_now();
         let repo = Arc::new(MemoryIdentityRepository::default());
-        repo.principals
-            .lock()
-            .insert("prn_audit_fail".to_string(), active_principal("prn_audit_fail", now));
+        repo.principals.lock().insert(
+            "prn_audit_fail".to_string(),
+            active_principal("prn_audit_fail", now),
+        );
         let svc = Service::new(Dependencies {
             state_store: Some(Arc::new(MemoryStateStore::default())),
             identity: Some(repo),
@@ -191,9 +198,10 @@ mod tests {
     async fn audit_records_metadata_only_test_chat_completion() {
         let now = test_now();
         let repo = Arc::new(MemoryIdentityRepository::default());
-        repo.principals
-            .lock()
-            .insert("prn_audit_metadata".to_string(), active_principal("prn_audit_metadata", now));
+        repo.principals.lock().insert(
+            "prn_audit_metadata".to_string(),
+            active_principal("prn_audit_metadata", now),
+        );
         let audit_sink = Arc::new(RecordingAuditSink::default());
         let chat = Arc::new(RecordingChatRunner {
             result: TestChatResult {
@@ -227,7 +235,11 @@ mod tests {
             .expect("activate");
         svc.run_test_chat(RunTestChatInput {
             token: active_token("tok_audit_metadata", "prn_audit_metadata"),
-            tenant_context: tenant_context("prn_audit_metadata", &state.tenant_id, "tok_audit_metadata"),
+            tenant_context: tenant_context(
+                "prn_audit_metadata",
+                &state.tenant_id,
+                "tok_audit_metadata",
+            ),
             message: "Do not audit this prompt.".to_string(),
         })
         .await
@@ -249,7 +261,10 @@ mod tests {
             "accessToken",
             "refreshToken",
         ] {
-            assert!(!payload.contains(forbidden), "audit retained forbidden evidence {forbidden:?}: {payload}");
+            assert!(
+                !payload.contains(forbidden),
+                "audit retained forbidden evidence {forbidden:?}: {payload}"
+            );
         }
     }
 }

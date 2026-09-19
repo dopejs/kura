@@ -8,11 +8,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
+use futures::future::BoxFuture;
 use kura_chat::Service;
 use kura_checkpoints::Manager as CheckpointManager;
-use kura_connectors::{
-    ConformanceResultStatus, SurfaceSupport, Supervisor, core_invariant_areas,
-};
+use kura_connectors::{ConformanceResultStatus, Supervisor, SurfaceSupport, core_invariant_areas};
 use kura_events::Bus;
 use kura_im::MessageLoop;
 use kura_imtypes::OutboundReply;
@@ -22,12 +21,13 @@ use kura_llm::{
 use kura_matrix::*;
 use kura_router::SessionRouter;
 use kura_runtime::Manager as RuntimeManager;
-use kura_store::matrix_setup::MatrixHostedSetupRecord;
 use kura_store::SQLiteStore;
-use futures::future::BoxFuture;
+use kura_store::matrix_setup::MatrixHostedSetupRecord;
 
 fn ts(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(y, mo, d, h, mi, s).single().expect("valid timestamp")
+    Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
+        .single()
+        .expect("valid timestamp")
 }
 
 // ---------------------------------------------------------------------------
@@ -63,39 +63,49 @@ mod test_server {
     }
 
     impl TestServer {
-        pub fn start(handler: impl Fn(&TestRequest) -> TestResponse + Send + Sync + 'static) -> TestServer {
+        pub fn start(
+            handler: impl Fn(&TestRequest) -> TestResponse + Send + Sync + 'static,
+        ) -> TestServer {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
-            listener.set_nonblocking(true).expect("nonblocking listener");
+            listener
+                .set_nonblocking(true)
+                .expect("nonblocking listener");
             let addr = listener.local_addr().expect("local addr");
             let base_url = format!("http://{addr}");
             let handler = Arc::new(handler);
             let shutdown = Arc::new(AtomicBool::new(false));
             let shutdown_flag = Arc::clone(&shutdown);
-            let join = thread::spawn(move || loop {
-                if shutdown_flag.load(Ordering::SeqCst) {
-                    break;
-                }
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        // On macOS/BSD the accepted stream inherits the
-                        // listener's non-blocking mode; restore blocking IO so
-                        // reading the request never fails with WouldBlock when
-                        // the client's bytes are still in flight (the CI-only
-                        // status-line flake). A read timeout keeps the test
-                        // bounded, and a bad connection never kills the server.
-                        let _ = stream.set_nonblocking(false);
-                        let _ = stream
-                            .set_read_timeout(Some(std::time::Duration::from_secs(5)));
-                        let handler = Arc::clone(&handler);
-                        let _ = handle_connection(&mut stream, &*handler);
+            let join = thread::spawn(move || {
+                loop {
+                    if shutdown_flag.load(Ordering::SeqCst) {
+                        break;
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            // On macOS/BSD the accepted stream inherits the
+                            // listener's non-blocking mode; restore blocking IO so
+                            // reading the request never fails with WouldBlock when
+                            // the client's bytes are still in flight (the CI-only
+                            // status-line flake). A read timeout keeps the test
+                            // bounded, and a bad connection never kills the server.
+                            let _ = stream.set_nonblocking(false);
+                            let _ =
+                                stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+                            let handler = Arc::clone(&handler);
+                            let _ = handle_connection(&mut stream, &*handler);
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(_) => break,
                     }
-                    Err(_) => break,
                 }
             });
-            TestServer { base_url, join: Some(join), shutdown }
+            TestServer {
+                base_url,
+                join: Some(join),
+                shutdown,
+            }
         }
 
         pub fn stop(&mut self) {
@@ -159,7 +169,12 @@ mod test_server {
         }
         let body = String::from_utf8_lossy(&body).to_string();
         let escaped_path = target.split('?').next().unwrap_or(&target).to_string();
-        let request = TestRequest { method, escaped_path, headers, body };
+        let request = TestRequest {
+            method,
+            escaped_path,
+            headers,
+            body,
+        };
         let response = handler(&request);
         let body_bytes = response.body.as_bytes();
         let head_resp = format!(
@@ -184,14 +199,27 @@ use test_server::{TestResponse, TestServer};
 fn redact_evidence_suppresses_secrets_and_raw_payloads() {
     let got = redact_evidence(&HashMap::from([
         ("accessToken".to_string(), "secret-token".to_string()),
-        ("rawProviderPayload".to_string(), "{\"body\":\"hello\"}".to_string()),
+        (
+            "rawProviderPayload".to_string(),
+            "{\"body\":\"hello\"}".to_string(),
+        ),
         ("homeserver".to_string(), "matrix.example.org".to_string()),
         ("room".to_string(), "!room:example.org".to_string()),
     ]));
     assert_eq!(got.status.as_str(), "suppressed");
     assert!(!got.safe_evidence.contains_key("accessToken"));
-    assert!(!got.safe_evidence.get("homeserver").unwrap_or(&String::new()).is_empty());
-    assert!(!got.safe_evidence.get("room").unwrap_or(&String::new()).is_empty());
+    assert!(
+        !got.safe_evidence
+            .get("homeserver")
+            .unwrap_or(&String::new())
+            .is_empty()
+    );
+    assert!(
+        !got.safe_evidence
+            .get("room")
+            .unwrap_or(&String::new())
+            .is_empty()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +240,10 @@ fn dedupe_uses_homeserver_conversation_and_event_id() {
     let mut replayed = first.clone();
     replayed.sync_batch_id = "sync-2".to_string();
 
-    assert!(!cache.mark_duplicate(&first), "first event should not be duplicate");
+    assert!(
+        !cache.mark_duplicate(&first),
+        "first event should not be duplicate"
+    );
     assert!(
         cache.mark_duplicate(&replayed),
         "same homeserver/conversation/event should be duplicate despite different sync batch"
@@ -243,7 +274,10 @@ fn final_reply_outcome_separates_assistant_and_matrix_reply_truth() {
             conversation_type: ConversationType::Room,
             ..InboundEvent::default()
         },
-        OutboundReply { content: "done".to_string(), ..OutboundReply::default() },
+        OutboundReply {
+            content: "done".to_string(),
+            ..OutboundReply::default()
+        },
     );
     assert_eq!(outcome.assistant_execution_outcome, "succeeded");
     assert_eq!(outcome.matrix_reply_outcome, "sent");
@@ -313,7 +347,11 @@ fn decide_route_accepts_direct_and_room_invocation_gate() {
         "matrix.example.org",
         "@bot:example.org",
     );
-    assert_eq!(direct.outcome, RouteOutcome::Accepted, "direct route should accept");
+    assert_eq!(
+        direct.outcome,
+        RouteOutcome::Accepted,
+        "direct route should accept"
+    );
 
     let room = decide_route(
         &InboundEvent {
@@ -486,7 +524,10 @@ fn conformance_profile_declares_matrix_surfaces() {
     );
 
     assert_eq!(profile.connector_kind, CONNECTOR_KIND);
-    assert_eq!(profile.equivalent_durable_identity_rule_id, "matrix_homeserver_conversation_event_id");
+    assert_eq!(
+        profile.equivalent_durable_identity_rule_id,
+        "matrix_homeserver_conversation_event_id"
+    );
     for area in core_invariant_areas() {
         assert_eq!(
             profile.core_invariant_results.get(&area).copied(),
@@ -541,7 +582,10 @@ fn unsupported_message_kind_classifies_matrix_unsupported_surfaces() {
         MessageKind::BridgeMetadataUnsupported,
         MessageKind::Unknown,
     ] {
-        assert!(unsupported_message_kind(kind), "kind {kind:?} should be unsupported");
+        assert!(
+            unsupported_message_kind(kind),
+            "kind {kind:?} should be unsupported"
+        );
     }
     assert!(!unsupported_message_kind(MessageKind::UnencryptedText));
 }
@@ -566,7 +610,14 @@ fn matrix_diagnostics_freshness_and_redaction_suppression() {
     );
     assert_eq!(fresh.base.freshness_state.as_str(), "fresh");
     assert_eq!(fresh.base.redaction_status.as_str(), "redacted");
-    assert_eq!(fresh.base.safe_evidence.get("retryAfter").map(String::as_str), Some("60s"));
+    assert_eq!(
+        fresh
+            .base
+            .safe_evidence
+            .get("retryAfter")
+            .map(String::as_str),
+        Some("60s")
+    );
 
     let suppressed = map_condition(
         MatrixCondition::ReplyFailed,
@@ -643,11 +694,17 @@ fn smoke_evidence_structured_skip_includes_required_risk_record() {
         ts(2026, 5, 10, 10, 0, 0),
     );
     assert_eq!(smoke.status, SmokeStatus::Skipped);
-    assert_eq!(smoke.authorization_mode, SmokeAuthorizationMode::Unavailable);
+    assert_eq!(
+        smoke.authorization_mode,
+        SmokeAuthorizationMode::Unavailable
+    );
     assert!(!smoke.owner.is_empty());
     assert!(!smoke.reason.is_empty());
     assert!(!smoke.remaining_risk.is_empty());
-    assert_eq!(smoke.retention_expires_at - smoke.validated_at, Duration::days(90));
+    assert_eq!(
+        smoke.retention_expires_at - smoke.validated_at,
+        Duration::days(90)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -658,7 +715,8 @@ fn smoke_evidence_structured_skip_includes_required_risk_record() {
 fn client_transport_sends_matrix_text_reply_with_bearer_token() {
     let saw_path: Arc<StdMutex<String>> = Arc::new(StdMutex::new(String::new()));
     let saw_auth: Arc<StdMutex<String>> = Arc::new(StdMutex::new(String::new()));
-    let saw_body: Arc<StdMutex<serde_json::Value>> = Arc::new(StdMutex::new(serde_json::Value::Null));
+    let saw_body: Arc<StdMutex<serde_json::Value>> =
+        Arc::new(StdMutex::new(serde_json::Value::Null));
     let server = {
         let saw_path = Arc::clone(&saw_path);
         let saw_auth = Arc::clone(&saw_auth);
@@ -672,7 +730,10 @@ fn client_transport_sends_matrix_text_reply_with_bearer_token() {
                 .unwrap_or_default();
             *saw_body.lock().expect("lock") =
                 serde_json::from_str(&request.body).unwrap_or(serde_json::Value::Null);
-            TestResponse { status: 200, body: "{\"event_id\":\"$reply1\"}".to_string() }
+            TestResponse {
+                status: 200,
+                body: "{\"event_id\":\"$reply1\"}".to_string(),
+            }
         })
     };
 
@@ -701,7 +762,10 @@ fn client_transport_sends_matrix_text_reply_with_bearer_token() {
         "unexpected send path: {}",
         saw_path.lock().expect("lock")
     );
-    assert_eq!(*saw_auth.lock().expect("lock"), "Bearer matrix-token-do-not-leak");
+    assert_eq!(
+        *saw_auth.lock().expect("lock"),
+        "Bearer matrix-token-do-not-leak"
+    );
     let body = saw_body.lock().expect("lock").clone();
     assert_eq!(body["msgtype"], "m.text");
     assert_eq!(body["body"], "hello");
@@ -798,7 +862,10 @@ fn client_transport_validates_bot_identity_and_room_membership() {
             body: "{\"user_id\":\"@bot:example.org\",\"device_id\":\"DEVICE1\"}".to_string(),
         },
         "/_matrix/client/v3/rooms/%21room:example.org/state/m.room.member/@bot:example.org" => {
-            TestResponse { status: 200, body: "{\"membership\":\"join\"}".to_string() }
+            TestResponse {
+                status: 200,
+                body: "{\"membership\":\"join\"}".to_string(),
+            }
         }
         other => panic!("unexpected path: {other}"),
     });
@@ -820,7 +887,10 @@ fn client_transport_validates_bot_identity_and_room_membership() {
     });
     result.expect("binding validation");
     assert_eq!(binding.authorization_state, AuthorizationState::Valid);
-    assert_eq!(binding.homeserver_capability_state, HomeserverCapabilityState::Valid);
+    assert_eq!(
+        binding.homeserver_capability_state,
+        HomeserverCapabilityState::Valid
+    );
     assert_eq!(binding.bot_device_id, "DEVICE1");
 
     let (policy, result) = transport.validate_route_policy(RoutePolicy {
@@ -861,7 +931,8 @@ fn client_transport_requires_access_token() {
 
 #[test]
 fn execute_safe_live_smoke_validates_credential_route_and_send_path() {
-    let sent_body: Arc<StdMutex<serde_json::Value>> = Arc::new(StdMutex::new(serde_json::Value::Null));
+    let sent_body: Arc<StdMutex<serde_json::Value>> =
+        Arc::new(StdMutex::new(serde_json::Value::Null));
     let server = {
         let sent_body = Arc::clone(&sent_body);
         TestServer::start(move |request| match request.escaped_path.as_str() {
@@ -870,13 +941,19 @@ fn execute_safe_live_smoke_validates_credential_route_and_send_path() {
                 body: "{\"user_id\":\"@bot:example.org\",\"device_id\":\"DEVICE1\"}".to_string(),
             },
             "/_matrix/client/v3/rooms/%21room:example.org/state/m.room.member/@bot:example.org" => {
-                TestResponse { status: 200, body: "{\"membership\":\"join\"}".to_string() }
+                TestResponse {
+                    status: 200,
+                    body: "{\"membership\":\"join\"}".to_string(),
+                }
             }
             _ => {
                 assert_eq!(request.method, "PUT");
                 *sent_body.lock().expect("lock") =
                     serde_json::from_str(&request.body).unwrap_or(serde_json::Value::Null);
-                TestResponse { status: 200, body: "{\"event_id\":\"$smoke_reply\"}".to_string() }
+                TestResponse {
+                    status: 200,
+                    body: "{\"event_id\":\"$smoke_reply\"}".to_string(),
+                }
             }
         })
     };
@@ -919,7 +996,10 @@ fn execute_safe_live_smoke_validates_credential_route_and_send_path() {
     })
     .expect("safe-live smoke");
     assert_eq!(evidence.status, SmokeStatus::Passed);
-    assert_eq!(evidence.authorization_mode, SmokeAuthorizationMode::SafeLive);
+    assert_eq!(
+        evidence.authorization_mode,
+        SmokeAuthorizationMode::SafeLive
+    );
     assert_eq!(
         evidence.safe_evidence.get("eventId").map(String::as_str),
         Some("$smoke_reply")
@@ -996,9 +1076,14 @@ impl Provider for EchoTestProvider {
                 .map(|m| m.content.clone())
                 .unwrap_or_default();
             Ok(ProviderResponse {
+                tool_calls: Vec::new(),
                 output: format!("reply:{content}"),
                 finish_reason: "stop".to_string(),
-                usage: Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    total_tokens: 2,
+                },
             })
         })
     }
@@ -1023,13 +1108,22 @@ impl Provider for EchoTestProvider {
                 delta: content.clone(),
                 output: format!("reply:{content}"),
                 finish_reason: "stop".to_string(),
-                usage: Some(Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 }),
+                usage: Some(Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    total_tokens: 2,
+                }),
                 ..Default::default()
             })?;
             Ok(ProviderResponse {
+                tool_calls: Vec::new(),
                 output: format!("reply:{content}"),
                 finish_reason: "stop".to_string(),
-                usage: Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    total_tokens: 2,
+                },
             })
         })
     }
@@ -1045,7 +1139,9 @@ fn loop_harness(
     let bus = Bus::new();
     let dispatcher = Arc::new(Dispatcher::new());
     dispatcher.register_provider(provider);
-    dispatcher.set_default_provider("echo").expect("default provider");
+    dispatcher
+        .set_default_provider("echo")
+        .expect("default provider");
     dispatcher.set_default_model("echo-v1");
     let chat = Service::new_service(dispatcher, None, None, Some(bus.clone()), None);
     let runtime_manager = Arc::new(RuntimeManager::new());
@@ -1179,7 +1275,9 @@ fn runtime_classifies_persisted_matrix_event_replay_as_duplicate_after_restart()
     )
     .expect("new runtime")
     .expect("runtime enabled");
-    first_runtime.start("ten_matrix_runtime").expect("first start");
+    first_runtime
+        .start("ten_matrix_runtime")
+        .expect("first start");
 
     let second_transport = FakeTransport::new(vec![runtime_event(now)]);
     let second_transport_handle = second_transport.clone();
@@ -1194,7 +1292,9 @@ fn runtime_classifies_persisted_matrix_event_replay_as_duplicate_after_restart()
     )
     .expect("new runtime")
     .expect("runtime enabled");
-    second_runtime.start("ten_matrix_runtime").expect("second start");
+    second_runtime
+        .start("ten_matrix_runtime")
+        .expect("second start");
 
     assert_eq!(first_transport_handle.sent_replies().len(), 1);
     assert_eq!(

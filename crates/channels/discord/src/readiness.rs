@@ -131,7 +131,11 @@ pub fn evaluate_hosted_setup(input: HostedSetupInput) -> HostedSetup {
         now = Utc::now();
     }
     let mode = input.delivery_mode.trim();
-    let mode = if mode.is_empty() { "gateway".to_string() } else { mode.to_string() };
+    let mode = if mode.is_empty() {
+        "gateway".to_string()
+    } else {
+        mode.to_string()
+    };
     let mut setup = HostedSetup {
         tenant_id: input.tenant_id.trim().to_string(),
         connector_id: input.connector_id.trim().to_string(),
@@ -191,7 +195,9 @@ pub fn evaluate_hosted_setup(input: HostedSetupInput) -> HostedSetup {
             setup.readiness_state = ReadinessState::Failed;
             setup.hosted_ready = false;
             setup.redaction_status = RedactionStatus::Suppressed;
-            setup.reason_code = DiagnosticReasonCode::UnknownConnectorFailure.as_str().to_string();
+            setup.reason_code = DiagnosticReasonCode::UnknownConnectorFailure
+                .as_str()
+                .to_string();
         }
         CredentialState::Submitted => {
             // Go default branch: a submitted-but-not-valid credential is not
@@ -199,7 +205,9 @@ pub fn evaluate_hosted_setup(input: HostedSetupInput) -> HostedSetup {
             setup.status = LifecycleState::Failed;
             setup.readiness_state = ReadinessState::Failed;
             setup.hosted_ready = false;
-            setup.reason_code = DiagnosticReasonCode::UnknownConnectorFailure.as_str().to_string();
+            setup.reason_code = DiagnosticReasonCode::UnknownConnectorFailure
+                .as_str()
+                .to_string();
         }
     }
     setup
@@ -230,19 +238,17 @@ pub fn normalize_destination_evidence(
         // Go maps the empty-string state to Invalid; the enum's default is
         // Invalid, matching that normalization.
         if destination.reason_code.trim().is_empty() {
-            destination.reason_code = if destination.validation_state
-                == DestinationValidationState::Valid
-            {
-                "healthy".to_string()
-            } else {
-                DiagnosticReasonCode::BlockedRoute.as_str().to_string()
-            };
+            destination.reason_code =
+                if destination.validation_state == DestinationValidationState::Valid {
+                    "healthy".to_string()
+                } else {
+                    DiagnosticReasonCode::BlockedRoute.as_str().to_string()
+                };
         }
         items.push(destination);
     }
     items
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -348,7 +354,10 @@ mod tests {
         assert_eq!(setup.status, LifecycleState::Failed);
         assert_eq!(setup.readiness_state, ReadinessState::Failed);
         assert!(!setup.hosted_ready);
-        assert_eq!(setup.reason_code, DiagnosticReasonCode::AuthMissing.as_str());
+        assert_eq!(
+            setup.reason_code,
+            DiagnosticReasonCode::AuthMissing.as_str()
+        );
         assert_eq!(setup.credential_state, CredentialState::Missing);
     }
 
@@ -386,8 +395,14 @@ mod tests {
         assert_eq!(items[0].tenant_id, "ten_discord");
         assert_eq!(items[0].connector_id, "discord-main");
         assert_eq!(items[0].validated_at, now);
-        assert_eq!(items[0].validation_state, DestinationValidationState::Invalid);
-        assert_eq!(items[0].reason_code, DiagnosticReasonCode::BlockedRoute.as_str());
+        assert_eq!(
+            items[0].validation_state,
+            DestinationValidationState::Invalid
+        );
+        assert_eq!(
+            items[0].reason_code,
+            DiagnosticReasonCode::BlockedRoute.as_str()
+        );
         assert_eq!(items[0].redaction_status, RedactionStatus::Redacted);
     }
 }

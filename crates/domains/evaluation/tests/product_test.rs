@@ -80,9 +80,10 @@ fn product_fixture_lifecycle_create_review_suppress_retention() {
     .expect("ReviewProductFixture");
     product_fixture_selectable(&approved).expect("approved fixture should be selectable");
 
-    let suppressed =
-        suppress_product_fixture(approved, now + chrono::Duration::minutes(3)).expect("SuppressProductFixture");
-    let err = product_fixture_selectable(&suppressed).expect_err("suppressed must not be selectable");
+    let suppressed = suppress_product_fixture(approved, now + chrono::Duration::minutes(3))
+        .expect("SuppressProductFixture");
+    let err =
+        product_fixture_selectable(&suppressed).expect_err("suppressed must not be selectable");
     assert!(matches!(err, EvaluationError::ProductFixtureNotSelectable));
 
     let deleted = apply_product_fixture_retention(
@@ -151,9 +152,10 @@ fn product_fixture_revision_is_immutable_and_payload_is_copied() {
         now,
     )
     .expect("CreateProductFixtureFromCandidate");
-    revision
-        .fixture_payload
-        .insert("goal".to_string(), serde_json::json!("mutated after return"));
+    revision.fixture_payload.insert(
+        "goal".to_string(),
+        serde_json::json!("mutated after return"),
+    );
 
     let (_revised, second_revision) = create_product_fixture_revision(
         fixture,
@@ -215,7 +217,11 @@ fn redact_evidence_payload_removes_sensitive_fields_before_persist() {
     assert_eq!(redacted.status, RedactionStatus::Redacted);
     assert!(!redacted.payload.contains_key("access_token"));
     assert!(!redacted.payload.contains_key("Authorization"));
-    let nested = redacted.payload.get("nested").and_then(|v| v.as_object()).expect("nested object");
+    let nested = redacted
+        .payload
+        .get("nested")
+        .and_then(|v| v.as_object())
+        .expect("nested object");
     assert!(!nested.contains_key("refresh_token"));
     assert_eq!(nested.get("count").and_then(|v| v.as_i64()), Some(1));
     assert_eq!(redacted.sensitive_fields_excluded.len(), 3);
@@ -237,10 +243,28 @@ fn redact_evidence_payload_handles_nested_arrays_and_configured_fields() {
         },
     );
     assert_eq!(redacted.status, RedactionStatus::Redacted);
-    let events = redacted.payload.get("events").and_then(|v| v.as_array()).expect("events");
-    assert!(!events[0].as_object().expect("obj").contains_key("credential"));
-    assert!(!events[1].as_object().expect("obj").contains_key("custom_secret"));
-    let profile = redacted.payload.get("profile").and_then(|v| v.as_object()).expect("profile");
+    let events = redacted
+        .payload
+        .get("events")
+        .and_then(|v| v.as_array())
+        .expect("events");
+    assert!(
+        !events[0]
+            .as_object()
+            .expect("obj")
+            .contains_key("credential")
+    );
+    assert!(
+        !events[1]
+            .as_object()
+            .expect("obj")
+            .contains_key("custom_secret")
+    );
+    let profile = redacted
+        .payload
+        .get("profile")
+        .and_then(|v| v.as_object())
+        .expect("profile");
     assert!(!profile.contains_key("api-key"));
     assert_eq!(redacted.sensitive_fields_excluded.len(), 3);
 }
@@ -250,7 +274,10 @@ fn failed_closed_redacted_evidence_carries_reason_without_payload() {
     let redacted = failed_closed_redacted_evidence("evaluation.redaction_failed");
     assert_eq!(redacted.status, RedactionStatus::Failed);
     assert!(redacted.payload.is_empty());
-    assert_eq!(redacted.redaction_rules_applied, vec!["failed_closed".to_string()]);
+    assert_eq!(
+        redacted.redaction_rules_applied,
+        vec!["failed_closed".to_string()]
+    );
     assert_eq!(
         redacted.sensitive_fields_excluded,
         vec!["evaluation.redaction_failed".to_string()]
@@ -286,7 +313,11 @@ fn candidate_evidence_from_payload_redacts_before_persist() {
     assert!(evidence.materialization_allowed);
     assert_eq!(evidence.retention_state, RetentionState::Active);
     assert!(!evidence.redacted_payload.contains_key("sessionToken"));
-    let nested = evidence.redacted_payload.get("nested").and_then(|v| v.as_object()).expect("nested");
+    let nested = evidence
+        .redacted_payload
+        .get("nested")
+        .and_then(|v| v.as_object())
+        .expect("nested");
     assert!(!nested.contains_key("custom_sensitive"));
     assert_eq!(evidence.sensitive_fields_excluded.len(), 2);
 }
@@ -315,7 +346,10 @@ fn normalize_product_limit_bounds_lists() {
     assert_eq!(normalize_product_limit(0), DEFAULT_PRODUCT_PAGE_LIMIT);
     assert_eq!(normalize_product_limit(-1), DEFAULT_PRODUCT_PAGE_LIMIT);
     assert_eq!(normalize_product_limit(25), 25);
-    assert_eq!(normalize_product_limit(MAX_PRODUCT_PAGE_LIMIT + 1), MAX_PRODUCT_PAGE_LIMIT);
+    assert_eq!(
+        normalize_product_limit(MAX_PRODUCT_PAGE_LIMIT + 1),
+        MAX_PRODUCT_PAGE_LIMIT
+    );
 }
 
 #[test]

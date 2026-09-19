@@ -6,12 +6,12 @@ mod common;
 use chrono::DateTime;
 use chrono::Utc;
 use kura_evaluation::{
-    INSPECTION_DRIFTED, INSPECTION_FAILED, INSPECTION_LIVE_VALIDATION_ABORTED,
+    EvaluationError, INSPECTION_DRIFTED, INSPECTION_FAILED, INSPECTION_LIVE_VALIDATION_ABORTED,
     INSPECTION_LIVE_VALIDATION_COMPLETED, INSPECTION_LIVE_VALIDATION_DENIED,
     INSPECTION_LIVE_VALIDATION_FAILED, INSPECTION_LIVE_VALIDATION_OPERATOR_ACTION,
     INSPECTION_MATCHED, INSPECTION_MISSING_ORIGINAL_EVIDENCE, INSPECTION_MISSING_REPLAY_EVIDENCE,
-    INSPECTION_UNSUPPORTED, EvaluationError, RedactionPolicy, RedactionStatus,
-    ToolCallDiffInput, ToolCallInspectionInput, build_tool_call_inspection, classify_tool_call_inspection,
+    INSPECTION_UNSUPPORTED, RedactionPolicy, RedactionStatus, ToolCallDiffInput,
+    ToolCallInspectionInput, build_tool_call_inspection, classify_tool_call_inspection,
     redacted_tool_call_diff,
 };
 
@@ -34,42 +34,66 @@ fn tool_call_inspection_classification_states() {
         ("matched", base.clone(), INSPECTION_MATCHED),
         (
             "drifted",
-            ToolCallInspectionInput { drifted: true, ..base.clone() },
+            ToolCallInspectionInput {
+                drifted: true,
+                ..base.clone()
+            },
             INSPECTION_DRIFTED,
         ),
         (
             "failed",
-            ToolCallInspectionInput { failed: true, ..base.clone() },
+            ToolCallInspectionInput {
+                failed: true,
+                ..base.clone()
+            },
             INSPECTION_FAILED,
         ),
         (
             "unsupported",
-            ToolCallInspectionInput { unsupported: true, ..base.clone() },
+            ToolCallInspectionInput {
+                unsupported: true,
+                ..base.clone()
+            },
             INSPECTION_UNSUPPORTED,
         ),
         (
             "missing original",
-            ToolCallInspectionInput { original_evidence_ref: String::new(), ..base.clone() },
+            ToolCallInspectionInput {
+                original_evidence_ref: String::new(),
+                ..base.clone()
+            },
             INSPECTION_MISSING_ORIGINAL_EVIDENCE,
         ),
         (
             "missing replay",
-            ToolCallInspectionInput { non_live_replay_evidence_ref: String::new(), ..base.clone() },
+            ToolCallInspectionInput {
+                non_live_replay_evidence_ref: String::new(),
+                ..base.clone()
+            },
             INSPECTION_MISSING_REPLAY_EVIDENCE,
         ),
         (
             "live denied",
-            ToolCallInspectionInput { live_validation_outcome: "denied".to_string(), ..base.clone() },
+            ToolCallInspectionInput {
+                live_validation_outcome: "denied".to_string(),
+                ..base.clone()
+            },
             INSPECTION_LIVE_VALIDATION_DENIED,
         ),
         (
             "live aborted",
-            ToolCallInspectionInput { live_validation_outcome: "aborted".to_string(), ..base.clone() },
+            ToolCallInspectionInput {
+                live_validation_outcome: "aborted".to_string(),
+                ..base.clone()
+            },
             INSPECTION_LIVE_VALIDATION_ABORTED,
         ),
         (
             "live failed",
-            ToolCallInspectionInput { live_validation_outcome: "failed".to_string(), ..base.clone() },
+            ToolCallInspectionInput {
+                live_validation_outcome: "failed".to_string(),
+                ..base.clone()
+            },
             INSPECTION_LIVE_VALIDATION_FAILED,
         ),
         (
@@ -82,12 +106,16 @@ fn tool_call_inspection_classification_states() {
         ),
         (
             "live completed",
-            ToolCallInspectionInput { live_validation_outcome: "completed".to_string(), ..base.clone() },
+            ToolCallInspectionInput {
+                live_validation_outcome: "completed".to_string(),
+                ..base.clone()
+            },
             INSPECTION_LIVE_VALIDATION_COMPLETED,
         ),
     ];
     for (name, input, want) in cases {
-        let got = build_tool_call_inspection(input, ts("2026-04-29T10:00:00Z")).expect("BuildToolCallInspection");
+        let got = build_tool_call_inspection(input, ts("2026-04-29T10:00:00Z"))
+            .expect("BuildToolCallInspection");
         assert_eq!(got.classification, want, "{name}: classification mismatch");
     }
 }
@@ -102,7 +130,10 @@ fn build_tool_call_inspection_requires_evidence_coordinates() {
         Utc::now(),
     )
     .expect_err("evidence coordinates required");
-    assert!(matches!(err, EvaluationError::ToolCallInspectionEvidenceRequired));
+    assert!(matches!(
+        err,
+        EvaluationError::ToolCallInspectionEvidenceRequired
+    ));
 }
 
 #[test]

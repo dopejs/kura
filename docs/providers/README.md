@@ -7,6 +7,7 @@ This module defines provider families, managed auth, model resolution, and provi
 - [23-provider-architecture.md](/Users/John/Code/agent-os/docs/providers/provider-architecture.md)
 - [24-provider-identity-and-profiles.md](/Users/John/Code/agent-os/docs/providers/provider-identity-and-profiles.md)
 - [25-managed-coding-providers.md](/Users/John/Code/agent-os/docs/providers/managed-coding-providers.md)
+- [tool-provider-architecture.md](tool-provider-architecture.md) — configuration and credential storage for tool providers (web search, image generation, browser)
 
 ## Suggested Reading Order
 

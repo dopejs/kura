@@ -53,7 +53,10 @@ pub fn build_discovery_run_from_policy(
             ..DiscoveryRun::default()
         });
         if input.idempotency_key.trim().is_empty() {
-            format!("discovery_run_{}", now.timestamp_nanos_opt().unwrap_or_default())
+            format!(
+                "discovery_run_{}",
+                now.timestamp_nanos_opt().unwrap_or_default()
+            )
         } else {
             format!("discovery_run_{}", scoped.replace(':', "_"))
         }
@@ -127,7 +130,10 @@ pub fn discovery_idempotency_scope(run: &DiscoveryRun) -> String {
 }
 
 /// Go `mergeDiscoveryPolicyInput`: explicit input overrides the policy.
-fn merge_discovery_policy_input(mut policy: DiscoveryPolicy, input: &StartDiscoveryRunInput) -> DiscoveryPolicy {
+fn merge_discovery_policy_input(
+    mut policy: DiscoveryPolicy,
+    input: &StartDiscoveryRunInput,
+) -> DiscoveryPolicy {
     if !is_zero_time(input.window_start) {
         policy.window_start = input.window_start;
     }

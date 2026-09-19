@@ -3,11 +3,14 @@
 //! adapter; nothing crosses a real transport.
 
 use chrono::{DateTime, Utc};
-use kura_livevalidation::{fake_outcome_result_for, FakeOutcome, FakeOutcomeResult, SafetyClass};
+use kura_livevalidation::{FakeOutcome, FakeOutcomeResult, SafetyClass, fake_outcome_result_for};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::{DeliveryAdapter, DeliveryOutcome, DeliveryTarget, ResultClass, SendResult, TargetKind, TargetStatus};
+use crate::{
+    DeliveryAdapter, DeliveryOutcome, DeliveryTarget, ResultClass, SendResult, TargetKind,
+    TargetStatus,
+};
 
 /// A recorded test-sink message (port of `TestSinkMessage`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -28,14 +31,19 @@ pub struct TestSinkAdapter {
 impl TestSinkAdapter {
     #[must_use]
     pub fn new() -> Self {
-        TestSinkAdapter { messages: Mutex::new(Vec::new()) }
+        TestSinkAdapter {
+            messages: Mutex::new(Vec::new()),
+        }
     }
 
     /// Port of `RunLiveValidationOutcome`: the fake-outcome verdict for a non-idempotent
     /// mutation (delivery dispatch is never auto-retried against the sink).
     #[must_use]
     pub fn run_live_validation_outcome(&self, outcome: &FakeOutcome) -> FakeOutcomeResult {
-        fake_outcome_result_for(outcome, &SafetyClass::from(SafetyClass::NON_IDEMPOTENT_MUTATION))
+        fake_outcome_result_for(
+            outcome,
+            &SafetyClass::from(SafetyClass::NON_IDEMPOTENT_MUTATION),
+        )
     }
 
     /// Port of `Messages`: a copy of the recorded messages.

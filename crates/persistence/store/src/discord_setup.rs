@@ -8,11 +8,11 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 use serde::{Deserialize, Serialize};
 
-use crate::crud::{now_rfc3339, null_string, opt_time_string};
 use crate::SQLiteStore;
+use crate::crud::{now_rfc3339, null_string, opt_time_string};
 
 /// Go `DiscordHostedSetupRecord` (the record stored in `discord_hosted_setups`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,7 +143,9 @@ fn normalize_hosted_setup(mut record: DiscordHostedSetupRecord) -> DiscordHosted
 }
 
 /// Go `normalizeDiscordDestinationValidationRecord`.
-fn normalize_destination(mut record: DiscordDestinationValidationRecord) -> DiscordDestinationValidationRecord {
+fn normalize_destination(
+    mut record: DiscordDestinationValidationRecord,
+) -> DiscordDestinationValidationRecord {
     record.validation_state = coalesce(&record.validation_state, "invalid");
     record.redaction_status = coalesce(&record.redaction_status, "redacted");
     if is_unset_time(&record.validated_at) {
@@ -174,7 +176,10 @@ fn normalize_smoke(mut record: DiscordSmokeEvidenceRecord) -> DiscordSmokeEviden
 
 impl SQLiteStore {
     /// Go `SaveDiscordHostedSetup`.
-    pub fn save_discord_hosted_setup(&self, record: &DiscordHostedSetupRecord) -> Result<(), String> {
+    pub fn save_discord_hosted_setup(
+        &self,
+        record: &DiscordHostedSetupRecord,
+    ) -> Result<(), String> {
         let record = normalize_hosted_setup(record.clone());
         let document = serde_json::to_string(&record)
             .map_err(|e| format!("marshal discord hosted setup: {e}"))?;
@@ -251,7 +256,10 @@ impl SQLiteStore {
     }
 
     /// Go `SaveDiscordDestinationValidation`.
-    pub fn save_discord_destination_validation(&self, record: &DiscordDestinationValidationRecord) -> Result<(), String> {
+    pub fn save_discord_destination_validation(
+        &self,
+        record: &DiscordDestinationValidationRecord,
+    ) -> Result<(), String> {
         let record = normalize_destination(record.clone());
         let document = serde_json::to_string(&record)
             .map_err(|e| format!("marshal discord destination validation: {e}"))?;
@@ -285,7 +293,12 @@ impl SQLiteStore {
                     document,
                 ],
             )
-            .map_err(|e| format!("save discord destination validation {}: {e}", record.destination_id))?;
+            .map_err(|e| {
+                format!(
+                    "save discord destination validation {}: {e}",
+                    record.destination_id
+                )
+            })?;
         Ok(())
     }
 
@@ -315,7 +328,10 @@ impl SQLiteStore {
     }
 
     /// Go `SaveDiscordSmokeEvidence`.
-    pub fn save_discord_smoke_evidence(&self, record: &DiscordSmokeEvidenceRecord) -> Result<(), String> {
+    pub fn save_discord_smoke_evidence(
+        &self,
+        record: &DiscordSmokeEvidenceRecord,
+    ) -> Result<(), String> {
         let record = normalize_smoke(record.clone());
         let document = serde_json::to_string(&record)
             .map_err(|e| format!("marshal discord smoke evidence: {e}"))?;
@@ -354,7 +370,12 @@ impl SQLiteStore {
                     document,
                 ],
             )
-            .map_err(|e| format!("save discord smoke evidence {}: {e}", record.smoke_evidence_id))?;
+            .map_err(|e| {
+                format!(
+                    "save discord smoke evidence {}: {e}",
+                    record.smoke_evidence_id
+                )
+            })?;
         Ok(())
     }
 
@@ -376,7 +397,11 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("latest discord smoke evidence {connector_id}: {e}"))?;
         let mut rows = stmt
-            .query(params![tenant_id.trim(), connector_id.trim(), now_rfc3339(&now)])
+            .query(params![
+                tenant_id.trim(),
+                connector_id.trim(),
+                now_rfc3339(&now)
+            ])
             .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);

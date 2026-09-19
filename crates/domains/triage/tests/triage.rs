@@ -92,11 +92,23 @@ fn policy_wire_round_trip() {
     let policy = sample_policy(&m);
     let json = serde_json::to_string(&policy).unwrap();
     // camelCase keys + snake_case enum wire values.
-    for key in ["\"policyId\"", "\"environmentScope\"", "\"defaultClassification\"", "\"createdAt\"", "\"conditions\""] {
+    for key in [
+        "\"policyId\"",
+        "\"environmentScope\"",
+        "\"defaultClassification\"",
+        "\"createdAt\"",
+        "\"conditions\"",
+    ] {
         assert!(json.contains(key), "missing {key} in {json}");
     }
-    assert!(json.contains("\"fyi\""), "default classification wire value");
-    assert!(json.contains("\"not_contains\"") == false, "no unexpected operator");
+    assert!(
+        json.contains("\"fyi\""),
+        "default classification wire value"
+    );
+    assert!(
+        json.contains("\"not_contains\"") == false,
+        "no unexpected operator"
+    );
     let decoded: Policy = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded, policy);
 }
@@ -122,7 +134,10 @@ fn decision_wire_round_trip() {
     assert!(json.contains("\"matchedRuleId\""));
     assert!(json.contains("\"matchedEvidence\""));
     assert!(json.contains("\"replayCandidate\":true"));
-    assert!(!json.contains("defaultApplied"), "defaultApplied=false must be omitted");
+    assert!(
+        !json.contains("defaultApplied"),
+        "defaultApplied=false must be omitted"
+    );
     let decoded: Decision = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded, matched);
 
@@ -139,7 +154,10 @@ fn decision_wire_round_trip() {
     };
     let json = serde_json::to_string(&defaulted).unwrap();
     assert!(json.contains("\"defaultApplied\":true"));
-    assert!(!json.contains("matchedRuleId"), "empty matchedRuleId must be omitted");
+    assert!(
+        !json.contains("matchedRuleId"),
+        "empty matchedRuleId must be omitted"
+    );
     let decoded: Decision = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded, defaulted);
 }
@@ -170,8 +188,12 @@ fn create_policy_normalizes_rules() {
 #[test]
 fn get_and_list_policies() {
     let m = Manager::new("test");
-    let a = m.create_policy("a", Vec::new(), Classification::Fyi).unwrap();
-    let b = m.create_policy("b", Vec::new(), Classification::Urgent).unwrap();
+    let a = m
+        .create_policy("a", Vec::new(), Classification::Fyi)
+        .unwrap();
+    let b = m
+        .create_policy("b", Vec::new(), Classification::Urgent)
+        .unwrap();
     let listed = m.list_policies();
     assert_eq!(listed.len(), 2);
     // Insertion order is preserved.
@@ -187,11 +209,36 @@ fn run_classifies_with_transparency() {
     let m = Manager::new("test");
     let policy = sample_policy(&m);
     let messages = vec![
-        Message { message_id: "m1".to_string(), sender: "spam@bad.example".to_string(), subject: "win money".to_string(), ..Message::default() },
-        Message { message_id: "m2".to_string(), sender: "weekly-newsletter@news.example".to_string(), subject: "this week".to_string(), ..Message::default() },
-        Message { message_id: "m3".to_string(), sender: "boss@corp.example".to_string(), subject: "URGENT: review".to_string(), ..Message::default() },
-        Message { message_id: "m4".to_string(), sender: "alice@corp.example".to_string(), subject: "can you help?".to_string(), ..Message::default() },
-        Message { message_id: "m5".to_string(), sender: "bob@corp.example".to_string(), subject: "fyi notes".to_string(), ..Message::default() },
+        Message {
+            message_id: "m1".to_string(),
+            sender: "spam@bad.example".to_string(),
+            subject: "win money".to_string(),
+            ..Message::default()
+        },
+        Message {
+            message_id: "m2".to_string(),
+            sender: "weekly-newsletter@news.example".to_string(),
+            subject: "this week".to_string(),
+            ..Message::default()
+        },
+        Message {
+            message_id: "m3".to_string(),
+            sender: "boss@corp.example".to_string(),
+            subject: "URGENT: review".to_string(),
+            ..Message::default()
+        },
+        Message {
+            message_id: "m4".to_string(),
+            sender: "alice@corp.example".to_string(),
+            subject: "can you help?".to_string(),
+            ..Message::default()
+        },
+        Message {
+            message_id: "m5".to_string(),
+            sender: "bob@corp.example".to_string(),
+            subject: "fyi notes".to_string(),
+            ..Message::default()
+        },
     ];
     let run = m.run(&policy.policy_id, &messages).unwrap();
     assert_eq!(run.decisions.len(), 5);
@@ -203,7 +250,10 @@ fn run_classifies_with_transparency() {
         (Classification::Fyi, Outcome::NoAction),
     ];
     for (i, (class, outcome)) in want.iter().enumerate() {
-        assert_eq!(run.decisions[i].classification, *class, "decision {i} classification");
+        assert_eq!(
+            run.decisions[i].classification, *class,
+            "decision {i} classification"
+        );
         assert_eq!(run.decisions[i].outcome, *outcome, "decision {i} outcome");
         assert!(run.decisions[i].replay_candidate);
     }
@@ -220,7 +270,12 @@ fn run_classifies_with_transparency() {
 fn run_is_deterministic() {
     let m = Manager::new("test");
     let policy = sample_policy(&m);
-    let messages = vec![Message { message_id: "m1".to_string(), sender: "boss@corp.example".to_string(), subject: "urgent please".to_string(), ..Message::default() }];
+    let messages = vec![Message {
+        message_id: "m1".to_string(),
+        sender: "boss@corp.example".to_string(),
+        subject: "urgent please".to_string(),
+        ..Message::default()
+    }];
     let a = m.run(&policy.policy_id, &messages).unwrap();
     let b = m.run(&policy.policy_id, &messages).unwrap();
     // DecidedAt is wall-clock; compare the deterministic fields only.
@@ -245,13 +300,21 @@ fn first_match_wins() {
             "ordered",
             vec![
                 Rule {
-                    conditions: vec![Condition { field: ConditionField::Subject, operator: ConditionOperator::Contains, value: "report".to_string() }],
+                    conditions: vec![Condition {
+                        field: ConditionField::Subject,
+                        operator: ConditionOperator::Contains,
+                        value: "report".to_string(),
+                    }],
                     classification: Classification::NeedsReply,
                     outcome: Outcome::DraftReply,
                     ..Rule::default()
                 },
                 Rule {
-                    conditions: vec![Condition { field: ConditionField::Subject, operator: ConditionOperator::Contains, value: "report".to_string() }],
+                    conditions: vec![Condition {
+                        field: ConditionField::Subject,
+                        operator: ConditionOperator::Contains,
+                        value: "report".to_string(),
+                    }],
                     classification: Classification::Fyi,
                     outcome: Outcome::NoAction,
                     ..Rule::default()
@@ -260,7 +323,16 @@ fn first_match_wins() {
             Classification::Fyi,
         )
         .unwrap();
-    let run = m.run(&policy.policy_id, &[Message { message_id: "m".to_string(), subject: "weekly report".to_string(), ..Message::default() }]).unwrap();
+    let run = m
+        .run(
+            &policy.policy_id,
+            &[Message {
+                message_id: "m".to_string(),
+                subject: "weekly report".to_string(),
+                ..Message::default()
+            }],
+        )
+        .unwrap();
     assert_eq!(run.decisions[0].classification, Classification::NeedsReply);
 }
 
@@ -272,13 +344,21 @@ fn operators_and_recipient_field() {
             "ops",
             vec![
                 Rule {
-                    conditions: vec![Condition { field: ConditionField::Recipient, operator: ConditionOperator::Equals, value: "me@corp.example".to_string() }],
+                    conditions: vec![Condition {
+                        field: ConditionField::Recipient,
+                        operator: ConditionOperator::Equals,
+                        value: "me@corp.example".to_string(),
+                    }],
                     classification: Classification::NeedsReply,
                     outcome: Outcome::DraftReply,
                     ..Rule::default()
                 },
                 Rule {
-                    conditions: vec![Condition { field: ConditionField::Subject, operator: ConditionOperator::NotContains, value: "spam".to_string() }],
+                    conditions: vec![Condition {
+                        field: ConditionField::Subject,
+                        operator: ConditionOperator::NotContains,
+                        value: "spam".to_string(),
+                    }],
                     classification: Classification::Fyi,
                     outcome: Outcome::NoAction,
                     ..Rule::default()
@@ -304,8 +384,12 @@ fn operators_and_recipient_field() {
 #[test]
 fn restore_replaces_policies() {
     let m = Manager::new("test");
-    let p1 = m.create_policy("one", Vec::new(), Classification::Fyi).unwrap();
-    let p2 = m.create_policy("two", Vec::new(), Classification::Urgent).unwrap();
+    let p1 = m
+        .create_policy("one", Vec::new(), Classification::Fyi)
+        .unwrap();
+    let p2 = m
+        .create_policy("two", Vec::new(), Classification::Urgent)
+        .unwrap();
     m.restore(vec![p2.clone()]);
     assert!(m.get_policy(&p1.policy_id).is_none());
     assert_eq!(m.get_policy(&p2.policy_id).unwrap(), p2);
@@ -317,14 +401,20 @@ fn persistence_round_trip() {
     let dir = temp_dir("persist");
     let policy_id;
     {
-        let store = Arc::new(parking_lot::Mutex::new(SQLiteStore::new(&dir.to_string_lossy()).unwrap()));
+        let store = Arc::new(parking_lot::Mutex::new(
+            SQLiteStore::new(&dir.to_string_lossy()).unwrap(),
+        ));
         let mut m = Manager::new("test");
         m.with_store(Arc::clone(&store));
-        let policy = m.create_policy("inbox", vec![], Classification::Fyi).unwrap();
+        let policy = m
+            .create_policy("inbox", vec![], Classification::Fyi)
+            .unwrap();
         policy_id = policy.policy_id.clone();
     }
     {
-        let store = Arc::new(parking_lot::Mutex::new(SQLiteStore::new(&dir.to_string_lossy()).unwrap()));
+        let store = Arc::new(parking_lot::Mutex::new(
+            SQLiteStore::new(&dir.to_string_lossy()).unwrap(),
+        ));
         let mut m = Manager::new("test");
         m.with_store(Arc::clone(&store));
         m.load_from_store().unwrap();
@@ -341,7 +431,11 @@ fn run_wire_round_trip() {
     let run = m
         .run(
             &policy.policy_id,
-            &[Message { message_id: "m1".to_string(), sender: "spam@bad.example".to_string(), ..Message::default() }],
+            &[Message {
+                message_id: "m1".to_string(),
+                sender: "spam@bad.example".to_string(),
+                ..Message::default()
+            }],
         )
         .unwrap();
     let json = serde_json::to_string(&run).unwrap();
@@ -355,4 +449,3 @@ fn manager_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<kura_triage::Manager>();
 }
-

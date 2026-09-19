@@ -6,10 +6,10 @@
 //! filtering/ordering plus a full document_json snapshot of the struct, and reads decode
 //! only document_json.
 
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
-use crate::crud::{enum_str, marshal_map, now_rfc3339, null_string, opt_time_string};
 use crate::SQLiteStore;
+use crate::crud::{enum_str, marshal_map, now_rfc3339, null_string, opt_time_string};
 
 fn scan_session_document(row: &Row) -> Result<kura_computeruse::Session, String> {
     let document: String = row.get(0).map_err(|e| e.to_string())?;
@@ -27,17 +27,23 @@ fn scan_artifact_document(row: &Row) -> Result<kura_computeruse::Artifact, Strin
 }
 
 impl SQLiteStore {
-    pub fn upsert_computer_use_session(&self, session: &kura_computeruse::Session) -> Result<(), String> {
-        let document_json =
-            serde_json::to_string(session).map_err(|e| format!("marshal computer-use session: {e}"))?;
+    pub fn upsert_computer_use_session(
+        &self,
+        session: &kura_computeruse::Session,
+    ) -> Result<(), String> {
+        let document_json = serde_json::to_string(session)
+            .map_err(|e| format!("marshal computer-use session: {e}"))?;
         let trusted_scope_json = match &session.trusted_page_scope {
-            Some(scope) => {
-                Some(serde_json::to_string(scope).map_err(|e| format!("marshal trusted page scope: {e}"))?)
-            }
+            Some(scope) => Some(
+                serde_json::to_string(scope)
+                    .map_err(|e| format!("marshal trusted page scope: {e}"))?,
+            ),
             None => None,
         };
         let current_page_json = match &session.current_page {
-            Some(page) => Some(serde_json::to_string(page).map_err(|e| format!("marshal current page: {e}"))?),
+            Some(page) => Some(
+                serde_json::to_string(page).map_err(|e| format!("marshal current page: {e}"))?,
+            ),
             None => None,
         };
 
@@ -84,7 +90,12 @@ impl SQLiteStore {
                     None::<String>,
                 ],
             )
-            .map_err(|e| format!("upsert computer-use session {}: {e}", session.computer_use_session_id))?;
+            .map_err(|e| {
+                format!(
+                    "upsert computer-use session {}: {e}",
+                    session.computer_use_session_id
+                )
+            })?;
         Ok(())
     }
 
@@ -127,28 +138,40 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("get computer-use session {session_id}: {e}"))?;
         let mut rows = stmt
-            .query(params![environment_scope.trim(), run_id.trim(), session_id.trim()])
+            .query(params![
+                environment_scope.trim(),
+                run_id.trim(),
+                session_id.trim()
+            ])
             .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
         scan_session_document(row).map(Some)
     }
-    pub fn upsert_computer_use_action(&self, action: &kura_computeruse::Action) -> Result<(), String> {
-        let document_json =
-            serde_json::to_string(action).map_err(|e| format!("marshal computer-use action: {e}"))?;
+    pub fn upsert_computer_use_action(
+        &self,
+        action: &kura_computeruse::Action,
+    ) -> Result<(), String> {
+        let document_json = serde_json::to_string(action)
+            .map_err(|e| format!("marshal computer-use action: {e}"))?;
         let target_match_context_json = match &action.target_match_context {
-            Some(ctx) => {
-                Some(serde_json::to_string(ctx).map_err(|e| format!("marshal target match context: {e}"))?)
-            }
+            Some(ctx) => Some(
+                serde_json::to_string(ctx)
+                    .map_err(|e| format!("marshal target match context: {e}"))?,
+            ),
             None => None,
         };
         let page_before_json = match &action.page_before {
-            Some(page) => Some(serde_json::to_string(page).map_err(|e| format!("marshal page before: {e}"))?),
+            Some(page) => {
+                Some(serde_json::to_string(page).map_err(|e| format!("marshal page before: {e}"))?)
+            }
             None => None,
         };
         let page_after_json = match &action.page_after {
-            Some(page) => Some(serde_json::to_string(page).map_err(|e| format!("marshal page after: {e}"))?),
+            Some(page) => {
+                Some(serde_json::to_string(page).map_err(|e| format!("marshal page after: {e}"))?)
+            }
             None => None,
         };
         let input_json = marshal_map(&action.input)?;
@@ -232,7 +255,11 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("list computer-use actions: {e}"))?;
         let mut rows = stmt
-            .query(params![environment_scope.trim(), run_id.trim(), session_id.trim()])
+            .query(params![
+                environment_scope.trim(),
+                run_id.trim(),
+                session_id.trim()
+            ])
             .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
@@ -298,9 +325,12 @@ impl SQLiteStore {
         scan_action_document(row).map(Some)
     }
 
-    pub fn upsert_computer_use_artifact(&self, artifact: &kura_computeruse::Artifact) -> Result<(), String> {
-        let document_json =
-            serde_json::to_string(artifact).map_err(|e| format!("marshal computer-use artifact: {e}"))?;
+    pub fn upsert_computer_use_artifact(
+        &self,
+        artifact: &kura_computeruse::Artifact,
+    ) -> Result<(), String> {
+        let document_json = serde_json::to_string(artifact)
+            .map_err(|e| format!("marshal computer-use artifact: {e}"))?;
 
         self.conn
             .execute(
@@ -367,7 +397,11 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("list computer-use artifacts: {e}"))?;
         let mut rows = stmt
-            .query(params![environment_scope.trim(), run_id.trim(), action_id.trim()])
+            .query(params![
+                environment_scope.trim(),
+                run_id.trim(),
+                action_id.trim()
+            ])
             .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
@@ -406,7 +440,13 @@ impl SQLiteStore {
         &self,
         environment_scope: &str,
         interrupted_at: &chrono::DateTime<chrono::Utc>,
-    ) -> Result<(Vec<kura_computeruse::Session>, Vec<kura_computeruse::Action>), String> {
+    ) -> Result<
+        (
+            Vec<kura_computeruse::Session>,
+            Vec<kura_computeruse::Action>,
+        ),
+        String,
+    > {
         let mut updated_sessions = Vec::new();
         {
             let mut stmt = self
@@ -462,8 +502,11 @@ impl SQLiteStore {
 
         for action in updated_actions.iter_mut() {
             action.status = kura_computeruse::ActionStatus::Interrupted;
-            action.failure_class = kura_computeruse::FailureClass::Interrupted.as_str().to_string();
-            action.failure_reason = "daemon restarted before computer-use action completed".to_string();
+            action.failure_class = kura_computeruse::FailureClass::Interrupted
+                .as_str()
+                .to_string();
+            action.failure_reason =
+                "daemon restarted before computer-use action completed".to_string();
             action.updated_at = *interrupted_at;
             action.completed_at = Some(*interrupted_at);
             self.upsert_computer_use_action(action)?;
@@ -494,12 +537,21 @@ impl ComputerUseStoreHandle {
 }
 
 impl kura_computeruse::Store for ComputerUseStoreHandle {
-    fn upsert_computer_use_session(&self, session: &kura_computeruse::Session) -> Result<(), String> {
+    fn upsert_computer_use_session(
+        &self,
+        session: &kura_computeruse::Session,
+    ) -> Result<(), String> {
         self.0.lock().upsert_computer_use_session(session)
     }
 
-    fn list_computer_use_sessions(&self, environment: &str, run_id: &str) -> Result<Vec<kura_computeruse::Session>, String> {
-        self.0.lock().list_computer_use_sessions(environment, run_id)
+    fn list_computer_use_sessions(
+        &self,
+        environment: &str,
+        run_id: &str,
+    ) -> Result<Vec<kura_computeruse::Session>, String> {
+        self.0
+            .lock()
+            .list_computer_use_sessions(environment, run_id)
     }
 
     fn get_computer_use_session(
@@ -508,7 +560,9 @@ impl kura_computeruse::Store for ComputerUseStoreHandle {
         run_id: &str,
         session_id: &str,
     ) -> Result<Option<kura_computeruse::Session>, String> {
-        self.0.lock().get_computer_use_session(environment, run_id, session_id)
+        self.0
+            .lock()
+            .get_computer_use_session(environment, run_id, session_id)
     }
 
     fn upsert_computer_use_action(&self, action: &kura_computeruse::Action) -> Result<(), String> {
@@ -521,7 +575,9 @@ impl kura_computeruse::Store for ComputerUseStoreHandle {
         run_id: &str,
         session_id: &str,
     ) -> Result<Vec<kura_computeruse::Action>, String> {
-        self.0.lock().list_computer_use_actions(environment, run_id, session_id)
+        self.0
+            .lock()
+            .list_computer_use_actions(environment, run_id, session_id)
     }
 
     fn get_computer_use_action(
@@ -531,7 +587,9 @@ impl kura_computeruse::Store for ComputerUseStoreHandle {
         session_id: &str,
         action_id: &str,
     ) -> Result<Option<kura_computeruse::Action>, String> {
-        self.0.lock().get_computer_use_action(environment, run_id, session_id, action_id)
+        self.0
+            .lock()
+            .get_computer_use_action(environment, run_id, session_id, action_id)
     }
 
     fn find_pending_computer_use_action_by_approval(
@@ -539,10 +597,15 @@ impl kura_computeruse::Store for ComputerUseStoreHandle {
         environment: &str,
         approval_id: &str,
     ) -> Result<Option<kura_computeruse::Action>, String> {
-        self.0.lock().find_pending_computer_use_action_by_approval(environment, approval_id)
+        self.0
+            .lock()
+            .find_pending_computer_use_action_by_approval(environment, approval_id)
     }
 
-    fn upsert_computer_use_artifact(&self, artifact: &kura_computeruse::Artifact) -> Result<(), String> {
+    fn upsert_computer_use_artifact(
+        &self,
+        artifact: &kura_computeruse::Artifact,
+    ) -> Result<(), String> {
         self.0.lock().upsert_computer_use_artifact(artifact)
     }
 
@@ -552,18 +615,34 @@ impl kura_computeruse::Store for ComputerUseStoreHandle {
         run_id: &str,
         action_id: &str,
     ) -> Result<Vec<kura_computeruse::Artifact>, String> {
-        self.0.lock().list_computer_use_artifacts_for_action(environment, run_id, action_id)
+        self.0
+            .lock()
+            .list_computer_use_artifacts_for_action(environment, run_id, action_id)
     }
 
-    fn get_computer_use_artifact(&self, environment: &str, artifact_id: &str) -> Result<Option<kura_computeruse::Artifact>, String> {
-        self.0.lock().get_computer_use_artifact(environment, artifact_id)
+    fn get_computer_use_artifact(
+        &self,
+        environment: &str,
+        artifact_id: &str,
+    ) -> Result<Option<kura_computeruse::Artifact>, String> {
+        self.0
+            .lock()
+            .get_computer_use_artifact(environment, artifact_id)
     }
 
     fn mark_in_flight_computer_use_interrupted(
         &self,
         environment: &str,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> Result<(Vec<kura_computeruse::Session>, Vec<kura_computeruse::Action>), String> {
-        self.0.lock().mark_inflight_computer_use_interrupted(environment, &now)
+    ) -> Result<
+        (
+            Vec<kura_computeruse::Session>,
+            Vec<kura_computeruse::Action>,
+        ),
+        String,
+    > {
+        self.0
+            .lock()
+            .mark_inflight_computer_use_interrupted(environment, &now)
     }
 }

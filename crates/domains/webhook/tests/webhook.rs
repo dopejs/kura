@@ -2,13 +2,13 @@
 //! `manager_test.go` / `persistence_test.go` coverage.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kura_store::SQLiteStore;
 use kura_webhook::{
-    sign, CreateSecret, Endpoint, Firer, Manager, QuotaGate, Status, TargetKind, TriggerInput,
-    TriggerRecord, TriggerStatus, WebhookError, MAX_PAYLOAD_BYTES,
+    CreateSecret, Endpoint, Firer, MAX_PAYLOAD_BYTES, Manager, QuotaGate, Status, TargetKind,
+    TriggerInput, TriggerRecord, TriggerStatus, WebhookError, sign,
 };
 use uuid::Uuid;
 
@@ -46,14 +46,18 @@ fn temp_dir(tag: &str) -> PathBuf {
 fn setup() -> (Manager, Box<RecordingFirer>, Endpoint, String) {
     let firer = Box::new(RecordingFirer::default());
     let m = Manager::new("test", Some(firer.clone() as Box<dyn Firer>), None);
-    let created = m.create("ten_a", "deploy hook", TargetKind::Routine, "routine_1").unwrap();
+    let created = m
+        .create("ten_a", "deploy hook", TargetKind::Routine, "routine_1")
+        .unwrap();
     (m, firer, created.endpoint, created.secret)
 }
 
 #[test]
 fn create_registers_endpoint_and_secret() {
     let m = Manager::new("test", None, None);
-    let created: CreateSecret = m.create("ten_a", "deploy hook", TargetKind::Routine, "routine_1").unwrap();
+    let created: CreateSecret = m
+        .create("ten_a", "deploy hook", TargetKind::Routine, "routine_1")
+        .unwrap();
     let ep = &created.endpoint;
     assert!(ep.webhook_id.starts_with("webhook_"));
     assert_eq!(ep.tenant_id, "ten_a");
@@ -72,17 +76,37 @@ fn create_registers_endpoint_and_secret() {
 #[test]
 fn create_validates_input() {
     let m = Manager::new("test", None, None);
-    assert_eq!(m.create("", "name", TargetKind::Routine, "ref").unwrap_err(), WebhookError::InvalidEndpoint);
-    assert_eq!(m.create("ten", "", TargetKind::Routine, "ref").unwrap_err(), WebhookError::InvalidEndpoint);
-    assert_eq!(m.create("ten", "name", TargetKind::Routine, " ").unwrap_err(), WebhookError::InvalidEndpoint);
+    assert_eq!(
+        m.create("", "name", TargetKind::Routine, "ref")
+            .unwrap_err(),
+        WebhookError::InvalidEndpoint
+    );
+    assert_eq!(
+        m.create("ten", "", TargetKind::Routine, "ref").unwrap_err(),
+        WebhookError::InvalidEndpoint
+    );
+    assert_eq!(
+        m.create("ten", "name", TargetKind::Routine, " ")
+            .unwrap_err(),
+        WebhookError::InvalidEndpoint
+    );
 }
 
 #[test]
 fn get_and_list_for_tenant() {
     let m = Manager::new("test", None, None);
-    let a = m.create("ten_a", "a", TargetKind::Run, "run_1").unwrap().endpoint;
-    let b = m.create("ten_b", "b", TargetKind::Workflow, "wf_1").unwrap().endpoint;
-    assert_eq!(m.get("ten_a", &a.webhook_id).unwrap().webhook_id, a.webhook_id);
+    let a = m
+        .create("ten_a", "a", TargetKind::Run, "run_1")
+        .unwrap()
+        .endpoint;
+    let b = m
+        .create("ten_b", "b", TargetKind::Workflow, "wf_1")
+        .unwrap()
+        .endpoint;
+    assert_eq!(
+        m.get("ten_a", &a.webhook_id).unwrap().webhook_id,
+        a.webhook_id
+    );
     // Cross-tenant lookup is denied.
     assert!(m.get("ten_b", &a.webhook_id).is_none());
     assert!(m.get("ten_a", "missing").is_none());
@@ -177,7 +201,11 @@ fn security_matrix_rejects_without_firing() {
     assert_eq!(result.unwrap_err(), WebhookError::PayloadTooLarge);
     assert_eq!(rec.status, TriggerStatus::PayloadTooLarge);
 
-    assert_eq!(firer.fired.load(Ordering::SeqCst), 0, "no failed trigger should fire");
+    assert_eq!(
+        firer.fired.load(Ordering::SeqCst),
+        0,
+        "no failed trigger should fire"
+    );
 
     // Replay: first keyed trigger fires, second is suppressed without error.
     let (rec, result) = m.trigger(TriggerInput {
@@ -198,7 +226,11 @@ fn security_matrix_rejects_without_firing() {
     });
     assert!(result.is_ok());
     assert_eq!(rec.status, TriggerStatus::ReplaySuppressed);
-    assert_eq!(firer.fired.load(Ordering::SeqCst), 1, "replay must not re-fire");
+    assert_eq!(
+        firer.fired.load(Ordering::SeqCst),
+        1,
+        "replay must not re-fire"
+    );
 
     // Disabled endpoint rejects.
     m.disable("ten_a", &ep.webhook_id).unwrap();
@@ -217,8 +249,14 @@ fn security_matrix_rejects_without_firing() {
 #[test]
 fn quota_denied_before_fire() {
     let firer = Box::new(RecordingFirer::default());
-    let m = Manager::new("test", Some(firer.clone() as Box<dyn Firer>), Some(Box::new(DenyQuota)));
-    let created = m.create("ten_a", "hook", TargetKind::Workflow, "summarize").unwrap();
+    let m = Manager::new(
+        "test",
+        Some(firer.clone() as Box<dyn Firer>),
+        Some(Box::new(DenyQuota)),
+    );
+    let created = m
+        .create("ten_a", "hook", TargetKind::Workflow, "summarize")
+        .unwrap();
     let payload = br#"{}"#.to_vec();
     let (rec, result) = m.trigger(TriggerInput {
         webhook_id: created.endpoint.webhook_id.clone(),
@@ -262,25 +300,45 @@ fn rotate_invalidates_old_secret() {
     assert_eq!(rec.status, TriggerStatus::Fired);
 
     // Cross-tenant rotate is rejected.
-    assert_eq!(m.rotate("ten_b", &ep.webhook_id).unwrap_err(), WebhookError::CrossTenant);
+    assert_eq!(
+        m.rotate("ten_b", &ep.webhook_id).unwrap_err(),
+        WebhookError::CrossTenant
+    );
 }
 
 #[test]
 fn disable_is_tenant_scoped() {
     let m = Manager::new("test", None, None);
-    let ep = m.create("ten_a", "hook", TargetKind::Run, "run_1").unwrap().endpoint;
-    assert_eq!(m.disable("ten_b", &ep.webhook_id).unwrap_err(), WebhookError::CrossTenant);
-    assert_eq!(m.disable("missing", "missing_hook").unwrap_err(), WebhookError::EndpointNotFound);
+    let ep = m
+        .create("ten_a", "hook", TargetKind::Run, "run_1")
+        .unwrap()
+        .endpoint;
+    assert_eq!(
+        m.disable("ten_b", &ep.webhook_id).unwrap_err(),
+        WebhookError::CrossTenant
+    );
+    assert_eq!(
+        m.disable("missing", "missing_hook").unwrap_err(),
+        WebhookError::EndpointNotFound
+    );
     let disabled = m.disable("ten_a", &ep.webhook_id).unwrap();
     assert_eq!(disabled.status, Status::Disabled);
-    assert_eq!(m.get("ten_a", &ep.webhook_id).unwrap().status, Status::Disabled);
+    assert_eq!(
+        m.get("ten_a", &ep.webhook_id).unwrap().status,
+        Status::Disabled
+    );
 }
 
 #[test]
 fn trigger_signed_resolves_tenant() {
     let (m, firer, ep, secret) = setup();
     let payload = br#"{"e":1}"#.to_vec();
-    let (rec, result) = m.trigger_signed(&ep.webhook_id, &sign(&secret, &payload), "k", payload.clone());
+    let (rec, result) = m.trigger_signed(
+        &ep.webhook_id,
+        &sign(&secret, &payload),
+        "k",
+        payload.clone(),
+    );
     assert!(result.is_ok());
     assert_eq!(rec.status, TriggerStatus::Fired);
     assert_eq!(rec.tenant_id, "ten_a");
@@ -290,9 +348,20 @@ fn trigger_signed_resolves_tenant() {
 #[test]
 fn wire_round_trip() {
     let m = Manager::new("test", None, None);
-    let created = m.create("ten_a", "hook", TargetKind::Routine, "routine_1").unwrap();
+    let created = m
+        .create("ten_a", "hook", TargetKind::Routine, "routine_1")
+        .unwrap();
     let json = serde_json::to_string(&created.endpoint).unwrap();
-    for key in ["\"webhookId\"", "\"tenantId\"", "\"environmentScope\"", "\"targetKind\"", "\"targetRef\"", "\"secretFingerprint\"", "\"secretVersion\"", "\"createdAt\""] {
+    for key in [
+        "\"webhookId\"",
+        "\"tenantId\"",
+        "\"environmentScope\"",
+        "\"targetKind\"",
+        "\"targetRef\"",
+        "\"secretFingerprint\"",
+        "\"secretVersion\"",
+        "\"createdAt\"",
+    ] {
         assert!(json.contains(key), "missing {key} in {json}");
     }
     assert!(json.contains("\"routine\""));
@@ -328,19 +397,27 @@ fn persistence_round_trip() {
     let webhook_id;
     let secret;
     {
-        let store = Arc::new(parking_lot::Mutex::new(SQLiteStore::new(&dir.to_string_lossy()).unwrap()));
+        let store = Arc::new(parking_lot::Mutex::new(
+            SQLiteStore::new(&dir.to_string_lossy()).unwrap(),
+        ));
         let mut m = Manager::new("test", None, None);
         m.with_store(Arc::clone(&store));
-        let created = m.create("ten_a", "hook", TargetKind::Routine, "routine_1").unwrap();
+        let created = m
+            .create("ten_a", "hook", TargetKind::Routine, "routine_1")
+            .unwrap();
         webhook_id = created.endpoint.webhook_id.clone();
         secret = created.secret;
     }
     {
-        let store = Arc::new(parking_lot::Mutex::new(SQLiteStore::new(&dir.to_string_lossy()).unwrap()));
+        let store = Arc::new(parking_lot::Mutex::new(
+            SQLiteStore::new(&dir.to_string_lossy()).unwrap(),
+        ));
         let mut m = Manager::new("test", None, None);
         m.with_store(Arc::clone(&store));
         m.load_from_store().unwrap();
-        let ep = m.get("ten_a", &webhook_id).expect("endpoint survived restart");
+        let ep = m
+            .get("ten_a", &webhook_id)
+            .expect("endpoint survived restart");
         assert_eq!(ep.name, "hook");
         assert_eq!(ep.status, Status::Active);
         // The signing secret must survive so a signature still verifies after restart.
@@ -362,4 +439,3 @@ fn manager_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<kura_webhook::Manager>();
 }
-

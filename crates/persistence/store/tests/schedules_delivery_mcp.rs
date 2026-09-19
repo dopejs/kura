@@ -4,6 +4,7 @@
 //! servers/tools) are created before their dependent rows.
 
 use chrono::{DateTime, Utc};
+use kura_store::SQLiteStore;
 use kura_store::delivery::{
     DeliveryAttemptRecord, DeliveryOutcomeFilter, DeliveryOutcomeRecord, DeliveryPreferenceRecord,
     DeliverySummaryWindowRecord, DeliveryTargetRecord,
@@ -11,10 +12,7 @@ use kura_store::delivery::{
 use kura_store::mcp::{
     MCPServerRecord, MCPServerStateRecord, MCPToolExposureRuleRecord, MCPToolRecord,
 };
-use kura_store::schedule::{
-    ScheduleDispatchAttemptRecord, ScheduleRecord, ScheduleTargetRecord,
-};
-use kura_store::SQLiteStore;
+use kura_store::schedule::{ScheduleDispatchAttemptRecord, ScheduleRecord, ScheduleTargetRecord};
 
 fn temp_dir(name: &str) -> String {
     let dir = std::env::temp_dir().join(format!("kura_store_sdm_{name}_{}", std::process::id()));
@@ -64,7 +62,10 @@ fn schedule_record_round_trips_through_sqlite() {
     assert_eq!(got.last_attempt_at, None);
     assert_eq!(got.document, r#"{"kind":"cron"}"#);
 
-    let fetched = store.get_schedule("test", "sched_1").unwrap().expect("found");
+    let fetched = store
+        .get_schedule("test", "sched_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(fetched.schedule_id, "sched_1");
     assert_eq!(fetched.kind, "cron");
     assert_eq!(fetched.next_due_at, Some(now));
@@ -100,7 +101,10 @@ fn schedule_target_round_trips_through_sqlite() {
     };
     store.upsert_schedule_target(&target).unwrap();
 
-    let fetched = store.get_schedule_target("sched_1", "target_1").unwrap().expect("found");
+    let fetched = store
+        .get_schedule_target("sched_1", "target_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(fetched.target_ref_id, "target_1");
     assert_eq!(fetched.schedule_id, "sched_1");
     assert_eq!(fetched.target_kind, "agent");
@@ -108,14 +112,20 @@ fn schedule_target_round_trips_through_sqlite() {
     assert_eq!(fetched.active, true);
     assert_eq!(fetched.updated_at, now);
     assert_eq!(fetched.document, r#"{"kind":"agent"}"#);
-    assert_eq!(store.get_schedule_target("sched_1", "missing").unwrap(), None);
+    assert_eq!(
+        store.get_schedule_target("sched_1", "missing").unwrap(),
+        None
+    );
 
     // Upserting the same id overwrites the row instead of duplicating it.
     let mut updated = target;
     updated.revision = 4;
     updated.active = false;
     store.upsert_schedule_target(&updated).unwrap();
-    let fetched = store.get_schedule_target("sched_1", "target_1").unwrap().expect("found");
+    let fetched = store
+        .get_schedule_target("sched_1", "target_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(fetched.revision, 4);
     assert_eq!(fetched.active, false);
 }
@@ -166,7 +176,13 @@ fn schedule_dispatch_attempt_round_trips_through_sqlite() {
     assert_eq!(got.workflow_id, "wf_1");
     assert_eq!(got.downstream_status, "running");
     assert_eq!(got.missed_count, 0);
-    assert_eq!(store.list_schedule_dispatch_attempts("missing").unwrap().len(), 0);
+    assert_eq!(
+        store
+            .list_schedule_dispatch_attempts("missing")
+            .unwrap()
+            .len(),
+        0
+    );
 }
 
 #[test]
@@ -194,7 +210,10 @@ fn delivery_target_round_trips_through_sqlite() {
     assert_eq!(got.updated_at, now);
     assert_eq!(got.document, r#"{"kind":"email"}"#);
 
-    let fetched = store.get_delivery_target("test", "dt_1").unwrap().expect("found");
+    let fetched = store
+        .get_delivery_target("test", "dt_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(fetched.target_id, "dt_1");
     assert_eq!(fetched.target_kind, "email");
     assert_eq!(store.get_delivery_target("test", "missing").unwrap(), None);
@@ -227,10 +246,16 @@ fn delivery_preference_round_trips_through_sqlite() {
     assert_eq!(got.active, true);
     assert_eq!(got.updated_at, now);
 
-    let fetched = store.get_delivery_preference("test", "dp_1").unwrap().expect("found");
+    let fetched = store
+        .get_delivery_preference("test", "dp_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(fetched.preference_id, "dp_1");
     assert_eq!(fetched.active, true);
-    assert_eq!(store.get_delivery_preference("test", "missing").unwrap(), None);
+    assert_eq!(
+        store.get_delivery_preference("test", "missing").unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -256,7 +281,9 @@ fn delivery_outcome_round_trips_and_filters_through_sqlite() {
     };
     store.upsert_delivery_outcome(&outcome).unwrap();
 
-    let listed = store.list_delivery_outcomes("test", &DeliveryOutcomeFilter::default()).unwrap();
+    let listed = store
+        .list_delivery_outcomes("test", &DeliveryOutcomeFilter::default())
+        .unwrap();
     assert_eq!(listed.len(), 1);
     let got = &listed[0];
     assert_eq!(got.delivery_id, "do_1");
@@ -273,14 +300,41 @@ fn delivery_outcome_round_trips_and_filters_through_sqlite() {
     assert_eq!(got.summary_window_id, "sw_1");
     assert_eq!(got.updated_at, now);
 
-    let by_run = DeliveryOutcomeFilter { run_id: "run_1".to_string(), ..DeliveryOutcomeFilter::default() };
-    assert_eq!(store.list_delivery_outcomes("test", &by_run).unwrap().len(), 1);
-    let by_target = DeliveryOutcomeFilter { target_id: "dt_1".to_string(), ..DeliveryOutcomeFilter::default() };
-    assert_eq!(store.list_delivery_outcomes("test", &by_target).unwrap().len(), 1);
-    let by_status = DeliveryOutcomeFilter { status: "pending".to_string(), ..DeliveryOutcomeFilter::default() };
-    assert_eq!(store.list_delivery_outcomes("test", &by_status).unwrap().len(), 0);
+    let by_run = DeliveryOutcomeFilter {
+        run_id: "run_1".to_string(),
+        ..DeliveryOutcomeFilter::default()
+    };
+    assert_eq!(
+        store.list_delivery_outcomes("test", &by_run).unwrap().len(),
+        1
+    );
+    let by_target = DeliveryOutcomeFilter {
+        target_id: "dt_1".to_string(),
+        ..DeliveryOutcomeFilter::default()
+    };
+    assert_eq!(
+        store
+            .list_delivery_outcomes("test", &by_target)
+            .unwrap()
+            .len(),
+        1
+    );
+    let by_status = DeliveryOutcomeFilter {
+        status: "pending".to_string(),
+        ..DeliveryOutcomeFilter::default()
+    };
+    assert_eq!(
+        store
+            .list_delivery_outcomes("test", &by_status)
+            .unwrap()
+            .len(),
+        0
+    );
 
-    let fetched = store.get_delivery_outcome("test", "do_1").unwrap().expect("found");
+    let fetched = store
+        .get_delivery_outcome("test", "do_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(fetched.delivery_id, "do_1");
     assert_eq!(fetched.status, "delivered");
     assert_eq!(store.get_delivery_outcome("test", "missing").unwrap(), None);
@@ -362,10 +416,18 @@ fn delivery_summary_window_round_trips_through_sqlite() {
     assert_eq!(got.window_ends_at, now);
     assert_eq!(got.updated_at, now);
 
-    let fetched = store.get_delivery_summary_window("test", "sw_1").unwrap().expect("found");
+    let fetched = store
+        .get_delivery_summary_window("test", "sw_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(fetched.summary_window_id, "sw_1");
     assert_eq!(fetched.status, "open");
-    assert_eq!(store.get_delivery_summary_window("test", "missing").unwrap(), None);
+    assert_eq!(
+        store
+            .get_delivery_summary_window("test", "missing")
+            .unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -489,5 +551,8 @@ fn mcp_tool_and_exposure_rule_round_trip_through_sqlite() {
     assert_eq!(tools[0].tool_name, "write_file");
     assert_eq!(tools[0].last_discovered_at, None);
     // The old exposure rule referenced the replaced tool and cascades away.
-    assert_eq!(store.list_mcp_tool_exposure_rules("mcp_1").unwrap().len(), 0);
+    assert_eq!(
+        store.list_mcp_tool_exposure_rules("mcp_1").unwrap().len(),
+        0
+    );
 }

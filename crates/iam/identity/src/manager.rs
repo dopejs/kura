@@ -9,16 +9,18 @@ use std::sync::Arc;
 use chrono::DateTime;
 use chrono::Utc;
 
-use crate::audit::Auditor;
-use crate::audit::AuditStore;
 use crate::audit::AUDIT_OUTCOME_SUCCEEDED;
+use crate::audit::AuditStore;
+use crate::audit::Auditor;
 use crate::permissions::require_permission;
 use crate::resolver::Resolver;
 use crate::resolver::ResolverStore;
 use crate::resolver::TokenAuthority;
 use crate::types::IdentityError;
+use crate::types::InvitationFilter;
 use crate::types::LifecycleStatus;
 use crate::types::Membership;
+use crate::types::MembershipFilter;
 use crate::types::Permission;
 use crate::types::Principal;
 use crate::types::PrincipalFilter;
@@ -31,8 +33,6 @@ use crate::types::TenantFilter;
 use crate::types::TenantInvitation;
 use crate::types::TenantKind;
 use crate::types::TokenTenantGrant;
-use crate::types::InvitationFilter;
-use crate::types::MembershipFilter;
 
 /// Full persistence surface for the manager: resolver reads, audit appends,
 /// and the upsert/list operations the manager itself needs.
@@ -44,7 +44,10 @@ pub trait Store: ResolverStore + AuditStore {
     fn upsert_token_tenant_grant(&self, grant: &TokenTenantGrant) -> Result<(), IdentityError>;
     fn list_tenants(&self, filter: &TenantFilter) -> Result<Vec<Tenant>, IdentityError>;
     fn list_principals(&self, filter: &PrincipalFilter) -> Result<Vec<Principal>, IdentityError>;
-    fn list_tenant_invitations(&self, filter: &InvitationFilter) -> Result<Vec<TenantInvitation>, IdentityError>;
+    fn list_tenant_invitations(
+        &self,
+        filter: &InvitationFilter,
+    ) -> Result<Vec<TenantInvitation>, IdentityError>;
     fn list_token_authorities(&self) -> Result<Vec<TokenAuthority>, IdentityError>;
 }
 
@@ -82,7 +85,11 @@ impl<S: Store + ?Sized> Manager<S> {
         (self.now)()
     }
 
-    pub fn resolve(&self, token: &TokenAuthority, tenant_id: &str) -> Result<TenantContext, IdentityError> {
+    pub fn resolve(
+        &self,
+        token: &TokenAuthority,
+        tenant_id: &str,
+    ) -> Result<TenantContext, IdentityError> {
         self.resolver.resolve(token, tenant_id)
     }
 
@@ -166,7 +173,11 @@ impl<S: Store + ?Sized> Manager<S> {
         if input.tenant_id != actor.tenant_id {
             return Err(IdentityError::TenantAccessDenied);
         }
-        if self.store.get_principal(&input.invited_principal_id)?.is_none() {
+        if self
+            .store
+            .get_principal(&input.invited_principal_id)?
+            .is_none()
+        {
             return Err(IdentityError::PrincipalInvalid);
         }
         let now = self.now();
@@ -197,12 +208,18 @@ impl<S: Store + ?Sized> Manager<S> {
         Ok(invitation)
     }
 
-    pub fn accept_invitation(&self, principal_id: &str, invitation_id: &str) -> Result<Membership, IdentityError> {
+    pub fn accept_invitation(
+        &self,
+        principal_id: &str,
+        invitation_id: &str,
+    ) -> Result<Membership, IdentityError> {
         let mut invitation = self.find_invitation(invitation_id)?;
         let now = self.now();
         if invitation.invited_principal_id != principal_id
             || invitation.status != LifecycleStatus::Invited
-            || invitation.expires_at.is_some_and(|expires_at| expires_at <= now)
+            || invitation
+                .expires_at
+                .is_some_and(|expires_at| expires_at <= now)
         {
             return Err(IdentityError::InvitationInvalid);
         }
@@ -303,11 +320,16 @@ impl<S: Store + ?Sized> Manager<S> {
             outcome: AUDIT_OUTCOME_SUCCEEDED.to_string(),
             reason_code: "membership_role_updated".to_string(),
             created_at: now,
-            document: Some(serde_json::json!({
-                "membershipId": membership.membership_id,
-                "oldRole": old_role,
-                "newRole": role,
-            }).as_object().cloned().unwrap_or_default()),
+            document: Some(
+                serde_json::json!({
+                    "membershipId": membership.membership_id,
+                    "oldRole": old_role,
+                    "newRole": role,
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            ),
             ..TenantAuditEvent::default()
         })?;
         self.store.upsert_membership(&membership)?;
@@ -338,11 +360,16 @@ impl<S: Store + ?Sized> Manager<S> {
             outcome: AUDIT_OUTCOME_SUCCEEDED.to_string(),
             reason_code: "membership_removed".to_string(),
             created_at: now,
-            document: Some(serde_json::json!({
-                "membershipId": membership.membership_id,
-                "oldRole": membership.role,
-                "newStatus": LifecycleStatus::Removed,
-            }).as_object().cloned().unwrap_or_default()),
+            document: Some(
+                serde_json::json!({
+                    "membershipId": membership.membership_id,
+                    "oldRole": membership.role,
+                    "newStatus": LifecycleStatus::Removed,
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            ),
             ..TenantAuditEvent::default()
         })?;
         self.store.upsert_membership(&membership)?;
@@ -358,7 +385,11 @@ impl<S: Store + ?Sized> Manager<S> {
     ) -> Result<Vec<TokenTenantGrant>, IdentityError> {
         require_permission(actor, Permission::TenantManage)?;
         let target_principal_id = self.token_principal_id(actor, token_id)?;
-        let seen = self.validate_token_tenant_grant_set(&target_principal_id, tenant_ids, default_tenant_id)?;
+        let seen = self.validate_token_tenant_grant_set(
+            &target_principal_id,
+            tenant_ids,
+            default_tenant_id,
+        )?;
         if default_tenant_id.is_empty() {
             return Err(IdentityError::TokenGrantInvalid);
         }
@@ -431,7 +462,10 @@ impl<S: Store + ?Sized> Manager<S> {
     /// Creates the local operator principal and personal tenant on first run,
     /// or returns the existing pair, and ensures every given token holds a
     /// default grant on the tenant.
-    pub fn bootstrap_local(&self, token_ids: &[String]) -> Result<(Principal, Tenant), IdentityError> {
+    pub fn bootstrap_local(
+        &self,
+        token_ids: &[String],
+    ) -> Result<(Principal, Tenant), IdentityError> {
         let now = self.now();
         let principals = self.store.list_principals(&PrincipalFilter {
             tenant_id: String::new(),
@@ -512,9 +546,9 @@ impl<S: Store + ?Sized> Manager<S> {
                 continue;
             }
             let grants = self.store.list_token_tenant_grants(token_id)?;
-            let has_grant = grants
-                .iter()
-                .any(|grant| grant.tenant_id == tenant.tenant_id && grant.status == LifecycleStatus::Active);
+            let has_grant = grants.iter().any(|grant| {
+                grant.tenant_id == tenant.tenant_id && grant.status == LifecycleStatus::Active
+            });
             if has_grant {
                 continue;
             }
@@ -533,7 +567,11 @@ impl<S: Store + ?Sized> Manager<S> {
         Ok(())
     }
 
-    fn token_principal_id(&self, actor: &TenantContext, token_id: &str) -> Result<String, IdentityError> {
+    fn token_principal_id(
+        &self,
+        actor: &TenantContext,
+        token_id: &str,
+    ) -> Result<String, IdentityError> {
         if token_id.is_empty() {
             return Err(IdentityError::TokenGrantInvalid);
         }
@@ -566,7 +604,9 @@ impl<S: Store + ?Sized> Manager<S> {
             limit: 1000,
         })?;
         for membership in memberships {
-            if membership.principal_id == principal_id && membership.status == LifecycleStatus::Active {
+            if membership.principal_id == principal_id
+                && membership.status == LifecycleStatus::Active
+            {
                 allowed.insert(membership.tenant_id);
             }
         }
@@ -600,7 +640,11 @@ impl<S: Store + ?Sized> Manager<S> {
             .ok_or(IdentityError::InvitationInvalid)
     }
 
-    fn find_membership(&self, tenant_id: &str, membership_id: &str) -> Result<Membership, IdentityError> {
+    fn find_membership(
+        &self,
+        tenant_id: &str,
+        membership_id: &str,
+    ) -> Result<Membership, IdentityError> {
         let memberships = self.store.list_memberships(&MembershipFilter {
             tenant_id: tenant_id.to_string(),
             status: None,
@@ -613,7 +657,11 @@ impl<S: Store + ?Sized> Manager<S> {
             .ok_or(IdentityError::MembershipInvalid)
     }
 
-    fn ensure_another_active_owner(&self, tenant_id: &str, membership_id: &str) -> Result<(), IdentityError> {
+    fn ensure_another_active_owner(
+        &self,
+        tenant_id: &str,
+        membership_id: &str,
+    ) -> Result<(), IdentityError> {
         let memberships = self.store.list_memberships(&MembershipFilter {
             tenant_id: tenant_id.to_string(),
             status: Some(LifecycleStatus::Active),
@@ -696,7 +744,13 @@ mod tests {
             .expect("re-bootstrap");
         assert_eq!(again_principal.principal_id, principal.principal_id);
         assert_eq!(again_tenant.tenant_id, tenant.tenant_id);
-        assert_eq!(store.list_token_tenant_grants("tok_1").expect("grants").len(), 1);
+        assert_eq!(
+            store
+                .list_token_tenant_grants("tok_1")
+                .expect("grants")
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -735,7 +789,12 @@ mod tests {
         assert_eq!(membership.status, LifecycleStatus::Active);
 
         let updated = manager
-            .update_membership_role(&org_actor, &org.tenant_id, &membership.membership_id, Role::Viewer)
+            .update_membership_role(
+                &org_actor,
+                &org.tenant_id,
+                &membership.membership_id,
+                Role::Viewer,
+            )
             .expect("update role");
         assert_eq!(updated.role, Role::Viewer);
 
@@ -807,7 +866,9 @@ mod tests {
         assert_eq!(grants[0].tenant_id, org.tenant_id);
         assert!(grants[0].is_default);
 
-        let old_grants = store.list_token_tenant_grants("tok_1").expect("list grants");
+        let old_grants = store
+            .list_token_tenant_grants("tok_1")
+            .expect("list grants");
         for grant in &old_grants {
             assert!(
                 !(grant.tenant_id == personal.tenant_id && grant.status == LifecycleStatus::Active),
@@ -850,16 +911,28 @@ mod tests {
 
         // Only the invited principal may reject.
         assert!(matches!(
-            manager.decide_invitation("prn_other", &invitation.invitation_id, LifecycleStatus::Rejected),
+            manager.decide_invitation(
+                "prn_other",
+                &invitation.invitation_id,
+                LifecycleStatus::Rejected
+            ),
             Err(IdentityError::InvitationInvalid)
         ));
         // Accepted is not a valid decision here.
         assert!(matches!(
-            manager.decide_invitation("prn_invited", &invitation.invitation_id, LifecycleStatus::Accepted),
+            manager.decide_invitation(
+                "prn_invited",
+                &invitation.invitation_id,
+                LifecycleStatus::Accepted
+            ),
             Err(IdentityError::InvitationInvalid)
         ));
         let rejected = manager
-            .decide_invitation("prn_invited", &invitation.invitation_id, LifecycleStatus::Rejected)
+            .decide_invitation(
+                "prn_invited",
+                &invitation.invitation_id,
+                LifecycleStatus::Rejected,
+            )
             .expect("reject invitation");
         assert_eq!(rejected.status, LifecycleStatus::Rejected);
         assert!(rejected.decided_at.is_some());

@@ -9,16 +9,19 @@ use std::sync::Arc;
 use chrono::DateTime;
 use chrono::Utc;
 
-use crate::types::epoch;
 use crate::types::IdentityError;
 use crate::types::TenantAuditEvent;
+use crate::types::epoch;
 
 pub const AUDIT_OUTCOME_SUCCEEDED: &str = "succeeded";
 pub const AUDIT_OUTCOME_DENIED: &str = "denied";
 pub const AUDIT_OUTCOME_FAILED_CLOSED: &str = "failed_closed";
 
 pub trait AuditStore {
-    fn append_tenant_audit_event(&self, event: TenantAuditEvent) -> Result<TenantAuditEvent, IdentityError>;
+    fn append_tenant_audit_event(
+        &self,
+        event: TenantAuditEvent,
+    ) -> Result<TenantAuditEvent, IdentityError>;
 }
 
 pub struct Auditor<S: AuditStore + ?Sized> {
@@ -50,6 +53,7 @@ impl<S: AuditStore + ?Sized> Auditor<S> {
     /// Like [`Auditor::record`] but any write failure is reported as
     /// [`IdentityError::AuditWriteFailed`] so the guarded action must abort.
     pub fn require(&self, event: TenantAuditEvent) -> Result<TenantAuditEvent, IdentityError> {
-        self.record(event).map_err(|_| IdentityError::AuditWriteFailed)
+        self.record(event)
+            .map_err(|_| IdentityError::AuditWriteFailed)
     }
 }

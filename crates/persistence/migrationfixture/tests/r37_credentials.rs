@@ -4,23 +4,26 @@
 mod common;
 
 use common::head_store;
-use kura_migrationfixture::{
-    seed_r37_local_credential_state, R37_FAKE_SECRET_TENANT_A,
-};
+use kura_migrationfixture::{R37_FAKE_SECRET_TENANT_A, seed_r37_local_credential_state};
 
 #[test]
 fn r37_credential_files_are_written_with_expected_values() {
     let (store, dir) = head_store("r37_files");
     let fixture = seed_r37_local_credential_state(&store, &dir).unwrap();
 
-    assert_eq!(fixture.mcp_secret_refs, vec!["R37_MCP_TOKEN", "R37_SHARED_TOKEN", "R37_CONFLICT_TOKEN"]);
-    assert_eq!(fixture.skill_secret_refs, vec!["R37_SKILL_TOKEN", "R37_SHARED_TOKEN", "R37_CONFLICT_TOKEN"]);
+    assert_eq!(
+        fixture.mcp_secret_refs,
+        vec!["R37_MCP_TOKEN", "R37_SHARED_TOKEN", "R37_CONFLICT_TOKEN"]
+    );
+    assert_eq!(
+        fixture.skill_secret_refs,
+        vec!["R37_SKILL_TOKEN", "R37_SHARED_TOKEN", "R37_CONFLICT_TOKEN"]
+    );
     assert_eq!(fixture.conflict_ref, "R37_CONFLICT_TOKEN");
 
-    let mcp: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(format!("{dir}/mcp-secrets.json")).unwrap(),
-    )
-    .unwrap();
+    let mcp: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(format!("{dir}/mcp-secrets.json")).unwrap())
+            .unwrap();
     assert_eq!(mcp["R37_MCP_TOKEN"], R37_FAKE_SECRET_TENANT_A);
     assert_eq!(mcp["R37_SHARED_TOKEN"], "shared-r37-value");
     assert_eq!(mcp["R37_CONFLICT_TOKEN"], "mcp-side");
@@ -46,7 +49,10 @@ fn r37_store_rows_load_back_through_the_domain_crud() {
     assert_eq!(states[0].status, kura_providers::AuthStatus::Authenticated);
     assert_eq!(states[0].family, kura_providers::Family::OpenAICompatible);
     assert_eq!(states[0].auth_mode, kura_providers::AuthMode::ApiKey);
-    assert_eq!(states[0].metadata.get("source").map(String::as_str), Some("r37_migration_fixture"));
+    assert_eq!(
+        states[0].metadata.get("source").map(String::as_str),
+        Some("r37_migration_fixture")
+    );
 
     // Integration resource (seeded via CRUD; pre-tenant fixture already added
     // two integrations, so match by id).
@@ -82,8 +88,16 @@ fn r37_store_rows_load_back_through_the_domain_crud() {
     assert_eq!(connectors[0].connector_id, fixture.connector_id);
     assert_eq!(connectors[0].kind, "discord");
     assert_eq!(connectors[0].status, kura_connectors::Status::Healthy);
-    assert_eq!(connectors[0].secret_refs, vec![fixture.conflict_ref.clone()]);
-    assert!(!connectors[0].secret_refs.iter().any(|r| r.contains("DO_NOT_LEAK")));
+    assert_eq!(
+        connectors[0].secret_refs,
+        vec![fixture.conflict_ref.clone()]
+    );
+    assert!(
+        !connectors[0]
+            .secret_refs
+            .iter()
+            .any(|r| r.contains("DO_NOT_LEAK"))
+    );
 
     // MCP server + state + tool + exposure rule.
     let servers = store.list_mcp_servers().unwrap();
@@ -103,7 +117,9 @@ fn r37_store_rows_load_back_through_the_domain_crud() {
     assert_eq!(tools[0].discovery_status, "discovered");
     assert!(tools[0].document.contains("lookup"));
 
-    let rules = store.list_mcp_tool_exposure_rules(&fixture.mcp_server_id).unwrap();
+    let rules = store
+        .list_mcp_tool_exposure_rules(&fixture.mcp_server_id)
+        .unwrap();
     assert_eq!(rules.len(), 1);
     assert_eq!(rules[0].runtime_surface, "chat");
     assert_eq!(rules[0].exposure_mode, "allow");

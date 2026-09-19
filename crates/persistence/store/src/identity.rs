@@ -4,13 +4,13 @@
 //! tables carry their own tenant/principal columns, so no legacy tenant_id columns
 //! are involved here.
 
-use rusqlite::{params, params_from_iter, types::Value, Row};
+use rusqlite::{Row, params, params_from_iter, types::Value};
 
+use crate::SQLiteStore;
 use crate::crud::{
     decode_opt_json, enum_str, now_rfc3339, null_string, opt_time_string, parse_enum,
     parse_opt_rfc3339, parse_rfc3339,
 };
-use crate::SQLiteStore;
 
 fn new_tenant_audit_event_id() -> String {
     let hex = uuid::Uuid::new_v4().simple().to_string();
@@ -222,7 +222,9 @@ fn scan_tenant_audit_event(row: &Row) -> Result<kura_identity::TenantAuditEvent,
         None => None,
         Some(serde_json::Value::Object(map)) => Some(map),
         Some(value) => {
-            return Err(format!("decode tenant audit event document: expected object, got {value}"));
+            return Err(format!(
+                "decode tenant audit event document: expected object, got {value}"
+            ));
         }
     };
 
@@ -293,7 +295,10 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn upsert_access_token(&self, token: &kura_identity::auth::AccessToken) -> Result<(), String> {
+    pub fn upsert_access_token(
+        &self,
+        token: &kura_identity::auth::AccessToken,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 r#"INSERT INTO auth_tokens (
@@ -363,9 +368,15 @@ impl SQLiteStore {
         for token in tokens {
             let status = match token.status {
                 kura_identity::auth::TokenStatus::Active => kura_identity::LifecycleStatus::Active,
-                kura_identity::auth::TokenStatus::Revoked => kura_identity::LifecycleStatus::Revoked,
-                kura_identity::auth::TokenStatus::Expired => kura_identity::LifecycleStatus::Expired,
-                kura_identity::auth::TokenStatus::Rotated => kura_identity::LifecycleStatus::Rotated,
+                kura_identity::auth::TokenStatus::Revoked => {
+                    kura_identity::LifecycleStatus::Revoked
+                }
+                kura_identity::auth::TokenStatus::Expired => {
+                    kura_identity::LifecycleStatus::Expired
+                }
+                kura_identity::auth::TokenStatus::Rotated => {
+                    kura_identity::LifecycleStatus::Rotated
+                }
             };
             items.push(kura_identity::TokenAuthority {
                 token_id: token.token_id,
@@ -425,7 +436,10 @@ impl SQLiteStore {
         scan_tenant(row).map(Some)
     }
 
-    pub fn list_tenants(&self, filter: &kura_identity::TenantFilter) -> Result<Vec<kura_identity::Tenant>, String> {
+    pub fn list_tenants(
+        &self,
+        filter: &kura_identity::TenantFilter,
+    ) -> Result<Vec<kura_identity::Tenant>, String> {
         let mut sql = String::from(
             r#"SELECT tenant_id, tenant_kind, display_name, status, created_at, updated_at,
                 created_by_principal_id, default_owner_principal_id
@@ -447,8 +461,13 @@ impl SQLiteStore {
             args.push(Value::Integer(filter.limit as i64));
         }
 
-        let mut stmt = self.conn.prepare(&sql).map_err(|e| format!("list tenants: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| format!("list tenants: {e}"))?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_tenant(row)?);
@@ -488,7 +507,10 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn get_principal(&self, principal_id: &str) -> Result<Option<kura_identity::Principal>, String> {
+    pub fn get_principal(
+        &self,
+        principal_id: &str,
+    ) -> Result<Option<kura_identity::Principal>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -498,14 +520,19 @@ impl SQLiteStore {
                 WHERE principal_id = ?1"#,
             )
             .map_err(|e| format!("get principal {principal_id}: {e}"))?;
-        let mut rows = stmt.query(params![principal_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![principal_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
         scan_principal(row).map(Some)
     }
 
-    pub fn list_principals(&self, filter: &kura_identity::PrincipalFilter) -> Result<Vec<kura_identity::Principal>, String> {
+    pub fn list_principals(
+        &self,
+        filter: &kura_identity::PrincipalFilter,
+    ) -> Result<Vec<kura_identity::Principal>, String> {
         let mut sql = String::from(
             r#"SELECT p.principal_id, p.principal_kind, p.display_name, p.status,
                 p.default_tenant_id, p.created_at, p.updated_at, p.disabled_at, p.removed_at
@@ -530,8 +557,13 @@ impl SQLiteStore {
             args.push(Value::Integer(filter.limit as i64));
         }
 
-        let mut stmt = self.conn.prepare(&sql).map_err(|e| format!("list principals: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| format!("list principals: {e}"))?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_principal(row)?);
@@ -573,7 +605,10 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn list_memberships(&self, filter: &kura_identity::MembershipFilter) -> Result<Vec<kura_identity::Membership>, String> {
+    pub fn list_memberships(
+        &self,
+        filter: &kura_identity::MembershipFilter,
+    ) -> Result<Vec<kura_identity::Membership>, String> {
         let mut sql = String::from(
             r#"SELECT membership_id, tenant_id, principal_id, role, status, invitation_id,
                 created_at, updated_at, accepted_at, removed_at
@@ -599,8 +634,13 @@ impl SQLiteStore {
             args.push(Value::Integer(filter.limit as i64));
         }
 
-        let mut stmt = self.conn.prepare(&sql).map_err(|e| format!("list memberships: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| format!("list memberships: {e}"))?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_membership(row)?);
@@ -608,7 +648,10 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn upsert_tenant_invitation(&self, invitation: &kura_identity::TenantInvitation) -> Result<(), String> {
+    pub fn upsert_tenant_invitation(
+        &self,
+        invitation: &kura_identity::TenantInvitation,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 r#"INSERT INTO tenant_invitations (
@@ -642,7 +685,10 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn list_tenant_invitations(&self, filter: &kura_identity::InvitationFilter) -> Result<Vec<kura_identity::TenantInvitation>, String> {
+    pub fn list_tenant_invitations(
+        &self,
+        filter: &kura_identity::InvitationFilter,
+    ) -> Result<Vec<kura_identity::TenantInvitation>, String> {
         let mut sql = String::from(
             r#"SELECT invitation_id, tenant_id, invited_principal_id, invited_by_principal_id,
                 role, status, created_at, updated_at, expires_at, decided_at
@@ -668,8 +714,13 @@ impl SQLiteStore {
             args.push(Value::Integer(filter.limit as i64));
         }
 
-        let mut stmt = self.conn.prepare(&sql).map_err(|e| format!("list tenant invitations: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| format!("list tenant invitations: {e}"))?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_tenant_invitation(row)?);
@@ -677,7 +728,10 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn upsert_token_tenant_grant(&self, grant: &kura_identity::TokenTenantGrant) -> Result<(), String> {
+    pub fn upsert_token_tenant_grant(
+        &self,
+        grant: &kura_identity::TokenTenantGrant,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 r#"INSERT INTO token_tenant_grants (
@@ -709,7 +763,10 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn list_token_tenant_grants(&self, token_id: &str) -> Result<Vec<kura_identity::TokenTenantGrant>, String> {
+    pub fn list_token_tenant_grants(
+        &self,
+        token_id: &str,
+    ) -> Result<Vec<kura_identity::TokenTenantGrant>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -728,7 +785,10 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn append_tenant_audit_event(&self, event: &kura_identity::TenantAuditEvent) -> Result<kura_identity::TenantAuditEvent, String> {
+    pub fn append_tenant_audit_event(
+        &self,
+        event: &kura_identity::TenantAuditEvent,
+    ) -> Result<kura_identity::TenantAuditEvent, String> {
         let mut event = event.clone();
         if event.audit_event_id.is_empty() {
             event.audit_event_id = new_tenant_audit_event_id();
@@ -738,10 +798,12 @@ impl SQLiteStore {
         }
         let document_json = match &event.document {
             None => None,
-            Some(map) => Some(
-                serde_json::to_string(map)
-                    .map_err(|e| format!("encode tenant audit event {} document: {e}", event.audit_event_id))?,
-            ),
+            Some(map) => Some(serde_json::to_string(map).map_err(|e| {
+                format!(
+                    "encode tenant audit event {} document: {e}",
+                    event.audit_event_id
+                )
+            })?),
         };
 
         self.conn
@@ -767,7 +829,10 @@ impl SQLiteStore {
         Ok(event)
     }
 
-    pub fn list_tenant_audit_events(&self, filter: &kura_identity::AuditEventFilter) -> Result<Vec<kura_identity::TenantAuditEvent>, String> {
+    pub fn list_tenant_audit_events(
+        &self,
+        filter: &kura_identity::AuditEventFilter,
+    ) -> Result<Vec<kura_identity::TenantAuditEvent>, String> {
         let mut sql = String::from(
             r#"SELECT audit_event_id, event_kind, tenant_id, principal_id, target_principal_id,
                 token_id, outcome, reason_code, created_at, document_json
@@ -801,8 +866,13 @@ impl SQLiteStore {
             args.push(Value::Integer(filter.limit as i64));
         }
 
-        let mut stmt = self.conn.prepare(&sql).map_err(|e| format!("list tenant audit events: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| format!("list tenant audit events: {e}"))?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_tenant_audit_event(row)?);
@@ -835,63 +905,110 @@ fn identity_store_err(message: String) -> kura_identity::IdentityError {
 }
 
 impl kura_identity::ResolverStore for SQLiteStore {
-    fn get_principal(&self, principal_id: &str) -> Result<Option<kura_identity::Principal>, kura_identity::IdentityError> {
+    fn get_principal(
+        &self,
+        principal_id: &str,
+    ) -> Result<Option<kura_identity::Principal>, kura_identity::IdentityError> {
         self.get_principal(principal_id).map_err(identity_store_err)
     }
 
-    fn get_tenant(&self, tenant_id: &str) -> Result<Option<kura_identity::Tenant>, kura_identity::IdentityError> {
+    fn get_tenant(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Option<kura_identity::Tenant>, kura_identity::IdentityError> {
         self.get_tenant(tenant_id).map_err(identity_store_err)
     }
 
-    fn list_memberships(&self, filter: &kura_identity::MembershipFilter) -> Result<Vec<kura_identity::Membership>, kura_identity::IdentityError> {
+    fn list_memberships(
+        &self,
+        filter: &kura_identity::MembershipFilter,
+    ) -> Result<Vec<kura_identity::Membership>, kura_identity::IdentityError> {
         self.list_memberships(filter).map_err(identity_store_err)
     }
 
-    fn list_token_tenant_grants(&self, token_id: &str) -> Result<Vec<kura_identity::TokenTenantGrant>, kura_identity::IdentityError> {
-        self.list_token_tenant_grants(token_id).map_err(identity_store_err)
+    fn list_token_tenant_grants(
+        &self,
+        token_id: &str,
+    ) -> Result<Vec<kura_identity::TokenTenantGrant>, kura_identity::IdentityError> {
+        self.list_token_tenant_grants(token_id)
+            .map_err(identity_store_err)
     }
 }
 
 impl kura_identity::AuditStore for SQLiteStore {
-    fn append_tenant_audit_event(&self, event: kura_identity::TenantAuditEvent) -> Result<kura_identity::TenantAuditEvent, kura_identity::IdentityError> {
-        self.append_tenant_audit_event(&event).map_err(identity_store_err)
+    fn append_tenant_audit_event(
+        &self,
+        event: kura_identity::TenantAuditEvent,
+    ) -> Result<kura_identity::TenantAuditEvent, kura_identity::IdentityError> {
+        self.append_tenant_audit_event(&event)
+            .map_err(identity_store_err)
     }
 }
 
 impl kura_identity::Store for SQLiteStore {
-    fn upsert_tenant(&self, tenant: &kura_identity::Tenant) -> Result<(), kura_identity::IdentityError> {
+    fn upsert_tenant(
+        &self,
+        tenant: &kura_identity::Tenant,
+    ) -> Result<(), kura_identity::IdentityError> {
         self.upsert_tenant(tenant).map_err(identity_store_err)
     }
 
-    fn upsert_principal(&self, principal: &kura_identity::Principal) -> Result<(), kura_identity::IdentityError> {
+    fn upsert_principal(
+        &self,
+        principal: &kura_identity::Principal,
+    ) -> Result<(), kura_identity::IdentityError> {
         self.upsert_principal(principal).map_err(identity_store_err)
     }
 
-    fn upsert_membership(&self, membership: &kura_identity::Membership) -> Result<(), kura_identity::IdentityError> {
-        self.upsert_membership(membership).map_err(identity_store_err)
+    fn upsert_membership(
+        &self,
+        membership: &kura_identity::Membership,
+    ) -> Result<(), kura_identity::IdentityError> {
+        self.upsert_membership(membership)
+            .map_err(identity_store_err)
     }
 
-    fn upsert_tenant_invitation(&self, invitation: &kura_identity::TenantInvitation) -> Result<(), kura_identity::IdentityError> {
-        self.upsert_tenant_invitation(invitation).map_err(identity_store_err)
+    fn upsert_tenant_invitation(
+        &self,
+        invitation: &kura_identity::TenantInvitation,
+    ) -> Result<(), kura_identity::IdentityError> {
+        self.upsert_tenant_invitation(invitation)
+            .map_err(identity_store_err)
     }
 
-    fn upsert_token_tenant_grant(&self, grant: &kura_identity::TokenTenantGrant) -> Result<(), kura_identity::IdentityError> {
-        self.upsert_token_tenant_grant(grant).map_err(identity_store_err)
+    fn upsert_token_tenant_grant(
+        &self,
+        grant: &kura_identity::TokenTenantGrant,
+    ) -> Result<(), kura_identity::IdentityError> {
+        self.upsert_token_tenant_grant(grant)
+            .map_err(identity_store_err)
     }
 
-    fn list_tenants(&self, filter: &kura_identity::TenantFilter) -> Result<Vec<kura_identity::Tenant>, kura_identity::IdentityError> {
+    fn list_tenants(
+        &self,
+        filter: &kura_identity::TenantFilter,
+    ) -> Result<Vec<kura_identity::Tenant>, kura_identity::IdentityError> {
         self.list_tenants(filter).map_err(identity_store_err)
     }
 
-    fn list_principals(&self, filter: &kura_identity::PrincipalFilter) -> Result<Vec<kura_identity::Principal>, kura_identity::IdentityError> {
+    fn list_principals(
+        &self,
+        filter: &kura_identity::PrincipalFilter,
+    ) -> Result<Vec<kura_identity::Principal>, kura_identity::IdentityError> {
         self.list_principals(filter).map_err(identity_store_err)
     }
 
-    fn list_tenant_invitations(&self, filter: &kura_identity::InvitationFilter) -> Result<Vec<kura_identity::TenantInvitation>, kura_identity::IdentityError> {
-        self.list_tenant_invitations(filter).map_err(identity_store_err)
+    fn list_tenant_invitations(
+        &self,
+        filter: &kura_identity::InvitationFilter,
+    ) -> Result<Vec<kura_identity::TenantInvitation>, kura_identity::IdentityError> {
+        self.list_tenant_invitations(filter)
+            .map_err(identity_store_err)
     }
 
-    fn list_token_authorities(&self) -> Result<Vec<kura_identity::TokenAuthority>, kura_identity::IdentityError> {
+    fn list_token_authorities(
+        &self,
+    ) -> Result<Vec<kura_identity::TokenAuthority>, kura_identity::IdentityError> {
         self.list_token_authorities().map_err(identity_store_err)
     }
 }

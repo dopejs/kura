@@ -3,9 +3,15 @@
 //! Port of `daemon/internal/tenantctx`. Go threads the value through
 //! `context.Context`; in Rust the carrier is a tokio task-local, which
 //! propagates across `.await` points within a scope the same way a context
-//! value propagates down a call chain. The API middleware installs the value
-//! after the identity manager resolves the caller; store-layer guards read it
-//! back via [`require`].
+//! value propagates down a call chain. `kura_api::middleware::protected`
+//! installs the value after the identity manager resolves the caller, by
+//! driving the downstream handler inside [`scope`]; store-layer guards read
+//! it back via [`require`].
+//!
+//! **Propagation limit:** a tokio task-local follows `.await` points inside
+//! the scope but is *not* inherited by `tokio::spawn`. Work detached from the
+//! request task sees no context and [`require`] fails closed there — detached
+//! work must carry the tenant explicitly or re-enter a [`scope`] of its own.
 
 use std::future::Future;
 
@@ -56,14 +62,20 @@ mod tests {
 
     #[test]
     fn require_without_context() {
-        assert!(matches!(require(), Err(IdentityError::TenantContextRequired)));
+        assert!(matches!(
+            require(),
+            Err(IdentityError::TenantContextRequired)
+        ));
         assert!(from_context().is_none());
     }
 
     #[test]
     fn require_with_empty_tenant_id() {
         with_context(ctx("prn_abc", "", ""), || {
-            assert!(matches!(require(), Err(IdentityError::TenantContextRequired)));
+            assert!(matches!(
+                require(),
+                Err(IdentityError::TenantContextRequired)
+            ));
         });
     }
 

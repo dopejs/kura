@@ -4,11 +4,11 @@
 //! preview persistence, and tenant isolation.
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use kura_store::thread_continuity::ContinuityLookupQuery;
 use kura_store::SQLiteStore;
+use kura_store::thread_continuity::ContinuityLookupQuery;
 use kura_threads::{
-    ContinuityItemKind, ContinuityPreview, ContinuityPreviewItem, ContinuityRole,
-    ContinuityStatus, ContinuityTurn, RedactionStatus, SessionSegment, SourceKind, Thread,
+    ContinuityItemKind, ContinuityPreview, ContinuityPreviewItem, ContinuityRole, ContinuityStatus,
+    ContinuityTurn, RedactionStatus, SessionSegment, SourceKind, Thread,
 };
 
 fn temp_dir(name: &str) -> String {
@@ -79,15 +79,21 @@ fn continuity_turn_sequence_allocation_and_dedup() {
     let now = Utc.with_ymd_and_hms(2026, 5, 11, 10, 0, 0).unwrap();
     let thread = thread("thr_1", "ten_1", now);
     store.upsert_thread(&thread).unwrap();
-    store.upsert_thread_session_segment(&segment(&thread, now)).unwrap();
+    store
+        .upsert_thread_session_segment(&segment(&thread, now))
+        .unwrap();
 
     // Sequences allocate transactionally: 1, then 2.
-    let first = store.save_continuity_turn(&turn(&thread, "first message")).unwrap();
+    let first = store
+        .save_continuity_turn(&turn(&thread, "first message"))
+        .unwrap();
     assert_eq!(first.acceptance_sequence, 1);
     assert!(!first.continuity_turn_id.is_empty());
     assert!(first.retention_expires_at.is_some(), "retention defaulted");
 
-    let second = store.save_continuity_turn(&turn(&thread, "second message")).unwrap();
+    let second = store
+        .save_continuity_turn(&turn(&thread, "second message"))
+        .unwrap();
     assert_eq!(second.acceptance_sequence, 2);
 
     // Same source_event_key resolves to the existing turn (dedup).
@@ -97,7 +103,10 @@ fn continuity_turn_sequence_allocation_and_dedup() {
     let mut again = turn(&thread, "duplicate retry");
     again.source_event_key = "evt_1".to_string();
     let resolved = store.save_continuity_turn(&again).unwrap();
-    assert_eq!(resolved.continuity_turn_id, saved.continuity_turn_id, "dedup by source event key");
+    assert_eq!(
+        resolved.continuity_turn_id, saved.continuity_turn_id,
+        "dedup by source event key"
+    );
 
     // Listing is scoped to the current session segment and ordered newest first.
     let query = ContinuityLookupQuery {
@@ -114,16 +123,34 @@ fn continuity_turn_sequence_allocation_and_dedup() {
     assert_eq!(listed[2].acceptance_sequence, 1);
 
     // Cross-tenant + cross-segment lookups are empty.
-    let other_tenant = ContinuityLookupQuery { tenant_id: "ten_2".to_string(), ..query.clone() };
-    assert!(store.list_continuity_turns(&other_tenant).unwrap().is_empty());
-    let other_segment = ContinuityLookupQuery { session_segment_id: "seg_other".to_string(), ..query.clone() };
-    assert!(store.list_continuity_turns(&other_segment).unwrap().is_empty());
+    let other_tenant = ContinuityLookupQuery {
+        tenant_id: "ten_2".to_string(),
+        ..query.clone()
+    };
+    assert!(
+        store
+            .list_continuity_turns(&other_tenant)
+            .unwrap()
+            .is_empty()
+    );
+    let other_segment = ContinuityLookupQuery {
+        session_segment_id: "seg_other".to_string(),
+        ..query.clone()
+    };
+    assert!(
+        store
+            .list_continuity_turns(&other_segment)
+            .unwrap()
+            .is_empty()
+    );
 
     // Outside-session-segment listing finds reset-boundary turns.
     let mut out = turn(&thread, "old segment");
     out.session_segment_id = "seg_old".to_string();
     let out_saved = store.save_continuity_turn(&out).unwrap();
-    let outside = store.list_continuity_turns_outside_session_segment(&query).unwrap();
+    let outside = store
+        .list_continuity_turns_outside_session_segment(&query)
+        .unwrap();
     assert_eq!(outside.len(), 1);
     assert_eq!(outside[0].continuity_turn_id, out_saved.continuity_turn_id);
 }
@@ -202,9 +229,19 @@ fn continuity_preview_save_and_detail() {
     ];
     let saved = store.save_continuity_preview(preview, &mut items).unwrap();
     assert!(!saved.continuity_preview_id.is_empty());
-    assert_eq!(saved.window_policy_id, kura_threads::DEFAULT_CONTINUITY_WINDOW_POLICY_ID, "policy defaulted");
-    assert_eq!(saved.max_prior_turns, kura_threads::DEFAULT_CONTINUITY_MAX_PRIOR_TURNS);
-    assert_eq!(saved.assembly_duration_ms, 1000, "duration computed from started/completed");
+    assert_eq!(
+        saved.window_policy_id,
+        kura_threads::DEFAULT_CONTINUITY_WINDOW_POLICY_ID,
+        "policy defaulted"
+    );
+    assert_eq!(
+        saved.max_prior_turns,
+        kura_threads::DEFAULT_CONTINUITY_MAX_PRIOR_TURNS
+    );
+    assert_eq!(
+        saved.assembly_duration_ms, 1000,
+        "duration computed from started/completed"
+    );
     assert!(saved.retention_expires_at > now, "retention defaulted");
     assert_eq!(items[0].item_order, 0);
     assert_eq!(items[1].item_order, 1, "order defaulted by index");
@@ -213,19 +250,45 @@ fn continuity_preview_save_and_detail() {
         .get_continuity_preview_detail("ten_1", "thr_2", &saved.continuity_preview_id)
         .unwrap()
         .expect("detail present");
-    assert_eq!(detail.preview.continuity_preview_id, saved.continuity_preview_id);
+    assert_eq!(
+        detail.preview.continuity_preview_id,
+        saved.continuity_preview_id
+    );
     assert_eq!(detail.preview.status, ContinuityStatus::Applied);
     assert_eq!(detail.items.len(), 2);
     assert_eq!(detail.items[0].item_kind, ContinuityItemKind::Turn);
-    assert_eq!(detail.items[1].reason_code, kura_threads::ContinuityReason::TooOld);
+    assert_eq!(
+        detail.items[1].reason_code,
+        kura_threads::ContinuityReason::TooOld
+    );
 
     // Missing / cross-tenant / other-thread detail → None.
-    assert!(store.get_continuity_preview_detail("ten_1", "thr_2", "contprev_missing").unwrap().is_none());
-    assert!(store.get_continuity_preview_detail("ten_2", "thr_2", &saved.continuity_preview_id).unwrap().is_none());
-    assert!(store.get_continuity_preview_detail("ten_1", "thr_other", &saved.continuity_preview_id).unwrap().is_none());
+    assert!(
+        store
+            .get_continuity_preview_detail("ten_1", "thr_2", "contprev_missing")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .get_continuity_preview_detail("ten_2", "thr_2", &saved.continuity_preview_id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .get_continuity_preview_detail("ten_1", "thr_other", &saved.continuity_preview_id)
+            .unwrap()
+            .is_none()
+    );
 
     // Summaries list newest first.
-    let summaries = store.list_continuity_preview_summaries("ten_1", "thr_2", 10).unwrap();
+    let summaries = store
+        .list_continuity_preview_summaries("ten_1", "thr_2", 10)
+        .unwrap();
     assert_eq!(summaries.len(), 1);
-    assert_eq!(summaries[0].continuity_preview_id, saved.continuity_preview_id);
+    assert_eq!(
+        summaries[0].continuity_preview_id,
+        saved.continuity_preview_id
+    );
 }

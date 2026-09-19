@@ -5,9 +5,9 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::error::ThreadsError;
+use crate::redaction::RedactionStatus;
 use crate::redaction::safe_continuity_content;
 use crate::redaction::safe_summary;
-use crate::redaction::RedactionStatus;
 use crate::source::SourceKind;
 use crate::utc_now_or;
 
@@ -316,10 +316,7 @@ pub fn eligible_continuity_turns(
         }
         eligible = eligible.split_off(over);
     }
-    (
-        eligible.into_iter().cloned().collect(),
-        excluded,
-    )
+    (eligible.into_iter().cloned().collect(), excluded)
 }
 
 /// Go: `PreviewItemForTurn`.
@@ -356,7 +353,10 @@ pub fn preview_item_for_turn(
 
 /// Go: `ResetBoundaryPreviewItems` — pre-reset turns are always excluded at
 /// the reset boundary.
-pub fn reset_boundary_preview_items(turns: &[ContinuityTurn], start_order: i32) -> Vec<ContinuityPreviewItem> {
+pub fn reset_boundary_preview_items(
+    turns: &[ContinuityTurn],
+    start_order: i32,
+) -> Vec<ContinuityPreviewItem> {
     turns
         .iter()
         .enumerate()
@@ -389,9 +389,13 @@ pub fn preview_items_for_artifact_excerpts(
             item_kind: ContinuityItemKind::ArtifactExcerpt,
             continuity_turn_id: turn.continuity_turn_id.clone(),
             role: None,
-            artifact_ref: format!("{}/{}", excerpt.resource_kind.trim(), excerpt.resource_id.trim())
-                .trim()
-                .to_string(),
+            artifact_ref: format!(
+                "{}/{}",
+                excerpt.resource_kind.trim(),
+                excerpt.resource_id.trim()
+            )
+            .trim()
+            .to_string(),
             artifact_excerpt_id: excerpt.artifact_excerpt_id.clone(),
             handoff_source_reference_id: String::new(),
             decision: ContinuityDecision::Excluded,
@@ -479,7 +483,8 @@ mod tests {
                 )
             })
             .collect();
-        let (included, excluded) = eligible_continuity_turns(&turns, &default_continuity_policy(), Some(now));
+        let (included, excluded) =
+            eligible_continuity_turns(&turns, &default_continuity_policy(), Some(now));
         assert_eq!(included.len() as i32, DEFAULT_CONTINUITY_MAX_PRIOR_TURNS);
         assert_eq!(included.first().map(|t| t.acceptance_sequence), Some(3));
         assert_eq!(included.last().map(|t| t.acceptance_sequence), Some(14));
@@ -492,12 +497,37 @@ mod tests {
     fn policy_excludes_age_retention_and_unsafe_redaction() {
         let now = Utc.with_ymd_and_hms(2026, 5, 11, 10, 0, 0).unwrap();
         let turns = vec![
-            test_turn("old", 1, now - Duration::days(31), Some(now + Duration::days(90)), RedactionStatus::Redacted),
-            test_turn("expired", 2, now, Some(now - Duration::hours(1)), RedactionStatus::Redacted),
-            test_turn("unsafe", 3, now, Some(now + Duration::days(90)), RedactionStatus::RedactionFailed),
-            test_turn("ok", 4, now, Some(now + Duration::days(90)), RedactionStatus::Redacted),
+            test_turn(
+                "old",
+                1,
+                now - Duration::days(31),
+                Some(now + Duration::days(90)),
+                RedactionStatus::Redacted,
+            ),
+            test_turn(
+                "expired",
+                2,
+                now,
+                Some(now - Duration::hours(1)),
+                RedactionStatus::Redacted,
+            ),
+            test_turn(
+                "unsafe",
+                3,
+                now,
+                Some(now + Duration::days(90)),
+                RedactionStatus::RedactionFailed,
+            ),
+            test_turn(
+                "ok",
+                4,
+                now,
+                Some(now + Duration::days(90)),
+                RedactionStatus::Redacted,
+            ),
         ];
-        let (included, excluded) = eligible_continuity_turns(&turns, &default_continuity_policy(), Some(now));
+        let (included, excluded) =
+            eligible_continuity_turns(&turns, &default_continuity_policy(), Some(now));
         assert_eq!(included.len(), 1);
         assert_eq!(included[0].continuity_turn_id, "ok");
         for reason in [
@@ -518,8 +548,20 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 5, 11, 10, 0, 0).unwrap();
         let items = reset_boundary_preview_items(
             &[
-                test_turn("pre_reset_1", 1, now, Some(now + Duration::days(90)), RedactionStatus::Redacted),
-                test_turn("pre_reset_2", 2, now, Some(now + Duration::days(90)), RedactionStatus::Redacted),
+                test_turn(
+                    "pre_reset_1",
+                    1,
+                    now,
+                    Some(now + Duration::days(90)),
+                    RedactionStatus::Redacted,
+                ),
+                test_turn(
+                    "pre_reset_2",
+                    2,
+                    now,
+                    Some(now + Duration::days(90)),
+                    RedactionStatus::Redacted,
+                ),
             ],
             3,
         );

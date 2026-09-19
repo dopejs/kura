@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use kura_store::{schema_migrations, SQLiteStore, CURRENT_SCHEMA_VERSION};
+use kura_store::{CURRENT_SCHEMA_VERSION, SQLiteStore, schema_migrations};
 
 fn temp_dir(name: &str) -> String {
     let dir = std::env::temp_dir().join(format!("kura_store_{name}_{}", std::process::id()));
@@ -16,7 +16,10 @@ fn opens_store_and_creates_schema_migrations_table() {
     assert!(Path::new(store.db_path()).exists());
 
     // All ported migrations are applied on open, up to the head of the ported list.
-    let applied: i64 = store_conn_query(store.db_path(), "SELECT MAX(version) FROM schema_migrations");
+    let applied: i64 = store_conn_query(
+        store.db_path(),
+        "SELECT MAX(version) FROM schema_migrations",
+    );
     assert_eq!(applied, schema_migrations().last().unwrap().version);
 }
 
@@ -38,13 +41,13 @@ fn store_conn_query(db_path: &str, query: &str) -> i64 {
 }
 use chrono::Utc;
 use kura_capabilities::{Capability, Status as CapabilityStatus};
-use kura_router::{Session, SessionKind, SessionStatus};
 use kura_events::{Event, Filter, Resource, Scope};
 use kura_llm::{Dispatch, DispatchStatus, Message, MessageRole, Usage};
 use kura_policy::{Approval, ApprovalStatus, Decision, DecisionOutcome};
 use kura_providers::{
     AuthMode, AuthState, AuthStatus, Check, CheckStatus, Family, Model, Preference,
 };
+use kura_router::{Session, SessionKind, SessionStatus};
 use kura_runtime::{Run, RunCheckpoint, RunStatus, Step, StepStatus, ToolCall, ToolCallStatus};
 
 fn make_run() -> Run {
@@ -171,7 +174,10 @@ fn tool_call_round_trips_through_sqlite() {
     assert_eq!(got.sandbox.get("session"), Some(&serde_json::json!("s-1")));
     assert_eq!(got.integration_bindings.len(), 1);
     assert_eq!(got.integration_bindings[0].integration_id, "int_1");
-    assert_eq!(got.integration_bindings[0].backend_kind, kura_integrations::BackendKind::Native);
+    assert_eq!(
+        got.integration_bindings[0].backend_kind,
+        kura_integrations::BackendKind::Native
+    );
 }
 
 #[test]
@@ -282,15 +288,25 @@ fn llm_dispatch_round_trips_through_sqlite() {
     let store = SQLiteStore::new(&dir).unwrap();
     let now = Utc::now();
     let dispatch = Dispatch {
+        tools: Vec::new(),
+        tool_calls: Vec::new(),
         dispatch_id: "disp_1".to_string(),
         provider: "openai".to_string(),
         model: "gpt-4o".to_string(),
-        messages: vec![Message { role: MessageRole::User, content: "hi".to_string() }],
+        messages: vec![Message {
+            role: MessageRole::User,
+            content: "hi".to_string(),
+            ..Message::default()
+        }],
         stream: true,
         status: DispatchStatus::Completed,
         output: "hello".to_string(),
         finish_reason: "stop".to_string(),
-        usage: Usage { input_tokens: 3, output_tokens: 1, total_tokens: 4 },
+        usage: Usage {
+            input_tokens: 3,
+            output_tokens: 1,
+            total_tokens: 4,
+        },
         error_code: String::new(),
         error: String::new(),
         timeout_ms: 30000,
@@ -342,7 +358,11 @@ fn provider_check_and_auth_state_round_trip() {
         error_class: String::new(),
         error_code: String::new(),
         error_message: String::new(),
-        usage: Usage { input_tokens: 5, output_tokens: 5, total_tokens: 10 },
+        usage: Usage {
+            input_tokens: 5,
+            output_tokens: 5,
+            total_tokens: 10,
+        },
         created_at: now,
         completed_at: now,
     };
@@ -352,7 +372,14 @@ fn provider_check_and_auth_state_round_trip() {
     assert_eq!(checks[0].family, Family::OpenAICompatible);
     assert_eq!(checks[0].status, CheckStatus::Passed);
     assert_eq!(checks[0].usage.total_tokens, 10);
-    assert_eq!(store.get_provider_check("prov_1", "chk_1").unwrap().unwrap().check_id, "chk_1");
+    assert_eq!(
+        store
+            .get_provider_check("prov_1", "chk_1")
+            .unwrap()
+            .unwrap()
+            .check_id,
+        "chk_1"
+    );
 
     let mut metadata = std::collections::HashMap::new();
     metadata.insert("region".to_string(), "us-east-1".to_string());
@@ -382,7 +409,10 @@ fn provider_check_and_auth_state_round_trip() {
     assert_eq!(states[0].status, AuthStatus::Authenticated);
     assert_eq!(states[0].cli_available, true);
     assert_eq!(states[0].login_command, vec!["login".to_string()]);
-    assert_eq!(states[0].metadata.get("region"), Some(&"us-east-1".to_string()));
+    assert_eq!(
+        states[0].metadata.get("region"),
+        Some(&"us-east-1".to_string())
+    );
     assert!(states[0].sandbox.is_some());
 }
 
@@ -413,9 +443,19 @@ fn provider_models_and_preference_round_trip() {
     assert_eq!(models[0].default, true);
     assert_eq!(models[0].tool_use, true);
     assert_eq!(models[0].reasoning_levels.len(), 2);
-    assert_eq!(store.list_provider_models_by_provider("prov_1").unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_provider_models_by_provider("prov_1")
+            .unwrap()
+            .len(),
+        1
+    );
 
-    let preference = Preference { provider_id: "prov_1".to_string(), default_model: "gpt-4o".to_string(), updated_at: now };
+    let preference = Preference {
+        provider_id: "prov_1".to_string(),
+        default_model: "gpt-4o".to_string(),
+        updated_at: now,
+    };
     store.upsert_provider_preference(&preference).unwrap();
     let prefs = store.list_provider_preferences().unwrap();
     assert_eq!(prefs.len(), 1);
@@ -489,7 +529,10 @@ fn manager_document_round_trips_through_sqlite() {
 
     store.delete_manager_document("triage", "t1").unwrap();
     assert_eq!(store.list_manager_documents("triage").unwrap().len(), 0);
-    assert_eq!(store.schema_version().unwrap(), kura_store::CURRENT_SCHEMA_VERSION);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        kura_store::CURRENT_SCHEMA_VERSION
+    );
 }
 #[test]
 fn sandbox_execution_round_trips_through_sqlite() {
@@ -536,7 +579,10 @@ fn legacy_dev_head_database_is_restamped_as_baseline() {
     let store = SQLiteStore::new(&dir).unwrap();
     // The re-stamp lands on baseline v1, then any post-baseline migrations
     // (v2+) apply on top.
-    assert_eq!(store.schema_version().unwrap(), kura_store::CURRENT_SCHEMA_VERSION);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        kura_store::CURRENT_SCHEMA_VERSION
+    );
 }
 #[test]
 fn event_append_and_list_round_trip() {
@@ -553,8 +599,14 @@ fn event_append_and_list_round_trip() {
         category: "audit".to_string(),
         name: "audit.cross_tenant_access_denied".to_string(),
         occurred_at: now,
-        scope: Scope { run_id: "run_1".to_string(), ..Scope::default() },
-        resource: Resource { kind: "run".to_string(), id: "run_1".to_string() },
+        scope: Scope {
+            run_id: "run_1".to_string(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "run".to_string(),
+            id: "run_1".to_string(),
+        },
         payload: payload.clone(),
     };
     let appended = store.append_event(&event).unwrap();
@@ -577,7 +629,115 @@ fn event_append_and_list_round_trip() {
 
     // Cursor filter: no rows after the last sequence.
     let after = store
-        .list_events(&Filter { cursor: appended.sequence, ..Filter::default() })
+        .list_events(&Filter {
+            cursor: appended.sequence,
+            ..Filter::default()
+        })
         .unwrap();
     assert!(after.is_empty());
+}
+
+/// The derived-index table arrives as schema v3, so an existing v2 database
+/// must upgrade in place rather than only fresh installs getting it. The
+/// retrieval cache is worthless if upgrading a real deployment silently leaves
+/// the table absent.
+#[test]
+fn memory_asset_embeddings_upgrade_from_v2_in_place() {
+    let dir = std::env::temp_dir().join(format!("kura-store-v3-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let path = dir.to_str().expect("path");
+
+    // Stop at v2: the state a deployment on the previous release is in.
+    let store = SQLiteStore::new_at_version(path, 2).expect("open at v2");
+    assert_eq!(store.schema_version().expect("version"), 2);
+    assert!(
+        store
+            .get_memory_asset_embeddings("fp", &["mem_1".to_string()])
+            .is_err(),
+        "the table must not exist yet at v2"
+    );
+    drop(store);
+
+    // Reopening runs the pending migrations, as a daemon upgrade does.
+    let store = SQLiteStore::new(path).expect("reopen");
+    assert_eq!(
+        store.schema_version().expect("version"),
+        CURRENT_SCHEMA_VERSION
+    );
+    assert!(
+        store
+            .get_memory_asset_embeddings("fp", &["mem_1".to_string()])
+            .expect("table exists after upgrade")
+            .is_empty()
+    );
+}
+
+/// Tool profiles arrive as schema v4. Same reasoning as the v3 test: a running
+/// deployment must gain the table on upgrade, not only fresh installs. Also
+/// asserts the partial unique index actually fires, because "one default per
+/// capability" being unrepresentable is the point of declaring it in SQL
+/// rather than validating it in Rust.
+#[test]
+fn tool_profiles_upgrade_from_v3_and_enforce_one_default() {
+    let dir = std::env::temp_dir().join(format!("kura-store-v4-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let path = dir.to_str().expect("path");
+
+    let store = SQLiteStore::new_at_version(path, 3).expect("open at v3");
+    assert_eq!(store.schema_version().expect("version"), 3);
+    assert!(
+        store.list_all_tool_profiles().is_err(),
+        "the table must not exist yet at v3"
+    );
+    drop(store);
+
+    let store = SQLiteStore::new(path).expect("reopen");
+    assert_eq!(
+        store.schema_version().expect("version"),
+        CURRENT_SCHEMA_VERSION
+    );
+    assert!(
+        store
+            .list_all_tool_profiles()
+            .expect("table exists")
+            .is_empty()
+    );
+
+    let manager = kura_tools::Manager::new();
+    let make = |title: &str| kura_tools::CreateProfileInput {
+        title: title.to_string(),
+        capability: kura_tools::Capability::WebSearch,
+        family: kura_tools::Family::BuiltinStub,
+        auth_mode: kura_tools::AuthMode::None,
+        is_default: Some(true),
+        ..kura_tools::CreateProfileInput::default()
+    };
+    let first = manager.create("ten_a", make("first")).expect("create");
+    store.upsert_tool_profile(&first).expect("persist first");
+
+    // A second row claiming the same default must be refused by the index,
+    // even if a caller bypasses the manager's demotion.
+    let mut second = manager.create("ten_a", make("second")).expect("create");
+    second.is_default = true;
+    let refused = store.upsert_tool_profile(&second);
+    assert!(
+        refused.is_err(),
+        "the partial unique index must refuse a second default for one capability"
+    );
+
+    // Persisting the demoted first row then makes room for it.
+    let demoted = manager.get(&first.profile_id).expect("first");
+    assert!(
+        !demoted.is_default,
+        "the manager demoted the previous default"
+    );
+    store
+        .upsert_tool_profile(&demoted)
+        .expect("persist demotion");
+    store.upsert_tool_profile(&second).expect("persist second");
+
+    let ids = store
+        .list_tool_profile_ids_for_tenant("ten_a")
+        .expect("list ids");
+    assert_eq!(ids.len(), 2);
 }

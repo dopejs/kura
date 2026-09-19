@@ -27,7 +27,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/execution/profiles", get(list_profiles))
         .route("/v1/execution/profiles/{profile_id}", get(get_profile))
-        .route("/v1/execution/profiles/{profile_id}/select", post(select_profile))
+        .route(
+            "/v1/execution/profiles/{profile_id}/select",
+            post(select_profile),
+        )
         .route("/v1/execution/explain", post(explain_execution))
 }
 
@@ -79,7 +82,9 @@ async fn list_profiles(
     State(state): State<AppState>,
 ) -> Result<Json<ExecutionProfileListResponse>, ApiError> {
     let manager = manager(&state)?;
-    Ok(Json(ExecutionProfileListResponse { items: manager.list_profiles() }))
+    Ok(Json(ExecutionProfileListResponse {
+        items: manager.list_profiles(),
+    }))
 }
 
 /// GET /v1/execution/profiles/{profile_id} (Go handleExecutionProfileRoutes
@@ -89,7 +94,9 @@ async fn get_profile(
     Path(profile_id): Path<String>,
 ) -> Result<Json<execprofile::ProfileProjection>, ApiError> {
     let manager = manager(&state)?;
-    let projection = manager.get_profile(profile_id.trim()).map_err(map_exec_error)?;
+    let projection = manager
+        .get_profile(profile_id.trim())
+        .map_err(map_exec_error)?;
     Ok(Json(projection))
 }
 

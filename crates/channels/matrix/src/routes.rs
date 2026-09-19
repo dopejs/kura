@@ -6,8 +6,8 @@ use kura_connectors::{DiagnosticReasonCode, RedactionStatus};
 
 use crate::is_unset_time;
 use crate::types::{
-    ConversationType, InboundEvent, MessageKind, RouteDecision, RouteOutcome, RoutePolicy,
-    RoutePolicyState, RoomSelectionState,
+    ConversationType, InboundEvent, MessageKind, RoomSelectionState, RouteDecision, RouteOutcome,
+    RoutePolicy, RoutePolicyState,
 };
 
 /// Go `NormalizeRoutePolicy`: fills every empty field with its ready default.
@@ -77,7 +77,9 @@ pub fn decide_route(
     if missing_matrix_identity(event) {
         return RouteDecision {
             outcome: RouteOutcome::Failed,
-            reason_code: DiagnosticReasonCode::UnknownConnectorFailure.as_str().to_string(),
+            reason_code: DiagnosticReasonCode::UnknownConnectorFailure
+                .as_str()
+                .to_string(),
             surface,
             ..RouteDecision::default()
         };
@@ -85,7 +87,9 @@ pub fn decide_route(
     if event.message_kind != MessageKind::UnencryptedText {
         return RouteDecision {
             outcome: RouteOutcome::Unsupported,
-            reason_code: DiagnosticReasonCode::UnsupportedCapability.as_str().to_string(),
+            reason_code: DiagnosticReasonCode::UnsupportedCapability
+                .as_str()
+                .to_string(),
             surface,
             ..RouteDecision::default()
         };
@@ -156,7 +160,9 @@ pub fn decide_route(
         }
         _ => RouteDecision {
             outcome: RouteOutcome::Unsupported,
-            reason_code: DiagnosticReasonCode::UnsupportedCapability.as_str().to_string(),
+            reason_code: DiagnosticReasonCode::UnsupportedCapability
+                .as_str()
+                .to_string(),
             surface,
             ..RouteDecision::default()
         },

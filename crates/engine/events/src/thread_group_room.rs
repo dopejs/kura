@@ -10,7 +10,8 @@ use kura_threads::{
 };
 
 pub const THREAD_CONVERSATION_SHAPE_RECORDED_NAME: &str = "thread.conversation_shape_recorded";
-pub const THREAD_PARTICIPATION_DECISION_RECORDED_NAME: &str = "thread.participation_decision_recorded";
+pub const THREAD_PARTICIPATION_DECISION_RECORDED_NAME: &str =
+    "thread.participation_decision_recorded";
 pub const THREAD_RESET_SCOPED_NAME: &str = "thread.reset_scoped";
 pub const THREAD_HANDOFF_LINKED_NAME: &str = "thread.handoff_linked";
 
@@ -28,7 +29,10 @@ pub fn thread_conversation_shape_event(evidence: ConversationShapeEvidence) -> E
             connector_id: evidence.connector_id.clone(),
             ..Scope::default()
         },
-        resource: Resource { kind: "thread_conversation_shape".to_string(), id: evidence.conversation_shape_id.clone() },
+        resource: Resource {
+            kind: "thread_conversation_shape".to_string(),
+            id: evidence.conversation_shape_id.clone(),
+        },
         payload: payload![
             "tenantId" => evidence.tenant_id,
             "threadId" => evidence.thread_id,
@@ -56,7 +60,10 @@ pub fn thread_participation_decision_event(decision: ParticipationDecision) -> E
             connector_id: decision.connector_id.clone(),
             ..Scope::default()
         },
-        resource: Resource { kind: "thread_participation_decision".to_string(), id: decision.participation_decision_id.clone() },
+        resource: Resource {
+            kind: "thread_participation_decision".to_string(),
+            id: decision.participation_decision_id.clone(),
+        },
         payload: payload![
             "tenantId" => decision.tenant_id,
             "threadId" => decision.thread_id,
@@ -75,14 +82,24 @@ pub fn thread_participation_decision_event(decision: ParticipationDecision) -> E
 /// Go: `ThreadScopedResetEvent` — lifecycle-action flavor of the scoped reset.
 #[must_use]
 pub fn thread_scoped_reset_event(reset: LifecycleAction, shape: ConversationShape) -> Event {
-    let occurred_at = if is_go_zero_time(reset.completed_at) { now_utc() } else { reset.completed_at };
+    let occurred_at = if is_go_zero_time(reset.completed_at) {
+        now_utc()
+    } else {
+        reset.completed_at
+    };
     Event {
         tenant_id: reset.tenant_id.clone(),
         category: "thread".to_string(),
         name: THREAD_RESET_SCOPED_NAME.to_string(),
         occurred_at,
-        scope: Scope { session_id: reset.resulting_session_segment_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "thread_reset_scoped".to_string(), id: reset.lifecycle_action_id.clone() },
+        scope: Scope {
+            session_id: reset.resulting_session_segment_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "thread_reset_scoped".to_string(),
+            id: reset.lifecycle_action_id.clone(),
+        },
         payload: payload![
             "tenantId" => reset.tenant_id,
             "threadId" => reset.thread_id,
@@ -106,8 +123,14 @@ pub fn thread_scoped_reset_evidence_event(reset: ResetEvent) -> Event {
         category: "thread".to_string(),
         name: THREAD_RESET_SCOPED_NAME.to_string(),
         occurred_at,
-        scope: Scope { session_id: reset.resulting_session_segment_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "thread_reset_scoped".to_string(), id: reset.reset_event_id.clone() },
+        scope: Scope {
+            session_id: reset.resulting_session_segment_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "thread_reset_scoped".to_string(),
+            id: reset.reset_event_id.clone(),
+        },
         payload: payload![
             "tenantId" => reset.tenant_id,
             "threadId" => reset.thread_id,
@@ -137,7 +160,10 @@ pub fn thread_handoff_linked_event(link: HandoffLink) -> Event {
             connector_id: link.destination_connector_id.clone(),
             ..Scope::default()
         },
-        resource: Resource { kind: "thread_handoff_link".to_string(), id: link.handoff_link_id.clone() },
+        resource: Resource {
+            kind: "thread_handoff_link".to_string(),
+            id: link.handoff_link_id.clone(),
+        },
         payload: payload![
             "tenantId" => link.tenant_id,
             "handoffLinkId" => link.handoff_link_id,

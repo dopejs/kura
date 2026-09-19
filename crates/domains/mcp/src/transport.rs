@@ -30,8 +30,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::Digest;
 
-use crate::types::{DiscoveryStatus, Server, Tool, TransportKind};
 use crate::McpError;
+use crate::types::{DiscoveryStatus, Server, Tool, TransportKind};
 
 /// MCP protocol version used for session initialization (Go hard-codes this).
 pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
@@ -185,8 +185,8 @@ pub fn decode_tools_list(
         #[serde(default)]
         tools: Vec<ToolsListTool>,
     }
-    let payload: ToolsListPayload =
-        serde_json::from_value(raw.clone()).map_err(|e| format!("decode tools/list response: {e}"))?;
+    let payload: ToolsListPayload = serde_json::from_value(raw.clone())
+        .map_err(|e| format!("decode tools/list response: {e}"))?;
     let mut tools = Vec::with_capacity(payload.tools.len());
     for item in payload.tools {
         tools.push(Tool {
@@ -195,6 +195,11 @@ pub fn decode_tools_list(
             title: item.title.trim().to_string(),
             description: item.description.trim().to_string(),
             schema_fingerprint: schema_fingerprint(&item.input_schema),
+            input_schema: if item.input_schema.is_null() {
+                None
+            } else {
+                Some(item.input_schema.clone())
+            },
             discovery_status: DiscoveryStatus::Discovered,
             last_discovered_at: Some(now),
             updated_at: now,
@@ -391,7 +396,12 @@ impl StdioSession {
         self.call("initialize", initialize_params(), timeout)
             .map_err(|err| format!("initialize mcp session for {}: {err}", self.server_id))?;
         self.notify("notifications/initialized", serde_json::json!({}))
-            .map_err(|err| format!("send initialized notification for {}: {err}", self.server_id))
+            .map_err(|err| {
+                format!(
+                    "send initialized notification for {}: {err}",
+                    self.server_id
+                )
+            })
     }
 
     fn call(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
@@ -417,7 +427,10 @@ impl StdioSession {
             Ok(outcome) => outcome,
             Err(RecvTimeoutError::Timeout) => {
                 self.pending.lock().unwrap().remove(&request_id);
-                Err(format!("mcp {method} timed out after {}s", timeout.as_secs()))
+                Err(format!(
+                    "mcp {method} timed out after {}s",
+                    timeout.as_secs()
+                ))
             }
             Err(RecvTimeoutError::Disconnected) => Err(McpError::TransportClosed.to_string()),
         }
@@ -599,8 +612,17 @@ impl StreamableHTTPSession {
     fn initialize(&self) -> Result<(), String> {
         self.call("initialize", initialize_params(), self.timeout)
             .map_err(|err| format!("initialize mcp session for {}: {err}", self.server_id))?;
-        self.notify("notifications/initialized", serde_json::json!({}), self.timeout)
-            .map_err(|err| format!("send initialized notification for {}: {err}", self.server_id))
+        self.notify(
+            "notifications/initialized",
+            serde_json::json!({}),
+            self.timeout,
+        )
+        .map_err(|err| {
+            format!(
+                "send initialized notification for {}: {err}",
+                self.server_id
+            )
+        })
     }
 
     fn call(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
@@ -733,9 +755,9 @@ impl Session for StreamableHTTPSession {
 use futures_util::{SinkExt, StreamExt};
 use tokio::runtime::Runtime;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{self, HeaderValue};
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 /// The write half of the websocket connection, guarded so sync `call`s and the async
@@ -744,9 +766,8 @@ type WsSink = futures_util::stream::SplitSink<
     WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
     Message,
 >;
-type WsRead = futures_util::stream::SplitStream<
-    WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
->;
+type WsRead =
+    futures_util::stream::SplitStream<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>>;
 
 /// Concrete websocket transport (Go `websocketTransport`): JSON-RPC over websocket
 /// text frames using tokio-tungstenite. The session owns a small multi-thread Tokio
@@ -776,23 +797,23 @@ impl Transport for WebsocketTransport {
         let runtime = ws_runtime()?;
         let request = build_ws_request(server)?;
         let (ws, _response) = run_blocking(&runtime, async {
-                match tokio::time::timeout(
-                    WEBSOCKET_HANDSHAKE_TIMEOUT,
-                    tokio_tungstenite::connect_async(request),
-                )
-                .await
-                {
-                    Ok(Ok(connected)) => Ok(connected),
-                    Ok(Err(err)) => Err(err),
-                    Err(_) => Err(tokio_tungstenite::tungstenite::Error::Io(
-                        std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            "websocket handshake timed out",
-                        ),
-                    )),
-                }
-            })
-            .map_err(|err| McpError::Other(format!("open mcp websocket transport: {err}")))?;
+            match tokio::time::timeout(
+                WEBSOCKET_HANDSHAKE_TIMEOUT,
+                tokio_tungstenite::connect_async(request),
+            )
+            .await
+            {
+                Ok(Ok(connected)) => Ok(connected),
+                Ok(Err(err)) => Err(err),
+                Err(_) => Err(tokio_tungstenite::tungstenite::Error::Io(
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "websocket handshake timed out",
+                    ),
+                )),
+            }
+        })
+        .map_err(|err| McpError::Other(format!("open mcp websocket transport: {err}")))?;
         let (sink, read) = ws.split();
         let session = WebsocketSession::new(server, sink, read, runtime)?;
         if let Err(err) = session.initialize(timeout) {
@@ -980,7 +1001,12 @@ impl WebsocketSession {
         self.call("initialize", initialize_params(), timeout)
             .map_err(|err| format!("initialize mcp session for {}: {err}", self.server_id))?;
         self.notify("notifications/initialized", serde_json::json!({}))
-            .map_err(|err| format!("send initialized notification for {}: {err}", self.server_id))
+            .map_err(|err| {
+                format!(
+                    "send initialized notification for {}: {err}",
+                    self.server_id
+                )
+            })
     }
 
     fn call(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
@@ -1021,7 +1047,10 @@ impl WebsocketSession {
             Ok(outcome) => outcome,
             Err(RecvTimeoutError::Timeout) => {
                 self.pending.lock().unwrap().remove(&request_id);
-                Err(format!("mcp {method} timed out after {}s", timeout.as_secs()))
+                Err(format!(
+                    "mcp {method} timed out after {}s",
+                    timeout.as_secs()
+                ))
             }
             Err(RecvTimeoutError::Disconnected) => Err(McpError::TransportClosed.to_string()),
         }

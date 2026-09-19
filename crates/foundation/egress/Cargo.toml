@@ -1,0 +1,14 @@
+[package]
+license.workspace = true
+name = "kura-egress"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+url = "2"
+
+[dev-dependencies]
+serde_json.workspace = true

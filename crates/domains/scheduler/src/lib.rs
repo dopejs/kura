@@ -20,8 +20,8 @@
 //!   and the checkpoints save step are excluded.
 
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -31,10 +31,8 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use kura_store::schedule::{
-    ScheduleDispatchAttemptRecord, ScheduleRecord, ScheduleTargetRecord,
-};
 use kura_store::SQLiteStore;
+use kura_store::schedule::{ScheduleDispatchAttemptRecord, ScheduleRecord, ScheduleTargetRecord};
 
 macro_rules! string_enum {
     ($name:ident { $first:ident => $first_s:literal $(, $v:ident => $s:literal)* $(,)? }) => {
@@ -488,7 +486,10 @@ impl Scheduler {
             None,
             &kv(&[
                 ("status", serde_json::json!(schedule.status.as_str())),
-                ("targetKind", serde_json::json!(schedule.target.kind.as_str())),
+                (
+                    "targetKind",
+                    serde_json::json!(schedule.target.kind.as_str()),
+                ),
                 ("targetRefId", serde_json::json!(schedule.target_ref_id)),
             ]),
         )?;
@@ -498,16 +499,21 @@ impl Scheduler {
     /// Go `List`: hydrates every schedule record in the environment scope.
     pub fn list(&self) -> Result<Vec<Schedule>, SchedulerError> {
         let records = self
-            .store.lock()
+            .store
+            .lock()
             .list_schedules(&environment_scope(self.environment))
             .map_err(SchedulerError::Store)?;
-        records.into_iter().map(|record| self.hydrate_schedule(record)).collect()
+        records
+            .into_iter()
+            .map(|record| self.hydrate_schedule(record))
+            .collect()
     }
 
     /// Go `Get` (the Go `(Schedule, bool, error)` becomes `Result<Option<Schedule>>`).
     pub fn get(&self, schedule_id: &str) -> Result<Option<Schedule>, SchedulerError> {
         let Some(record) = self
-            .store.lock()
+            .store
+            .lock()
             .get_schedule(&environment_scope(self.environment), schedule_id)
             .map_err(SchedulerError::Store)?
         else {
@@ -614,7 +620,8 @@ impl Scheduler {
             {
                 continue;
             }
-            if schedule.kind == ScheduleKind::Recurring && schedule.status != ScheduleStatus::Cancelled
+            if schedule.kind == ScheduleKind::Recurring
+                && schedule.status != ScheduleStatus::Cancelled
             {
                 self.record_missed_intervals(&mut schedule, now)?;
             }
@@ -729,7 +736,10 @@ impl Scheduler {
                     "dispatchStatus",
                     serde_json::json!(schedule.attempts[0].dispatch_status.as_str()),
                 ),
-                ("skippedReason", serde_json::json!(schedule.attempts[0].skipped_reason)),
+                (
+                    "skippedReason",
+                    serde_json::json!(schedule.attempts[0].skipped_reason),
+                ),
             ]),
         )
     }
@@ -759,7 +769,10 @@ impl Scheduler {
                     "dispatchStatus",
                     serde_json::json!(schedule.attempts[attempt_index].dispatch_status.as_str()),
                 ),
-                ("dueAt", serde_json::json!(schedule.attempts[attempt_index].due_at)),
+                (
+                    "dueAt",
+                    serde_json::json!(schedule.attempts[attempt_index].due_at),
+                ),
                 (
                     "triggerSource",
                     serde_json::json!(schedule.attempts[attempt_index].trigger_source.as_str()),
@@ -768,7 +781,8 @@ impl Scheduler {
         )?;
 
         let target_result = self
-            .store.lock()
+            .store
+            .lock()
             .get_schedule_target(&schedule.schedule_id, &schedule.target_ref_id)
             .map_err(SchedulerError::Store)?;
         let target_record = match target_result {
@@ -910,7 +924,10 @@ impl Scheduler {
                     "resolvedTargetRevision",
                     serde_json::json!(schedule.attempts[attempt_index].resolved_target_revision),
                 ),
-                ("runId", serde_json::json!(schedule.attempts[attempt_index].run_id)),
+                (
+                    "runId",
+                    serde_json::json!(schedule.attempts[attempt_index].run_id),
+                ),
                 (
                     "workflowId",
                     serde_json::json!(schedule.attempts[attempt_index].workflow_id),
@@ -970,7 +987,10 @@ impl Scheduler {
                 schedule,
                 Some(&attempt),
                 &kv(&[
-                    ("dispatchStatus", serde_json::json!(attempt.dispatch_status.as_str())),
+                    (
+                        "dispatchStatus",
+                        serde_json::json!(attempt.dispatch_status.as_str()),
+                    ),
                     ("failureClass", serde_json::json!(attempt.failure_class)),
                     ("failureReason", serde_json::json!(attempt.failure_reason)),
                     ("retryCount", serde_json::json!(attempt.retry_count)),
@@ -983,7 +1003,10 @@ impl Scheduler {
             schedule,
             Some(&attempt),
             &kv(&[
-                ("dispatchStatus", serde_json::json!(attempt.dispatch_status.as_str())),
+                (
+                    "dispatchStatus",
+                    serde_json::json!(attempt.dispatch_status.as_str()),
+                ),
                 ("failureClass", serde_json::json!(attempt.failure_class)),
                 ("failureReason", serde_json::json!(attempt.failure_reason)),
                 ("retryCount", serde_json::json!(attempt.retry_count)),
@@ -1006,8 +1029,13 @@ impl Scheduler {
                 }
             } else {
                 match self
-                    .store.lock()
-                    .get_workflow(&schedule.environment_scope, &attempt.run_id, &attempt.workflow_id)
+                    .store
+                    .lock()
+                    .get_workflow(
+                        &schedule.environment_scope,
+                        &attempt.run_id,
+                        &attempt.workflow_id,
+                    )
                     .map_err(SchedulerError::Store)?
                 {
                     Some(workflow) => map_workflow_status(workflow.status),
@@ -1085,7 +1113,10 @@ impl Scheduler {
                     "dispatchStatus",
                     serde_json::json!(schedule.attempts[0].dispatch_status.as_str()),
                 ),
-                ("missedCount", serde_json::json!(schedule.attempts[0].missed_count)),
+                (
+                    "missedCount",
+                    serde_json::json!(schedule.attempts[0].missed_count),
+                ),
             ]),
         )
     }
@@ -1146,12 +1177,10 @@ impl Scheduler {
             schedule.schedule_id = record.schedule_id.clone();
             schedule.environment_scope = record.environment_scope.clone();
             schedule.tenant_id = record.tenant_id.clone();
-            schedule.kind = parse_enum(&record.kind).map_err(|err| {
-                SchedulerError::DecodeSchedule(record.schedule_id.clone(), err)
-            })?;
-            schedule.status = parse_enum(&record.status).map_err(|err| {
-                SchedulerError::DecodeSchedule(record.schedule_id.clone(), err)
-            })?;
+            schedule.kind = parse_enum(&record.kind)
+                .map_err(|err| SchedulerError::DecodeSchedule(record.schedule_id.clone(), err))?;
+            schedule.status = parse_enum(&record.status)
+                .map_err(|err| SchedulerError::DecodeSchedule(record.schedule_id.clone(), err))?;
             schedule.target_ref_id = record.target_ref_id.clone();
             schedule.created_at = record.created_at;
             schedule.updated_at = record.updated_at;
@@ -1163,14 +1192,16 @@ impl Scheduler {
             schedule.completed_at = record.completed_at;
         }
         if let Some(target_record) = self
-            .store.lock()
+            .store
+            .lock()
             .get_schedule_target(&record.schedule_id, &record.target_ref_id)
             .map_err(SchedulerError::Store)?
         {
             schedule.target = decode_target_record(&target_record)?;
         }
         let attempt_records = self
-            .store.lock()
+            .store
+            .lock()
             .list_schedule_dispatch_attempts(&record.schedule_id)
             .map_err(SchedulerError::Store)?;
         let mut attempts = Vec::with_capacity(attempt_records.len());
@@ -1203,7 +1234,8 @@ impl Scheduler {
         let schedule_doc = serde_json::to_string(schedule).map_err(|err| {
             SchedulerError::MarshalSchedule(schedule.schedule_id.clone(), err.to_string())
         })?;
-        self.store.lock()
+        self.store
+            .lock()
             .upsert_schedule(&ScheduleRecord {
                 schedule_id: schedule.schedule_id.clone(),
                 environment_scope: schedule.environment_scope.clone(),
@@ -1227,7 +1259,8 @@ impl Scheduler {
         let target_doc = serde_json::to_string(&schedule.target).map_err(|err| {
             SchedulerError::MarshalScheduleTarget(schedule.target_ref_id.clone(), err.to_string())
         })?;
-        self.store.lock()
+        self.store
+            .lock()
             .upsert_schedule_target(&ScheduleTargetRecord {
                 target_ref_id: schedule.target_ref_id.clone(),
                 schedule_id: schedule.schedule_id.clone(),
@@ -1243,7 +1276,8 @@ impl Scheduler {
             let attempt_doc = serde_json::to_string(attempt).map_err(|err| {
                 SchedulerError::MarshalScheduleAttempt(attempt.attempt_id.clone(), err.to_string())
             })?;
-            self.store.lock()
+            self.store
+                .lock()
                 .upsert_schedule_dispatch_attempt(&ScheduleDispatchAttemptRecord {
                     attempt_id: attempt.attempt_id.clone(),
                     schedule_id: schedule.schedule_id.clone(),
@@ -1298,17 +1332,20 @@ impl Scheduler {
             payload: serde_json::Map::new(),
             ..kura_events::Event::default()
         };
-        event
-            .payload
-            .insert("scheduleId".to_string(), serde_json::json!(schedule.schedule_id));
-        event
-            .payload
-            .insert("status".to_string(), serde_json::json!(schedule.status.as_str()));
+        event.payload.insert(
+            "scheduleId".to_string(),
+            serde_json::json!(schedule.schedule_id),
+        );
+        event.payload.insert(
+            "status".to_string(),
+            serde_json::json!(schedule.status.as_str()),
+        );
         if let Some(attempt) = attempt {
             event.scope.schedule_attempt_id = attempt.attempt_id.clone();
-            event
-                .payload
-                .insert("scheduleAttemptId".to_string(), serde_json::json!(attempt.attempt_id));
+            event.payload.insert(
+                "scheduleAttemptId".to_string(),
+                serde_json::json!(attempt.attempt_id),
+            );
             event.payload.insert(
                 "dispatchStatus".to_string(),
                 serde_json::json!(attempt.dispatch_status.as_str()),
@@ -1328,9 +1365,10 @@ impl Scheduler {
             }
             if !attempt.workflow_id.is_empty() {
                 event.scope.workflow_id = attempt.workflow_id.clone();
-                event
-                    .payload
-                    .insert("workflowId".to_string(), serde_json::json!(attempt.workflow_id));
+                event.payload.insert(
+                    "workflowId".to_string(),
+                    serde_json::json!(attempt.workflow_id),
+                );
             }
         }
         for (key, value) in payload {
@@ -1370,7 +1408,9 @@ fn next_cron_due_after(
     after: DateTime<Utc>,
 ) -> Result<Option<DateTime<Utc>>, SchedulerError> {
     if expr.trim().is_empty() {
-        return Err(SchedulerError::Cron("cron expression is required".to_string()));
+        return Err(SchedulerError::Cron(
+            "cron expression is required".to_string(),
+        ));
     }
     let tz: Tz = timezone
         .trim()
@@ -1378,7 +1418,9 @@ fn next_cron_due_after(
         .map_err(|_| SchedulerError::Cron(format!("load timezone {:?}", timezone)))?;
     let fields: Vec<&str> = expr.split_whitespace().collect();
     if fields.len() != 5 {
-        return Err(SchedulerError::Cron("cron expression must have 5 fields".to_string()));
+        return Err(SchedulerError::Cron(
+            "cron expression must have 5 fields".to_string(),
+        ));
     }
     let minutes = parse_cron_field(fields[0], 0, 59)
         .map_err(|e| SchedulerError::Cron(format!("parse minute field: {e}")))?;
@@ -1394,7 +1436,10 @@ fn next_cron_due_after(
     // cursor = after.In(location).Add(time.Minute).Truncate(time.Minute)
     let after_local = after.with_timezone(&tz);
     let mut cursor = after_local + chrono::Duration::minutes(1);
-    cursor = cursor.with_second(0).and_then(|c| c.with_nanosecond(0)).unwrap_or(cursor);
+    cursor = cursor
+        .with_second(0)
+        .and_then(|c| c.with_nanosecond(0))
+        .unwrap_or(cursor);
     let Some(deadline) = cursor.checked_add_months(chrono::Months::new(12)) else {
         return Err(SchedulerError::Cron(
             "no matching cron time found within one year".to_string(),
@@ -1461,7 +1506,9 @@ fn parse_cron_field(field: &str, min: i64, max: i64) -> Result<BTreeSet<i64>, St
             }
             continue;
         }
-        let value: i64 = part.parse().map_err(|_| format!("invalid value {part:?}"))?;
+        let value: i64 = part
+            .parse()
+            .map_err(|_| format!("invalid value {part:?}"))?;
         if value < min || value > max {
             return Err(format!("value {value} out of bounds"));
         }
@@ -1490,7 +1537,9 @@ fn decode_target_record(record: &ScheduleTargetRecord) -> Result<Target, Schedul
     Ok(target)
 }
 
-fn decode_attempt_record(record: &ScheduleDispatchAttemptRecord) -> Result<DispatchAttempt, SchedulerError> {
+fn decode_attempt_record(
+    record: &ScheduleDispatchAttemptRecord,
+) -> Result<DispatchAttempt, SchedulerError> {
     let mut attempt: DispatchAttempt = if record.document.is_empty() {
         DispatchAttempt::default()
     } else {
@@ -1501,12 +1550,10 @@ fn decode_attempt_record(record: &ScheduleDispatchAttemptRecord) -> Result<Dispa
     attempt.attempt_id = record.attempt_id.clone();
     attempt.schedule_id = record.schedule_id.clone();
     attempt.due_at = record.due_at;
-    attempt.trigger_source = parse_enum(&record.trigger_source).map_err(|err| {
-        SchedulerError::DecodeScheduleAttempt(record.attempt_id.clone(), err)
-    })?;
-    attempt.dispatch_status = parse_enum(&record.dispatch_status).map_err(|err| {
-        SchedulerError::DecodeScheduleAttempt(record.attempt_id.clone(), err)
-    })?;
+    attempt.trigger_source = parse_enum(&record.trigger_source)
+        .map_err(|err| SchedulerError::DecodeScheduleAttempt(record.attempt_id.clone(), err))?;
+    attempt.dispatch_status = parse_enum(&record.dispatch_status)
+        .map_err(|err| SchedulerError::DecodeScheduleAttempt(record.attempt_id.clone(), err))?;
     attempt.failure_class = record.failure_class.clone();
     attempt.failure_reason = record.failure_reason.clone();
     attempt.retry_count = record.retry_count;
@@ -1515,9 +1562,8 @@ fn decode_attempt_record(record: &ScheduleDispatchAttemptRecord) -> Result<Dispa
     attempt.resolved_target_revision = record.resolved_target_revision;
     attempt.run_id = record.run_id.clone();
     attempt.workflow_id = record.workflow_id.clone();
-    attempt.downstream_status = parse_enum(&record.downstream_status).map_err(|err| {
-        SchedulerError::DecodeScheduleAttempt(record.attempt_id.clone(), err)
-    })?;
+    attempt.downstream_status = parse_enum(&record.downstream_status)
+        .map_err(|err| SchedulerError::DecodeScheduleAttempt(record.attempt_id.clone(), err))?;
     attempt.skipped_reason = record.skipped_reason.clone();
     attempt.missed_count = record.missed_count;
     attempt.created_at = record.created_at;
@@ -1526,7 +1572,8 @@ fn decode_attempt_record(record: &ScheduleDispatchAttemptRecord) -> Result<Dispa
 }
 
 fn parse_enum<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, String> {
-    serde_json::from_str(&format!("\"{value}\"")).map_err(|e| format!("invalid enum value {value}: {e}"))
+    serde_json::from_str(&format!("\"{value}\""))
+        .map_err(|e| format!("invalid enum value {value}: {e}"))
 }
 
 #[must_use]
@@ -1582,7 +1629,8 @@ fn next_retry_time(policy: &RetryPolicy, retry_count: i64) -> Option<DateTime<Ut
 #[must_use]
 fn has_active_attempt(items: &[DispatchAttempt]) -> bool {
     items.iter().any(|item| {
-        item.dispatch_status == DispatchStatus::Dispatched && is_active_downstream_status(item.downstream_status)
+        item.dispatch_status == DispatchStatus::Dispatched
+            && is_active_downstream_status(item.downstream_status)
     })
 }
 
@@ -1614,9 +1662,11 @@ fn map_workflow_status(status: kura_orchestration::WorkflowStatus) -> Downstream
 fn target_summary(target: &Target) -> String {
     match target.kind {
         TargetKind::Workflow => match &target.workflow {
-            Some(workflow) => {
-                first_non_empty(&[&workflow.workflow_goal, &workflow.run_goal, &workflow.entrypoint])
-            }
+            Some(workflow) => first_non_empty(&[
+                &workflow.workflow_goal,
+                &workflow.run_goal,
+                &workflow.entrypoint,
+            ]),
             None => target.kind.as_str().to_string(),
         },
         TargetKind::Run => match &target.run {
@@ -1660,10 +1710,16 @@ fn new_schedule_id() -> String {
 
 #[must_use]
 fn new_target_ref_id() -> String {
-    format!("sched_target_{}", &Uuid::new_v4().simple().to_string()[..16])
+    format!(
+        "sched_target_{}",
+        &Uuid::new_v4().simple().to_string()[..16]
+    )
 }
 
 #[must_use]
 fn new_attempt_id() -> String {
-    format!("sched_attempt_{}", &Uuid::new_v4().simple().to_string()[..16])
+    format!(
+        "sched_attempt_{}",
+        &Uuid::new_v4().simple().to_string()[..16]
+    )
 }

@@ -44,8 +44,15 @@ impl Provider for EchoProvider {
                 if request.cancel.is_cancelled() {
                     return Err(ProviderError::Cancelled);
                 }
-                let delta = if index > 0 { format!(" {part}") } else { part.to_string() };
-                emit(StreamChunk { delta, ..StreamChunk::default() })?;
+                let delta = if index > 0 {
+                    format!(" {part}")
+                } else {
+                    part.to_string()
+                };
+                emit(StreamChunk {
+                    delta,
+                    ..StreamChunk::default()
+                })?;
             }
             Ok(echo_response(&request.messages))
         })
@@ -55,6 +62,7 @@ impl Provider for EchoProvider {
 fn echo_response(messages: &[Message]) -> ProviderResponse {
     let output = compose_echo_output(messages);
     ProviderResponse {
+        tool_calls: Vec::new(),
         usage: Usage {
             input_tokens: approximate_tokens(&compose_echo_output(messages)),
             output_tokens: approximate_tokens(&output),
@@ -86,18 +94,24 @@ mod tests {
     use crate::provider::CancelToken;
 
     fn user_message(content: &str) -> Message {
-        Message { role: crate::types::MessageRole::User, content: content.into() }
+        Message::text(crate::types::MessageRole::User, content)
     }
 
     fn request(messages: Vec<Message>) -> ProviderRequest {
-        ProviderRequest { messages, ..ProviderRequest::default() }
+        ProviderRequest {
+            messages,
+            ..ProviderRequest::default()
+        }
     }
 
     #[tokio::test]
     async fn complete_echoes_trimmed_joined_content_with_word_usage() {
         let provider = EchoProvider::new();
         let response = provider
-            .complete(request(vec![user_message("  hello world  "), user_message("again")]))
+            .complete(request(vec![
+                user_message("  hello world  "),
+                user_message("again"),
+            ]))
             .await
             .unwrap();
         assert_eq!(response.output, "hello world\nagain");

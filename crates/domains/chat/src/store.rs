@@ -48,6 +48,14 @@ pub struct BindingResolutionParams {
 pub trait ChatStore: Send + Sync {
     // -- llm dispatch CRUD (ported in kura-store) -------------------------
     fn upsert_llm_dispatch(&self, dispatch: &Dispatch) -> Result<(), String>;
+    /// D11 (2026-09-19): binds a persisted dispatch row to its tenant so the
+    /// tenant-scoped list/get paths can see it. The dispatch row itself has
+    /// no tenant column in its upsert; without this binding every chat
+    /// dispatch stayed a NULL-tenant row, visible only to the single-user
+    /// assembly. Default no-op keeps store fakes unchanged.
+    fn bind_llm_dispatch_tenant(&self, _dispatch_id: &str, _tenant_id: &str) -> Result<(), String> {
+        Ok(())
+    }
     // -- event ledger (ported in kura-store) ------------------------------
     fn append_event(&self, event: &Event) -> Result<Event, String>;
     // -- setup wizard (not yet ported to kura-store) ----------------------
@@ -123,14 +131,34 @@ pub trait ChatStore: Send + Sync {
 /// checks through `kura_bindings::resolve_selection` (the Go precedence
 /// port), preserving the fail-closed semantics.
 impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
+    fn bind_llm_dispatch_tenant(&self, dispatch_id: &str, tenant_id: &str) -> Result<(), String> {
+        if tenant_id.trim().is_empty() {
+            return Ok(());
+        }
+        self.lock()
+            .map_err(|_| "chat store mutex poisoned".to_string())?
+            .bind_row_tenant(
+                "llm_dispatches",
+                "dispatch_id",
+                dispatch_id,
+                tenant_id.trim(),
+            )
+    }
+
     fn upsert_llm_dispatch(&self, dispatch: &Dispatch) -> Result<(), String> {
-        self.lock().map_err(|_| "lock sqlite store".to_string())?.upsert_llm_dispatch(dispatch)
+        self.lock()
+            .map_err(|_| "lock sqlite store".to_string())?
+            .upsert_llm_dispatch(dispatch)
     }
     fn append_event(&self, event: &Event) -> Result<Event, String> {
-        self.lock().map_err(|_| "lock sqlite store".to_string())?.append_event(event)
+        self.lock()
+            .map_err(|_| "lock sqlite store".to_string())?
+            .append_event(event)
     }
     fn list_setup_sessions(&self, tenant_id: &str) -> Result<Vec<SetupSession>, String> {
-        self.lock().map_err(|_| "lock sqlite store".to_string())?.list_setup_sessions(tenant_id)
+        self.lock()
+            .map_err(|_| "lock sqlite store".to_string())?
+            .list_setup_sessions(tenant_id)
     }
     fn active_agent_profile_selection(
         &self,
@@ -169,7 +197,10 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
         let mut profile_candidates: Vec<String> = Vec::new();
         let mut workspace_candidates: Vec<String> = vec![tenant_default_workspace_id.clone()];
         profile_candidates.push(params.tenant_default_profile_id.clone());
-        for rule in [channel_binding.as_ref(), account_binding.as_ref()].into_iter().flatten() {
+        for rule in [channel_binding.as_ref(), account_binding.as_ref()]
+            .into_iter()
+            .flatten()
+        {
             profile_candidates.push(rule.selected_profile_id.clone());
             workspace_candidates.push(rule.selected_workspace_id.clone());
         }
@@ -215,7 +246,13 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
             .map_err(|_| "lock sqlite store".to_string())?
             // The chat pipeline carries no scope-visibility limits (Go parity:
             // the service call passes none; limits ride the bindings routes).
-            .effective_capability_visibility(tenant_id, profile_id, workspace_id, capability_id, &[])
+            .effective_capability_visibility(
+                tenant_id,
+                profile_id,
+                workspace_id,
+                capability_id,
+                &[],
+            )
     }
     fn record_runtime_binding_evidence(
         &self,
@@ -283,7 +320,12 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
     ) -> Result<(), String> {
         self.lock()
             .map_err(|_| "lock sqlite store".to_string())?
-            .mark_handoff_source_references_consumed(tenant_id, link_id, response_turn_id, Some(now))
+            .mark_handoff_source_references_consumed(
+                tenant_id,
+                link_id,
+                response_turn_id,
+                Some(now),
+            )
     }
     fn save_continuity_preview(
         &self,

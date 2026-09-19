@@ -10,13 +10,16 @@ use chrono::Utc;
 use kura_evaluation::{
     AttemptFilter, CandidateFilter, CandidateKind, ComparisonFilter, ComparisonResult,
     ComparisonTerminalStatus, FixtureDomainClass, FixtureFilter, ReadinessStatus,
-    RegressionFixture, ReplayAttempt, ReplayAttemptStatus, ReplayCandidate, ReplayMode,
-    SourceKind, Store,
+    RegressionFixture, ReplayAttempt, ReplayAttemptStatus, ReplayCandidate, ReplayMode, SourceKind,
+    Store,
 };
 use kura_store::{EvaluationStoreHandle, SQLiteStore};
 
 fn temp_dir(name: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("kura_store_eval_trait_{name}_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "kura_store_eval_trait_{name}_{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     dir.to_string_lossy().to_string()
 }
@@ -130,17 +133,31 @@ fn evaluation_store_trait_replay_candidate_round_trip() {
     candidate.latest_attempt_id = "att_1".to_string();
     handle.upsert_replay_candidate(candidate).unwrap();
 
-    let got = handle.get_replay_candidate("test", "cand_1").unwrap().expect("candidate");
+    let got = handle
+        .get_replay_candidate("test", "cand_1")
+        .unwrap()
+        .expect("candidate");
     assert_eq!(got.candidate_id, "cand_1");
     assert_eq!(got.readiness_status, ReadinessStatus::FullyReplayable);
     assert_eq!(got.latest_attempt_id, "att_1");
     assert_eq!(handle.get_replay_candidate("prod", "cand_1").unwrap(), None);
 
-    let all = handle.list_replay_candidates(&CandidateFilter::default()).unwrap();
+    let all = handle
+        .list_replay_candidates(&CandidateFilter::default())
+        .unwrap();
     assert_eq!(all.len(), 1);
-    let source_filter = CandidateFilter { source_kind: SourceKind::Run, ..Default::default() };
-    assert_eq!(handle.list_replay_candidates(&source_filter).unwrap().len(), 1);
-    let miss = CandidateFilter { candidate_kind: CandidateKind::Fixture, ..Default::default() };
+    let source_filter = CandidateFilter {
+        source_kind: SourceKind::Run,
+        ..Default::default()
+    };
+    assert_eq!(
+        handle.list_replay_candidates(&source_filter).unwrap().len(),
+        1
+    );
+    let miss = CandidateFilter {
+        candidate_kind: CandidateKind::Fixture,
+        ..Default::default()
+    };
     assert!(handle.list_replay_candidates(&miss).unwrap().is_empty());
 }
 
@@ -150,22 +167,33 @@ fn evaluation_store_trait_replay_attempt_round_trip() {
     let store = SQLiteStore::new(&dir).unwrap();
     let handle = Arc::new(EvaluationStoreHandle::new(store));
 
-    handle.upsert_replay_candidate(make_candidate("cand_1", "test")).unwrap();
+    handle
+        .upsert_replay_candidate(make_candidate("cand_1", "test"))
+        .unwrap();
     let mut attempt = make_attempt("att_1", "cand_1", "test");
     handle.upsert_replay_attempt(attempt.clone()).unwrap();
     attempt.status = ReplayAttemptStatus::Running;
     handle.upsert_replay_attempt(attempt).unwrap();
 
-    let got = handle.get_replay_attempt("test", "att_1").unwrap().expect("attempt");
+    let got = handle
+        .get_replay_attempt("test", "att_1")
+        .unwrap()
+        .expect("attempt");
     assert_eq!(got.attempt_id, "att_1");
     assert_eq!(got.candidate_id, "cand_1");
     assert_eq!(got.status, ReplayAttemptStatus::Running);
     assert_eq!(got.runtime_summary, "ran cleanly");
     assert_eq!(handle.get_replay_attempt("prod", "att_1").unwrap(), None);
 
-    let by_candidate = AttemptFilter { candidate_id: "cand_1".to_string(), ..Default::default() };
+    let by_candidate = AttemptFilter {
+        candidate_id: "cand_1".to_string(),
+        ..Default::default()
+    };
     assert_eq!(handle.list_replay_attempts(&by_candidate).unwrap().len(), 1);
-    let by_status = AttemptFilter { status: ReplayAttemptStatus::Cancelled, ..Default::default() };
+    let by_status = AttemptFilter {
+        status: ReplayAttemptStatus::Cancelled,
+        ..Default::default()
+    };
     assert!(handle.list_replay_attempts(&by_status).unwrap().is_empty());
 }
 
@@ -175,23 +203,39 @@ fn evaluation_store_trait_comparison_and_fixture_round_trip() {
     let store = SQLiteStore::new(&dir).unwrap();
     let handle = Arc::new(EvaluationStoreHandle::new(store));
 
-    handle.upsert_replay_candidate(make_candidate("cand_1", "test")).unwrap();
-    handle.upsert_replay_attempt(make_attempt("att_1", "cand_1", "test")).unwrap();
+    handle
+        .upsert_replay_candidate(make_candidate("cand_1", "test"))
+        .unwrap();
+    handle
+        .upsert_replay_attempt(make_attempt("att_1", "cand_1", "test"))
+        .unwrap();
     let mut comparison = make_comparison("cmp_1", "att_1", "test");
     handle.upsert_comparison_result(comparison.clone()).unwrap();
     comparison.terminal_status = ComparisonTerminalStatus::Drifted;
     handle.upsert_comparison_result(comparison).unwrap();
 
-    let got = handle.get_comparison_result("test", "cmp_1").unwrap().expect("comparison");
+    let got = handle
+        .get_comparison_result("test", "cmp_1")
+        .unwrap()
+        .expect("comparison");
     assert_eq!(got.terminal_status, ComparisonTerminalStatus::Drifted);
-    let by_attempt = ComparisonFilter { attempt_id: "att_1".to_string(), ..Default::default() };
-    assert_eq!(handle.list_comparison_results(&by_attempt).unwrap().len(), 1);
+    let by_attempt = ComparisonFilter {
+        attempt_id: "att_1".to_string(),
+        ..Default::default()
+    };
+    assert_eq!(
+        handle.list_comparison_results(&by_attempt).unwrap().len(),
+        1
+    );
 
     let mut fixture = make_fixture("fix_1", "test");
     handle.upsert_regression_fixture(fixture.clone()).unwrap();
     fixture.manifest_path = "fixtures/fix_1_v2.json".to_string();
     handle.upsert_regression_fixture(fixture).unwrap();
-    let by_domain = FixtureFilter { domain_class: FixtureDomainClass::Integration, ..Default::default() };
+    let by_domain = FixtureFilter {
+        domain_class: FixtureDomainClass::Integration,
+        ..Default::default()
+    };
     let fixtures = handle.list_regression_fixtures(&by_domain).unwrap();
     assert_eq!(fixtures.len(), 1);
     assert_eq!(fixtures[0].manifest_path, "fixtures/fix_1_v2.json");

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use kura_identity::{LifecycleStatus, Role, TenantContext, permissions_for_role};
 use kura_setupwizard::{
-    catalog_targets, new_service, MemoryStore, ServiceDependencies, SetupState, SupportStatus,
-    SetupStyle, TARGET_OPENAI_COMPATIBLE,
+    MemoryStore, ServiceDependencies, SetupState, SetupStyle, SupportStatus,
+    TARGET_OPENAI_COMPATIBLE, catalog_targets, new_service,
 };
 
 fn admin() -> TenantContext {
@@ -40,7 +40,11 @@ fn catalog_lists_supported_targets_sorted() {
     let targets = catalog_targets("ten_1");
     assert_eq!(targets.len(), 6);
     assert!(targets.windows(2).all(|w| w[0].target_id <= w[1].target_id));
-    assert!(targets.iter().all(|t| t.support_status == SupportStatus::Supported));
+    assert!(
+        targets
+            .iter()
+            .all(|t| t.support_status == SupportStatus::Supported)
+    );
 }
 
 #[tokio::test]
@@ -72,7 +76,10 @@ async fn start_denies_viewer() {
         })
         .await
         .unwrap_err();
-    assert!(matches!(err, kura_setupwizard::SetupError::PermissionDenied));
+    assert!(matches!(
+        err,
+        kura_setupwizard::SetupError::PermissionDenied
+    ));
 }
 
 #[tokio::test]

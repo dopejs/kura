@@ -20,7 +20,10 @@ fn head_store() -> (kura_store::SQLiteStore, String) {
 fn r50_seeds_two_tenants_per_table() {
     let (store, _dir) = head_store();
     let fixture = seed_r50_telegram_channel_connector_rows(&store).unwrap();
-    assert_eq!(fixture.tenant_ids, vec!["ten_telegram_alpha", "ten_telegram_beta"]);
+    assert_eq!(
+        fixture.tenant_ids,
+        vec!["ten_telegram_alpha", "ten_telegram_beta"]
+    );
 
     let counts = count_r50_telegram_channel_connector_rows(&store).unwrap();
     for (table, expected) in &fixture.expected_row_count {
@@ -125,5 +128,8 @@ fn r50_allowment_smoke_update_rows_load_back() {
     assert_eq!(update.4, "accepted");
     let udoc: serde_json::Value = serde_json::from_str(&update.5).unwrap();
     assert_eq!(udoc["telegramChatId"], "chat_1");
-    assert_eq!(udoc["safeEvidence"]["identityRule"], "telegram_chat_message_id");
+    assert_eq!(
+        udoc["safeEvidence"]["identityRule"],
+        "telegram_chat_message_id"
+    );
 }

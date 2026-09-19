@@ -111,7 +111,11 @@ impl Dispatcher {
     }
 
     /// Validates the input, applies defaults, and returns a queued dispatch.
-    pub fn prepare(&self, input: CreateDispatchInput, stream: bool) -> Result<Dispatch, PrepareError> {
+    pub fn prepare(
+        &self,
+        input: CreateDispatchInput,
+        stream: bool,
+    ) -> Result<Dispatch, PrepareError> {
         let inner = self.inner.read();
 
         let mut provider_name = input.provider.trim().to_string();
@@ -130,8 +134,14 @@ impl Dispatcher {
             return Err(PrepareError::ModelRequired);
         }
 
+        // A message may be content-free only when it carries tool calls (an
+        // assistant turn that asked for work) — every other empty message is
+        // still a caller bug.
         if input.messages.is_empty()
-            || input.messages.iter().any(|message| message.content.trim().is_empty())
+            || input
+                .messages
+                .iter()
+                .any(|message| message.content.trim().is_empty() && message.tool_calls.is_empty())
         {
             return Err(PrepareError::MessagesRequired);
         }
@@ -156,9 +166,11 @@ impl Dispatcher {
             provider: provider_name,
             model: model_name,
             messages: input.messages,
+            tools: input.tools,
             stream,
             status: DispatchStatus::Queued,
             output: String::new(),
+            tool_calls: Vec::new(),
             finish_reason: String::new(),
             usage: Usage::default(),
             error_code: String::new(),
@@ -228,7 +240,40 @@ impl Dispatcher {
             .ok_or_else(|| PrepareError::ProviderNotFound(name.to_string()))
     }
 
+    /// Runs the attempt loop and records the dispatch's latency and outcome
+    /// (Stage 10.3: `kura_llm_dispatch_duration_seconds{provider,outcome}`).
     async fn execute(
+        &self,
+        dispatch: Dispatch,
+        provider: Arc<dyn Provider>,
+        emit: Option<StreamEmitter<'_>>,
+        cancel: &CancelToken,
+    ) -> Result<Dispatch, FailedDispatch> {
+        let provider_name = dispatch.provider.clone();
+        let clock = std::time::Instant::now();
+        let result = self
+            .execute_attempts(dispatch, provider, emit, cancel)
+            .await;
+        let outcome = match &result {
+            Ok(_) => "completed",
+            Err(failed) => match failed.dispatch.status {
+                DispatchStatus::Cancelled => "cancelled",
+                DispatchStatus::PartialFailed => "partial_failed",
+                _ => "failed",
+            },
+        };
+        let labels = [("provider", provider_name.as_str()), ("outcome", outcome)];
+        let metrics = kura_telemetry::metrics::registry();
+        metrics.observe(
+            kura_telemetry::metrics::LLM_DISPATCH_DURATION_SECONDS,
+            &labels,
+            clock.elapsed().as_secs_f64(),
+        );
+        metrics.inc(kura_telemetry::metrics::LLM_DISPATCHES_TOTAL, &labels);
+        result
+    }
+
+    async fn execute_attempts(
         &self,
         mut dispatch: Dispatch,
         provider: Arc<dyn Provider>,
@@ -257,6 +302,7 @@ impl Dispatcher {
                 provider: dispatch.provider.clone(),
                 model: dispatch.model.clone(),
                 messages: dispatch.messages.clone(),
+                tools: dispatch.tools.clone(),
                 attempt,
                 timeout_ms: dispatch.timeout_ms,
                 cancel: cancel.clone(),
@@ -266,30 +312,30 @@ impl Dispatcher {
             // Text streamed so far this attempt; backfilled into each chunk's
             // `output` and used as the fallback output on failure.
             let mut aggregate = String::new();
-            let result: Result<ProviderResponse, ProviderError> = if let Some(emit) = emit.as_deref_mut()
-            {
-                let mut forwarding = |mut chunk: StreamChunk| {
-                    aggregate.push_str(&chunk.delta);
-                    chunk.output = aggregate.clone();
-                    emit(chunk)
-                };
-                tokio::select! {
-                    // Streaming attempts carry no per-attempt deadline, like Go.
-                    _ = cancel.wait() => Err(ProviderError::Cancelled),
-                    outcome = provider.stream(request, &mut forwarding) => outcome,
-                }
-            } else {
-                let timeout = Duration::from_millis(dispatch.timeout_ms.max(0) as u64);
-                tokio::select! {
-                    _ = cancel.wait() => Err(ProviderError::Cancelled),
-                    outcome = tokio::time::timeout(timeout, provider.complete(request)) => {
-                        match outcome {
-                            Ok(result) => result,
-                            Err(_) => Err(ProviderError::Timeout),
+            let result: Result<ProviderResponse, ProviderError> =
+                if let Some(emit) = emit.as_deref_mut() {
+                    let mut forwarding = |mut chunk: StreamChunk| {
+                        aggregate.push_str(&chunk.delta);
+                        chunk.output = aggregate.clone();
+                        emit(chunk)
+                    };
+                    tokio::select! {
+                        // Streaming attempts carry no per-attempt deadline, like Go.
+                        _ = cancel.wait() => Err(ProviderError::Cancelled),
+                        outcome = provider.stream(request, &mut forwarding) => outcome,
+                    }
+                } else {
+                    let timeout = Duration::from_millis(dispatch.timeout_ms.max(0) as u64);
+                    tokio::select! {
+                        _ = cancel.wait() => Err(ProviderError::Cancelled),
+                        outcome = tokio::time::timeout(timeout, provider.complete(request)) => {
+                            match outcome {
+                                Ok(result) => result,
+                                Err(_) => Err(ProviderError::Timeout),
+                            }
                         }
                     }
-                }
-            };
+                };
 
             match result {
                 Ok(mut response) => {
@@ -299,6 +345,7 @@ impl Dispatcher {
                     let completed_at = Utc::now();
                     dispatch.status = DispatchStatus::Completed;
                     dispatch.output = response.output;
+                    dispatch.tool_calls = response.tool_calls;
                     dispatch.partial = false;
                     dispatch.finish_reason = response.finish_reason;
                     dispatch.usage = normalize_usage(response.usage);
@@ -327,7 +374,10 @@ impl Dispatcher {
                     dispatch.usage = Usage::default();
                     dispatch.updated_at = completed_at;
                     dispatch.completed_at = Some(completed_at);
-                    return Err(FailedDispatch { dispatch, error: err });
+                    return Err(FailedDispatch {
+                        dispatch,
+                        error: err,
+                    });
                 }
             }
         }
@@ -363,10 +413,18 @@ fn classify_dispatch_error(parent_cancelled: bool, err: &ProviderError) -> Class
             message: "dispatch timed out".into(),
             retryable: true,
         },
-        ProviderError::Provider { code, message, retryable } => ClassifiedError {
+        ProviderError::Provider {
+            code,
+            message,
+            retryable,
+        } => ClassifiedError {
             status: DispatchStatus::Failed,
             code: code.clone(),
-            message: if message.is_empty() { code.clone() } else { message.clone() },
+            message: if message.is_empty() {
+                code.clone()
+            } else {
+                message.clone()
+            },
             retryable: *retryable,
         },
         ProviderError::Other(message) => ClassifiedError {

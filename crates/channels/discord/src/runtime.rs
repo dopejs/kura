@@ -2,30 +2,26 @@
 //! supervisor, the kura-im message loop, the SQLite store, and the event bus,
 //! and drives the inbound/route/diagnostic/conformance persistence.
 
-use std::collections::HashMap;
 use parking_lot::Mutex;
-use std::sync::mpsc::{self, Receiver};
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
 
 use chrono::{DateTime, Utc};
 use kura_chat::CancellationToken;
 use kura_connectors::{
-    Connector, DiagnosticReasonCode, RegisterInput, ReportFailureInput, ReportHealthInput,
-    Status, Supervisor,
+    Connector, DiagnosticReasonCode, RegisterInput, ReportFailureInput, ReportHealthInput, Status,
+    Supervisor,
 };
 use kura_events::{Bus, Event, Resource, Scope};
 use kura_im::MessageLoop;
 use kura_imtypes::InboundMessage;
 use kura_store::SQLiteStore;
-use kura_store::discord_setup::{
-    DiscordDestinationValidationRecord, DiscordHostedSetupRecord,
-};
+use kura_store::discord_setup::{DiscordDestinationValidationRecord, DiscordHostedSetupRecord};
 use kura_telemetry::Logger;
 use serde_json::{Map, Value};
 
-use crate::config::{
-    Config, credential_state_for_config, destination_evidence_for_config,
-};
+use crate::config::{Config, credential_state_for_config, destination_evidence_for_config};
 use crate::conformance::conformance_profile_for_setup;
 use crate::destinations::{DestinationValidation, DestinationValidationState};
 use crate::diagnostics::{
@@ -113,7 +109,6 @@ pub fn new_runtime(
     }))
 }
 
-
 impl Runtime {
     /// Go `Start(ctx)`: registers the connector, wires the lifecycle
     /// observer, starts the transport, persists the hosted-setup projection
@@ -167,7 +162,9 @@ impl Runtime {
             let _ = self.persist_hosted_setup_projection();
             if let Ok(failed) = self.inner.supervisor.report_failure(
                 &self.inner.cfg.connector_id,
-                ReportFailureInput { reason: err.to_string() },
+                ReportFailureInput {
+                    reason: err.to_string(),
+                },
             ) {
                 let _ = self.persist_connector(&failed);
                 let mut payload = Map::new();
@@ -181,7 +178,10 @@ impl Runtime {
                     Value::String(self.inner.cfg.delivery_mode.clone()),
                 );
                 payload.insert("error".to_string(), Value::String(err.to_string()));
-                payload.insert("errorClass".to_string(), Value::String(classify_discord_error(&err)));
+                payload.insert(
+                    "errorClass".to_string(),
+                    Value::String(classify_discord_error(&err)),
+                );
                 let _ = self.publish_event("connector.failed", payload);
             }
             return Err(err);
@@ -192,12 +192,20 @@ impl Runtime {
         let connector = self
             .inner
             .supervisor
-            .report_health(&self.inner.cfg.connector_id, ReportHealthInput { status: Status::Healthy })
+            .report_health(
+                &self.inner.cfg.connector_id,
+                ReportHealthInput {
+                    status: Status::Healthy,
+                },
+            )
             .map_err(|err| DiscordError::Other(err.to_string()))?;
         self.persist_connector(&connector)?;
         let mut payload = Map::new();
         payload.insert("kind".to_string(), Value::String(connector.kind.clone()));
-        payload.insert("status".to_string(), Value::String(connector.status.as_str().to_string()));
+        payload.insert(
+            "status".to_string(),
+            Value::String(connector.status.as_str().to_string()),
+        );
         payload.insert(
             "deliveryMode".to_string(),
             Value::String(self.inner.cfg.delivery_mode.clone()),
@@ -241,7 +249,12 @@ impl Runtime {
     pub fn run_inbound(&self) {
         loop {
             // The guard is a temporary: it is dropped before handle_event runs.
-            let event = self.inner.inbound_rx.lock().as_ref().and_then(|rx| rx.recv().ok());
+            let event = self
+                .inner
+                .inbound_rx
+                .lock()
+                .as_ref()
+                .and_then(|rx| rx.recv().ok());
             match event {
                 Some(event) => self.handle_event(event),
                 None => return,
@@ -265,7 +278,9 @@ impl Runtime {
         if event.degraded {
             if let Ok(degraded) = self.inner.supervisor.report_health(
                 &self.inner.cfg.connector_id,
-                ReportHealthInput { status: Status::Degraded },
+                ReportHealthInput {
+                    status: Status::Degraded,
+                },
             ) {
                 let _ = self.persist_connector(&degraded);
             }
@@ -304,7 +319,9 @@ impl Runtime {
         }
         if let Ok(connector) = self.inner.supervisor.report_health(
             &self.inner.cfg.connector_id,
-            ReportHealthInput { status: Status::Healthy },
+            ReportHealthInput {
+                status: Status::Healthy,
+            },
         ) {
             let _ = self.persist_connector(&connector);
         }
@@ -327,11 +344,12 @@ impl Runtime {
             ..Connector::default()
         };
         let cancel = CancellationToken::new();
-        match self
-            .inner
-            .message_loop
-            .process_single_turn(&connector, &inbound, self.inner.transport.as_ref(), &cancel)
-        {
+        match self.inner.message_loop.process_single_turn(
+            &connector,
+            &inbound,
+            self.inner.transport.as_ref(),
+            &cancel,
+        ) {
             Err(err) => {
                 if let Some(logger) = &self.inner.logger {
                     logger.error(&format!(
@@ -343,7 +361,10 @@ impl Runtime {
                     &inbound,
                     DiagnosticReasonCode::ReplyFailed,
                     HashMap::from([
-                        ("errorClass".to_string(), classify_discord_error_message(&err)),
+                        (
+                            "errorClass".to_string(),
+                            classify_discord_error_message(&err),
+                        ),
                         ("stage".to_string(), "message_loop".to_string()),
                     ]),
                 );
@@ -369,11 +390,20 @@ impl Runtime {
     /// Go `normalizeInboundIdentity`: binds tenant/connector/identity fields,
     /// returning the blocking reason when durable identity is missing.
     fn normalize_inbound_identity(&self, inbound: &mut InboundMessage) -> String {
-        inbound.tenant_id = first_non_empty(&[inbound.tenant_id.as_str(), self.runtime_tenant_id().as_str()]);
-        inbound.connector_id = first_non_empty(&[inbound.connector_id.as_str(), self.inner.cfg.connector_id.as_str()]);
+        inbound.tenant_id = first_non_empty(&[
+            inbound.tenant_id.as_str(),
+            self.runtime_tenant_id().as_str(),
+        ]);
+        inbound.connector_id = first_non_empty(&[
+            inbound.connector_id.as_str(),
+            self.inner.cfg.connector_id.as_str(),
+        ]);
         inbound.connector_kind = first_non_empty(&[inbound.connector_kind.as_str(), "discord"]);
         inbound.connector_account_id = inbound_connector_account_id(inbound);
-        inbound.account_id = first_non_empty(&[inbound.account_id.as_str(), inbound.connector_account_id.as_str()]);
+        inbound.account_id = first_non_empty(&[
+            inbound.account_id.as_str(),
+            inbound.connector_account_id.as_str(),
+        ]);
         inbound.channel_or_conversation_id = inbound_channel_or_conversation_id(inbound);
         inbound.provider_message_id = inbound_provider_message_id(inbound);
         if inbound.equivalent_rule_id.is_empty() {
@@ -393,14 +423,20 @@ impl Runtime {
 
     fn publish_route_outcome(&self, inbound: &InboundMessage, outcome: &str, reason: &str) {
         let mut payload = Map::new();
-        payload.insert("tenantId".to_string(), Value::String(inbound.tenant_id.clone()));
+        payload.insert(
+            "tenantId".to_string(),
+            Value::String(inbound.tenant_id.clone()),
+        );
         payload.insert(
             "connectorId".to_string(),
             Value::String(self.inner.cfg.connector_id.clone()),
         );
         payload.insert("outcome".to_string(), Value::String(outcome.to_string()));
         payload.insert("reasonCode".to_string(), Value::String(reason.to_string()));
-        payload.insert("surface".to_string(), Value::String(discord_route_surface(inbound).to_string()));
+        payload.insert(
+            "surface".to_string(),
+            Value::String(discord_route_surface(inbound).to_string()),
+        );
         payload.insert(
             "connectorAccountId".to_string(),
             Value::String(inbound_connector_account_id(inbound)),
@@ -413,8 +449,14 @@ impl Runtime {
             "providerMessageId".to_string(),
             Value::String(inbound_provider_message_id(inbound)),
         );
-        payload.insert("equivalentRuleId".to_string(), Value::String(inbound.equivalent_rule_id.clone()));
-        payload.insert("redactionStatus".to_string(), Value::String("redacted".to_string()));
+        payload.insert(
+            "equivalentRuleId".to_string(),
+            Value::String(inbound.equivalent_rule_id.clone()),
+        );
+        payload.insert(
+            "redactionStatus".to_string(),
+            Value::String("redacted".to_string()),
+        );
         let _ = self.publish_event("connector.route_outcome_recorded", payload);
     }
 
@@ -423,10 +465,13 @@ impl Runtime {
         if inbound.direct {
             return cfg.respond_in_dm;
         }
-        if !cfg.allowed_guild_ids.is_empty() && !contains(&cfg.allowed_guild_ids, &inbound.guild_id) {
+        if !cfg.allowed_guild_ids.is_empty() && !contains(&cfg.allowed_guild_ids, &inbound.guild_id)
+        {
             return false;
         }
-        if !cfg.allowed_channel_ids.is_empty() && !contains(&cfg.allowed_channel_ids, &inbound.channel_id) {
+        if !cfg.allowed_channel_ids.is_empty()
+            && !contains(&cfg.allowed_channel_ids, &inbound.channel_id)
+        {
             return false;
         }
         if cfg.require_mention && !inbound.mentioned {
@@ -444,7 +489,11 @@ impl Runtime {
         Ok(())
     }
 
-    fn publish_event(&self, name: &str, payload: Map<String, Value>) -> Result<Event, crate::DiscordError> {
+    fn publish_event(
+        &self,
+        name: &str,
+        payload: Map<String, Value>,
+    ) -> Result<Event, crate::DiscordError> {
         let Some(bus) = &self.inner.event_bus else {
             return Ok(Event::default());
         };
@@ -463,7 +512,9 @@ impl Runtime {
             ..Event::default()
         };
         if let Some(store) = &self.inner.store {
-            event = store.append_event(&event).map_err(|err| crate::DiscordError::Other(err))?;
+            event = store
+                .append_event(&event)
+                .map_err(|err| crate::DiscordError::Other(err))?;
         }
         Ok(bus.publish(event))
     }
@@ -486,7 +537,10 @@ impl Runtime {
             return Ok(());
         };
         let state = build_diagnostic_state(
-            &first_non_empty(&[inbound.tenant_id.as_str(), self.runtime_tenant_id().as_str()]),
+            &first_non_empty(&[
+                inbound.tenant_id.as_str(),
+                self.runtime_tenant_id().as_str(),
+            ]),
             &self.inner.cfg.connector_id,
             &inbound_connector_account_id(inbound),
             reason,
@@ -558,8 +612,14 @@ impl Runtime {
         self.persist_conformance_evidence(&setup, now)?;
 
         let mut payload = Map::new();
-        payload.insert("tenantId".to_string(), Value::String(setup.tenant_id.clone()));
-        payload.insert("connectorId".to_string(), Value::String(setup.connector_id.clone()));
+        payload.insert(
+            "tenantId".to_string(),
+            Value::String(setup.tenant_id.clone()),
+        );
+        payload.insert(
+            "connectorId".to_string(),
+            Value::String(setup.connector_id.clone()),
+        );
         payload.insert(
             "readinessState".to_string(),
             Value::String(setup.readiness_state.as_str().to_string()),
@@ -569,12 +629,18 @@ impl Runtime {
             "credentialState".to_string(),
             Value::String(setup.credential_state.as_str().to_string()),
         );
-        payload.insert("reasonCode".to_string(), Value::String(setup.reason_code.clone()));
+        payload.insert(
+            "reasonCode".to_string(),
+            Value::String(setup.reason_code.clone()),
+        );
         payload.insert(
             "redactionStatus".to_string(),
             Value::String(setup.redaction_status.as_str().to_string()),
         );
-        payload.insert("validatedAt".to_string(), Value::String(setup.validated_at.to_rfc3339()));
+        payload.insert(
+            "validatedAt".to_string(),
+            Value::String(setup.validated_at.to_rfc3339()),
+        );
 
         let event = Event {
             category: "connector".to_string(),
@@ -590,7 +656,9 @@ impl Runtime {
             payload,
             ..Event::default()
         };
-        let persisted = store.append_event(&event).map_err(|err| crate::DiscordError::Other(err))?;
+        let persisted = store
+            .append_event(&event)
+            .map_err(|err| crate::DiscordError::Other(err))?;
         if let Some(bus) = &self.inner.event_bus {
             bus.publish(persisted);
         }
@@ -613,7 +681,9 @@ impl Runtime {
             connector_id: self.inner.cfg.connector_id.clone(),
             core_invariant_results: profile.core_invariant_results.clone(),
             provider_surface_results: profile.provider_surface_results.clone(),
-            equivalent_durable_identity_rule_id: profile.equivalent_durable_identity_rule_id.clone(),
+            equivalent_durable_identity_rule_id: profile
+                .equivalent_durable_identity_rule_id
+                .clone(),
             equivalent_durable_identity_rule: profile.equivalent_durable_identity_rule.clone(),
             redaction_status: kura_connectors::RedactionStatus::Redacted,
             now,
@@ -698,9 +768,13 @@ fn discord_route_outcome(cfg: &Config, inbound: &InboundMessage) -> &'static str
 fn discord_route_reason(cfg: &Config, inbound: &InboundMessage) -> String {
     if inbound.direct && !cfg.respond_in_dm {
         "direct_message_disabled".to_string()
-    } else if !cfg.allowed_guild_ids.is_empty() && !contains(&cfg.allowed_guild_ids, &inbound.guild_id) {
+    } else if !cfg.allowed_guild_ids.is_empty()
+        && !contains(&cfg.allowed_guild_ids, &inbound.guild_id)
+    {
         "blocked_guild".to_string()
-    } else if !cfg.allowed_channel_ids.is_empty() && !contains(&cfg.allowed_channel_ids, &inbound.channel_id) {
+    } else if !cfg.allowed_channel_ids.is_empty()
+        && !contains(&cfg.allowed_channel_ids, &inbound.channel_id)
+    {
         "blocked_channel".to_string()
     } else if !inbound.direct && cfg.require_mention && !inbound.mentioned {
         "mention_required".to_string()
@@ -724,7 +798,10 @@ fn discord_route_surface(inbound: &InboundMessage) -> &'static str {
 /// Go `inboundConnectorAccountID`.
 #[must_use]
 fn inbound_connector_account_id(inbound: &InboundMessage) -> String {
-    first_non_empty(&[inbound.connector_account_id.as_str(), inbound.account_id.as_str()])
+    first_non_empty(&[
+        inbound.connector_account_id.as_str(),
+        inbound.account_id.as_str(),
+    ])
 }
 
 /// Go `inboundChannelOrConversationID`.
@@ -740,7 +817,10 @@ fn inbound_channel_or_conversation_id(inbound: &InboundMessage) -> String {
 /// Go `inboundProviderMessageID`.
 #[must_use]
 fn inbound_provider_message_id(inbound: &InboundMessage) -> String {
-    first_non_empty(&[inbound.provider_message_id.as_str(), inbound.external_message_id.as_str()])
+    first_non_empty(&[
+        inbound.provider_message_id.as_str(),
+        inbound.external_message_id.as_str(),
+    ])
 }
 
 /// Go `firstNonEmpty`.

@@ -24,7 +24,7 @@ use kura_events as events;
 use kura_memory as memory;
 
 use crate::error::ApiError;
-use crate::middleware::{environment_scope_from_config, TenantContext};
+use crate::middleware::{TenantContext, environment_scope_from_config};
 use crate::state::AppState;
 
 use super::{decode_json_or_default, decode_json_required};
@@ -39,9 +39,14 @@ pub fn router() -> Router<AppState> {
         .route("/v1/memory/assets/{asset_id}/approve", post(approve_asset))
         .route("/v1/memory/assets/{asset_id}/reject", post(reject_asset))
         .route("/v1/memory/assets/{asset_id}/revoke", post(revoke_asset))
-        .route("/v1/memory/assets/{asset_id}/visibility", post(set_visibility))
+        .route(
+            "/v1/memory/assets/{asset_id}/visibility",
+            post(set_visibility),
+        )
         .route("/v1/memory/capture", post(capture))
         .route("/v1/memory/consolidate", post(consolidate))
+        .route("/v1/memory/overview", get(overview))
+        .route("/v1/memory/indexes/rebuild", post(rebuild_indexes))
 }
 
 #[derive(Debug, Serialize)]
@@ -139,8 +144,14 @@ fn publish_memory_event(
     payload.insert("tenantId".to_string(), serde_json::json!(asset.tenant_id));
     payload.insert("kind".to_string(), serde_json::json!(asset.kind.as_str()));
     payload.insert("layer".to_string(), serde_json::json!(asset.layer.as_str()));
-    payload.insert("status".to_string(), serde_json::json!(asset.status.as_str()));
-    payload.insert("visibility".to_string(), serde_json::json!(asset.visibility.as_str()));
+    payload.insert(
+        "status".to_string(),
+        serde_json::json!(asset.status.as_str()),
+    );
+    payload.insert(
+        "visibility".to_string(),
+        serde_json::json!(asset.visibility.as_str()),
+    );
     payload.insert("version".to_string(), serde_json::json!(asset.version));
     if !asset.supersedes_asset_id.is_empty() {
         payload.insert(
@@ -171,13 +182,22 @@ fn publish_memory_event(
 /// Writes the white-box Markdown projection for ready L2/L3 assets.
 fn project_markdown(state: &AppState, asset: &memory::MemoryAsset) {
     if asset.status != memory::AssetStatus::Ready
-        || !matches!(asset.layer, memory::MemoryLayer::L2 | memory::MemoryLayer::L3)
+        || !matches!(
+            asset.layer,
+            memory::MemoryLayer::L2 | memory::MemoryLayer::L3
+        )
     {
         return;
     }
     let Ok(manager) = manager(state) else { return };
-    let tenant_dir = if asset.tenant_id.is_empty() { "local" } else { &asset.tenant_id };
-    let dir = PathBuf::from(&state.config.data_dir).join("memory").join(tenant_dir);
+    let tenant_dir = if asset.tenant_id.is_empty() {
+        "local"
+    } else {
+        &asset.tenant_id
+    };
+    let dir = PathBuf::from(&state.config.data_dir)
+        .join("memory")
+        .join(tenant_dir);
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
@@ -193,11 +213,47 @@ fn finish_mutation(
     asset: &memory::MemoryAsset,
 ) -> Result<(), ApiError> {
     persist_asset(state, asset)?;
+    clear_derived_indexes_if_unrecallable(state, asset);
     publish_memory_event(state, event_name, asset)?;
     project_markdown(state, asset);
     Ok(())
 }
 
+/// Drops derived-index rows for an asset that is no longer recallable.
+///
+/// `memory-system.md` requires that "forget or redact operations also clear
+/// derived indexes and caches". That invariant used to hold for free: the
+/// vector ranker recomputed over Ready assets every turn, so a revoked asset
+/// simply stopped being a candidate. Persisting embeddings removed the free
+/// guarantee, so it is enforced here — at the single choke point every asset
+/// mutation already passes through, rather than at each call site.
+///
+/// Superseded assets are included: the superseding version is a different
+/// asset id with its own vector, and the old one must stop being recallable.
+///
+/// A failure is logged, not propagated: the state transition itself already
+/// committed, and a stale derived row cannot resurrect a non-Ready asset into
+/// context (retrieval selects on status first). Losing the write would be a
+/// leak of compute, not of memory.
+fn clear_derived_indexes_if_unrecallable(state: &AppState, asset: &memory::MemoryAsset) {
+    if matches!(
+        asset.status,
+        memory::AssetStatus::Ready | memory::AssetStatus::Pending
+    ) {
+        return;
+    }
+    if let Err(err) = state
+        .store
+        .lock()
+        .delete_memory_asset_embeddings(&asset.asset_id)
+    {
+        eprintln!(
+            "memory: failed to clear derived index for {} ({}): {err}",
+            asset.asset_id,
+            asset.status.as_str()
+        );
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Reusable write-path helpers (spec 058 phase 2): the capture hooks in the
@@ -281,9 +337,18 @@ pub fn execute_consolidation(
     let mut payload = serde_json::Map::new();
     payload.insert("tenantId".to_string(), serde_json::json!(run.tenant_id));
     payload.insert("trigger".to_string(), serde_json::json!(run.trigger));
-    payload.insert("extractedL1".to_string(), serde_json::json!(run.extracted_l1));
-    payload.insert("aggregatedL2".to_string(), serde_json::json!(run.aggregated_l2));
-    payload.insert("distilledL3".to_string(), serde_json::json!(run.distilled_l3));
+    payload.insert(
+        "extractedL1".to_string(),
+        serde_json::json!(run.extracted_l1),
+    );
+    payload.insert(
+        "aggregatedL2".to_string(),
+        serde_json::json!(run.aggregated_l2),
+    );
+    payload.insert(
+        "distilledL3".to_string(),
+        serde_json::json!(run.distilled_l3),
+    );
     if !run.error.is_empty() {
         payload.insert("error".to_string(), serde_json::json!(run.error));
     }
@@ -311,7 +376,9 @@ pub fn execute_consolidation(
 /// with bookkeeping, plus the retention sweep. Errors log; the tick never
 /// aborts.
 pub fn memory_tick(state: &AppState) {
-    let Some(manager) = state.memory.as_deref() else { return };
+    let Some(manager) = state.memory.as_deref() else {
+        return;
+    };
     let now = chrono::Utc::now();
     for tenant in manager.tenants_with_bookkeeping() {
         if manager.idle_due(&tenant, now) {
@@ -345,7 +412,9 @@ async fn list_assets(
     } else {
         serde_json::from_value(serde_json::json!(query.status.trim())).ok()
     };
-    Ok(Json(AssetListResponse { items: manager.list(&tenant_id, layer, status) }))
+    Ok(Json(AssetListResponse {
+        items: manager.list(&tenant_id, layer, status),
+    }))
 }
 
 /// POST /v1/memory/assets — a policy-gated write; 201 with the stored asset
@@ -365,7 +434,10 @@ async fn create_asset(
             finish_mutation(&state, "memory.asset_superseded", &previous)?;
         }
     }
-    Ok((StatusCode::CREATED, Json(AssetDecisionResponse { asset, decision })))
+    Ok((
+        StatusCode::CREATED,
+        Json(AssetDecisionResponse { asset, decision }),
+    ))
 }
 
 /// GET /v1/memory/assets/{asset_id}.
@@ -387,7 +459,10 @@ async fn drilldown(
     Path(asset_id): Path<String>,
 ) -> Result<Json<memory::DrilldownNode>, ApiError> {
     let manager = manager(&state)?;
-    manager.drilldown(asset_id.trim()).map(Json).map_err(map_memory_error)
+    manager
+        .drilldown(asset_id.trim())
+        .map(Json)
+        .map_err(map_memory_error)
 }
 
 /// POST /v1/memory/assets/{asset_id}/approve.
@@ -500,21 +575,185 @@ async fn consolidate(
 ) -> Result<Json<memory::ConsolidationRun>, ApiError> {
     let request: ConsolidateRequest = decode_json_or_default(&body)?;
     let tenant_id = context_tenant(&tenant, &request.tenant_id);
-    let trigger = if request.trigger.trim().is_empty() { "manual" } else { request.trigger.trim() };
-    let window = if request.window.is_empty() { None } else { Some(request.window) };
+    let trigger = if request.trigger.trim().is_empty() {
+        "manual"
+    } else {
+        request.trigger.trim()
+    };
+    let window = if request.window.is_empty() {
+        None
+    } else {
+        Some(request.window)
+    };
     let run = execute_consolidation(&state, &tenant_id, trigger, window)?;
     Ok(Json(run))
 }
 
+// ---------------------------------------------------------------------------
+// What is remembered (Stage 2.1) and index rebuild (Stage 2.2)
+// ---------------------------------------------------------------------------
+
+/// One `(layer, status)` bucket of the tenant's memory plane.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryLayerCount {
+    pub layer: String,
+    pub status: String,
+    pub count: i64,
+}
+
+/// A compact record of something the agent recently started or stopped
+/// remembering. Content is deliberately absent — this is an inventory, and the
+/// asset routes already serve content with their visibility rules applied.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryChangeEntry {
+    pub asset_id: String,
+    pub layer: String,
+    pub status: String,
+    pub title: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryOverviewResponse {
+    pub tenant_id: String,
+    pub counts: Vec<MemoryLayerCount>,
+    /// Vectors held in the derived retrieval index for this tenant's assets.
+    /// A count far below the Ready total means the index is not being written
+    /// — visible here as a number instead of as unexplained latency.
+    pub derived_embeddings: i64,
+    pub recently_remembered: Vec<MemoryChangeEntry>,
+    pub recently_forgotten: Vec<MemoryChangeEntry>,
+}
+
+const OVERVIEW_RECENT_LIMIT: usize = 20;
+
+fn change_entry(asset: &memory::MemoryAsset) -> MemoryChangeEntry {
+    MemoryChangeEntry {
+        asset_id: asset.asset_id.clone(),
+        layer: asset.layer.as_str().to_string(),
+        status: asset.status.as_str().to_string(),
+        title: asset.title.clone(),
+        updated_at: asset.updated_at,
+    }
+}
+
+/// GET /v1/memory/overview — the tenant-level answer to "what does it
+/// remember, and what did it forget".
+///
+/// The memory plane could already be read asset by asset, which answers the
+/// question only for someone who already knows what to look for. This is the
+/// inventory: counts per layer and status, the size of the derived index, and
+/// the two recency lists that matter — what was just written, and what was
+/// just revoked or expired.
+async fn overview(
+    State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<MemoryOverviewResponse>, ApiError> {
+    let manager = manager(&state)?;
+    let tenant_id = context_tenant(&tenant, params.get("tenantId").map_or("", String::as_str));
+
+    let counts = state
+        .store_pool
+        .read()
+        .count_memory_assets_by_layer_status(&tenant_id)
+        .map_err(ApiError::from_store)?
+        .into_iter()
+        .map(|(layer, status, count)| MemoryLayerCount {
+            layer,
+            status,
+            count,
+        })
+        .collect();
+    let derived_embeddings = state
+        .store_pool
+        .read()
+        .count_memory_asset_embeddings_for_tenant(&tenant_id)
+        .map_err(ApiError::from_store)?;
+
+    let mut assets = manager.list(&tenant_id, None, None);
+    assets.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+    let recently_remembered = assets
+        .iter()
+        .filter(|a| a.status == memory::AssetStatus::Ready)
+        .take(OVERVIEW_RECENT_LIMIT)
+        .map(change_entry)
+        .collect();
+    // "Forgotten" is every terminal state that removes an asset from recall,
+    // not just explicit revocation: superseding and retention expiry are also
+    // things the operator did not necessarily watch happen.
+    let recently_forgotten = assets
+        .iter()
+        .filter(|a| {
+            matches!(
+                a.status,
+                memory::AssetStatus::Revoked
+                    | memory::AssetStatus::Expired
+                    | memory::AssetStatus::Superseded
+            )
+        })
+        .take(OVERVIEW_RECENT_LIMIT)
+        .map(change_entry)
+        .collect();
+
+    Ok(Json(MemoryOverviewResponse {
+        tenant_id,
+        counts,
+        derived_embeddings,
+        recently_remembered,
+        recently_forgotten,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebuildIndexesResponse {
+    pub tenant_id: String,
+    /// Derived rows dropped. They are recomputed lazily by the next
+    /// retrievals, so this is the repair, not a second step.
+    pub cleared_embeddings: usize,
+}
+
+/// POST /v1/memory/indexes/rebuild — drops this tenant's derived retrieval
+/// index so it is recomputed from the assets.
+///
+/// Deliberately **not** a delete of anything the operator would miss:
+/// conversation truth and the memory assets themselves are untouched. This is
+/// the repair path a persisted index needs — without it, a corrupt or stale
+/// index has no remedy short of deleting the memory plane, which is exactly
+/// the trade `memory reset` exists to avoid.
+async fn rebuild_indexes(
+    State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<RebuildIndexesResponse>, ApiError> {
+    let tenant_id = context_tenant(&tenant, params.get("tenantId").map_or("", String::as_str));
+    let cleared = state
+        .store
+        .lock()
+        .clear_memory_asset_embeddings_for_tenant(&tenant_id)
+        .map_err(ApiError::from_store)?;
+    Ok(Json(RebuildIndexesResponse {
+        tenant_id,
+        cleared_embeddings: cleared,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::super::tests_support::{request_json, test_state};
+    use super::super::tests_support::{request_json, request_json_as_tenant, test_state};
     use axum::http::StatusCode;
     use std::sync::Arc;
 
     fn state_with_manager() -> crate::state::AppState {
         let mut state = test_state();
-        state.memory = Some(Arc::new(kura_memory::Manager::new("test", None, None, None)));
+        state.memory = Some(Arc::new(kura_memory::Manager::new(
+            "test", None, None, None,
+        )));
         state
     }
 
@@ -543,7 +782,10 @@ mod tests {
         assert_eq!(status, StatusCode::CREATED, "{created}");
         assert_eq!(created["decision"], "accept", "{created}");
         assert_eq!(created["asset"]["status"], "ready");
-        let atom_id = created["asset"]["assetId"].as_str().expect("assetId").to_string();
+        let atom_id = created["asset"]["assetId"]
+            .as_str()
+            .expect("assetId")
+            .to_string();
 
         // L2 scenario over the atom; drill-down resolves to the atom's
         // source links.
@@ -562,7 +804,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "{scenario}");
-        let scenario_id = scenario["asset"]["assetId"].as_str().expect("assetId").to_string();
+        let scenario_id = scenario["asset"]["assetId"]
+            .as_str()
+            .expect("assetId")
+            .to_string();
 
         let (status, tree) = request_json(
             state.clone(),
@@ -574,8 +819,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{tree}");
         assert_eq!(tree["members"][0]["asset"]["assetId"], atom_id.as_str());
         assert_eq!(
-            tree["members"][0]["asset"]["sourceLinks"][0]["id"],
-            "thr_1",
+            tree["members"][0]["asset"]["sourceLinks"][0]["id"], "thr_1",
             "{tree}"
         );
 
@@ -611,7 +855,10 @@ mod tests {
             request_json(state.clone(), "POST", "/v1/memory/assets", Some(body)).await;
         assert_eq!(status, StatusCode::CREATED, "{pending}");
         assert_eq!(pending["asset"]["status"], "pending");
-        let asset_id = pending["asset"]["assetId"].as_str().expect("assetId").to_string();
+        let asset_id = pending["asset"]["assetId"]
+            .as_str()
+            .expect("assetId")
+            .to_string();
 
         let (status, approved) = request_json(
             state.clone(),
@@ -660,5 +907,200 @@ mod tests {
         assert_eq!(run["trigger"], "manual");
         // The Noop consolidator records the run with zero drafts.
         assert_eq!(run["extractedL1"], 0);
+    }
+
+    /// Stage 2.1: the inventory answers "what does it remember, and what did
+    /// it forget" without the reader having to already know which asset to
+    /// look up.
+    #[tokio::test]
+    async fn overview_reports_counts_and_both_recency_lists() {
+        let state = state_with_manager();
+
+        let (status, created) = request_json(
+            state.clone(),
+            "POST",
+            "/v1/memory/assets",
+            Some(atom_body("prefers Chinese replies")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{created}");
+        let kept = created["asset"]["assetId"]
+            .as_str()
+            .expect("assetId")
+            .to_string();
+
+        let (status, created) = request_json(
+            state.clone(),
+            "POST",
+            "/v1/memory/assets",
+            Some(atom_body("uses dark mode")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let forgotten = created["asset"]["assetId"]
+            .as_str()
+            .expect("assetId")
+            .to_string();
+
+        let (status, _) = request_json(
+            state.clone(),
+            "POST",
+            &format!("/v1/memory/assets/{forgotten}/revoke"),
+            Some(serde_json::json!({ "reason": "wrong" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, overview) =
+            request_json(state.clone(), "GET", "/v1/memory/overview", None).await;
+        assert_eq!(status, StatusCode::OK, "{overview}");
+
+        let counts = overview["counts"].as_array().expect("counts");
+        let ready: i64 = counts
+            .iter()
+            .filter(|c| c["status"] == "ready")
+            .map(|c| c["count"].as_i64().unwrap_or(0))
+            .sum();
+        let revoked: i64 = counts
+            .iter()
+            .filter(|c| c["status"] == "revoked")
+            .map(|c| c["count"].as_i64().unwrap_or(0))
+            .sum();
+        assert_eq!(ready, 1, "one asset still remembered: {overview}");
+        assert_eq!(revoked, 1, "one asset forgotten: {overview}");
+
+        let remembered: Vec<&str> = overview["recentlyRemembered"]
+            .as_array()
+            .expect("recentlyRemembered")
+            .iter()
+            .filter_map(|e| e["assetId"].as_str())
+            .collect();
+        assert_eq!(remembered, [kept.as_str()]);
+
+        let gone: Vec<&str> = overview["recentlyForgotten"]
+            .as_array()
+            .expect("recentlyForgotten")
+            .iter()
+            .filter_map(|e| e["assetId"].as_str())
+            .collect();
+        assert_eq!(gone, [forgotten.as_str()]);
+    }
+
+    /// Stage 2.2: the rebuild is a repair, not a delete — it drops derived
+    /// rows and leaves every asset in place.
+    #[tokio::test]
+    async fn index_rebuild_clears_derived_rows_and_keeps_the_assets() {
+        let state = state_with_manager();
+        let (status, created) = request_json(
+            state.clone(),
+            "POST",
+            "/v1/memory/assets",
+            Some(atom_body("prefers Chinese replies")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let asset_id = created["asset"]["assetId"]
+            .as_str()
+            .expect("assetId")
+            .to_string();
+
+        // Stand in for what the retrieval path writes on a cache miss.
+        state
+            .store
+            .lock()
+            .put_memory_asset_embedding(&asset_id, "fp-test", &[0.5, 0.5])
+            .expect("seed derived row");
+        assert_eq!(
+            state
+                .store
+                .lock()
+                .count_memory_asset_embeddings_for_tenant("")
+                .expect("count"),
+            1
+        );
+
+        let (status, rebuilt) =
+            request_json(state.clone(), "POST", "/v1/memory/indexes/rebuild", None).await;
+        assert_eq!(status, StatusCode::OK, "{rebuilt}");
+        assert_eq!(rebuilt["clearedEmbeddings"], 1);
+
+        assert_eq!(
+            state
+                .store
+                .lock()
+                .count_memory_asset_embeddings_for_tenant("")
+                .expect("count"),
+            0,
+            "derived rows dropped"
+        );
+        // Conversation truth untouched: this is the whole point of a rebuild
+        // rather than a reset.
+        let (status, asset) = request_json(
+            state.clone(),
+            "GET",
+            &format!("/v1/memory/assets/{asset_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{asset}");
+        assert_eq!(asset["status"], "ready");
+    }
+
+    /// A rebuild must repair the caller's own index, never every tenant's.
+    #[tokio::test]
+    async fn index_rebuild_is_scoped_to_the_acting_tenant() {
+        let state = state_with_manager();
+
+        let seed = |tenant: &str| {
+            let body = atom_body("prefers Chinese replies");
+            let state = state.clone();
+            let tenant = tenant.to_string();
+            async move {
+                let (status, created) = request_json_as_tenant(
+                    state.clone(),
+                    &tenant,
+                    "POST",
+                    "/v1/memory/assets",
+                    Some(body),
+                )
+                .await;
+                assert_eq!(status, StatusCode::CREATED, "{created}");
+                let asset_id = created["asset"]["assetId"]
+                    .as_str()
+                    .expect("assetId")
+                    .to_string();
+                state
+                    .store
+                    .lock()
+                    .put_memory_asset_embedding(&asset_id, "fp-test", &[0.5, 0.5])
+                    .expect("seed derived row");
+                asset_id
+            }
+        };
+        let _a = seed("tnt_a").await;
+        let _b = seed("tnt_b").await;
+
+        let count = |tenant: &str| {
+            state
+                .store
+                .lock()
+                .count_memory_asset_embeddings_for_tenant(tenant)
+                .expect("count")
+        };
+        assert_eq!(count("tnt_a"), 1);
+        assert_eq!(count("tnt_b"), 1);
+
+        let (status, rebuilt) = request_json_as_tenant(
+            state.clone(),
+            "tnt_a",
+            "POST",
+            "/v1/memory/indexes/rebuild",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{rebuilt}");
+        assert_eq!(rebuilt["clearedEmbeddings"], 1);
+        assert_eq!(count("tnt_a"), 0);
+        assert_eq!(count("tnt_b"), 1, "another tenant's index is untouched");
     }
 }

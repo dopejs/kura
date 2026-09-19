@@ -6,7 +6,7 @@
 //! that participates in credential storage, OAuth state, secret-reference resolution, or
 //! readiness probing.
 
-use crate::{emit_denial, require, TenancyError};
+use crate::{TenancyError, emit_denial, require};
 
 /// Tenant-aware accessor for the integrations table.
 pub struct Integrations {
@@ -26,7 +26,10 @@ impl Integrations {
 
     /// Persists an integration row and binds its tenant_id. Pass A only wires ownership;
     /// readiness/credential probing remains owned by Roadmap 37 (untouched here).
-    pub fn upsert_integration_for_tenant(&self, item: &kura_integrations::Resource) -> Result<(), TenancyError> {
+    pub fn upsert_integration_for_tenant(
+        &self,
+        item: &kura_integrations::Resource,
+    ) -> Result<(), TenancyError> {
         let tenant_id = require()?;
         let owner = self
             .store
@@ -40,8 +43,15 @@ impl Integrations {
         }
         let mut bound = item.clone();
         bound.tenant_id = tenant_id.clone();
-        self.store.upsert_integration(&bound).map_err(TenancyError::from)?;
-        match self.store.bind_row_tenant("integrations", "integration_id", &bound.integration_id, &tenant_id) {
+        self.store
+            .upsert_integration(&bound)
+            .map_err(TenancyError::from)?;
+        match self.store.bind_row_tenant(
+            "integrations",
+            "integration_id",
+            &bound.integration_id,
+            &tenant_id,
+        ) {
             Err(e) if crate::SQLiteStore::is_cross_tenant_row(&e) => {
                 self.emit("store:UpsertIntegrationForTenant", "integration");
                 Err(TenancyError::CrossTenantWrite)

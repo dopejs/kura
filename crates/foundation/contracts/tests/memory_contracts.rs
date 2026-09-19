@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{schema_root_dir, validate_fixtures, Fixture};
+use common::{Fixture, schema_root_dir, validate_fixtures};
 use kura_contracts::Validator;
 
 #[test]
@@ -24,6 +24,14 @@ fn test_memory_schemas_accept_canonical_fixtures() {
         (
             r##"schemas/api/memory-consolidation-run.schema.json"##,
             r##"{"runId":"memrun_1","tenantId":"ten_a","trigger":"turns","extractedL1":3,"aggregatedL2":1,"distilledL3":0,"pendingApproval":0,"startedAt":"2026-08-17T10:00:00Z","completedAt":"2026-08-17T10:00:02Z"}"##,
+        ),
+        (
+            r##"schemas/api/memory-overview.schema.json"##,
+            r##"{"tenantId":"ten_a","counts":[{"layer":"l1","status":"ready","count":12},{"layer":"l1","status":"revoked","count":3}],"derivedEmbeddings":12,"recentlyRemembered":[{"assetId":"mem_1","layer":"l1","status":"ready","title":"reply language","updatedAt":"2026-09-18T10:00:00Z"}],"recentlyForgotten":[{"assetId":"mem_2","layer":"l1","status":"revoked","title":"stale fact","updatedAt":"2026-09-18T10:01:00Z"}]}"##,
+        ),
+        (
+            r##"schemas/api/memory-index-rebuild.schema.json"##,
+            r##"{"tenantId":"ten_a","clearedEmbeddings":12}"##,
         ),
     ];
     validate_fixtures(&validator, fixtures);

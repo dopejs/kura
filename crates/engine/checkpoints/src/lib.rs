@@ -47,22 +47,30 @@ impl Manager {
                 .map_err(|e| format!("upsert checkpoint step {}: {e}", step.step_id))?;
         }
         for tool_call in &checkpoint.tool_calls {
-            self.store
-                .lock()
-                .upsert_tool_call(tool_call)
-                .map_err(|e| format!("upsert checkpoint tool call {}: {e}", tool_call.tool_call_id))?;
+            self.store.lock().upsert_tool_call(tool_call).map_err(|e| {
+                format!(
+                    "upsert checkpoint tool call {}: {e}",
+                    tool_call.tool_call_id
+                )
+            })?;
         }
         Ok(())
     }
 
     pub fn restore_run_checkpoint(&self, checkpoint: RunCheckpoint) -> Result<(), String> {
         self.runtime.restore_run_checkpoint(checkpoint.clone());
-        self.persist_snapshot_state(&checkpoint)
-            .map_err(|e| format!("persist restored checkpoint state for run {}: {e}", checkpoint.run.run_id))?;
-        self.store
-            .lock()
-            .save_checkpoint(&checkpoint)
-            .map_err(|e| format!("save restored checkpoint for run {}: {e}", checkpoint.run.run_id))
+        self.persist_snapshot_state(&checkpoint).map_err(|e| {
+            format!(
+                "persist restored checkpoint state for run {}: {e}",
+                checkpoint.run.run_id
+            )
+        })?;
+        self.store.lock().save_checkpoint(&checkpoint).map_err(|e| {
+            format!(
+                "save restored checkpoint for run {}: {e}",
+                checkpoint.run.run_id
+            )
+        })
     }
 
     pub fn restore(&self) -> Result<RecoveryStats, String> {
@@ -72,7 +80,9 @@ impl Manager {
             .list_latest_checkpoints()
             .map_err(|e| format!("load latest checkpoints: {e}"))?;
         self.runtime.restore_checkpoints(checkpoints.clone());
-        Ok(RecoveryStats { run_count: checkpoints.len() })
+        Ok(RecoveryStats {
+            run_count: checkpoints.len(),
+        })
     }
 
     #[must_use]

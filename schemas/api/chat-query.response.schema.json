@@ -89,6 +89,25 @@
     "continuityExcludedCount": {
       "type": "integer",
       "minimum": 0
+    },
+    "toolTrace": {
+      "type": "array",
+      "description": "Stage 9.0: every tool call the turn made, in order. Absent when the model answered without tools.",
+      "items": {
+        "type": "object",
+        "required": ["round", "dispatchId", "callId", "name", "arguments", "output", "isError", "durationMs"],
+        "additionalProperties": false,
+        "properties": {
+          "round": { "type": "integer", "minimum": 0 },
+          "dispatchId": { "type": "string" },
+          "callId": { "type": "string" },
+          "name": { "type": "string" },
+          "arguments": { "type": "string", "description": "The raw JSON arguments text the model produced." },
+          "output": { "type": "string", "description": "What the model saw back, already truncated." },
+          "isError": { "type": "boolean" },
+          "durationMs": { "type": "integer", "minimum": 0 }
+        }
+      }
     }
   }
 }

@@ -1,14 +1,17 @@
 use chrono::{TimeZone, Utc};
 use kura_integrations::DiagnosticReasonCode;
 use kura_opsreadiness::{
+    HostedOperationalProfile, SmokeProbeInput, SmokeProbeResult, SmokeReportStatus,
     build_integration_diagnostic_smoke_report, build_smoke_probe_outcome, generate_hosted_run_id,
-    validate_hosted_profile, validate_hosted_redaction, HostedOperationalProfile, SmokeProbeInput,
-    SmokeProbeResult, SmokeReportStatus,
+    validate_hosted_profile, validate_hosted_redaction,
 };
 
 #[test]
 fn hosted_run_id_generation() {
-    let started = Utc.with_ymd_and_hms(2026, 4, 23, 16, 0, 0).single().unwrap();
+    let started = Utc
+        .with_ymd_and_hms(2026, 4, 23, 16, 0, 0)
+        .single()
+        .unwrap();
     let id = generate_hosted_run_id("My Profile", started).unwrap();
     assert!(id.starts_with("my_profile_"));
     assert!(generate_hosted_run_id("", started).is_err());
@@ -41,9 +44,23 @@ fn hosted_redaction_detects_raw_credential() {
     struct Leaky {
         value: String,
     }
-    let err = validate_hosted_redaction("test", &Leaky { value: "access_token abc".to_string() }).unwrap_err();
+    let err = validate_hosted_redaction(
+        "test",
+        &Leaky {
+            value: "access_token abc".to_string(),
+        },
+    )
+    .unwrap_err();
     assert!(err.contains("raw credential material"));
-    assert!(validate_hosted_redaction("test", &Leaky { value: "ok".to_string() }).is_ok());
+    assert!(
+        validate_hosted_redaction(
+            "test",
+            &Leaky {
+                value: "ok".to_string()
+            }
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -57,14 +74,35 @@ fn smoke_probe_blocks_on_missing_credentials() {
     };
     let outcome = build_smoke_probe_outcome("r1", 0, &probe, Utc::now());
     assert_eq!(outcome.result, SmokeProbeResult::Blocked);
-    assert_eq!(outcome.reason_code, DiagnosticReasonCode::TokenMissing.as_str());
+    assert_eq!(
+        outcome.reason_code,
+        DiagnosticReasonCode::TokenMissing.as_str()
+    );
 }
 
 #[test]
 fn smoke_report_aggregates_domain_summary() {
     let probes = vec![
-        SmokeProbeInput { tenant_id: "t1".to_string(), domain_kind: "calendar".to_string(), supported: true, read_only_or_reversible: true, safe_credentials_available: true, tenant_approval_available: true, provider_available: true, ..SmokeProbeInput::default() },
-        SmokeProbeInput { tenant_id: "t1".to_string(), domain_kind: "mail".to_string(), supported: true, read_only_or_reversible: true, safe_credentials_available: true, tenant_approval_available: true, provider_available: true, ..SmokeProbeInput::default() },
+        SmokeProbeInput {
+            tenant_id: "t1".to_string(),
+            domain_kind: "calendar".to_string(),
+            supported: true,
+            read_only_or_reversible: true,
+            safe_credentials_available: true,
+            tenant_approval_available: true,
+            provider_available: true,
+            ..SmokeProbeInput::default()
+        },
+        SmokeProbeInput {
+            tenant_id: "t1".to_string(),
+            domain_kind: "mail".to_string(),
+            supported: true,
+            read_only_or_reversible: true,
+            safe_credentials_available: true,
+            tenant_approval_available: true,
+            provider_available: true,
+            ..SmokeProbeInput::default()
+        },
     ];
     let report = build_integration_diagnostic_smoke_report("r1", "op", &probes, Utc::now());
     assert_eq!(report.status, SmokeReportStatus::Completed);

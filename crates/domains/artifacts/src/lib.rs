@@ -16,24 +16,36 @@ pub struct Service {
 
 impl Service {
     pub fn new(data_dir: &str) -> Self {
-        Service { data_dir: data_dir.trim().to_string() }
+        Service {
+            data_dir: data_dir.trim().to_string(),
+        }
     }
 
     /// Persists a computer-use artifact and returns its record. The artifact id is derived from
     /// the first 8 bytes of the content sha256 (16 hex chars); the full 32-byte digest is stored
     /// on the record for integrity verification.
-    pub fn save_computer_use_artifact(&self, input: ArtifactCaptureRequest) -> Result<Artifact, String> {
+    pub fn save_computer_use_artifact(
+        &self,
+        input: ArtifactCaptureRequest,
+    ) -> Result<Artifact, String> {
         let now = Utc::now();
         let digest = Sha256::digest(&input.content);
         let artifact_id = format!("cuart_{}", hex_encode(&digest[..8]));
-        let storage_key = format!("computer-use/{}/{}", input.computer_use_session_id, artifact_id);
+        let storage_key = format!(
+            "computer-use/{}/{}",
+            input.computer_use_session_id, artifact_id
+        );
 
         if !self.data_dir.trim().is_empty() {
-            let full_path = Path::new(&self.data_dir).join("artifacts").join(&storage_key);
+            let full_path = Path::new(&self.data_dir)
+                .join("artifacts")
+                .join(&storage_key);
             if let Some(parent) = full_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| format!("create artifact directory: {e}"))?;
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("create artifact directory: {e}"))?;
             }
-            std::fs::write(&full_path, &input.content).map_err(|e| format!("write artifact content: {e}"))?;
+            std::fs::write(&full_path, &input.content)
+                .map_err(|e| format!("write artifact content: {e}"))?;
         }
 
         Ok(Artifact {
@@ -58,7 +70,9 @@ impl Service {
         if self.data_dir.trim().is_empty() {
             return Ok(Vec::new());
         }
-        let full_path = Path::new(&self.data_dir).join("artifacts").join(storage_key);
+        let full_path = Path::new(&self.data_dir)
+            .join("artifacts")
+            .join(storage_key);
         std::fs::read(&full_path).map_err(|e| format!("read artifact content: {e}"))
     }
 }

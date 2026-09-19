@@ -1,8 +1,8 @@
 use kura_opsreadiness::{
+    BackupArtifact, CalendarSmokeInput, LaunchGateEvidence, REQUIRED_LAUNCH_WORKLOADS,
+    RESULT_NO_SHIP, RESULT_SHIP, RealAccountSmokeStatus, RestartEvent, WorkloadEvidence,
     calendar_real_account_smoke, contains_raw_credential_material, validate_backup_artifact,
-    validate_launch_gate, validate_restart_recovery, BackupArtifact, CalendarSmokeInput,
-    LaunchGateEvidence, RealAccountSmokeStatus, RestartEvent, WorkloadEvidence,
-    REQUIRED_LAUNCH_WORKLOADS, RESULT_NO_SHIP, RESULT_SHIP,
+    validate_launch_gate, validate_restart_recovery,
 };
 
 fn passing_smoke(domain: &str) -> RealAccountSmokeStatus {
@@ -18,18 +18,28 @@ fn passing_smoke(domain: &str) -> RealAccountSmokeStatus {
 
 #[test]
 fn raw_credential_detection() {
-    assert!(contains_raw_credential_material("exposed access_token value"));
+    assert!(contains_raw_credential_material(
+        "exposed access_token value"
+    ));
     assert!(!contains_raw_credential_material("all good here"));
 }
 
 #[test]
 fn launch_gate_ships_with_full_evidence() {
     let evidence = LaunchGateEvidence {
-        channels: vec![passing_smoke("discord"), passing_smoke("slack"), passing_smoke("web")],
+        channels: vec![
+            passing_smoke("discord"),
+            passing_smoke("slack"),
+            passing_smoke("web"),
+        ],
         provider_smoke: vec![passing_smoke("calendar"), passing_smoke("mail")],
         workloads: REQUIRED_LAUNCH_WORKLOADS
             .iter()
-            .map(|name| WorkloadEvidence { name: name.to_string(), status: "pass".to_string(), ..WorkloadEvidence::default() })
+            .map(|name| WorkloadEvidence {
+                name: name.to_string(),
+                status: "pass".to_string(),
+                ..WorkloadEvidence::default()
+            })
             .collect(),
         soak_duration_met: true,
         support_bundle_validated: true,
@@ -44,9 +54,17 @@ fn launch_gate_ships_with_full_evidence() {
 #[test]
 fn launch_gate_blocks_on_missing_workload() {
     let evidence = LaunchGateEvidence {
-        channels: vec![passing_smoke("discord"), passing_smoke("slack"), passing_smoke("web")],
+        channels: vec![
+            passing_smoke("discord"),
+            passing_smoke("slack"),
+            passing_smoke("web"),
+        ],
         provider_smoke: vec![passing_smoke("calendar"), passing_smoke("mail")],
-        workloads: vec![WorkloadEvidence { name: "activation".to_string(), status: "pass".to_string(), ..WorkloadEvidence::default() }],
+        workloads: vec![WorkloadEvidence {
+            name: "activation".to_string(),
+            status: "pass".to_string(),
+            ..WorkloadEvidence::default()
+        }],
         soak_duration_met: true,
         support_bundle_validated: true,
         redaction_validated: true,
@@ -55,7 +73,12 @@ fn launch_gate_blocks_on_missing_workload() {
     let decision = validate_launch_gate(&evidence);
     assert_eq!(decision.result, RESULT_NO_SHIP);
     assert!(!decision.reasons.is_empty());
-    assert!(decision.reasons.iter().any(|r| r.contains("missing required workload evidence")));
+    assert!(
+        decision
+            .reasons
+            .iter()
+            .any(|r| r.contains("missing required workload evidence"))
+    );
 }
 
 #[test]

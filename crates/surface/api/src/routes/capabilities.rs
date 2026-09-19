@@ -19,6 +19,7 @@ use kura_events as events;
 
 use crate::error::ApiError;
 use crate::middleware::environment_scope_from_config;
+use crate::middleware::{TenantContext, require_daemon_global_operator};
 use crate::state::AppState;
 
 use super::decode_json_required;
@@ -27,7 +28,10 @@ use super::decode_json_required;
 #[must_use]
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/v1/capabilities", get(list_capabilities).post(register_capability))
+        .route(
+            "/v1/capabilities",
+            get(list_capabilities).post(register_capability),
+        )
         .route("/v1/capabilities/{capability_id}", get(get_capability))
         .route(
             "/v1/capabilities/{capability_id}/{action}",
@@ -106,15 +110,19 @@ async fn list_capabilities(
     State(state): State<AppState>,
 ) -> Result<Json<CapabilityListResponse>, ApiError> {
     let supervisor = supervisor(&state)?;
-    Ok(Json(CapabilityListResponse { items: supervisor.list() }))
+    Ok(Json(CapabilityListResponse {
+        items: supervisor.list(),
+    }))
 }
 
 /// POST /v1/capabilities (Go handleCapabilities POST branch) — 201 on first
 /// registration, 200 on re-registration.
 async fn register_capability(
     State(state): State<AppState>,
+    tenant: Option<axum::extract::Extension<TenantContext>>,
     body: Bytes,
 ) -> Result<(StatusCode, Json<capabilities::Capability>), ApiError> {
+    require_daemon_global_operator(tenant.as_ref().map(|e| &e.0), "POST /v1/capabilities")?;
     let input: capabilities::RegisterInput = decode_json_required(&body)?;
     let supervisor = supervisor(&state)?;
     let (capability, created) = supervisor.register(input).map_err(map_supervisor_error)?;
@@ -123,9 +131,16 @@ async fn register_capability(
     payload.insert("kind".to_string(), serde_json::json!(capability.kind));
     payload.insert("status".to_string(), status_json(&capability));
     payload.insert("created".to_string(), serde_json::json!(created));
-    payload.insert("displayName".to_string(), serde_json::json!(capability.display_name));
+    payload.insert(
+        "displayName".to_string(),
+        serde_json::json!(capability.display_name),
+    );
     publish_capability_event(&state, "capability.registered", &capability, payload)?;
-    let status = if created { StatusCode::CREATED } else { StatusCode::OK };
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
     Ok((status, Json(capability)))
 }
 
@@ -167,7 +182,10 @@ async fn capability_action(
                 .map_err(map_supervisor_error)?;
             let mut payload = serde_json::Map::new();
             payload.insert("status".to_string(), status_json(&capability));
-            payload.insert("failureCount".to_string(), serde_json::json!(capability.failure_count));
+            payload.insert(
+                "failureCount".to_string(),
+                serde_json::json!(capability.failure_count),
+            );
             payload.insert(
                 "backoffSeconds".to_string(),
                 serde_json::json!(capability.backoff_seconds),
@@ -184,7 +202,10 @@ async fn capability_action(
                 .map_err(map_supervisor_error)?;
             let mut payload = serde_json::Map::new();
             payload.insert("status".to_string(), status_json(&capability));
-            payload.insert("restartCount".to_string(), serde_json::json!(capability.restart_count));
+            payload.insert(
+                "restartCount".to_string(),
+                serde_json::json!(capability.restart_count),
+            );
             (capability, "capability.restart_scheduled", payload)
         }
         _ => return Err(ApiError::NotFound("not found".to_string())),
@@ -249,8 +270,7 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "{restarted}");
 
-        let (status, _) =
-            request_json(state, "GET", "/v1/capabilities/cap_missing", None).await;
+        let (status, _) = request_json(state, "GET", "/v1/capabilities/cap_missing", None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }

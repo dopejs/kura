@@ -65,7 +65,10 @@ pub fn router() -> Router<AppState> {
             "/v1/runs/{run_id}/workflows",
             get(list_workflows).post(create_workflow),
         )
-        .route("/v1/runs/{run_id}/workflows/{workflow_id}", get(get_workflow))
+        .route(
+            "/v1/runs/{run_id}/workflows/{workflow_id}",
+            get(get_workflow),
+        )
         .route(
             "/v1/runs/{run_id}/workflows/{workflow_id}/start",
             post(start_workflow),
@@ -108,6 +111,7 @@ async fn list_workflows(
 /// Returns 201 with the planned workflow document.
 async fn create_workflow(
     State(state): State<AppState>,
+    tenant: Option<axum::extract::Extension<crate::middleware::TenantContext>>,
     Path(run_id): Path<String>,
     body: Bytes,
 ) -> Result<(StatusCode, Json<orchestration::Workflow>), ApiError> {
@@ -130,7 +134,8 @@ async fn create_workflow(
 
     let calendar_action =
         build_calendar_action(input.calendar_action.as_ref()).map_err(ApiError::BadRequest)?;
-    let mail_action = build_mail_action(input.mail_action.as_ref()).map_err(ApiError::BadRequest)?;
+    let mail_action =
+        build_mail_action(input.mail_action.as_ref()).map_err(ApiError::BadRequest)?;
 
     // Go: orchestration.NewManager().Plan(...) with the skill/MCP planning
     // adapters; a fresh manager per request mirrors the stateless Go Manager.
@@ -156,7 +161,8 @@ async fn create_workflow(
 
     // Go: reserveWorkflowLaunchQuota — billing not yet wired (Go is a no-op
     // when the billing manager is nil), so no reservation is held.
-    persist_workflow_detail(&state, &workflow).map_err(ApiError::from_store)?;
+    persist_workflow_detail_for_tenant(&state, tenant.as_ref().map(|e| &e.0), &workflow)
+        .map_err(ApiError::from_store)?;
     // Go: recordActiveProfileProjectionForTarget — profile store not ported.
     // Go: billing Commit/Release — skipped with the reservation above.
     publish_workflow_event(&state, "workflow.planned", &workflow, None, None)?;
@@ -191,6 +197,7 @@ async fn get_workflow(
 /// and advance the ready steps (Go handleRunWorkflowStart).
 async fn start_workflow(
     State(state): State<AppState>,
+    tenant: Option<axum::extract::Extension<crate::middleware::TenantContext>>,
     Path((run_id, workflow_id)): Path<(String, String)>,
 ) -> Result<Json<orchestration::Workflow>, ApiError> {
     let environment_scope = environment_scope_from_config(&state.config);
@@ -214,7 +221,8 @@ async fn start_workflow(
 
     let mut workflow = orchestration::initialize_execution(workflow, Utc::now());
     // Go: recordActiveProfileProjectionForTarget — not ported.
-    persist_workflow_detail(&state, &workflow).map_err(ApiError::from_store)?;
+    persist_workflow_detail_for_tenant(&state, tenant.as_ref().map(|e| &e.0), &workflow)
+        .map_err(ApiError::from_store)?;
     // Go: billing Commit — skipped with the reservation.
     publish_workflow_event(&state, "workflow.started", &workflow, None, None)?;
 
@@ -233,6 +241,7 @@ async fn start_workflow(
 /// publish workflow.status_changed (Go handleRunWorkflowCancel).
 async fn cancel_workflow(
     State(state): State<AppState>,
+    tenant: Option<axum::extract::Extension<crate::middleware::TenantContext>>,
     Path((run_id, workflow_id)): Path<(String, String)>,
 ) -> Result<Json<orchestration::Workflow>, ApiError> {
     let environment_scope = environment_scope_from_config(&state.config);
@@ -262,17 +271,16 @@ async fn cancel_workflow(
                 if let Ok((cancelled_step, run_update, _)) =
                     manager.cancel_step(&run_id, &step.runtime_step_id)
                 {
-                    let _ = persist_step_cancel_mutation(&state, &cancelled_step, run_update.as_ref());
+                    let _ =
+                        persist_step_cancel_mutation(&state, &cancelled_step, run_update.as_ref());
                 }
             }
         }
         if !step.active_tool_call_id.is_empty() {
             if let Some(manager) = runtime_manager {
-                if let Some(tool_call) = manager.get_tool_call(
-                    &run_id,
-                    &step.runtime_step_id,
-                    &step.active_tool_call_id,
-                ) {
+                if let Some(tool_call) =
+                    manager.get_tool_call(&run_id, &step.runtime_step_id, &step.active_tool_call_id)
+                {
                     if !tool_call.sandbox_execution_id.is_empty() {
                         if let Some(sandboxes) = &state.sandboxes {
                             let _ = sandboxes.cancel_execution(&tool_call.sandbox_execution_id);
@@ -283,10 +291,20 @@ async fn cancel_workflow(
         }
     }
 
-    persist_workflow_detail(&state, &workflow).map_err(ApiError::from_store)?;
+    persist_workflow_detail_for_tenant(&state, tenant.as_ref().map(|e| &e.0), &workflow)
+        .map_err(ApiError::from_store)?;
     let mut extra = serde_json::Map::new();
-    extra.insert("status".to_string(), serde_json::json!(workflow.status.as_str()));
-    publish_workflow_event(&state, "workflow.status_changed", &workflow, None, Some(&extra))?;
+    extra.insert(
+        "status".to_string(),
+        serde_json::json!(workflow.status.as_str()),
+    );
+    publish_workflow_event(
+        &state,
+        "workflow.status_changed",
+        &workflow,
+        None,
+        Some(&extra),
+    )?;
 
     let store = state.store.lock();
     workflow =
@@ -408,11 +426,7 @@ fn build_calendar_action(
             .iter()
             .filter_map(|attendee| {
                 let email = attendee.trim().to_string();
-                if email.is_empty() {
-                    None
-                } else {
-                    Some(email)
-                }
+                if email.is_empty() { None } else { Some(email) }
             })
             .collect(),
         reason: request.reason.trim().to_string(),
@@ -420,12 +434,12 @@ fn build_calendar_action(
     };
     action.window_start = parse_optional_action_time(&request.window_start)
         .map_err(|err| format!("parse windowStart: {err}"))?;
-    action.window_end =
-        parse_optional_action_time(&request.window_end).map_err(|err| format!("parse windowEnd: {err}"))?;
-    action.starts_at =
-        parse_optional_action_time(&request.starts_at).map_err(|err| format!("parse startsAt: {err}"))?;
-    action.ends_at =
-        parse_optional_action_time(&request.ends_at).map_err(|err| format!("parse endsAt: {err}"))?;
+    action.window_end = parse_optional_action_time(&request.window_end)
+        .map_err(|err| format!("parse windowEnd: {err}"))?;
+    action.starts_at = parse_optional_action_time(&request.starts_at)
+        .map_err(|err| format!("parse startsAt: {err}"))?;
+    action.ends_at = parse_optional_action_time(&request.ends_at)
+        .map_err(|err| format!("parse endsAt: {err}"))?;
     if action.operation_class.as_str().trim().is_empty() {
         return Err("calendarAction.operationClass is required".to_string());
     }
@@ -477,7 +491,31 @@ fn build_mail_action(
 // Workflow ledger persistence (Go persistWorkflowDetail)
 // ---------------------------------------------------------------------------
 
-fn persist_workflow_detail(state: &AppState, workflow: &orchestration::Workflow) -> Result<(), String> {
+/// Persists the workflow ledger. Access control for this family lives on the
+/// owning run (`ByIDTenantGuardLayer` in [`super::router`]); the row is also
+/// bound to the acting tenant here so `kura-tenancy`'s
+/// `list_workflows_for_tenant` sees it instead of returning an empty set.
+fn persist_workflow_detail_for_tenant(
+    state: &AppState,
+    tenant: Option<&crate::middleware::TenantContext>,
+    workflow: &orchestration::Workflow,
+) -> Result<(), String> {
+    persist_workflow_detail(state, workflow)?;
+    let Some(tc) = tenant else { return Ok(()) };
+    let tenant_id = tc.0.tenant_id.trim();
+    if tenant_id.is_empty() {
+        return Ok(());
+    }
+    state
+        .store
+        .lock()
+        .bind_row_tenant("workflows", "workflow_id", &workflow.workflow_id, tenant_id)
+}
+
+fn persist_workflow_detail(
+    state: &AppState,
+    workflow: &orchestration::Workflow,
+) -> Result<(), String> {
     let store = state.store.lock();
     store.upsert_workflow(workflow)?;
     store.replace_workflow_steps(&workflow.workflow_id, &workflow.steps)?;
@@ -513,7 +551,9 @@ fn persist_tool_call(state: &AppState, tool_call: &runtime::ToolCall) -> Result<
             .ok_or_else(|| ApiError::internal(runtime::RuntimeError::StepNotFound))?;
         store.upsert_step(&step).map_err(ApiError::from_store)?;
     }
-    store.upsert_tool_call(tool_call).map_err(ApiError::from_store)
+    store
+        .upsert_tool_call(tool_call)
+        .map_err(ApiError::from_store)
 }
 
 fn persist_step_cancel_mutation(
@@ -590,44 +630,98 @@ fn publish_workflow_event(
 ) -> Result<events::Event, ApiError> {
     let step = workflow_event_step(workflow, tool_call, extra);
     let mut payload = serde_json::Map::new();
-    payload.insert("workflowId".to_string(), serde_json::json!(workflow.workflow_id));
+    payload.insert(
+        "workflowId".to_string(),
+        serde_json::json!(workflow.workflow_id),
+    );
     payload.insert("runId".to_string(), serde_json::json!(workflow.run_id));
-    payload.insert("status".to_string(), serde_json::json!(workflow.status.as_str()));
+    payload.insert(
+        "status".to_string(),
+        serde_json::json!(workflow.status.as_str()),
+    );
     if let Some(tool_call) = tool_call {
-        payload.insert("workflowStepId".to_string(), serde_json::json!(tool_call.workflow_step_id));
-        payload.insert("runtimeStepId".to_string(), serde_json::json!(tool_call.step_id));
-        payload.insert("toolCallId".to_string(), serde_json::json!(tool_call.tool_call_id));
+        payload.insert(
+            "workflowStepId".to_string(),
+            serde_json::json!(tool_call.workflow_step_id),
+        );
+        payload.insert(
+            "runtimeStepId".to_string(),
+            serde_json::json!(tool_call.step_id),
+        );
+        payload.insert(
+            "toolCallId".to_string(),
+            serde_json::json!(tool_call.tool_call_id),
+        );
         payload.insert("attempt".to_string(), serde_json::json!(tool_call.attempt));
-        payload.insert("toolName".to_string(), serde_json::json!(tool_call.tool_name));
-        payload.insert("invocationKind".to_string(), serde_json::json!(tool_call.invocation_kind));
+        payload.insert(
+            "toolName".to_string(),
+            serde_json::json!(tool_call.tool_name),
+        );
+        payload.insert(
+            "invocationKind".to_string(),
+            serde_json::json!(tool_call.invocation_kind),
+        );
         if !tool_call.capability_id.is_empty() {
-            payload.insert("consumerId".to_string(), serde_json::json!(tool_call.capability_id));
-            payload.insert("consumerKind".to_string(), serde_json::json!(tool_call.invocation_kind));
+            payload.insert(
+                "consumerId".to_string(),
+                serde_json::json!(tool_call.capability_id),
+            );
+            payload.insert(
+                "consumerKind".to_string(),
+                serde_json::json!(tool_call.invocation_kind),
+            );
         }
         if !tool_call.skill_id.is_empty() {
-            payload.insert("consumerId".to_string(), serde_json::json!(tool_call.skill_id));
-            payload.insert("consumerKind".to_string(), serde_json::json!(tool_call.invocation_kind));
+            payload.insert(
+                "consumerId".to_string(),
+                serde_json::json!(tool_call.skill_id),
+            );
+            payload.insert(
+                "consumerKind".to_string(),
+                serde_json::json!(tool_call.invocation_kind),
+            );
         }
         if !tool_call.mcp_server_id.is_empty() {
-            payload.insert("consumerId".to_string(), serde_json::json!(tool_call.mcp_server_id));
-            payload.insert("consumerKind".to_string(), serde_json::json!(tool_call.invocation_kind));
+            payload.insert(
+                "consumerId".to_string(),
+                serde_json::json!(tool_call.mcp_server_id),
+            );
+            payload.insert(
+                "consumerKind".to_string(),
+                serde_json::json!(tool_call.invocation_kind),
+            );
         }
         if !tool_call.failure_class.is_empty() {
-            payload.insert("failureClass".to_string(), serde_json::json!(tool_call.failure_class));
+            payload.insert(
+                "failureClass".to_string(),
+                serde_json::json!(tool_call.failure_class),
+            );
         }
     }
     if let Some(step) = step {
         if name == "workflow.step_status_changed" {
-            payload.insert("status".to_string(), serde_json::json!(step.status.as_str()));
+            payload.insert(
+                "status".to_string(),
+                serde_json::json!(step.status.as_str()),
+            );
         }
         if !step.workflow_step_id.is_empty() {
-            payload.insert("workflowStepId".to_string(), serde_json::json!(step.workflow_step_id));
+            payload.insert(
+                "workflowStepId".to_string(),
+                serde_json::json!(step.workflow_step_id),
+            );
         }
         if !step.consumer_kind.is_empty() {
-            payload.insert("consumerKind".to_string(), serde_json::json!(step.consumer_kind));
+            payload.insert(
+                "consumerKind".to_string(),
+                serde_json::json!(step.consumer_kind),
+            );
         }
         if !step.consumer_id.is_empty() {
-            payload.insert("consumerId".to_string(), serde_json::json!(step.consumer_id));
+            payload.insert(
+                "consumerId".to_string(),
+                serde_json::json!(step.consumer_id),
+            );
         }
         if !step.tool_name.is_empty() {
             payload.insert("toolName".to_string(), serde_json::json!(step.tool_name));
@@ -639,10 +733,16 @@ fn publish_workflow_event(
             );
         }
         if !step.blocked_reason.is_empty() {
-            payload.insert("blockedReason".to_string(), serde_json::json!(step.blocked_reason));
+            payload.insert(
+                "blockedReason".to_string(),
+                serde_json::json!(step.blocked_reason),
+            );
         }
         if !step.last_failure_class.is_empty() && !payload.contains_key("failureClass") {
-            payload.insert("failureClass".to_string(), serde_json::json!(step.last_failure_class));
+            payload.insert(
+                "failureClass".to_string(),
+                serde_json::json!(step.last_failure_class),
+            );
         }
     }
     if let Some(extra) = extra {
@@ -687,32 +787,62 @@ fn publish_tool_call_event(
     tool_call: &runtime::ToolCall,
 ) -> Result<events::Event, ApiError> {
     let mut payload = serde_json::Map::new();
-    payload.insert("toolName".to_string(), serde_json::json!(tool_call.tool_name));
-    payload.insert("status".to_string(), serde_json::json!(tool_call.status.as_str()));
-    payload.insert("invocationKind".to_string(), serde_json::json!(tool_call.invocation_kind));
+    payload.insert(
+        "toolName".to_string(),
+        serde_json::json!(tool_call.tool_name),
+    );
+    payload.insert(
+        "status".to_string(),
+        serde_json::json!(tool_call.status.as_str()),
+    );
+    payload.insert(
+        "invocationKind".to_string(),
+        serde_json::json!(tool_call.invocation_kind),
+    );
     if !tool_call.capability_id.is_empty() {
-        payload.insert("capabilityId".to_string(), serde_json::json!(tool_call.capability_id));
+        payload.insert(
+            "capabilityId".to_string(),
+            serde_json::json!(tool_call.capability_id),
+        );
     }
     if !tool_call.domain_kind.is_empty() {
-        payload.insert("domainKind".to_string(), serde_json::json!(tool_call.domain_kind));
+        payload.insert(
+            "domainKind".to_string(),
+            serde_json::json!(tool_call.domain_kind),
+        );
     }
     if !tool_call.skill_id.is_empty() {
         payload.insert("skillId".to_string(), serde_json::json!(tool_call.skill_id));
     }
     if !tool_call.mcp_server_id.is_empty() {
-        payload.insert("mcpServerId".to_string(), serde_json::json!(tool_call.mcp_server_id));
+        payload.insert(
+            "mcpServerId".to_string(),
+            serde_json::json!(tool_call.mcp_server_id),
+        );
     }
     if !tool_call.mcp_server_name.is_empty() {
-        payload.insert("mcpServerName".to_string(), serde_json::json!(tool_call.mcp_server_name));
+        payload.insert(
+            "mcpServerName".to_string(),
+            serde_json::json!(tool_call.mcp_server_name),
+        );
     }
     if !tool_call.mcp_tool_name.is_empty() {
-        payload.insert("mcpToolName".to_string(), serde_json::json!(tool_call.mcp_tool_name));
+        payload.insert(
+            "mcpToolName".to_string(),
+            serde_json::json!(tool_call.mcp_tool_name),
+        );
     }
     if !tool_call.mcp_transport_kind.is_empty() {
-        payload.insert("mcpTransportKind".to_string(), serde_json::json!(tool_call.mcp_transport_kind));
+        payload.insert(
+            "mcpTransportKind".to_string(),
+            serde_json::json!(tool_call.mcp_transport_kind),
+        );
     }
     if !tool_call.mcp_session_id.is_empty() {
-        payload.insert("mcpSessionId".to_string(), serde_json::json!(tool_call.mcp_session_id));
+        payload.insert(
+            "mcpSessionId".to_string(),
+            serde_json::json!(tool_call.mcp_session_id),
+        );
     }
     if !tool_call.authorization_result.is_empty() {
         payload.insert(
@@ -733,7 +863,10 @@ fn publish_tool_call_event(
         );
     }
     if !tool_call.failure_class.is_empty() {
-        payload.insert("failureClass".to_string(), serde_json::json!(tool_call.failure_class));
+        payload.insert(
+            "failureClass".to_string(),
+            serde_json::json!(tool_call.failure_class),
+        );
     }
 
     let event = events::Event {
@@ -797,9 +930,7 @@ fn project_workflow_calendar_summaries(
                 filtered.push(item.clone());
                 continue;
             }
-            if !step.runtime_step_id.is_empty()
-                && item.step_id.trim() == step.runtime_step_id
-            {
+            if !step.runtime_step_id.is_empty() && item.step_id.trim() == step.runtime_step_id {
                 filtered.push(item.clone());
             }
         }
@@ -808,7 +939,9 @@ fn project_workflow_calendar_summaries(
     Ok(workflow)
 }
 
-fn summarize_calendar_operations(mut items: Vec<calendar::Operation>) -> Vec<calendar::OperationSummary> {
+fn summarize_calendar_operations(
+    mut items: Vec<calendar::Operation>,
+) -> Vec<calendar::OperationSummary> {
     if items.is_empty() {
         return Vec::new();
     }
@@ -988,13 +1121,11 @@ fn capture_terminal_workflow_memory(state: &AppState, workflow: &orchestration::
         },
         "workflow_result",
         &text,
-        vec![
-            kura_memory::SourceLink {
-                kind: kura_memory::SourceKind::Run,
-                id: workflow.run_id.clone(),
-                ..kura_memory::SourceLink::default()
-            },
-        ],
+        vec![kura_memory::SourceLink {
+            kind: kura_memory::SourceKind::Run,
+            id: workflow.run_id.clone(),
+            ..kura_memory::SourceLink::default()
+        }],
     );
     if captured.is_some_and(|(_, due)| due) {
         let state = state.clone();
@@ -1066,24 +1197,46 @@ fn start_workflow_step_execution(
     }
     // Go: persistCheckpoint — checkpoint durability is not part of this wave.
 
-    let workflow =
-        orchestration::start_step_attempt(workflow, &wf_step.workflow_step_id, &runtime_step.step_id, Utc::now());
+    let workflow = orchestration::start_step_attempt(
+        workflow,
+        &wf_step.workflow_step_id,
+        &runtime_step.step_id,
+        Utc::now(),
+    );
 
     match wf_step.consumer_kind.as_str() {
         "calendar" => {
             let (tool_call, step_status, blocked_reason) =
                 execute_workflow_calendar_step(state, &workflow, &runtime_step, wf_step)?;
-            advance_workflow_after_tool_call(state, workflow, &tool_call, Some(step_status), &blocked_reason)
+            advance_workflow_after_tool_call(
+                state,
+                workflow,
+                &tool_call,
+                Some(step_status),
+                &blocked_reason,
+            )
         }
         "mail" => {
             let (tool_call, step_status, blocked_reason) =
                 execute_workflow_mail_step(state, &workflow, &runtime_step, wf_step)?;
-            advance_workflow_after_tool_call(state, workflow, &tool_call, Some(step_status), &blocked_reason)
+            advance_workflow_after_tool_call(
+                state,
+                workflow,
+                &tool_call,
+                Some(step_status),
+                &blocked_reason,
+            )
         }
         "mcp_tool" => {
             let (tool_call, step_status, blocked_reason) =
                 execute_workflow_mcp_tool(state, &workflow, &runtime_step, wf_step)?;
-            advance_workflow_after_tool_call(state, workflow, &tool_call, Some(step_status), &blocked_reason)
+            advance_workflow_after_tool_call(
+                state,
+                workflow,
+                &tool_call,
+                Some(step_status),
+                &blocked_reason,
+            )
         }
         _ => {
             // skill / local_tool / capability consumers: the Go sandbox/policy
@@ -1093,10 +1246,20 @@ fn start_workflow_step_execution(
             let (tool_call, terminal_sync, step_status, blocked_reason) =
                 execute_workflow_capability_tool(state, &workflow, &runtime_step, wf_step)?;
             if terminal_sync {
-                advance_workflow_after_tool_call(state, workflow, &tool_call, Some(step_status), &blocked_reason)
+                advance_workflow_after_tool_call(
+                    state,
+                    workflow,
+                    &tool_call,
+                    Some(step_status),
+                    &blocked_reason,
+                )
             } else {
-                let workflow =
-                    orchestration::bind_tool_call(workflow, &wf_step.workflow_step_id, &tool_call, Utc::now());
+                let workflow = orchestration::bind_tool_call(
+                    workflow,
+                    &wf_step.workflow_step_id,
+                    &tool_call,
+                    Utc::now(),
+                );
                 persist_workflow_detail(state, &workflow).map_err(ApiError::from_store)?;
                 Ok((workflow, false))
             }
@@ -1166,7 +1329,8 @@ fn execute_calendar_action(
     let selection = calendar::Selection {
         integration_id: action.integration_id.trim().to_string(),
     };
-    let map_err = |err: calendar::CalendarError| (CalendarExecutionResult::default(), Some(err.to_string()));
+    let map_err =
+        |err: calendar::CalendarError| (CalendarExecutionResult::default(), Some(err.to_string()));
 
     let result = match action.operation_class {
         calendar::OperationClass::ListEvents => {
@@ -1385,7 +1549,9 @@ fn execute_workflow_calendar_step(
                 workflow_id: workflow.workflow_id.clone(),
                 workflow_step_id: wf_step.workflow_step_id.clone(),
                 attempt: wf_step.attempt_count + 1,
-                invocation_kind: runtime::ToolCallInvocationKind::DomainTool.as_str().to_string(),
+                invocation_kind: runtime::ToolCallInvocationKind::DomainTool
+                    .as_str()
+                    .to_string(),
                 domain_kind: "calendar".to_string(),
                 tool_name: action.operation_class.as_str().to_string(),
                 input: serde_json::to_value(&action).ok(),
@@ -1394,7 +1560,13 @@ fn execute_workflow_calendar_step(
         )
         .map_err(ApiError::internal)?;
     persist_tool_call(state, &tool_call)?;
-    publish_tool_call_event(state, "tool_call.requested", &workflow.run_id, &runtime_step.step_id, &tool_call)?;
+    publish_tool_call_event(
+        state,
+        "tool_call.requested",
+        &workflow.run_id,
+        &runtime_step.step_id,
+        &tool_call,
+    )?;
 
     let (result, exec_err) = execute_calendar_action(
         state,
@@ -1419,10 +1591,7 @@ fn execute_workflow_calendar_step(
 
     let bindings = calendar_integration_bindings(
         state,
-        orchestration::first_non_empty(&[
-            &result.operation.integration_id,
-            &action.integration_id,
-        ]),
+        orchestration::first_non_empty(&[&result.operation.integration_id, &action.integration_id]),
     );
     let output = calendar_tool_call_output(&result);
 
@@ -1442,7 +1611,13 @@ fn execute_workflow_calendar_step(
             )
             .map_err(ApiError::internal)?;
         persist_tool_call(state, &tool_call)?;
-        publish_tool_call_event(state, "tool_call.failed", &workflow.run_id, &runtime_step.step_id, &tool_call)?;
+        publish_tool_call_event(
+            state,
+            "tool_call.failed",
+            &workflow.run_id,
+            &runtime_step.step_id,
+            &tool_call,
+        )?;
         return Ok((tool_call, orchestration::StepStatus::Failed, String::new()));
     }
 
@@ -1459,8 +1634,18 @@ fn execute_workflow_calendar_step(
         )
         .map_err(ApiError::internal)?;
     persist_tool_call(state, &tool_call)?;
-    publish_tool_call_event(state, "tool_call.completed", &workflow.run_id, &runtime_step.step_id, &tool_call)?;
-    Ok((tool_call, orchestration::StepStatus::Completed, String::new()))
+    publish_tool_call_event(
+        state,
+        "tool_call.completed",
+        &workflow.run_id,
+        &runtime_step.step_id,
+        &tool_call,
+    )?;
+    Ok((
+        tool_call,
+        orchestration::StepStatus::Completed,
+        String::new(),
+    ))
 }
 
 /// Maps a calendar execution error string to its stable failure class. The Go
@@ -1487,7 +1672,9 @@ fn calendar_failure_class_for_string(err: &str) -> &'static str {
 /// Go decodeCalendarAction — the workflow step input is the serialized action.
 fn decode_calendar_action(input: Option<&serde_json::Value>) -> Result<calendar::Action, ApiError> {
     let Some(input) = input else {
-        return Err(ApiError::internal("calendar workflow step input is missing"));
+        return Err(ApiError::internal(
+            "calendar workflow step input is missing",
+        ));
     };
     serde_json::from_value(input.clone()).map_err(ApiError::internal)
 }
@@ -1500,14 +1687,20 @@ fn record_calendar_activity(
 ) -> Result<(), ApiError> {
     let store = state.store.lock();
     if !account.integration_id.is_empty() {
-        store.upsert_calendar_account(account).map_err(ApiError::from_store)?;
+        store
+            .upsert_calendar_account(account)
+            .map_err(ApiError::from_store)?;
     }
     if operation.operation_id.is_empty() {
         return Ok(());
     }
-    store.upsert_calendar_operation(operation).map_err(ApiError::from_store)?;
+    store
+        .upsert_calendar_operation(operation)
+        .map_err(ApiError::from_store)?;
     for artifact in artifacts {
-        store.upsert_calendar_artifact(artifact).map_err(ApiError::from_store)?;
+        store
+            .upsert_calendar_artifact(artifact)
+            .map_err(ApiError::from_store)?;
     }
     Ok(())
 }
@@ -1589,7 +1782,9 @@ fn execute_mail_action(
                     account: account.clone(),
                     operation: operation.clone(),
                     artifacts: artifacts.clone(),
-                    output: Some(serde_json::json!({ "account": account, "items": items, "operation": operation, "artifacts": artifacts })),
+                    output: Some(
+                        serde_json::json!({ "account": account, "items": items, "operation": operation, "artifacts": artifacts }),
+                    ),
                 },
                 Err(err) => return map_err(err),
             }
@@ -1608,7 +1803,9 @@ fn execute_mail_action(
                     account: account.clone(),
                     operation: operation.clone(),
                     artifacts: artifacts.clone(),
-                    output: Some(serde_json::json!({ "account": account, "thread": item, "operation": operation, "artifacts": artifacts })),
+                    output: Some(
+                        serde_json::json!({ "account": account, "thread": item, "operation": operation, "artifacts": artifacts }),
+                    ),
                 },
                 Err(err) => return map_err(err),
             }
@@ -1627,7 +1824,9 @@ fn execute_mail_action(
                     account: account.clone(),
                     operation: operation.clone(),
                     artifacts: artifacts.clone(),
-                    output: Some(serde_json::json!({ "account": account, "message": item, "operation": operation, "artifacts": artifacts })),
+                    output: Some(
+                        serde_json::json!({ "account": account, "message": item, "operation": operation, "artifacts": artifacts }),
+                    ),
                 },
                 Err(err) => return map_err(err),
             }
@@ -1645,7 +1844,9 @@ fn execute_mail_action(
                     account: account.clone(),
                     operation: operation.clone(),
                     artifacts: artifacts.clone(),
-                    output: Some(serde_json::json!({ "account": account, "items": items, "operation": operation, "artifacts": artifacts })),
+                    output: Some(
+                        serde_json::json!({ "account": account, "items": items, "operation": operation, "artifacts": artifacts }),
+                    ),
                 },
                 Err(err) => return map_err(err),
             }
@@ -1664,7 +1865,9 @@ fn execute_mail_action(
                     account: account.clone(),
                     operation: operation.clone(),
                     artifacts: artifacts.clone(),
-                    output: Some(serde_json::json!({ "account": account, "draft": item, "operation": operation, "artifacts": artifacts })),
+                    output: Some(
+                        serde_json::json!({ "account": account, "draft": item, "operation": operation, "artifacts": artifacts }),
+                    ),
                 },
                 Err(err) => return map_err(err),
             }
@@ -1690,7 +1893,9 @@ fn execute_mail_action(
                     account: account.clone(),
                     operation: operation.clone(),
                     artifacts: artifacts.clone(),
-                    output: Some(serde_json::json!({ "account": account, "draft": item, "operation": operation, "artifacts": artifacts })),
+                    output: Some(
+                        serde_json::json!({ "account": account, "draft": item, "operation": operation, "artifacts": artifacts }),
+                    ),
                 },
                 Err(err) => return map_err(err),
             }
@@ -1713,7 +1918,9 @@ fn execute_mail_action(
                     account: account.clone(),
                     operation: operation.clone(),
                     artifacts: artifacts.clone(),
-                    output: Some(serde_json::json!({ "account": account, "message": item, "operation": operation, "artifacts": artifacts })),
+                    output: Some(
+                        serde_json::json!({ "account": account, "message": item, "operation": operation, "artifacts": artifacts }),
+                    ),
                 },
                 Err(err) => return map_err(err),
             }
@@ -1731,7 +1938,9 @@ fn execute_mail_action(
                     account: account.clone(),
                     operation: operation.clone(),
                     artifacts: artifacts.clone(),
-                    output: Some(serde_json::json!({ "account": account, "message": item, "operation": operation, "artifacts": artifacts })),
+                    output: Some(
+                        serde_json::json!({ "account": account, "message": item, "operation": operation, "artifacts": artifacts }),
+                    ),
                 },
                 Err(err) => return map_err(err),
             }
@@ -1776,7 +1985,12 @@ fn execute_mail_action(
                     } else {
                         serde_json::json!({ "account": account, "message": message, "operation": operation, "artifacts": artifacts })
                     };
-                    MailExecutionResult { account, operation, artifacts, output: Some(output) }
+                    MailExecutionResult {
+                        account,
+                        operation,
+                        artifacts,
+                        output: Some(output),
+                    }
                 }
                 Err(err) => return map_err(err),
             }
@@ -1815,7 +2029,9 @@ fn execute_workflow_mail_step(
                 workflow_id: workflow.workflow_id.clone(),
                 workflow_step_id: wf_step.workflow_step_id.clone(),
                 attempt: wf_step.attempt_count + 1,
-                invocation_kind: runtime::ToolCallInvocationKind::DomainTool.as_str().to_string(),
+                invocation_kind: runtime::ToolCallInvocationKind::DomainTool
+                    .as_str()
+                    .to_string(),
                 domain_kind: "mail".to_string(),
                 tool_name: action.operation_class.as_str().to_string(),
                 input: serde_json::to_value(&action).ok(),
@@ -1824,7 +2040,13 @@ fn execute_workflow_mail_step(
         )
         .map_err(ApiError::internal)?;
     persist_tool_call(state, &tool_call)?;
-    publish_tool_call_event(state, "tool_call.requested", &workflow.run_id, &runtime_step.step_id, &tool_call)?;
+    publish_tool_call_event(
+        state,
+        "tool_call.requested",
+        &workflow.run_id,
+        &runtime_step.step_id,
+        &tool_call,
+    )?;
 
     let (result, exec_err) = execute_mail_action(
         state,
@@ -1848,10 +2070,7 @@ fn execute_workflow_mail_step(
 
     let bindings = calendar_integration_bindings(
         state,
-        orchestration::first_non_empty(&[
-            &result.operation.integration_id,
-            &action.integration_id,
-        ]),
+        orchestration::first_non_empty(&[&result.operation.integration_id, &action.integration_id]),
     );
     let output = mail_tool_call_output(&result);
 
@@ -1871,7 +2090,13 @@ fn execute_workflow_mail_step(
             )
             .map_err(ApiError::internal)?;
         persist_tool_call(state, &tool_call)?;
-        publish_tool_call_event(state, "tool_call.failed", &workflow.run_id, &runtime_step.step_id, &tool_call)?;
+        publish_tool_call_event(
+            state,
+            "tool_call.failed",
+            &workflow.run_id,
+            &runtime_step.step_id,
+            &tool_call,
+        )?;
         return Ok((tool_call, orchestration::StepStatus::Failed, String::new()));
     }
 
@@ -1888,8 +2113,18 @@ fn execute_workflow_mail_step(
         )
         .map_err(ApiError::internal)?;
     persist_tool_call(state, &tool_call)?;
-    publish_tool_call_event(state, "tool_call.completed", &workflow.run_id, &runtime_step.step_id, &tool_call)?;
-    Ok((tool_call, orchestration::StepStatus::Completed, String::new()))
+    publish_tool_call_event(
+        state,
+        "tool_call.completed",
+        &workflow.run_id,
+        &runtime_step.step_id,
+        &tool_call,
+    )?;
+    Ok((
+        tool_call,
+        orchestration::StepStatus::Completed,
+        String::new(),
+    ))
 }
 
 fn mail_failure_class_for_string(err: &str) -> &'static str {
@@ -1931,14 +2166,20 @@ fn record_mail_activity(
 ) -> Result<(), ApiError> {
     let store = state.store.lock();
     if !account.integration_id.is_empty() {
-        store.upsert_mail_account(account).map_err(ApiError::from_store)?;
+        store
+            .upsert_mail_account(account)
+            .map_err(ApiError::from_store)?;
     }
     if operation.operation_id.is_empty() {
         return Ok(());
     }
-    store.upsert_mail_operation(operation).map_err(ApiError::from_store)?;
+    store
+        .upsert_mail_operation(operation)
+        .map_err(ApiError::from_store)?;
     for artifact in artifacts {
-        store.upsert_mail_artifact(artifact).map_err(ApiError::from_store)?;
+        store
+            .upsert_mail_artifact(artifact)
+            .map_err(ApiError::from_store)?;
     }
     Ok(())
 }
@@ -1977,9 +2218,13 @@ fn execute_workflow_mcp_tool(
         let blocked_reason = if authorization.status == mcp::ToolAuthorizationStatus::Rejected
             || authorization.status == mcp::ToolAuthorizationStatus::Pending
         {
-            orchestration::BlockedReason::ApprovalDenied.as_str().to_string()
+            orchestration::BlockedReason::ApprovalDenied
+                .as_str()
+                .to_string()
         } else {
-            orchestration::BlockedReason::PolicyBlocked.as_str().to_string()
+            orchestration::BlockedReason::PolicyBlocked
+                .as_str()
+                .to_string()
         };
         let tool_call = runtime_manager
             .create_tool_call(
@@ -1989,7 +2234,9 @@ fn execute_workflow_mcp_tool(
                     workflow_id: workflow.workflow_id.clone(),
                     workflow_step_id: wf_step.workflow_step_id.clone(),
                     attempt: wf_step.attempt_count + 1,
-                    invocation_kind: runtime::ToolCallInvocationKind::McpTool.as_str().to_string(),
+                    invocation_kind: runtime::ToolCallInvocationKind::McpTool
+                        .as_str()
+                        .to_string(),
                     mcp_server_id: wf_step.consumer_id.clone(),
                     mcp_tool_name: wf_step.tool_name.clone(),
                     tool_name: wf_step.tool_name.clone(),
@@ -2015,7 +2262,9 @@ fn execute_workflow_mcp_tool(
                 workflow_id: workflow.workflow_id.clone(),
                 workflow_step_id: wf_step.workflow_step_id.clone(),
                 attempt: wf_step.attempt_count + 1,
-                invocation_kind: runtime::ToolCallInvocationKind::McpTool.as_str().to_string(),
+                invocation_kind: runtime::ToolCallInvocationKind::McpTool
+                    .as_str()
+                    .to_string(),
                 mcp_server_id: server.server.server_id.clone(),
                 mcp_server_name: server.server.display_name.clone(),
                 mcp_tool_name: wf_step.tool_name.clone(),
@@ -2034,11 +2283,22 @@ fn execute_workflow_mcp_tool(
         )
         .map_err(ApiError::internal)?;
     persist_tool_call(state, &tool_call)?;
-    publish_tool_call_event(state, "tool_call.requested", &workflow.run_id, &runtime_step.step_id, &tool_call)?;
+    publish_tool_call_event(
+        state,
+        "tool_call.requested",
+        &workflow.run_id,
+        &runtime_step.step_id,
+        &tool_call,
+    )?;
 
     let input_value = wf_step.input.clone().unwrap_or(serde_json::Value::Null);
     let result = mcp_manager
-        .call_tool(&wf_step.consumer_id, &wf_step.tool_name, input_value, &authorization)
+        .call_tool(
+            &wf_step.consumer_id,
+            &wf_step.tool_name,
+            input_value,
+            &authorization,
+        )
         .map_err(ApiError::internal)?;
 
     let mut output = serde_json::Map::new();
@@ -2046,7 +2306,10 @@ fn execute_workflow_mcp_tool(
         "transportKind".to_string(),
         serde_json::json!(server.server.transport_kind.as_str()),
     );
-    output.insert("sessionId".to_string(), serde_json::json!(result.session_id));
+    output.insert(
+        "sessionId".to_string(),
+        serde_json::json!(result.session_id),
+    );
     if let Some(result_output) = &result.output {
         output.insert("result".to_string(), result_output.clone());
     }
@@ -2070,8 +2333,18 @@ fn execute_workflow_mcp_tool(
             )
             .map_err(ApiError::internal)?;
         persist_tool_call(state, &tool_call)?;
-        publish_tool_call_event(state, "tool_call.completed", &workflow.run_id, &runtime_step.step_id, &tool_call)?;
-        Ok((tool_call, orchestration::StepStatus::Completed, String::new()))
+        publish_tool_call_event(
+            state,
+            "tool_call.completed",
+            &workflow.run_id,
+            &runtime_step.step_id,
+            &tool_call,
+        )?;
+        Ok((
+            tool_call,
+            orchestration::StepStatus::Completed,
+            String::new(),
+        ))
     } else {
         tool_call = runtime_manager
             .fail_tool_call(
@@ -2092,14 +2365,22 @@ fn execute_workflow_mcp_tool(
             )
             .map_err(ApiError::internal)?;
         persist_tool_call(state, &tool_call)?;
-        publish_tool_call_event(state, "tool_call.failed", &workflow.run_id, &runtime_step.step_id, &tool_call)?;
+        publish_tool_call_event(
+            state,
+            "tool_call.failed",
+            &workflow.run_id,
+            &runtime_step.step_id,
+            &tool_call,
+        )?;
         Ok((tool_call, orchestration::StepStatus::Failed, String::new()))
     }
 }
 
 /// Serializes a ConsumerContractView to the tool call sandbox map (Go
 /// consumerViewMap).
-fn consumer_view_map(view: &kura_sandbox::ConsumerContractView) -> serde_json::Map<String, serde_json::Value> {
+fn consumer_view_map(
+    view: &kura_sandbox::ConsumerContractView,
+) -> serde_json::Map<String, serde_json::Value> {
     serde_json::to_value(view)
         .ok()
         .and_then(|value| value.as_object().cloned())
@@ -2124,7 +2405,9 @@ fn execute_workflow_capability_tool(
     let invocation_kind = if wf_step.consumer_kind == "skill" {
         runtime::ToolCallInvocationKind::Skill.as_str().to_string()
     } else {
-        runtime::ToolCallInvocationKind::LocalTool.as_str().to_string()
+        runtime::ToolCallInvocationKind::LocalTool
+            .as_str()
+            .to_string()
     };
     let mut tool_call = runtime_manager
         .create_tool_call(
@@ -2144,7 +2427,9 @@ fn execute_workflow_capability_tool(
         )
         .map_err(ApiError::internal)?;
 
-    let blocked_reason = orchestration::BlockedReason::ConsumerUnavailable.as_str().to_string();
+    let blocked_reason = orchestration::BlockedReason::ConsumerUnavailable
+        .as_str()
+        .to_string();
     tool_call = runtime_manager
         .fail_tool_call(
             &workflow.run_id,
@@ -2159,7 +2444,13 @@ fn execute_workflow_capability_tool(
         )
         .map_err(ApiError::internal)?;
     persist_tool_call(state, &tool_call)?;
-    publish_tool_call_event(state, "tool_call.failed", &workflow.run_id, &runtime_step.step_id, &tool_call)?;
+    publish_tool_call_event(
+        state,
+        "tool_call.failed",
+        &workflow.run_id,
+        &runtime_step.step_id,
+        &tool_call,
+    )?;
     Ok((
         tool_call,
         true,
@@ -2185,7 +2476,9 @@ fn execute_workflow_computer_use_step(
         .as_ref()
         .ok_or_else(|| ApiError::internal("computer-use workflow input must be an object"))?;
     let Some(input_map) = input_value.as_object() else {
-        return Err(ApiError::internal("computer-use workflow input must be an object"));
+        return Err(ApiError::internal(
+            "computer-use workflow input must be an object",
+        ));
     };
 
     let (session, _) = computer_use_manager
@@ -2359,7 +2652,9 @@ fn string_field(map: &serde_json::Map<String, serde_json::Value>, key: &str) -> 
 }
 
 /// Go decodeWorkflowComputerUseAction.
-fn decode_workflow_computer_use_action(payload: &serde_json::Value) -> computeruse::CreateActionInput {
+fn decode_workflow_computer_use_action(
+    payload: &serde_json::Value,
+) -> computeruse::CreateActionInput {
     let map = payload.as_object().cloned().unwrap_or_default();
     computeruse::CreateActionInput {
         action_kind: deserialize_enum::<computeruse::ActionKind>(&string_field(&map, "actionKind")),
@@ -2378,9 +2673,18 @@ fn publish_computer_use_artifact_event(
     artifact: &computeruse::Artifact,
 ) -> Result<(), ApiError> {
     let mut payload = serde_json::Map::new();
-    payload.insert("artifactId".to_string(), serde_json::json!(artifact.artifact_id));
-    payload.insert("artifactKind".to_string(), serde_json::json!(artifact.kind.as_str()));
-    payload.insert("captureStatus".to_string(), serde_json::json!(artifact.status.as_str()));
+    payload.insert(
+        "artifactId".to_string(),
+        serde_json::json!(artifact.artifact_id),
+    );
+    payload.insert(
+        "artifactKind".to_string(),
+        serde_json::json!(artifact.kind.as_str()),
+    );
+    payload.insert(
+        "captureStatus".to_string(),
+        serde_json::json!(artifact.status.as_str()),
+    );
     let event = events::Event {
         category: "capability".to_string(),
         name: "computer_use.artifact_recorded".to_string(),
@@ -2412,8 +2716,14 @@ fn publish_computer_use_target_mismatch(
     action: &computeruse::Action,
 ) -> Result<(), ApiError> {
     let mut payload = serde_json::Map::new();
-    payload.insert("status".to_string(), serde_json::json!(action.status.as_str()));
-    payload.insert("failureClass".to_string(), serde_json::json!(action.failure_class));
+    payload.insert(
+        "status".to_string(),
+        serde_json::json!(action.status.as_str()),
+    );
+    payload.insert(
+        "failureClass".to_string(),
+        serde_json::json!(action.failure_class),
+    );
     payload.insert(
         "computerUseSessionId".to_string(),
         serde_json::json!(action.computer_use_session_id),
@@ -2478,14 +2788,16 @@ pub(crate) fn advance_workflow_after_tool_call(
         match step.status {
             orchestration::StepStatus::Completed => {
                 if let Some(manager) = runtime_manager {
-                    if let Ok((updated_step, run_update)) = manager.update_step_status_and_reconcile_run(
-                        &workflow.run_id,
-                        &tool_call.step_id,
-                        runtime::UpdateStepStatusInput {
-                            status: runtime::StepStatus::Completed,
-                            output: tool_call.output.clone(),
-                        },
-                    ) {
+                    if let Ok((updated_step, run_update)) = manager
+                        .update_step_status_and_reconcile_run(
+                            &workflow.run_id,
+                            &tool_call.step_id,
+                            runtime::UpdateStepStatusInput {
+                                status: runtime::StepStatus::Completed,
+                                output: tool_call.output.clone(),
+                            },
+                        )
+                    {
                         let _ = persist_step(state, &updated_step);
                         if let Some(run_update) = run_update {
                             let _ = persist_run(state, &run_update);
@@ -2498,20 +2810,23 @@ pub(crate) fn advance_workflow_after_tool_call(
                     if let Ok((updated_step, run_update, _)) =
                         manager.cancel_step(&workflow.run_id, &tool_call.step_id)
                     {
-                        let _ = persist_step_cancel_mutation(state, &updated_step, run_update.as_ref());
+                        let _ =
+                            persist_step_cancel_mutation(state, &updated_step, run_update.as_ref());
                     }
                 }
             }
             orchestration::StepStatus::Failed => {
                 if let Some(manager) = runtime_manager {
-                    if let Ok((updated_step, run_update)) = manager.update_step_status_and_reconcile_run(
-                        &workflow.run_id,
-                        &tool_call.step_id,
-                        runtime::UpdateStepStatusInput {
-                            status: runtime::StepStatus::Failed,
-                            output: tool_call.output.clone(),
-                        },
-                    ) {
+                    if let Ok((updated_step, run_update)) = manager
+                        .update_step_status_and_reconcile_run(
+                            &workflow.run_id,
+                            &tool_call.step_id,
+                            runtime::UpdateStepStatusInput {
+                                status: runtime::StepStatus::Failed,
+                                output: tool_call.output.clone(),
+                            },
+                        )
+                    {
                         let _ = persist_step(state, &updated_step);
                         if let Some(run_update) = run_update {
                             let _ = persist_run(state, &run_update);
@@ -2647,7 +2962,9 @@ fn link_workflow_calendar_operations_to_delivery(
         }
         item.delivery_id = delivery_id.trim().to_string();
         item.updated_at = Utc::now();
-        store.upsert_calendar_operation(&item).map_err(ApiError::from_store)?;
+        store
+            .upsert_calendar_operation(&item)
+            .map_err(ApiError::from_store)?;
         if let Some(calendar_manager) = state.calendar.as_ref() {
             calendar_manager.store_operation(item);
         }
@@ -2678,14 +2995,15 @@ fn link_workflow_mail_operations_to_delivery(
         }
         item.delivery_id = delivery_id.trim().to_string();
         item.updated_at = Utc::now();
-        store.upsert_mail_operation(&item).map_err(ApiError::from_store)?;
+        store
+            .upsert_mail_operation(&item)
+            .map_err(ApiError::from_store)?;
         if let Some(mail_manager) = state.mail.as_ref() {
             mail_manager.store_operation(item);
         }
     }
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -2700,6 +3018,7 @@ mod tests {
 
     fn test_config() -> kura_config::Config {
         kura_config::Config {
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-workflows-test".to_string(),
@@ -2707,23 +3026,42 @@ mod tests {
             version: "0.1.0".to_string(),
             llm: kura_config::LlmConfig::default(),
             connectors: kura_config::ConnectorConfig {
-                discord: kura_config::DiscordConnectorConfig { enabled: false, ..Default::default() },
-                telegram: kura_config::TelegramConnectorConfig { enabled: false, ..Default::default() },
-                slack: kura_config::SlackConnectorConfig { enabled: false, ..Default::default() },
-                matrix: kura_config::MatrixConnectorConfig { enabled: false, ..Default::default() },
+                discord: kura_config::DiscordConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                telegram: kura_config::TelegramConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                slack: kura_config::SlackConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                matrix: kura_config::MatrixConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
             },
+            egress: Default::default(),
         }
     }
 
     fn temp_store() -> Arc<Mutex<SQLiteStore>> {
         let dir = std::env::temp_dir().join(format!("kura-api-workflows-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&dir).expect("mkdir");
-        Arc::new(Mutex::new(SQLiteStore::new(dir.to_str().expect("path")).expect("store")))
+        Arc::new(Mutex::new(
+            SQLiteStore::new(dir.to_str().expect("path")).expect("store"),
+        ))
     }
 
     fn test_state_with_runtime() -> (AppState, Arc<kura_runtime::Manager>) {
         let runtime = Arc::new(kura_runtime::Manager::new());
-        let state = AppState::new(test_config(), Arc::new(kura_events::Bus::new()), temp_store());
+        let state = AppState::new(
+            test_config(),
+            Arc::new(kura_events::Bus::new()),
+            temp_store(),
+        );
         let mut state = state;
         state.runtime = Some(runtime.clone());
         (state, runtime)
@@ -2740,20 +3078,21 @@ mod tests {
             "---\nname: exec-skill\ndescription: executable skill\nexecution.entrypoint: scripts/run.sh\nexecution.working_dir: .\nexecution.profile_id: subprocess_default\nexecution.read_roots: .\nexecution.write_roots: .\nexecution.network_mode: deny\nexecution.timeout_ms: 5000\nexecution.approval_mode: allow\n---\nworkflow test skill\n",
         )
         .expect("write skill");
-        std::fs::create_dir_all(format!("{data_root}/skills/exec-skill/scripts")).expect("mkdir scripts");
+        std::fs::create_dir_all(format!("{data_root}/skills/exec-skill/scripts"))
+            .expect("mkdir scripts");
         std::fs::write(
             format!("{data_root}/skills/exec-skill/scripts/run.sh"),
             "#!/bin/sh\nprintf 'workflow-ok %s' \"$1\"\n",
         )
         .expect("write entrypoint");
-        kura_skills::Registry::with_roots(
-            home_root.to_str().expect("path"),
-            data_root,
-        )
-        .expect("registry")
+        kura_skills::Registry::with_roots(home_root.to_str().expect("path"), data_root)
+            .expect("registry")
     }
 
-    fn run_with_entrypoint(state: &AppState, runtime: &Arc<kura_runtime::Manager>) -> kura_runtime::Run {
+    fn run_with_entrypoint(
+        state: &AppState,
+        runtime: &Arc<kura_runtime::Manager>,
+    ) -> kura_runtime::Run {
         let run = runtime
             .create_run(kura_runtime::CreateRunInput {
                 entrypoint: "operator".to_string(),
@@ -2780,7 +3119,9 @@ mod tests {
             .expect("request");
         let response = app.clone().oneshot(request).await.expect("oneshot");
         let status = response.status();
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let json: serde_json::Value = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -2832,10 +3173,25 @@ mod tests {
         assert_eq!(created["status"], "planned");
         assert_eq!(created["runId"], run.run_id);
         assert_eq!(created["steps"].as_array().map(Vec::len), Some(1));
-        assert!(created["steps"][0]["runtimeStepId"].is_null(), "body={created}");
-        assert!(created["steps"][0]["activeToolCallId"].is_null(), "body={created}");
-        assert!(created["steps"][0]["selectionRationale"].as_str().map(str::len).unwrap_or(0) > 0);
-        let workflow_id = created["workflowId"].as_str().expect("workflowId").to_string();
+        assert!(
+            created["steps"][0]["runtimeStepId"].is_null(),
+            "body={created}"
+        );
+        assert!(
+            created["steps"][0]["activeToolCallId"].is_null(),
+            "body={created}"
+        );
+        assert!(
+            created["steps"][0]["selectionRationale"]
+                .as_str()
+                .map(str::len)
+                .unwrap_or(0)
+                > 0
+        );
+        let workflow_id = created["workflowId"]
+            .as_str()
+            .expect("workflowId")
+            .to_string();
 
         // GET list -> only the test-environment workflow.
         let (status, list) = request(
@@ -2846,7 +3202,11 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(list["items"].as_array().map(Vec::len), Some(1), "body={list}");
+        assert_eq!(
+            list["items"].as_array().map(Vec::len),
+            Some(1),
+            "body={list}"
+        );
 
         // GET by id -> environment scope + inspectable planning truth.
         let (status, got) = request(
@@ -2902,7 +3262,7 @@ mod tests {
             &app,
             Method::POST,
             &format!("/v1/runs/{}/workflows", run.run_id),
-            Some("{" ),
+            Some("{"),
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -2932,7 +3292,9 @@ mod tests {
             &app,
             Method::POST,
             &format!("/v1/runs/{}/workflows", run.run_id),
-            Some(r#"{"calendarAction":{"operationClass":"list_events","windowStart":"not-a-time"}}"#),
+            Some(
+                r#"{"calendarAction":{"operationClass":"list_events","windowStart":"not-a-time"}}"#,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "body={body}");
@@ -3041,7 +3403,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "body={created}");
-        let workflow_id = created["workflowId"].as_str().expect("workflowId").to_string();
+        let workflow_id = created["workflowId"]
+            .as_str()
+            .expect("workflowId")
+            .to_string();
         assert_eq!(created["steps"][0]["consumerKind"], "skill");
 
         // Start -> 200; the skill consumer backend is not ported, so the step
@@ -3154,5 +3519,67 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    /// Workflows are addressed under their run, so the run carries tenant
+    /// ownership: another tenant cannot list, read, or act on the workflows of
+    /// a run it does not own, and the refusal is a 404 rather than a
+    /// disclosure.
+    #[tokio::test]
+    async fn workflows_are_scoped_by_their_owning_run() {
+        let (state, runtime) = test_state_with_runtime();
+        let run = run_with_entrypoint(&state, &runtime);
+        // Bind the run to tenant A, the way the runs family does on create.
+        state
+            .store
+            .lock()
+            .bind_row_tenant("runs", "run_id", &run.run_id, "tnt_a")
+            .expect("bind run");
+        let app = super::super::router(state.clone());
+
+        let uri = format!("/v1/runs/{}/workflows", run.run_id);
+
+        let tenant_request = |tenant: &'static str, method: Method, uri: String| {
+            let app = app.clone();
+            async move {
+                let mut request = Request::builder()
+                    .method(method)
+                    .uri(&uri)
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(String::new()))
+                    .expect("request");
+                request
+                    .extensions_mut()
+                    .insert(crate::middleware::TenantContext(
+                        kura_identity::TenantContext {
+                            tenant_id: tenant.to_string(),
+                            principal_id: format!("prn_{tenant}"),
+                            ..Default::default()
+                        },
+                    ));
+                app.oneshot(request).await.expect("oneshot").status()
+            }
+        };
+
+        // The owner reaches the run's workflows.
+        assert_eq!(
+            tenant_request("tnt_a", Method::GET, uri.clone()).await,
+            StatusCode::OK
+        );
+        // Another tenant does not, and learns nothing about the run.
+        assert_eq!(
+            tenant_request("tnt_b", Method::GET, uri.clone()).await,
+            StatusCode::NOT_FOUND
+        );
+        // Nested actions are covered by the same layer.
+        assert_eq!(
+            tenant_request(
+                "tnt_b",
+                Method::POST,
+                format!("/v1/runs/{}/workflows/wf_nonexistent/start", run.run_id),
+            )
+            .await,
+            StatusCode::NOT_FOUND
+        );
     }
 }

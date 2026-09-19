@@ -391,6 +391,9 @@ pub struct ChatQueryResponse {
     pub continuity_included_count: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuity_excluded_count: Option<i64>,
+    /// Stage 9.0: the tool calls this turn made, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_trace: Vec<kura_chat::ToolTraceEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1606,13 +1609,22 @@ mod tests {
             provider: "echo".to_string(),
             model: "echo-1".to_string(),
             skills: vec!["skill_a".to_string()],
-            skill_contracts: vec![serde_json::json!({ "name": "x" }).as_object().expect("obj").clone()],
+            skill_contracts: vec![
+                serde_json::json!({ "name": "x" })
+                    .as_object()
+                    .expect("obj")
+                    .clone(),
+            ],
             query: "hello".to_string(),
             status: "completed".to_string(),
             partial: false,
             reply: "hi".to_string(),
             finish_reason: "stop".to_string(),
-            usage: llm::Usage { input_tokens: 3, output_tokens: 1, total_tokens: 4 },
+            usage: llm::Usage {
+                input_tokens: 3,
+                output_tokens: 1,
+                total_tokens: 4,
+            },
             error_code: String::new(),
             error: String::new(),
             thread_id: "thread_1".to_string(),
@@ -1624,6 +1636,7 @@ mod tests {
             continuity_status: "applied".to_string(),
             continuity_included_count: Some(2),
             continuity_excluded_count: None,
+            tool_trace: Vec::new(),
         };
         round_trip(&value);
         let json = serde_json::to_value(&value).expect("serialize");
@@ -1631,7 +1644,10 @@ mod tests {
         assert_eq!(json["usage"]["inputTokens"], 3);
         assert!(json.get("errorCode").is_none(), "empty string omitted");
         assert_eq!(json["continuityApplied"], true);
-        assert!(json.get("continuityExcludedCount").is_none(), "None omitted");
+        assert!(
+            json.get("continuityExcludedCount").is_none(),
+            "None omitted"
+        );
     }
 
     #[test]

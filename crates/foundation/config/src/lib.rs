@@ -25,5 +25,7 @@ pub use projection::{
 pub use types::{
     Config, ConnectorConfig, DiscordConnectorConfig, Environment, LlmConfig,
     ManagedCliProviderConfig, MatrixConnectorConfig, OpenAiCompatibleProviderConfig,
-    SlackConnectorConfig, TelegramConnectorConfig,
+    SlackConnectorConfig, StoreConfig, TelegramConnectorConfig,
 };
+
+pub use file::{FileConfigValidation, INLINE_SECRET_PATHS, validate_file_config_json};

@@ -11,11 +11,14 @@
 
 use rusqlite::{params, params_from_iter, types::Value};
 
-use crate::crud::{enum_str, now_rfc3339, null_string, opt_time_string};
 use crate::SQLiteStore;
+use crate::crud::{enum_str, now_rfc3339, null_string, opt_time_string};
 
 impl SQLiteStore {
-    pub fn upsert_replay_candidate(&self, item: &kura_evaluation::ReplayCandidate) -> Result<(), String> {
+    pub fn upsert_replay_candidate(
+        &self,
+        item: &kura_evaluation::ReplayCandidate,
+    ) -> Result<(), String> {
         let document_json =
             serde_json::to_string(item).map_err(|e| format!("marshal replay candidate: {e}"))?;
         self.conn
@@ -91,12 +94,14 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("list replay candidates: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
-            let item = serde_json::from_str(&raw)
-                .map_err(|e| format!("decode replay candidate: {e}"))?;
+            let item =
+                serde_json::from_str(&raw).map_err(|e| format!("decode replay candidate: {e}"))?;
             items.push(item);
         }
         Ok(items)
@@ -119,7 +124,9 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("get replay candidate {candidate_id}: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -129,7 +136,10 @@ impl SQLiteStore {
         Ok(Some(item))
     }
 
-    pub fn upsert_replay_attempt(&self, item: &kura_evaluation::ReplayAttempt) -> Result<(), String> {
+    pub fn upsert_replay_attempt(
+        &self,
+        item: &kura_evaluation::ReplayAttempt,
+    ) -> Result<(), String> {
         let document_json =
             serde_json::to_string(item).map_err(|e| format!("marshal replay attempt: {e}"))?;
         self.conn
@@ -203,12 +213,14 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("list replay attempts: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
-            let item = serde_json::from_str(&raw)
-                .map_err(|e| format!("decode replay attempt: {e}"))?;
+            let item =
+                serde_json::from_str(&raw).map_err(|e| format!("decode replay attempt: {e}"))?;
             items.push(item);
         }
         Ok(items)
@@ -231,7 +243,9 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("get replay attempt {attempt_id}: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -241,7 +255,10 @@ impl SQLiteStore {
         Ok(Some(item))
     }
 
-    pub fn upsert_comparison_result(&self, item: &kura_evaluation::ComparisonResult) -> Result<(), String> {
+    pub fn upsert_comparison_result(
+        &self,
+        item: &kura_evaluation::ComparisonResult,
+    ) -> Result<(), String> {
         let document_json =
             serde_json::to_string(item).map_err(|e| format!("marshal comparison result: {e}"))?;
         self.conn
@@ -311,12 +328,13 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("list comparisons: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
-            let item = serde_json::from_str(&raw)
-                .map_err(|e| format!("decode comparison: {e}"))?;
+            let item = serde_json::from_str(&raw).map_err(|e| format!("decode comparison: {e}"))?;
             items.push(item);
         }
         Ok(items)
@@ -339,7 +357,9 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("get comparison {comparison_id}: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -349,7 +369,10 @@ impl SQLiteStore {
         Ok(Some(item))
     }
 
-    pub fn upsert_regression_fixture(&self, item: &kura_evaluation::RegressionFixture) -> Result<(), String> {
+    pub fn upsert_regression_fixture(
+        &self,
+        item: &kura_evaluation::RegressionFixture,
+    ) -> Result<(), String> {
         let document_json =
             serde_json::to_string(item).map_err(|e| format!("marshal regression fixture: {e}"))?;
         self.conn
@@ -410,7 +433,9 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("list regression fixtures: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
@@ -438,7 +463,9 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("get regression fixture {fixture_id}: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -448,7 +475,6 @@ impl SQLiteStore {
         Ok(Some(item))
     }
 }
-
 
 // --- kura_evaluation::Store trait impl (sync wrapper over the DAOs) ---
 //

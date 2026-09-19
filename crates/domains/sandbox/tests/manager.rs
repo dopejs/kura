@@ -50,6 +50,8 @@ fn test_config(data_dir: &str) -> kura_config::Config {
             ..Default::default()
         },
         connectors: kura_config::ConnectorConfig::default(),
+        egress: Default::default(),
+        store: Default::default(),
     }
 }
 

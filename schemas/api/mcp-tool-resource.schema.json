@@ -19,6 +19,7 @@
     "title": { "type": "string" },
     "description": { "type": "string" },
     "schemaFingerprint": { "type": "string" },
+    "inputSchema": { "type": "object", "description": "The tool's inputSchema as the MCP server declared it." },
     "discoveryStatus": { "type": "string", "enum": ["discovered", "stale", "unavailable"] },
     "lastDiscoveredAt": { "type": "string", "format": "date-time" },
     "updatedAt": { "type": "string", "format": "date-time" },

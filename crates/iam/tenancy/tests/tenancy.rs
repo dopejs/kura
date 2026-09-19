@@ -12,13 +12,11 @@ use kura_events::{Bus, Filter};
 use kura_identity::tenantctx;
 use kura_identity::{Permission, TenantContext};
 use kura_runtime::{Run, RunStatus};
+use kura_store::SQLiteStore;
 use kura_store::delivery::DeliveryTargetRecord;
 use kura_store::schedule::ScheduleRecord;
-use kura_store::SQLiteStore;
-use kura_tenancy::{
-    BindingAccessScope, ProfileAccessScope, TenancyError,
-};
 use kura_tenancy::runtime::{runtime_tenant_id, runtime_tenant_predicate};
+use kura_tenancy::{BindingAccessScope, ProfileAccessScope, TenancyError};
 
 fn temp_dir(name: &str) -> String {
     let dir = std::env::temp_dir().join(format!("kura_tenancy_{name}_{}", std::process::id()));
@@ -50,7 +48,10 @@ fn make_run(id: &str) -> Run {
 
 #[test]
 fn require_without_context_fails_closed() {
-    assert_eq!(kura_tenancy::require(), Err(TenancyError::TenantContextRequired));
+    assert_eq!(
+        kura_tenancy::require(),
+        Err(TenancyError::TenantContextRequired)
+    );
     assert!(tenantctx::from_context().is_none());
     // Must panics when the context is missing.
     let result = std::panic::catch_unwind(kura_tenancy::must);
@@ -91,7 +92,10 @@ fn cross_tenant_read_emits_audit_denial_without_leaking_existence() {
         // Cross-tenant by-id read: not-found (existence not leaked)...
         assert!(rt.get_run_for_tenant("run_a").unwrap().is_none());
         // ...and the audit denial was published.
-        let audit = bus.list(&Filter { category: "audit".to_string(), ..Filter::default() });
+        let audit = bus.list(&Filter {
+            category: "audit".to_string(),
+            ..Filter::default()
+        });
         assert_eq!(audit.len(), 1);
         assert_eq!(audit[0].name, "audit.cross_tenant_access_denied");
     });
@@ -115,7 +119,10 @@ fn cross_tenant_write_refused_and_audited() {
     tenantctx::with_context(ctx("ten_b"), || {
         let err = rt.upsert_run_for_tenant(&make_run("run_a")).unwrap_err();
         assert_eq!(err, TenancyError::CrossTenantWrite);
-        let audit = bus.list(&Filter { category: "audit".to_string(), ..Filter::default() });
+        let audit = bus.list(&Filter {
+            category: "audit".to_string(),
+            ..Filter::default()
+        });
         assert_eq!(audit.len(), 1);
     });
 
@@ -189,8 +196,18 @@ fn schedules_accessor_cross_tenant_not_found() {
     });
     tenantctx::with_context(ctx("ten_b"), || {
         // Cross-tenant get -> not-found (no existence leak).
-        assert!(accessor.get_schedule_for_tenant("test", "sch_1").unwrap().is_none());
-        assert!(accessor.list_schedules_for_tenant("test").unwrap().is_empty());
+        assert!(
+            accessor
+                .get_schedule_for_tenant("test", "sch_1")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            accessor
+                .list_schedules_for_tenant("test")
+                .unwrap()
+                .is_empty()
+        );
     });
 }
 
@@ -219,8 +236,14 @@ fn events_accessor_requires_tenant_and_rejects_global() {
     let accessor = kura_tenancy::events::Events::new(store, None);
 
     // No tenant context: fail-closed.
-    assert_eq!(accessor.append_event_for_tenant(&kura_events::Event::default()), Err(TenancyError::TenantContextRequired));
-    assert_eq!(accessor.list_events_for_tenant(&Filter::default()), Err(TenancyError::TenantContextRequired));
+    assert_eq!(
+        accessor.append_event_for_tenant(&kura_events::Event::default()),
+        Err(TenancyError::TenantContextRequired)
+    );
+    assert_eq!(
+        accessor.list_events_for_tenant(&Filter::default()),
+        Err(TenancyError::TenantContextRequired)
+    );
 
     // Global category refused even with a tenant context.
     let mut global = kura_events::Event::default();
@@ -243,7 +266,12 @@ fn events_accessor_requires_tenant_and_rejects_global() {
         assert_eq!(list.len(), 1);
     });
     tenantctx::with_context(ctx("ten_b"), || {
-        assert!(accessor.list_events_for_tenant(&Filter::default()).unwrap().is_empty());
+        assert!(
+            accessor
+                .list_events_for_tenant(&Filter::default())
+                .unwrap()
+                .is_empty()
+        );
     });
 }
 
@@ -253,8 +281,14 @@ fn binding_and_profile_scope_checks() {
         tenant_id: "ten_a".to_string(),
         permissions: vec![Permission::BindingsInspect, Permission::BindingsManage],
     };
-    let ws_a = kura_bindings::Workspace { tenant_id: "ten_a".to_string(), ..kura_bindings::Workspace::default() };
-    let ws_b = kura_bindings::Workspace { tenant_id: "ten_b".to_string(), ..kura_bindings::Workspace::default() };
+    let ws_a = kura_bindings::Workspace {
+        tenant_id: "ten_a".to_string(),
+        ..kura_bindings::Workspace::default()
+    };
+    let ws_b = kura_bindings::Workspace {
+        tenant_id: "ten_b".to_string(),
+        ..kura_bindings::Workspace::default()
+    };
     assert!(scope.can_inspect_workspace(&ws_a));
     assert!(scope.can_manage_workspace(&ws_a));
     assert!(!scope.can_inspect_workspace(&ws_b));
@@ -266,8 +300,14 @@ fn binding_and_profile_scope_checks() {
         tenant_id: "ten_a".to_string(),
         permissions: vec![Permission::ProfilesInspect],
     };
-    let prof_a = kura_profiles::AgentProfile { tenant_id: "ten_a".to_string(), ..kura_profiles::AgentProfile::default() };
-    let prof_b = kura_profiles::AgentProfile { tenant_id: "ten_b".to_string(), ..kura_profiles::AgentProfile::default() };
+    let prof_a = kura_profiles::AgentProfile {
+        tenant_id: "ten_a".to_string(),
+        ..kura_profiles::AgentProfile::default()
+    };
+    let prof_b = kura_profiles::AgentProfile {
+        tenant_id: "ten_b".to_string(),
+        ..kura_profiles::AgentProfile::default()
+    };
     assert!(profiles.can_inspect(&prof_a));
     assert!(!profiles.can_manage(&prof_a)); // inspect-only scope
     assert!(!profiles.can_inspect(&prof_b));

@@ -8,12 +8,12 @@
 use chrono::Utc;
 use kura_runtime::{Run, RunStatus};
 use kura_store::{
+    SQLiteStore,
     consumer_policy::ConsumerPolicyRecordRecord,
     reminders::{
         ReminderActionRecord, ReminderOccurrenceFilter, ReminderOccurrenceRecord, ReminderRecord,
     },
     secret_scope::SecretScopeBindingRecord,
-    SQLiteStore,
 };
 
 fn temp_dir(name: &str) -> String {
@@ -135,39 +135,72 @@ fn reminder_occurrence_round_trips_through_sqlite() {
         state: "fired".to_string(),
         ..Default::default()
     };
-    assert_eq!(store.list_reminder_occurrences("test", &state_filter).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_reminder_occurrences("test", &state_filter)
+            .unwrap()
+            .len(),
+        1
+    );
     let missed_filter = ReminderOccurrenceFilter {
         state: "cancelled".to_string(),
         ..Default::default()
     };
-    assert!(store.list_reminder_occurrences("test", &missed_filter).unwrap().is_empty());
+    assert!(
+        store
+            .list_reminder_occurrences("test", &missed_filter)
+            .unwrap()
+            .is_empty()
+    );
     let run_filter = ReminderOccurrenceFilter {
         run_id: "run_reminder".to_string(),
         ..Default::default()
     };
-    assert_eq!(store.list_reminder_occurrences("test", &run_filter).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_reminder_occurrences("test", &run_filter)
+            .unwrap()
+            .len(),
+        1
+    );
     let window_filter = ReminderOccurrenceFilter {
         scheduled_before: Some(now + chrono::Duration::seconds(60)),
         scheduled_after: Some(now - chrono::Duration::seconds(60)),
         ..Default::default()
     };
-    assert_eq!(store.list_reminder_occurrences("test", &window_filter).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_reminder_occurrences("test", &window_filter)
+            .unwrap()
+            .len(),
+        1
+    );
     let before_filter = ReminderOccurrenceFilter {
         scheduled_before: Some(now - chrono::Duration::seconds(60)),
         ..Default::default()
     };
-    assert!(store.list_reminder_occurrences("test", &before_filter).unwrap().is_empty());
+    assert!(
+        store
+            .list_reminder_occurrences("test", &before_filter)
+            .unwrap()
+            .is_empty()
+    );
 
     let fetched = store
         .get_reminder_occurrence("test", "occ_1")
         .unwrap()
         .expect("found");
     assert_eq!(fetched.state, "fired");
-    assert_eq!(store.get_reminder_occurrence("test", "missing").unwrap(), None);
-    assert!(store
-        .list_reminder_occurrences("prod", &ReminderOccurrenceFilter::default())
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        store.get_reminder_occurrence("test", "missing").unwrap(),
+        None
+    );
+    assert!(
+        store
+            .list_reminder_occurrences("prod", &ReminderOccurrenceFilter::default())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -220,7 +253,12 @@ fn reminder_action_round_trips_through_sqlite() {
     assert_eq!(actions[0].run_id, "run_reminder");
     assert_eq!(actions[1].action_id, "act_1");
     // Scoped to the reminder's environment scope.
-    assert!(store.list_reminder_actions("prod", "rem_1").unwrap().is_empty());
+    assert!(
+        store
+            .list_reminder_actions("prod", "rem_1")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -293,7 +331,9 @@ fn secret_scope_binding_round_trips_through_sqlite() {
     binding.active = false;
     store.upsert_secret_scope_binding(&binding).unwrap();
 
-    let listed = store.list_secret_scope_bindings("integration", "int_cal").unwrap();
+    let listed = store
+        .list_secret_scope_bindings("integration", "int_cal")
+        .unwrap();
     assert_eq!(listed.len(), 1);
     let got = &listed[0];
     assert_eq!(got.binding_id, "bind_1");
@@ -306,5 +346,10 @@ fn secret_scope_binding_round_trips_through_sqlite() {
     assert_eq!(got.active, false);
     assert_eq!(got.document, "{\"kind\":\"binding\"}");
     // No bindings for a different consumer.
-    assert!(store.list_secret_scope_bindings("integration", "int_mail").unwrap().is_empty());
+    assert!(
+        store
+            .list_secret_scope_bindings("integration", "int_mail")
+            .unwrap()
+            .is_empty()
+    );
 }

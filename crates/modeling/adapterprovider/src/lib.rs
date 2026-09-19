@@ -10,8 +10,8 @@ use std::io::{BufReader, Read, Write};
 use std::time::Duration;
 
 use kura_adapterrpc::{
-    read_request, write_message, CodecError, FailureKind, Request, Response, Status,
-    CONTRACT_VERSION,
+    CONTRACT_VERSION, CodecError, FailureKind, Request, Response, Status, read_request,
+    write_message,
 };
 use serde_json::value::RawValue;
 
@@ -184,12 +184,11 @@ mod tests {
     use std::os::unix::net::UnixStream;
     use std::thread;
 
-    use kura_adapterrpc::{is_ambiguous, Client, Error};
+    use kura_adapterrpc::{Client, Error, is_ambiguous};
 
     struct HandlerFn(
         Box<
-            dyn Fn(Operation, Option<Duration>)
-                -> Result<Option<Box<RawValue>>, HandlerError>
+            dyn Fn(Operation, Option<Duration>) -> Result<Option<Box<RawValue>>, HandlerError>
                 + Send
                 + Sync,
         >,
@@ -258,11 +257,7 @@ mod tests {
 
         let err = client
             .dispatch::<serde_json::Value, serde_json::Value, serde_json::Value>(
-                "calendar",
-                "Fail",
-                None,
-                None,
-                None,
+                "calendar", "Fail", None, None, None,
             )
             .unwrap_err();
         let Error::Adapter(ae) = err else {
@@ -278,13 +273,12 @@ mod tests {
         let client = pipe_client(h);
         let err = client
             .dispatch::<serde_json::Value, serde_json::Value, serde_json::Value>(
-                "calendar",
-                "Write",
-                None,
-                None,
-                None,
+                "calendar", "Write", None, None, None,
             )
             .unwrap_err();
-        assert!(is_ambiguous(&err), "err = {err}, want ambiguous classification");
+        assert!(
+            is_ambiguous(&err),
+            "err = {err}, want ambiguous classification"
+        );
     }
 }

@@ -229,7 +229,10 @@ pub fn discover_external(data_dir: &str) -> (Vec<ExternalPlugin>, Vec<String>) {
             }
         };
         if manifest.id.trim().is_empty() {
-            warnings.push(format!("{}: manifest id is required", manifest_path.display()));
+            warnings.push(format!(
+                "{}: manifest id is required",
+                manifest_path.display()
+            ));
             continue;
         }
         if manifest.entry.kind != "process" || manifest.entry.command.trim().is_empty() {
@@ -317,7 +320,10 @@ impl PluginSpec {
 /// under `profile`. See [`resolve_specs`].
 #[must_use]
 pub fn resolve(descriptors: &[PluginDescriptor], profile: &PluginProfile) -> AssemblyReport {
-    let specs: Vec<PluginSpec> = descriptors.iter().map(PluginSpec::from_descriptor).collect();
+    let specs: Vec<PluginSpec> = descriptors
+        .iter()
+        .map(PluginSpec::from_descriptor)
+        .collect();
     resolve_specs(&specs, profile)
 }
 
@@ -438,6 +444,11 @@ pub mod points {
     /// status, sourceKind, requestTurnId, responseTurnId}`. Observational:
     /// a halt only stops later handlers, never the turn.
     pub const CHAT_TURN_END: &str = "chat/turn-end";
+    /// Stage 9.0: before a tool the model asked for is executed. Payload:
+    /// `{tenantId, threadId, dispatchId, callId, name, arguments}`; hooks may
+    /// rewrite `arguments` or halt to veto the call — a veto is reported to
+    /// the model as a tool error, never silently dropped.
+    pub const CHAT_TOOL_CALL: &str = "chat/tool-call";
 }
 
 /// Outcome of one hook handler in a waterfall run.
@@ -515,11 +526,32 @@ impl HookBus {
             let guard = self.handlers.read();
             guard.get(point).cloned().unwrap_or_default()
         };
+        // Stage 10.3: the waterfall's duration by point, so a slow plugin
+        // shows up as a slow hook point rather than as slow chat.
+        let clock = std::time::Instant::now();
+        let result = Self::run_handlers(handlers, payload);
+        if result.ran > 0 {
+            kura_telemetry::metrics::registry().observe(
+                kura_telemetry::metrics::HOOK_DURATION_SECONDS,
+                &[("point", point)],
+                clock.elapsed().as_secs_f64(),
+            );
+        }
+        result
+    }
+
+    fn run_handlers(
+        handlers: Vec<(String, Arc<dyn Hook>)>,
+        payload: &mut serde_json::Value,
+    ) -> HookRunResult {
         let mut ran = 0;
         for (plugin_id, hook) in handlers {
             ran += 1;
             if let HookOutcome::Halt(reason) = hook.handle(payload) {
-                return HookRunResult { halted: Some((plugin_id, reason)), ran };
+                return HookRunResult {
+                    halted: Some((plugin_id, reason)),
+                    ran,
+                };
             }
         }
         HookRunResult { halted: None, ran }
@@ -586,7 +618,10 @@ mod tests {
         let mut entries = BTreeMap::new();
         entries.insert(
             "b".to_string(),
-            PluginEntry { enabled: Some(false), config: serde_json::Map::new() },
+            PluginEntry {
+                enabled: Some(false),
+                config: serde_json::Map::new(),
+            },
         );
         entries.insert("nope".to_string(), PluginEntry::default());
         let profile = PluginProfile {
@@ -597,7 +632,12 @@ mod tests {
         assert!(report.enabled("a"));
         assert!(!report.enabled("b"));
         assert!(!report.enabled("c"));
-        assert_eq!(report.warnings.len(), 2, "ghost + nope warned: {:?}", report.warnings);
+        assert_eq!(
+            report.warnings.len(),
+            2,
+            "ghost + nope warned: {:?}",
+            report.warnings
+        );
     }
 
     #[test]
@@ -685,13 +725,21 @@ mod tests {
         .expect("write");
 
         let (plugins, warnings) = discover_external(&data_dir);
-        assert_eq!(plugins.len(), 1, "only the valid manifest loads: {warnings:?}");
+        assert_eq!(
+            plugins.len(),
+            1,
+            "only the valid manifest loads: {warnings:?}"
+        );
         let plugin = &plugins[0];
         assert_eq!(plugin.manifest.id, "session-strategy");
         assert_eq!(plugin.manifest.hooks[0].on_error, HookErrorPolicy::Veto);
         assert_eq!(plugin.manifest.entry.timeout_ms, 500);
         assert_eq!(plugin.dir, root.join("good"));
-        assert_eq!(warnings.len(), 3, "broken + empty + no-entry warned: {warnings:?}");
+        assert_eq!(
+            warnings.len(),
+            3,
+            "broken + empty + no-entry warned: {warnings:?}"
+        );
     }
 
     #[test]
@@ -718,7 +766,10 @@ mod tests {
         assert!(report.enabled("a") && report.enabled("ext"));
         assert_eq!(report.plugins[1].source, "external");
         assert!(!report.plugins[2].enabled);
-        assert_eq!(report.plugins[2].reason.as_deref(), Some("duplicate plugin id"));
+        assert_eq!(
+            report.plugins[2].reason.as_deref(),
+            Some("duplicate plugin id")
+        );
 
         // Disabling the builtin dependency cascades into the external.
         let profile = PluginProfile {

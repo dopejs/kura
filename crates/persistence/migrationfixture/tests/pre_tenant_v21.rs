@@ -4,13 +4,16 @@
 mod common;
 
 use common::{count, open_conn, temp_dir};
-use kura_migrationfixture::{build_pre_tenant_v21_fixture, count_seeded_rows, FIXTURE_TIMESTAMP};
+use kura_migrationfixture::{FIXTURE_TIMESTAMP, build_pre_tenant_v21_fixture, count_seeded_rows};
 
 #[test]
 fn pre_tenant_v21_fixture_seeds_all_parent_child_pairs() {
     let dir = temp_dir("pre_tenant_v21");
     let store = build_pre_tenant_v21_fixture(&dir).unwrap();
-    assert_eq!(store.schema_version().unwrap(), kura_store::CURRENT_SCHEMA_VERSION);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        kura_store::CURRENT_SCHEMA_VERSION
+    );
 
     let counts = count_seeded_rows(&store).unwrap();
     // Runtime chain: session -> run -> step -> tool_call + llm dispatch + checkpoint.
@@ -92,7 +95,15 @@ fn pre_tenant_v21_fixture_seeds_exact_ids_and_payloads() {
         .unwrap();
     assert_eq!(
         session,
-        ("chat".to_string(), "active".to_string(), "test".to_string(), "peer_1".to_string(), "rk_seed".to_string(), FIXTURE_TIMESTAMP.to_string(), 1)
+        (
+            "chat".to_string(),
+            "active".to_string(),
+            "test".to_string(),
+            "peer_1".to_string(),
+            "rk_seed".to_string(),
+            FIXTURE_TIMESTAMP.to_string(),
+            1
+        )
     );
 
     let run: (String, String, String) = conn
@@ -102,7 +113,14 @@ fn pre_tenant_v21_fixture_seeds_exact_ids_and_payloads() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(run, ("sess_seed".to_string(), "test".to_string(), "queued".to_string()));
+    assert_eq!(
+        run,
+        (
+            "sess_seed".to_string(),
+            "test".to_string(),
+            "queued".to_string()
+        )
+    );
 
     // The checkpoint snapshot_json carries the exact Go payload.
     let snapshot: String = conn
@@ -154,7 +172,12 @@ fn pre_tenant_v21_fixture_seeds_exact_ids_and_payloads() {
         .unwrap();
     assert_eq!(
         run_event,
-        (Some("run_seed".to_string()), None, "run".to_string(), "run_seed".to_string())
+        (
+            Some("run_seed".to_string()),
+            None,
+            "run".to_string(),
+            "run_seed".to_string()
+        )
     );
     let cap_event: (Option<String>, String, String) = conn
         .query_row(
@@ -165,6 +188,10 @@ fn pre_tenant_v21_fixture_seeds_exact_ids_and_payloads() {
         .unwrap();
     assert_eq!(
         cap_event,
-        (Some("cap_a".to_string()), "capability".to_string(), "cap_a".to_string())
+        (
+            Some("cap_a".to_string()),
+            "capability".to_string(),
+            "cap_a".to_string()
+        )
     );
 }

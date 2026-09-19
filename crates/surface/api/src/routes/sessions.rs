@@ -29,7 +29,7 @@ use kura_events as events;
 use kura_router as router_domain;
 
 use crate::error::ApiError;
-use crate::middleware::{environment_scope_from_config, TenantContext};
+use crate::middleware::{TenantContext, environment_scope_from_config};
 use crate::state::AppState;
 use crate::types::EventListResponse;
 
@@ -69,8 +69,8 @@ async fn list_sessions(
     if let Some(tc) = tenant.as_ref().map(|extension| &extension.0.0) {
         if !tc.tenant_id.trim().is_empty() {
             let owned: std::collections::HashSet<String> = state
-                .store
-                .lock()
+                .store_pool
+                .read()
                 .list_sessions_for_tenant_raw(&tc.tenant_id)
                 .map_err(ApiError::from_store)?
                 .into_iter()
@@ -101,12 +101,14 @@ async fn reset_session(
     Path(session_id): Path<String>,
 ) -> Result<Json<router_domain::Session>, ApiError> {
     let router = session_router(&state)?;
-    let session = router.reset_session(session_id.trim()).map_err(|err| match err {
-        router_domain::RouterError::SessionNotFound => {
-            ApiError::NotFound("not found".to_string())
-        }
-        other => ApiError::BadRequest(other.to_string()),
-    })?;
+    let session = router
+        .reset_session(session_id.trim())
+        .map_err(|err| match err {
+            router_domain::RouterError::SessionNotFound => {
+                ApiError::NotFound("not found".to_string())
+            }
+            other => ApiError::BadRequest(other.to_string()),
+        })?;
 
     state
         .store
@@ -115,7 +117,10 @@ async fn reset_session(
         .map_err(ApiError::from_store)?;
 
     let mut payload = serde_json::Map::new();
-    payload.insert("generation".to_string(), serde_json::json!(session.generation));
+    payload.insert(
+        "generation".to_string(),
+        serde_json::json!(session.generation),
+    );
     let event = events::Event {
         category: "session".to_string(),
         name: "session.reset".to_string(),
@@ -188,8 +193,13 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{listed}");
         assert_eq!(listed["items"].as_array().expect("items").len(), 1);
 
-        let (status, fetched) =
-            request_json(state.clone(), "GET", &format!("/v1/sessions/{session_id}"), None).await;
+        let (status, fetched) = request_json(
+            state.clone(),
+            "GET",
+            &format!("/v1/sessions/{session_id}"),
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(fetched["sessionId"], session_id.as_str());
 

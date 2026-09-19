@@ -39,6 +39,21 @@ export type ChatQueryResponse = {
   continuityStatus?: "applied" | "empty" | "disabled" | "blocked" | "partial" | "failed";
   continuityIncludedCount?: number;
   continuityExcludedCount?: number;
+  /** Stage 9.0: every tool call the turn made, in order. Absent when the model answered without tools. */
+  toolTrace?: ChatToolTraceEntry[];
+};
+
+/** One executed tool call of a chat turn; `output` is what the model saw back (already truncated). */
+export type ChatToolTraceEntry = {
+  round: number;
+  dispatchId: string;
+  callId: string;
+  name: string;
+  /** The raw JSON arguments text the model produced. */
+  arguments: string;
+  output: string;
+  isError: boolean;
+  durationMs: number;
 };
 
 export type ChatQueryStreamStarted = {
@@ -3260,6 +3275,270 @@ export interface MemoryAssetDecision {
   decision: MemoryWriteDecision;
 }
 
+/** One `(layer, status)` bucket of a tenant's memory plane. */
+export interface MemoryLayerCount {
+  layer: MemoryLayer;
+  status: MemoryAssetStatus;
+  count: number;
+}
+
+/** A compact record of something the agent recently started or stopped remembering. */
+export interface MemoryChangeEntry {
+  assetId: string;
+  layer: MemoryLayer;
+  status: MemoryAssetStatus;
+  title: string;
+  updatedAt: string;
+}
+
+/**
+ * The tenant-level answer to "what does it remember, and what did it forget".
+ *
+ * `derivedEmbeddings` is the size of the retrieval index for this tenant. A
+ * value far below the Ready total means the index is not being written, which
+ * otherwise shows up only as unexplained retrieval latency.
+ */
+export interface MemoryOverview {
+  tenantId: string;
+  counts: MemoryLayerCount[];
+  derivedEmbeddings: number;
+  recentlyRemembered: MemoryChangeEntry[];
+  recentlyForgotten: MemoryChangeEntry[];
+}
+
+export interface MemoryIndexRebuildResult {
+  tenantId: string;
+  clearedEmbeddings: number;
+}
+
+export type ToolCapability = "web.search" | "image.generate" | "video.generate" | "browser.session";
+export type ToolAuthMode = "none" | "api_key" | "oauth_device" | "local_cli_bridge";
+export type ToolProfileSource = "builtin" | "config" | "managed";
+export type ToolReadiness = "unconfigured" | "ready" | "disabled" | "error";
+export type ToolCheckErrorClass =
+  | "config_error"
+  | "auth_error"
+  | "transport_error"
+  | "upstream_error"
+  | "quota_error"
+  | "timeout";
+
+export interface ToolLimits {
+  timeoutMs: number;
+  maxResults: number;
+  /** 0 means "inherit the plane default", not "unlimited". */
+  maxCallsPerDay: number;
+}
+
+/**
+ * A configured tool provider.
+ *
+ * Note what is absent: there is no credential field. The profile carries a
+ * `secretRef`; the value lives only in the tenant secret plane and is written
+ * through the tenant-secret routes.
+ */
+export interface ToolProfileResource {
+  profileId: string;
+  tenantId?: string;
+  title: string;
+  capability: ToolCapability;
+  family: string;
+  authMode: ToolAuthMode;
+  source: ToolProfileSource;
+  enabled: boolean;
+  isDefault: boolean;
+  baseUrl?: string;
+  /** Reference into the tenant secret plane. Never a value. */
+  secretRef?: string;
+  secretConfigured: boolean;
+  /** `mcp_backed` only: the MCP server that serves this capability. */
+  mcpServerId?: string;
+  /** `mcp_backed` only: the tool on that server. */
+  mcpToolName?: string;
+  limits: ToolLimits;
+  readiness: ToolReadiness;
+  issues?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Whether one agent-facing capability is usable here. Unconfigured ones are reported, not omitted. */
+export interface ToolCapabilityStatus {
+  capability: ToolCapability;
+  configured: boolean;
+  defaultProfileId?: string;
+  profileCount: number;
+}
+
+export interface ToolCheckOutcome {
+  profileId: string;
+  passed: boolean;
+  errorClass?: ToolCheckErrorClass;
+  detail?: string;
+  checkedAt: string;
+}
+
+export interface CreateToolProfileInput {
+  title: string;
+  capability: ToolCapability;
+  family: string;
+  authMode: ToolAuthMode;
+  baseUrl?: string;
+  secretRef?: string;
+  /** Required for family `mcp_backed`. */
+  mcpServerId?: string;
+  /** Required for family `mcp_backed`. */
+  mcpToolName?: string;
+  limits?: ToolLimits;
+  isDefault?: boolean;
+  enabled?: boolean;
+}
+
+export interface UpdateToolProfileInput {
+  title?: string;
+  baseUrl?: string;
+  /** Points the profile at a different secret; the value is written elsewhere. */
+  secretRef?: string;
+  mcpServerId?: string;
+  mcpToolName?: string;
+  limits?: ToolLimits;
+  enabled?: boolean;
+  isDefault?: boolean;
+}
+
+/**
+ * One recorded pre-dispatch context assembly: what memory was injected, what
+ * was excluded and why. Correlated by tenant and thread in time order; an
+ * assembly cannot carry a dispatch id because it is recorded before the
+ * dispatch exists.
+ */
+export interface ContextAssembly {
+  assemblyId: string;
+  tenantId?: string;
+  threadId?: string;
+  recordedAt: string;
+  record: {
+    included: Array<{ assetId: string; layer: string; chars: number; source: string }>;
+    excluded: Array<{ assetId: string; layer: string; reason: string; source: string }>;
+    budgetChars: number;
+    usedChars: number;
+    retrievalBudgetChars?: number;
+    retrievalUsedChars?: number;
+  };
+}
+
+/** The operator-owned config.json, redacted, with the hash a compare-and-set write must present. */
+export interface ConfigFile {
+  path: string;
+  exists: boolean;
+  config: Record<string, unknown>;
+  sha256: string;
+  /** Settings that take effect without a restart. Empty today; published rather than implied. */
+  hotApplySettings: string[];
+}
+
+export interface ConfigFileWriteInput {
+  config: Record<string, unknown>;
+  /** Compare-and-set against the sha256 returned by getConfigFile. */
+  expectSha256?: string;
+  dryRun?: boolean;
+  /** Refuse unknown keys instead of warning about them. */
+  strict?: boolean;
+}
+
+export interface ConfigFileWriteResult {
+  applied: boolean;
+  dryRun: boolean;
+  sha256: string;
+  restartRequired: boolean;
+  hotApplied: string[];
+  restartRequiredFor: string[];
+  warnings: string[];
+}
+
+/** What a thread is for, kept as a system message that survives window elision. */
+export interface SessionFrame {
+  threadId: string;
+  tenantId?: string;
+  goal: string;
+  constraints: string[];
+  updatedAt: string;
+}
+
+export interface SessionFrameInput {
+  goal: string;
+  constraints?: string[];
+}
+
+export type SwarmRunStatus = "queued" | "running" | "completed" | "partial_failed" | "failed" | "cancelled";
+export type SwarmChildStatus = "queued" | "running" | "completed" | "failed" | "quota_denied" | "cancelled";
+
+export interface SwarmChild {
+  index: number;
+  goal: string;
+  threadId: string;
+  status: SwarmChildStatus;
+  dispatchId?: string;
+  outputPreview?: string;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+/** A bounded fan-out of goals to concurrent child turns, with every child's terminal state. */
+export interface SwarmRun {
+  runId: string;
+  tenantId?: string;
+  requestedBy: string;
+  provider?: string;
+  model?: string;
+  status: SwarmRunStatus;
+  children: SwarmChild[];
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface SwarmLaunchInput {
+  goals: string[];
+  provider?: string;
+  model?: string;
+  requestedBy?: string;
+}
+
+export interface SkillUsage {
+  skillId: string;
+  invocations: number;
+  helpful: number;
+  corrected: number;
+  lastUsedAt?: string;
+  lastFeedbackAt?: string;
+}
+
+export interface SkillSearchHit {
+  skillId: string;
+  name: string;
+  description: string;
+  rank: number;
+  usage: SkillUsage;
+}
+
+export interface SkillDistillInput {
+  threadId: string;
+  tenantId?: string;
+  /** Steering folded into the distillation prompt; reply on the distill thread and call again. */
+  guidance?: string;
+  provider?: string;
+  model?: string;
+}
+
+export interface SkillDistillResult {
+  distillThreadId: string;
+  dispatchId: string;
+  proposal?: { asset: MemoryAssetResource; decision: MemoryWriteDecision };
+  parseError?: string;
+}
+
 export interface MemoryDrilldownNode {
   asset: MemoryAssetResource;
   members?: MemoryDrilldownNode[];
@@ -4338,8 +4617,132 @@ export class KuraClient {
     return this.requestJSON<MemoryAssetDecision>(`/v1/memory/assets/${encodeURIComponent(assetId)}/visibility`, { method: "POST", body: { visibility }, tenant: tenantOptions });
   }
 
+  /** Distils a skill proposal from a conversation as a visible, steerable chat turn (Stage 3.1). */
+  async distillSkillProposal(input: SkillDistillInput, tenantOptions?: TenantRequestOptions): Promise<SkillDistillResult> {
+    return this.requestJSON<SkillDistillResult>("/v1/skills/proposals/distill", { method: "POST", body: input, tenant: tenantOptions });
+  }
+
+  /** "Which skill covers this" — fused ranking over the installed registry (Stage 3.2). */
+  async searchSkills(q: string, tenantOptions?: TenantRequestOptions): Promise<{ items: SkillSearchHit[] }> {
+    return this.requestJSON<{ items: SkillSearchHit[] }>(`/v1/skills/search?q=${encodeURIComponent(q)}`, { tenant: tenantOptions });
+  }
+
+  async getSkillUsage(skillId: string, tenantOptions?: TenantRequestOptions): Promise<SkillUsage> {
+    return this.requestJSON<SkillUsage>(`/v1/skills/${encodeURIComponent(skillId)}/usage`, { tenant: tenantOptions });
+  }
+
+  async recordSkillFeedback(skillId: string, outcome: "helpful" | "corrected", tenantOptions?: TenantRequestOptions): Promise<SkillUsage> {
+    return this.requestJSON<SkillUsage>(`/v1/skills/${encodeURIComponent(skillId)}/feedback`, { method: "POST", body: { outcome }, tenant: tenantOptions });
+  }
+
+  /** Launches a bounded fan-out (202). Refused until the swarm plugin is opted in. */
+  async launchSwarmRun(input: SwarmLaunchInput, tenantOptions?: TenantRequestOptions): Promise<SwarmRun> {
+    return this.requestJSON<SwarmRun>("/v1/swarm/runs", { method: "POST", body: input, tenant: tenantOptions });
+  }
+
+  async listSwarmRuns(tenantOptions?: TenantRequestOptions): Promise<{ items: SwarmRun[] }> {
+    return this.requestJSON<{ items: SwarmRun[] }>("/v1/swarm/runs", { tenant: tenantOptions });
+  }
+
+  async getSwarmRun(runId: string, tenantOptions?: TenantRequestOptions): Promise<SwarmRun> {
+    return this.requestJSON<SwarmRun>(`/v1/swarm/runs/${encodeURIComponent(runId)}`, { tenant: tenantOptions });
+  }
+
+  async getSessionFrame(threadId: string, tenantOptions?: TenantRequestOptions): Promise<SessionFrame> {
+    return this.requestJSON<SessionFrame>(`/v1/threads/${encodeURIComponent(threadId)}/frame`, { tenant: tenantOptions });
+  }
+
+  async setSessionFrame(threadId: string, input: SessionFrameInput, tenantOptions?: TenantRequestOptions): Promise<SessionFrame> {
+    return this.requestJSON<SessionFrame>(`/v1/threads/${encodeURIComponent(threadId)}/frame`, { method: "PUT", body: input, tenant: tenantOptions });
+  }
+
+  async clearSessionFrame(threadId: string, tenantOptions?: TenantRequestOptions): Promise<void> {
+    await this.requestJSON<void>(`/v1/threads/${encodeURIComponent(threadId)}/frame`, { method: "DELETE", tenant: tenantOptions });
+  }
+
+  async getConfigFile(tenantOptions?: TenantRequestOptions): Promise<ConfigFile> {
+    return this.requestJSON<ConfigFile>("/v1/config/file", { tenant: tenantOptions });
+  }
+
+  /**
+   * Writes config.json through the daemon: validated, compare-and-set,
+   * atomic. Inline secret values are refused — use the `*Env` indirection or
+   * a secret reference. Nothing hot-applies today; the result says so.
+   */
+  async writeConfigFile(input: ConfigFileWriteInput, tenantOptions?: TenantRequestOptions): Promise<ConfigFileWriteResult> {
+    return this.requestJSON<ConfigFileWriteResult>("/v1/config/file", { method: "PUT", body: input, tenant: tenantOptions });
+  }
+
+  /** What memory the model actually saw, newest first. The one-call answer during an incident. */
+  async listContextAssemblies(
+    query?: { tenantId?: string; threadId?: string; limit?: number },
+    tenantOptions?: TenantRequestOptions,
+  ): Promise<{ items: ContextAssembly[] }> {
+    const params = new URLSearchParams();
+    if (query?.tenantId) params.set("tenantId", query.tenantId);
+    if (query?.threadId) params.set("threadId", query.threadId);
+    if (query?.limit) params.set("limit", String(query.limit));
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return this.requestJSON<{ items: ContextAssembly[] }>(`/v1/context/assemblies${suffix}`, { tenant: tenantOptions });
+  }
+
+  async getMemoryOverview(query?: { tenantId?: string }, tenantOptions?: TenantRequestOptions): Promise<MemoryOverview> {
+    const params = new URLSearchParams();
+    if (query?.tenantId) params.set("tenantId", query.tenantId);
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return this.requestJSON<MemoryOverview>(`/v1/memory/overview${suffix}`, { tenant: tenantOptions });
+  }
+
+  /**
+   * Drops the tenant's derived retrieval index so it is recomputed from the
+   * assets. Conversation truth and the assets themselves are untouched — this
+   * is the repair path, not a reset.
+   */
+  async rebuildMemoryIndexes(query?: { tenantId?: string }, tenantOptions?: TenantRequestOptions): Promise<MemoryIndexRebuildResult> {
+    const params = new URLSearchParams();
+    if (query?.tenantId) params.set("tenantId", query.tenantId);
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return this.requestJSON<MemoryIndexRebuildResult>(`/v1/memory/indexes/rebuild${suffix}`, { method: "POST", tenant: tenantOptions });
+  }
+
   async consolidateMemory(input?: { tenantId?: string; trigger?: string }, tenantOptions?: TenantRequestOptions): Promise<MemoryConsolidationRun> {
     return this.requestJSON<MemoryConsolidationRun>("/v1/memory/consolidate", { method: "POST", body: input ?? {}, tenant: tenantOptions });
+  }
+
+  /** What the agent could do in this deployment, configured or not. */
+  async listToolCapabilities(query?: { tenantId?: string }, tenantOptions?: TenantRequestOptions): Promise<{ items: ToolCapabilityStatus[] }> {
+    const params = new URLSearchParams();
+    if (query?.tenantId) params.set("tenantId", query.tenantId);
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return this.requestJSON<{ items: ToolCapabilityStatus[] }>(`/v1/tools/capabilities${suffix}`, { tenant: tenantOptions });
+  }
+
+  async listToolProfiles(query?: { tenantId?: string; capability?: ToolCapability }, tenantOptions?: TenantRequestOptions): Promise<{ items: ToolProfileResource[] }> {
+    const params = new URLSearchParams();
+    if (query?.tenantId) params.set("tenantId", query.tenantId);
+    if (query?.capability) params.set("capability", query.capability);
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return this.requestJSON<{ items: ToolProfileResource[] }>(`/v1/tools/profiles${suffix}`, { tenant: tenantOptions });
+  }
+
+  async createToolProfile(input: CreateToolProfileInput, tenantOptions?: TenantRequestOptions): Promise<ToolProfileResource> {
+    return this.requestJSON<ToolProfileResource>("/v1/tools/profiles", { method: "POST", body: input, tenant: tenantOptions });
+  }
+
+  async updateToolProfile(profileId: string, input: UpdateToolProfileInput, tenantOptions?: TenantRequestOptions): Promise<ToolProfileResource> {
+    return this.requestJSON<ToolProfileResource>(`/v1/tools/profiles/${encodeURIComponent(profileId)}`, { method: "PATCH", body: input, tenant: tenantOptions });
+  }
+
+  async deleteToolProfile(profileId: string, tenantOptions?: TenantRequestOptions): Promise<void> {
+    await this.requestJSON<void>(`/v1/tools/profiles/${encodeURIComponent(profileId)}`, { method: "DELETE", tenant: tenantOptions });
+  }
+
+  /**
+   * Preflight a profile. Surfaces a mistyped credential where the operator is
+   * standing rather than as a failed turn in front of the user.
+   */
+  async checkToolProfile(profileId: string, tenantOptions?: TenantRequestOptions): Promise<ToolCheckOutcome> {
+    return this.requestJSON<ToolCheckOutcome>(`/v1/tools/profiles/${encodeURIComponent(profileId)}/check`, { method: "POST", tenant: tenantOptions });
   }
 
   async listPlugins(tenantOptions?: TenantRequestOptions): Promise<PluginsReport> {

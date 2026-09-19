@@ -5,8 +5,8 @@ use chrono::{DateTime, Utc};
 
 use crate::campaign::is_zero_time;
 use crate::campaign_aggregation::{
-    build_campaign_attempt_group, build_campaign_replay_launch_plan,
-    CampaignAttemptAggregationInput, CampaignReplayLaunchPlan,
+    CampaignAttemptAggregationInput, CampaignReplayLaunchPlan, build_campaign_attempt_group,
+    build_campaign_replay_launch_plan,
 };
 use crate::error::EvaluationError;
 use crate::types::{CampaignAttemptGroup, CampaignItem, ReplayCampaign};
@@ -33,7 +33,11 @@ pub struct CampaignRunnerPlan {
 pub fn build_campaign_runner_plan(
     input: CampaignRunnerInput,
 ) -> Result<CampaignRunnerPlan, EvaluationError> {
-    let now = if is_zero_time(input.now) { Utc::now() } else { input.now };
+    let now = if is_zero_time(input.now) {
+        Utc::now()
+    } else {
+        input.now
+    };
     let launches = build_campaign_replay_launch_plan(&input.campaign, &input.items);
     let mut groups = Vec::with_capacity(input.items.len());
     for item in &input.items {

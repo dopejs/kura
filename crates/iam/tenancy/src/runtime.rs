@@ -14,7 +14,7 @@ use kura_llm::Dispatch;
 use kura_router::Session;
 use kura_runtime::{Run, RunCheckpoint, Step, ToolCall};
 
-use crate::{emit_denial, require, TenancyError};
+use crate::{TenancyError, emit_denial, require};
 
 /// Tenant-aware accessor for the runtime spine.
 pub struct Runtime {
@@ -38,7 +38,9 @@ impl Runtime {
 
     pub fn list_runs_for_tenant(&self) -> Result<Vec<Run>, TenancyError> {
         let tenant_id = require()?;
-        self.store.list_runs_for_tenant_raw(&tenant_id).map_err(TenancyError::from)
+        self.store
+            .list_runs_for_tenant_raw(&tenant_id)
+            .map_err(TenancyError::from)
     }
 
     pub fn get_run_for_tenant(&self, run_id: &str) -> Result<Option<Run>, TenancyError> {
@@ -65,7 +67,10 @@ impl Runtime {
 
     pub fn delete_run_for_tenant(&self, run_id: &str) -> Result<bool, TenancyError> {
         let tenant_id = require()?;
-        match self.store.delete_row_for_tenant("runs", "run_id", run_id, &tenant_id) {
+        match self
+            .store
+            .delete_row_for_tenant("runs", "run_id", run_id, &tenant_id)
+        {
             Err(e) if crate::SQLiteStore::is_cross_tenant_row(&e) => {
                 self.emit("store:DeleteRunForTenant", "run");
                 Ok(false)
@@ -78,12 +83,17 @@ impl Runtime {
 
     pub fn list_sessions_for_tenant(&self) -> Result<Vec<Session>, TenancyError> {
         let tenant_id = require()?;
-        self.store.list_sessions_for_tenant_raw(&tenant_id).map_err(TenancyError::from)
+        self.store
+            .list_sessions_for_tenant_raw(&tenant_id)
+            .map_err(TenancyError::from)
     }
 
     pub fn upsert_session_for_tenant(&self, session: &Session) -> Result<(), TenancyError> {
         let tenant_id = require()?;
-        match self.store.upsert_session_for_tenant_safe(session, &tenant_id) {
+        match self
+            .store
+            .upsert_session_for_tenant_safe(session, &tenant_id)
+        {
             Err(e) if crate::SQLiteStore::is_cross_tenant_row(&e) => {
                 self.emit("store:UpsertSessionForTenant", "session");
                 Err(TenancyError::CrossTenantWrite)
@@ -94,7 +104,10 @@ impl Runtime {
 
     pub fn delete_session_for_tenant(&self, session_id: &str) -> Result<bool, TenancyError> {
         let tenant_id = require()?;
-        match self.store.delete_row_for_tenant("sessions", "session_id", session_id, &tenant_id) {
+        match self
+            .store
+            .delete_row_for_tenant("sessions", "session_id", session_id, &tenant_id)
+        {
             Err(e) if crate::SQLiteStore::is_cross_tenant_row(&e) => {
                 self.emit("store:DeleteSessionForTenant", "session");
                 Ok(false)
@@ -125,7 +138,11 @@ impl Runtime {
 
     // ----- tool_calls -----
 
-    pub fn list_tool_calls_for_tenant(&self, run_id: &str, step_id: &str) -> Result<Vec<ToolCall>, TenancyError> {
+    pub fn list_tool_calls_for_tenant(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<Vec<ToolCall>, TenancyError> {
         let tenant_id = require()?;
         self.store
             .list_tool_calls_for_tenant_raw(&tenant_id, run_id, step_id)
@@ -134,7 +151,10 @@ impl Runtime {
 
     pub fn upsert_tool_call_for_tenant(&self, tool_call: &ToolCall) -> Result<(), TenancyError> {
         let tenant_id = require()?;
-        match self.store.upsert_tool_call_for_tenant_safe(tool_call, &tenant_id) {
+        match self
+            .store
+            .upsert_tool_call_for_tenant_safe(tool_call, &tenant_id)
+        {
             Err(e) if crate::SQLiteStore::is_cross_tenant_row(&e) => {
                 self.emit("store:UpsertToolCallForTenant", "tool_call");
                 Err(TenancyError::CrossTenantWrite)
@@ -147,12 +167,20 @@ impl Runtime {
 
     pub fn list_llm_dispatches_for_tenant(&self) -> Result<Vec<Dispatch>, TenancyError> {
         let tenant_id = require()?;
-        self.store.list_llm_dispatches_for_tenant_raw(&tenant_id).map_err(TenancyError::from)
+        self.store
+            .list_llm_dispatches_for_tenant_raw(&tenant_id)
+            .map_err(TenancyError::from)
     }
 
-    pub fn get_llm_dispatch_for_tenant(&self, dispatch_id: &str) -> Result<Option<Dispatch>, TenancyError> {
+    pub fn get_llm_dispatch_for_tenant(
+        &self,
+        dispatch_id: &str,
+    ) -> Result<Option<Dispatch>, TenancyError> {
         let tenant_id = require()?;
-        match self.store.get_llm_dispatch_for_tenant_raw(dispatch_id, &tenant_id) {
+        match self
+            .store
+            .get_llm_dispatch_for_tenant_raw(dispatch_id, &tenant_id)
+        {
             Err(e) if crate::SQLiteStore::is_cross_tenant_row(&e) => {
                 self.emit("store:GetLLMDispatchForTenant", "llm_dispatch");
                 Ok(None)
@@ -163,7 +191,10 @@ impl Runtime {
 
     pub fn upsert_llm_dispatch_for_tenant(&self, dispatch: &Dispatch) -> Result<(), TenancyError> {
         let tenant_id = require()?;
-        match self.store.upsert_llm_dispatch_for_tenant_safe(dispatch, &tenant_id) {
+        match self
+            .store
+            .upsert_llm_dispatch_for_tenant_safe(dispatch, &tenant_id)
+        {
             Err(e) if crate::SQLiteStore::is_cross_tenant_row(&e) => {
                 self.emit("store:UpsertLLMDispatchForTenant", "llm_dispatch");
                 Err(TenancyError::CrossTenantWrite)
@@ -184,7 +215,10 @@ impl Runtime {
     /// Writes a checkpoint row and binds tenant_id to it. Because checkpoint_id is
     /// generated server-side and not surfaced to callers, the bind step uses
     /// (run_id, captured_at) via the parent run.
-    pub fn save_checkpoint_for_tenant(&self, checkpoint: &RunCheckpoint) -> Result<(), TenancyError> {
+    pub fn save_checkpoint_for_tenant(
+        &self,
+        checkpoint: &RunCheckpoint,
+    ) -> Result<(), TenancyError> {
         let tenant_id = require()?;
         self.store
             .save_checkpoint_for_tenant_safe(checkpoint, &tenant_id)
@@ -206,6 +240,9 @@ pub fn runtime_tenant_predicate(tenant_id: &str) -> (String, Option<String>) {
     if tenant_id.is_empty() {
         (String::new(), None)
     } else {
-        ("(tenant_id = ? OR tenant_id IS NULL)".to_string(), Some(tenant_id.to_string()))
+        (
+            "(tenant_id = ? OR tenant_id IS NULL)".to_string(),
+            Some(tenant_id.to_string()),
+        )
     }
 }

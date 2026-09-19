@@ -375,8 +375,16 @@ pub struct ProjectionInput {
 
 /// Go `DefaultRoutePolicy`: a future-eligible, redacted, valid policy.
 #[must_use]
-pub fn default_route_policy(tenant_id: &str, connector_id: &str, now: DateTime<Utc>) -> RoutePolicy {
-    let now = if now == DateTime::<Utc>::UNIX_EPOCH { Utc::now() } else { now };
+pub fn default_route_policy(
+    tenant_id: &str,
+    connector_id: &str,
+    now: DateTime<Utc>,
+) -> RoutePolicy {
+    let now = if now == DateTime::<Utc>::UNIX_EPOCH {
+        Utc::now()
+    } else {
+        now
+    };
     RoutePolicy {
         tenant_id: tenant_id.to_string(),
         connector_id: connector_id.to_string(),
@@ -392,7 +400,11 @@ pub fn default_route_policy(tenant_id: &str, connector_id: &str, now: DateTime<U
 /// validation state, and the redaction status when unset.
 #[must_use]
 pub fn normalize_route_policy(mut policy: RoutePolicy, now: DateTime<Utc>) -> RoutePolicy {
-    let now = if now == DateTime::<Utc>::UNIX_EPOCH { Utc::now() } else { now };
+    let now = if now == DateTime::<Utc>::UNIX_EPOCH {
+        Utc::now()
+    } else {
+        now
+    };
     if policy.validated_at == DateTime::<Utc>::UNIX_EPOCH {
         policy.validated_at = now;
     }
@@ -610,17 +622,29 @@ pub fn capability_profile_for_kind(kind: &str) -> HashMap<String, CapabilitySupp
         ("re-enable".to_string(), CapabilitySupport::Supported),
         ("repair".to_string(), CapabilitySupport::Supported),
         ("reconnect".to_string(), CapabilitySupport::Supported),
-        ("credential-rotation".to_string(), CapabilitySupport::Limited),
+        (
+            "credential-rotation".to_string(),
+            CapabilitySupport::Limited,
+        ),
         ("route-edit".to_string(), CapabilitySupport::Supported),
-        ("foreground-reply-status".to_string(), CapabilitySupport::Supported),
-        ("background-delivery-status".to_string(), CapabilitySupport::Supported),
+        (
+            "foreground-reply-status".to_string(),
+            CapabilitySupport::Supported,
+        ),
+        (
+            "background-delivery-status".to_string(),
+            CapabilitySupport::Supported,
+        ),
         ("support-evidence".to_string(), CapabilitySupport::Supported),
     ]);
     match kind.to_lowercase().as_str() {
         "discord" | "telegram" | "slack" | "matrix" => capabilities,
         _ => {
             capabilities.insert("reconnect".to_string(), CapabilitySupport::Unsupported);
-            capabilities.insert("credential-rotation".to_string(), CapabilitySupport::Unsupported);
+            capabilities.insert(
+                "credential-rotation".to_string(),
+                CapabilitySupport::Unsupported,
+            );
             capabilities.insert("route-edit".to_string(), CapabilitySupport::Unsupported);
             capabilities
         }
@@ -744,13 +768,18 @@ pub fn build_support_evidence_bundle(
     principal_id: &str,
     now: DateTime<Utc>,
 ) -> SupportEvidenceBundle {
-    let now = if now == DateTime::<Utc>::UNIX_EPOCH { Utc::now() } else { now };
+    let now = if now == DateTime::<Utc>::UNIX_EPOCH {
+        Utc::now()
+    } else {
+        now
+    };
     let diagnostics = input
         .diagnostics
         .get(&connector.connector_id)
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    let projection = build_connector_projection(connector.clone(), latest_diagnostic(diagnostics), now);
+    let projection =
+        build_connector_projection(connector.clone(), latest_diagnostic(diagnostics), now);
     SupportEvidenceBundle {
         tenant_id: input.tenant_id.clone(),
         connector_id: connector.connector_id.clone(),

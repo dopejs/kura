@@ -8,14 +8,14 @@ use std::collections::HashMap;
 
 use chrono::DateTime;
 use chrono::Utc;
+use kura_evaluation::{CampaignAttemptAggregationInput, CampaignItem};
 use kura_evaluation::{
-    CampaignRunnerInput, CampaignSourceSelection, CampaignTransition,
-    CreateCampaignInput, EvaluationError, ProductLifecycleStatus, ProductResourceKind,
-    ReplayCampaign, ReplayMode, RetentionState, SuppressionState, build_campaign_attempt_group,
+    CampaignRunnerInput, CampaignSourceSelection, CampaignTransition, CreateCampaignInput,
+    EvaluationError, ProductLifecycleStatus, ProductResourceKind, ReplayCampaign, ReplayMode,
+    RetentionState, SuppressionState, build_campaign_attempt_group,
     build_campaign_replay_launch_plan, build_campaign_runner_plan, campaign_idempotency_scope,
     campaign_item_from_selection, create_replay_campaign, transition_replay_campaign,
 };
-use kura_evaluation::{CampaignAttemptAggregationInput, CampaignItem};
 
 fn ts(s: &str) -> DateTime<Utc> {
     s.parse::<DateTime<Utc>>().expect("ts")
@@ -128,7 +128,8 @@ fn campaign_selection_rejects_suppressed_expired_draft_and_cross_tenant_sources(
         assert!(
             matches!(
                 err,
-                EvaluationError::CampaignSelectionInvalid | EvaluationError::ProductCrossTenantSource
+                EvaluationError::CampaignSelectionInvalid
+                    | EvaluationError::ProductCrossTenantSource
             ),
             "selection {selection:?} err={err:?}"
         );
@@ -166,7 +167,10 @@ fn campaign_source_snapshot_remains_stable_after_source_edit() {
     )
     .expect("CreateReplayCampaign");
     assert_eq!(
-        items[0].source_snapshot.get("revisionId").and_then(|v| v.as_str()),
+        items[0]
+            .source_snapshot
+            .get("revisionId")
+            .and_then(|v| v.as_str()),
         Some("revision_1"),
         "campaign item snapshot changed"
     );
@@ -246,5 +250,8 @@ fn build_campaign_runner_plan_launches_non_live_attempts_and_carries_live_valida
     assert_eq!(plan.launches.len(), 1);
     assert_eq!(plan.launches[0].mode, ReplayMode::NonLive.as_str());
     assert_eq!(plan.groups.len(), 1);
-    assert_eq!(plan.groups[0].live_validation_ids, vec!["ledger_runner".to_string()]);
+    assert_eq!(
+        plan.groups[0].live_validation_ids,
+        vec!["ledger_runner".to_string()]
+    );
 }

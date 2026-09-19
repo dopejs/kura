@@ -64,8 +64,8 @@ use kura_store::{
 use kura_triage::Manager as TriageManager;
 use kura_webhook::Manager as WebhookManager;
 
-use crate::adapters;
 use crate::AppError;
+use crate::adapters;
 
 // ---------------------------------------------------------------------------
 // Seams shared between the kernel and plugins during assembly
@@ -313,7 +313,9 @@ pub(crate) const BUILTINS: &[BuiltinPlugin] = &[
             id: "computer-use",
             summary: "Computer-use sessions with artifact recording",
             provides: &["computeruse.manager"],
-            requires: &[],
+            // Stage 9.4: the subprocess browser driver reports to the
+            // capability supervisor.
+            requires: &["capabilities"],
         },
         build: build_computer_use,
     },
@@ -429,6 +431,29 @@ pub(crate) const BUILTINS: &[BuiltinPlugin] = &[
     },
     BuiltinPlugin {
         descriptor: PluginDescriptor {
+            id: "tools",
+            summary: "Tool provider profiles (web search, image generation, browser)",
+            provides: &["tools.manager"],
+            // Every tool call is third-party spend, so the plane does not
+            // assemble without the quota plane it reserves against.
+            requires: &["billing"],
+        },
+        build: build_tools,
+    },
+    BuiltinPlugin {
+        descriptor: PluginDescriptor {
+            id: "swarm",
+            summary: "Bounded concurrent sub-agents (opt-in via swarm.config.enabled)",
+            provides: &["swarm.manager"],
+            // A fan-out multiplies spend and runs turns: it does not assemble
+            // without the quota plane it reserves against or the chat service
+            // its children run through.
+            requires: &["billing", "chat"],
+        },
+        build: build_swarm,
+    },
+    BuiltinPlugin {
+        descriptor: PluginDescriptor {
             id: "self-improve",
             summary: "Audited self-improvement proposals over the plugin profile",
             provides: &["improvement.manager"],
@@ -500,6 +525,33 @@ fn build_llm(asm: &mut Assembly) -> Result<(), AppError> {
     for bridge in managed_registry.list() {
         llm.register_provider(bridge.provider());
     }
+    // D10: the live OpenAI-compatible HTTP provider (with tool calling).
+    // Registered only when a base URL is configured, and only when that URL
+    // passes the egress policy — an LLM endpoint is an outbound target like
+    // any other.
+    let openai = &asm.cfg.llm.openai_compatible;
+    if !openai.base_url.trim().is_empty() {
+        match asm.cfg.egress.check_url(openai.base_url.trim()) {
+            Ok(_) => {
+                let api_key = if openai.api_key.trim().is_empty() {
+                    None
+                } else {
+                    Some(openai.api_key.clone())
+                };
+                llm.register_provider(Arc::new(
+                    kura_openai_provider::OpenAiCompatibleProvider::new(
+                        openai.base_url.trim(),
+                        api_key,
+                    ),
+                ));
+            }
+            Err(denial) => {
+                eprintln!(
+                    "[kura] llm: openai_compatible base URL refused by egress policy ({denial}); provider not registered"
+                );
+            }
+        }
+    }
     // Deterministic in-process fallback so the daemon always has a default
     // provider (Go registers echo in dispatcher.go).
     llm.register_provider(Arc::new(kura_llm::EchoProvider::new()));
@@ -515,11 +567,38 @@ fn build_llm(asm: &mut Assembly) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Stage 3.4: counts an invocation for every skill a turn selected.
+struct SkillUsageHook {
+    state: Arc<std::sync::OnceLock<AppState>>,
+}
+impl kura_plugin::Hook for SkillUsageHook {
+    fn handle(&self, payload: &mut serde_json::Value) -> kura_plugin::HookOutcome {
+        if let (Some(state), Some(skills)) = (
+            self.state.get(),
+            payload.get("skills").and_then(serde_json::Value::as_array),
+        ) {
+            for id in skills.iter().filter_map(serde_json::Value::as_str) {
+                kura_api::routes::skill_proposals::record_invocation(state, id);
+            }
+        }
+        kura_plugin::HookOutcome::Continue
+    }
+}
+
 fn build_skills(asm: &mut Assembly) -> Result<(), AppError> {
     let skills = Arc::new(
         SkillsRegistry::new(&asm.cfg.data_dir).map_err(|err| AppError::Skills(err.to_string()))?,
     );
     asm.state.skills = Some(skills);
+    if let Some(bus) = asm.state.hooks.clone() {
+        bus.register(
+            kura_plugin::points::CHAT_TURN_END,
+            "skills",
+            Arc::new(SkillUsageHook {
+                state: asm.late_state.clone(),
+            }),
+        );
+    }
     Ok(())
 }
 
@@ -532,8 +611,16 @@ fn build_sandbox(asm: &mut Assembly) -> Result<(), AppError> {
     ));
     // The sandbox secret manager is a second instance sharing the same
     // store/backend because set_secret_manager takes ownership.
-    let secret_store = asm.seams.get::<SecretStoreSeam>().expect("kernel secret store").0;
-    let secret_backend = asm.seams.get::<SecretBackendSeam>().expect("kernel secret backend").0;
+    let secret_store = asm
+        .seams
+        .get::<SecretStoreSeam>()
+        .expect("kernel secret store")
+        .0;
+    let secret_backend = asm
+        .seams
+        .get::<SecretBackendSeam>()
+        .expect("kernel secret backend")
+        .0;
     sandboxes.set_secret_manager(SecretsManager::new(secret_store, secret_backend));
     asm.state.sandboxes = Some(sandboxes);
     asm.lifecycle.on_close(
@@ -551,8 +638,10 @@ fn build_mcp(asm: &mut Assembly) -> Result<(), AppError> {
     let sandboxes = asm.state.sandboxes.clone().expect("sandbox plugin built");
     let secret_manager = asm.state.secrets.clone().expect("kernel secrets");
     let mcp_starter = Arc::new(adapters::McpExecutionStarter::new(sandboxes));
-    let mcp_secret_resolver =
-        Arc::new(adapters::McpSecretResolver::new(asm.store.clone(), secret_manager));
+    let mcp_secret_resolver = Arc::new(adapters::McpSecretResolver::new(
+        asm.store.clone(),
+        secret_manager,
+    ));
     let mcp = Arc::new(McpManager::new(
         asm.cfg.clone(),
         Some(asm.secondary.clone()),
@@ -588,7 +677,11 @@ fn build_mail(asm: &mut Assembly) -> Result<(), AppError> {
 
 fn build_providers(asm: &mut Assembly) -> Result<(), AppError> {
     let llm = asm.state.llm.clone().expect("llm plugin built");
-    let managed_registry = asm.seams.get::<ManagedRegistrySeam>().expect("llm registry seam").0;
+    let managed_registry = asm
+        .seams
+        .get::<ManagedRegistrySeam>()
+        .expect("llm registry seam")
+        .0;
     asm.state.providers = Some(Arc::new(kura_providers::new_manager(
         asm.cfg.llm.clone(),
         Some(llm),
@@ -619,8 +712,25 @@ fn build_chat(asm: &mut Assembly) -> Result<(), AppError> {
     if let Some(hooks) = asm.state.hooks.clone() {
         chat.set_hooks(hooks);
     }
+    // Stage 9.0: the tool seam. Which tools exist is resolved per turn from
+    // the late state (tools/memory/mcp build after chat).
+    let config_object = asm.profile.config_for("chat");
+    let config: ChatPluginConfig = serde_json::from_value(serde_json::Value::Object(config_object))
+        .map_err(|err| AppError::PluginProfile(format!("chat config: {err}")))?;
+    chat.set_tool_host(
+        Arc::new(crate::tool_host::AppToolHost::new(asm.late_state.clone())),
+        config.tool_max_rounds,
+    );
     asm.state.chat = Some(Arc::new(chat));
     Ok(())
+}
+
+/// `plugins.json` → `entries.chat.config`.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct ChatPluginConfig {
+    /// Bound on tool rounds per turn; 0 = the chat crate's default.
+    tool_max_rounds: usize,
 }
 
 /// The default context-assembly hook: injects the tenant's Ready L3/L2
@@ -639,6 +749,17 @@ impl ContextHook {
     /// loadouts and are recorded as excluded).
     /// Binding-aware loadout: `agent`-visibility assets inject only when
     /// their bindings contain the turn's active agent profile id.
+    /// Vectors for the retrieval corpus. Delegates to the API crate's
+    /// implementation so this path and `/v1/retrieval/queries` share one
+    /// derived index and cannot drift apart.
+    fn corpus_vectors(
+        state: &kura_api::AppState,
+        embedder: &dyn kura_context::Embedder,
+        docs: &[kura_context::RetrievalDoc],
+    ) -> Vec<Vec<f32>> {
+        kura_api::routes::retrieval::corpus_vectors(state, embedder, docs)
+    }
+
     fn bootstrap_layer(
         memory: &MemoryManager,
         tenant_id: &str,
@@ -646,7 +767,11 @@ impl ContextHook {
         layer: kura_memory::MemoryLayer,
         excluded: &mut Vec<kura_context::ExcludedItem>,
     ) -> Vec<kura_context::BootstrapAsset> {
-        let mut assets = memory.list(tenant_id, Some(layer), Some(kura_memory::AssetStatus::Ready));
+        let mut assets = memory.list(
+            tenant_id,
+            Some(layer),
+            Some(kura_memory::AssetStatus::Ready),
+        );
         assets.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         let mut views = Vec::with_capacity(assets.len());
         for asset in assets {
@@ -715,7 +840,10 @@ impl kura_plugin::Hook for ContextHook {
                     if Some(idx) == last_user_idx {
                         continue;
                     }
-                    let role = message.get("role").and_then(Value::as_str).unwrap_or_default();
+                    let role = message
+                        .get("role")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
                     if role == "system" {
                         continue;
                     }
@@ -795,23 +923,76 @@ impl kura_plugin::Hook for ContextHook {
             .to_string();
         if !query.trim().is_empty() {
             let mut atom_excluded = Vec::new();
-            let atoms = Self::bootstrap_layer(
+            // The corpus is L1 atoms **plus** L2/L3. Bootstrap injects L2/L3
+            // newest-first under its own budget, so a scenario or persona that
+            // did not fit — or simply is not recent — was previously
+            // unreachable no matter how well the query matched it. Retrieval
+            // is the second chance.
+            let mut atoms = Self::bootstrap_layer(
                 memory,
                 &tenant_id,
                 &agent_profile_id,
                 kura_memory::MemoryLayer::L1,
                 &mut atom_excluded,
             );
-            // Visibility-excluded atoms are only recorded when retrieval
+            for layer in [kura_memory::MemoryLayer::L2, kura_memory::MemoryLayer::L3] {
+                atoms.extend(Self::bootstrap_layer(
+                    memory,
+                    &tenant_id,
+                    &agent_profile_id,
+                    layer,
+                    &mut atom_excluded,
+                ));
+            }
+            // Anything bootstrap already injected must not be injected twice.
+            // Recorded rather than silently dropped: "it was already in the
+            // window" is a different fact from "it did not match".
+            let already_injected: std::collections::HashSet<String> = record
+                .included
+                .iter()
+                .map(|item| item.asset_id.clone())
+                .collect();
+            atoms.retain(|asset| {
+                if already_injected.contains(&asset.asset_id) {
+                    record.excluded.push(kura_context::ExcludedItem {
+                        asset_id: asset.asset_id.clone(),
+                        layer: asset.layer.clone(),
+                        reason: "already_injected".to_string(),
+                        source: "retrieval".to_string(),
+                    });
+                    false
+                } else {
+                    true
+                }
+            });
+            // Visibility-excluded assets are only recorded when retrieval
             // actually runs (they were candidates for this query's corpus).
-            record.excluded.extend(atom_excluded.into_iter().map(|mut item| {
-                item.source = "retrieval".to_string();
-                item
-            }));
+            record
+                .excluded
+                .extend(atom_excluded.into_iter().map(|mut item| {
+                    item.source = "retrieval".to_string();
+                    item
+                }));
+            // Bound the corpus before any scoring: it is the tenant's whole
+            // Ready-atom set, it grows without limit, and everything below is
+            // linear in it. Newest first (bootstrap_layer already sorted), so
+            // the bound drops the oldest — and says so.
+            let max_corpus = self.config.max_corpus();
+            if atoms.len() > max_corpus {
+                for asset in atoms.split_off(max_corpus) {
+                    record.excluded.push(kura_context::ExcludedItem {
+                        asset_id: asset.asset_id,
+                        layer: asset.layer,
+                        reason: "over_candidate_limit".to_string(),
+                        source: "retrieval".to_string(),
+                    });
+                }
+            }
             let docs: Vec<kura_context::RetrievalDoc> = atoms
                 .into_iter()
                 .map(|asset| kura_context::RetrievalDoc {
                     asset_id: asset.asset_id,
+                    layer: asset.layer,
                     title: asset.title,
                     content: asset.content,
                 })
@@ -824,11 +1005,19 @@ impl kura_plugin::Hook for ContextHook {
                 Some(external) => external,
                 None => &default_embedder,
             };
-            kura_context::retrieve_and_assemble(
+            // Corpus vectors come from the persisted derived index, so this
+            // turn embeds exactly one text: the query. Misses are computed
+            // once and written back. Before this, every turn re-embedded the
+            // whole corpus — one RPC per atom per turn for an external
+            // provider, synchronously on the reply path.
+            let doc_vectors = Self::corpus_vectors(state, embedder, &docs);
+            kura_context::retrieve_and_assemble_with_options(
                 &query,
                 &docs,
                 Some(embedder),
+                Some(&doc_vectors),
                 self.config.retrieval_budget(),
+                self.config.min_similarity(),
                 &mut injected,
                 &mut record,
             );
@@ -873,11 +1062,7 @@ impl kura_plugin::Hook for ContextHook {
             payload: event_payload,
             ..kura_events::Event::default()
         };
-        let event = state
-            .store
-            .lock()
-            .append_event(&event)
-            .unwrap_or(event);
+        let event = state.store.lock().append_event(&event).unwrap_or(event);
         state.event_bus.publish(event);
         kura_plugin::HookOutcome::Continue
     }
@@ -894,7 +1079,10 @@ fn build_context(asm: &mut Assembly) -> Result<(), AppError> {
     bus.register(
         kura_plugin::points::CHAT_PRE_DISPATCH,
         "context",
-        Arc::new(ContextHook { state: asm.late_state.clone(), config }),
+        Arc::new(ContextHook {
+            state: asm.late_state.clone(),
+            config,
+        }),
     );
     Ok(())
 }
@@ -923,17 +1111,52 @@ impl kura_plugin::Hook for SessionStrategyHook {
         let Some(messages_value) = payload.get("messages") else {
             return kura_plugin::HookOutcome::Continue;
         };
-        let Ok(messages) =
+        let Ok(mut messages) =
             serde_json::from_value::<Vec<kura_session::WindowMessage>>(messages_value.clone())
         else {
             return kura_plugin::HookOutcome::Continue;
         };
+
+        // Stage 5.1: the thread's session frame goes in first, as a system
+        // message, so the goal survives whatever elision follows and is the
+        // first thing the model reads.
+        let mut frame_applied = false;
+        {
+            let thread_id = payload
+                .get("threadId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            let tenant_id = payload
+                .get("tenantId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            if !thread_id.is_empty() {
+                if let Some(state) = self.state.get() {
+                    if let Ok(Some(frame)) =
+                        kura_api::routes::session_frames::load_frame(state, tenant_id, thread_id)
+                    {
+                        if !frame.is_empty() {
+                            kura_session::apply_frame(&mut messages, &frame);
+                            frame_applied = true;
+                        }
+                    }
+                }
+            }
+        }
+
         let mut shaped = kura_session::shape_window(
             &messages,
             self.config.budget_for(source_kind.as_deref()),
             self.config.keep_recent_floor(),
         );
         if shaped.elided == 0 {
+            if frame_applied {
+                if let Ok(new_messages) = serde_json::to_value(&shaped.messages) {
+                    payload["messages"] = new_messages;
+                }
+            }
             return kura_plugin::HookOutcome::Continue;
         }
 
@@ -995,9 +1218,7 @@ impl kura_plugin::Hook for SessionStrategyHook {
                             if let Err(err) = kura_api::routes::memory::execute_consolidation(
                                 &state, &tenant_id, "turns", None,
                             ) {
-                                eprintln!(
-                                    "memory: eviction-trigger consolidation failed: {err:?}"
-                                );
+                                eprintln!("memory: eviction-trigger consolidation failed: {err:?}");
                             }
                         });
                     }
@@ -1012,6 +1233,118 @@ impl kura_plugin::Hook for SessionStrategyHook {
     }
 }
 
+/// Stage 5.2: channel-native thread segmentation, evaluated at
+/// `chat/turn-start` — before continuity is assembled, so a freshly opened
+/// segment is what the turn sees. The mechanism is the threads engine's own
+/// `reset_thread` (through `apply_thread_lifecycle_action`), so an automatic
+/// segment boundary leaves the same audited lifecycle action and reset
+/// evidence as an operator-requested reset.
+struct SessionSegmentationHook {
+    config: kura_session::SessionStrategyConfig,
+    state: Arc<std::sync::OnceLock<AppState>>,
+}
+
+impl kura_plugin::Hook for SessionSegmentationHook {
+    fn handle(&self, payload: &mut serde_json::Value) -> kura_plugin::HookOutcome {
+        use serde_json::Value;
+        if payload.get("sourceKind").and_then(Value::as_str) != Some("channel") {
+            return kura_plugin::HookOutcome::Continue;
+        }
+        let channel_scope_ref = payload
+            .get("channelScopeRef")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let Some(policy) = self.config.segmentation_for(channel_scope_ref).cloned() else {
+            return kura_plugin::HookOutcome::Continue;
+        };
+        let tenant_id = payload
+            .get("tenantId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let thread_id = payload
+            .get("threadId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if thread_id.is_empty() {
+            return kura_plugin::HookOutcome::Continue;
+        }
+        let Some(state) = self.state.get() else {
+            return kura_plugin::HookOutcome::Continue;
+        };
+        let now = payload
+            .get("sourceTimestamp")
+            .and_then(Value::as_str)
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|t| t.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+
+        let (segment_id, last_turn_at) = {
+            let store = state.store.lock();
+            let Ok(Some(thread)) = store.get_thread_for_tenant(&tenant_id, &thread_id) else {
+                return kura_plugin::HookOutcome::Continue;
+            };
+            let segment_id = thread.current_session_segment_id.clone();
+            if segment_id.trim().is_empty() {
+                return kura_plugin::HookOutcome::Continue;
+            }
+            let last = store
+                .list_continuity_turns(&kura_store::thread_continuity::ContinuityLookupQuery {
+                    tenant_id: tenant_id.clone(),
+                    thread_id: thread_id.clone(),
+                    session_segment_id: segment_id.clone(),
+                    limit: 1,
+                    now: Some(now),
+                })
+                .ok()
+                .and_then(|turns| turns.into_iter().next())
+                .map(|turn| turn.recorded_at);
+            (segment_id, last)
+        };
+        if !kura_session::segment_boundary_due(&policy, last_turn_at, now) {
+            return kura_plugin::HookOutcome::Continue;
+        }
+
+        let input = kura_threads::LifecycleMutationInput {
+            actor_principal_id: "session-strategy".to_string(),
+            reason_code: "idle_gap_segmentation".to_string(),
+            audit_event_id: format!(
+                "audit_thread_segment_{}",
+                now.timestamp_nanos_opt().unwrap_or_default()
+            ),
+            now: Some(now),
+            new_segment_id: String::new(),
+        };
+        let result = state.store.lock().apply_thread_lifecycle_action(
+            &tenant_id,
+            &thread_id,
+            kura_threads::LifecycleActionKind::Reset,
+            &input,
+        );
+        match result {
+            Ok(Some(result)) => {
+                let _ = kura_api::routes::resources::publish_thread_event(
+                    state,
+                    &tenant_id,
+                    kura_events::thread_lifecycle_event(result.action.clone()),
+                );
+                eprintln!(
+                    "[kura] session-strategy: thread {thread_id} idle past {}s; opened segment {} (was {segment_id})",
+                    policy.idle_gap_seconds, result.thread.current_session_segment_id
+                );
+            }
+            Ok(None) => {}
+            Err(err) => {
+                eprintln!("[kura] session-strategy: segment reset for {thread_id} failed: {err}")
+            }
+        }
+        kura_plugin::HookOutcome::Continue
+    }
+}
+
 fn build_session_strategy(asm: &mut Assembly) -> Result<(), AppError> {
     let Some(bus) = asm.state.hooks.clone() else {
         return Ok(());
@@ -1020,13 +1353,23 @@ fn build_session_strategy(asm: &mut Assembly) -> Result<(), AppError> {
     // malformed profile) instead of silently running default budgets.
     let config_object = asm.profile.config_for("session-strategy");
     let config: kura_session::SessionStrategyConfig =
-        serde_json::from_value(serde_json::Value::Object(config_object)).map_err(|err| {
-            AppError::PluginProfile(format!("session-strategy config: {err}"))
-        })?;
+        serde_json::from_value(serde_json::Value::Object(config_object))
+            .map_err(|err| AppError::PluginProfile(format!("session-strategy config: {err}")))?;
+    bus.register(
+        kura_plugin::points::CHAT_TURN_START,
+        "session-strategy",
+        Arc::new(SessionSegmentationHook {
+            config: config.clone(),
+            state: asm.late_state.clone(),
+        }),
+    );
     bus.register(
         kura_plugin::points::CHAT_PRE_DISPATCH,
         "session-strategy",
-        Arc::new(SessionStrategyHook { config, state: asm.late_state.clone() }),
+        Arc::new(SessionStrategyHook {
+            config,
+            state: asm.late_state.clone(),
+        }),
     );
     Ok(())
 }
@@ -1039,9 +1382,8 @@ fn build_billing(asm: &mut Assembly) -> Result<(), AppError> {
 
 fn build_activation(asm: &mut Assembly) -> Result<(), AppError> {
     let billing = asm.state.billing.clone().expect("billing plugin built");
-    let activation_store = Arc::new(
-        SqliteActivationStore::new(asm.open_store()?).map_err(AppError::Store)?,
-    );
+    let activation_store =
+        Arc::new(SqliteActivationStore::new(asm.open_store()?).map_err(AppError::Store)?);
     let activation_billing = Arc::new(ActivationBillingProjectorAdapter::new(billing));
     let activation_chat = Arc::new(ActivationChatRunnerAdapter::new(asm.state.chat.clone()));
     asm.state.activation = Some(Arc::new(ActivationService::with_sqlite(
@@ -1067,12 +1409,64 @@ fn build_computer_use(asm: &mut Assembly) -> Result<(), AppError> {
         &asm.cfg.data_dir,
         asm.env_scope,
     ));
+    // Stage 9.4: `entries.computer-use.config.driver = "subprocess"` swaps
+    // the in-memory driver for a supervised worker process
+    // (`capabilities/browser/PROTOCOL.md`). The manager, policy gating and
+    // artifact recorder do not change.
+    let config_object = asm.profile.config_for("computer-use");
+    let config: ComputerUsePluginConfig =
+        serde_json::from_value(serde_json::Value::Object(config_object))
+            .map_err(|err| AppError::PluginProfile(format!("computer-use config: {err}")))?;
+    let driver: Option<Arc<dyn kura_computeruse::Driver>> = match config.driver.as_str() {
+        "" | "memory" => None,
+        "subprocess" => {
+            if config.command.trim().is_empty() {
+                return Err(AppError::PluginProfile(
+                    "computer-use config: driver \"subprocess\" needs `command`".to_string(),
+                ));
+            }
+            let capability_id = kura_computeruse::subprocess_driver::DEFAULT_CAPABILITY_ID;
+            let supervisor: Option<Arc<dyn kura_computeruse::WorkerSupervisor>> =
+                asm.state.capabilities.clone().map(|sup| {
+                    let _ = sup.register(kura_capabilities::RegisterInput {
+                        capability_id: capability_id.to_string(),
+                        kind: kura_computeruse::subprocess_driver::KIND_BROWSER_WORKER.to_string(),
+                        display_name: "browser worker".to_string(),
+                    });
+                    Arc::new(crate::adapters::BrowserWorkerSupervisor(sup))
+                        as Arc<dyn kura_computeruse::WorkerSupervisor>
+                });
+            Some(Arc::new(kura_computeruse::SubprocessDriver::new(
+                kura_computeruse::SubprocessDriverConfig {
+                    command: config.command.clone(),
+                    args: config.args.clone(),
+                    env: config
+                        .env
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                    timeout_ms: if config.timeout_ms == 0 {
+                        30_000
+                    } else {
+                        config.timeout_ms
+                    },
+                    capability_id: capability_id.to_string(),
+                },
+                supervisor,
+            )))
+        }
+        other => {
+            return Err(AppError::PluginProfile(format!(
+                "computer-use config: unknown driver \"{other}\" (memory | subprocess)"
+            )));
+        }
+    };
     asm.state.computer_use = Some(Arc::new(ComputerUseManager::new(ComputerUseDependencies {
         environment_scope: asm.env_scope.to_string(),
         runtime: asm.state.runtime.clone(),
         policy: asm.state.policy.clone(),
         store: computeruse_store,
-        driver: None,
+        driver,
         artifacts: Some(computeruse_recorder.clone()),
     })));
     #[cfg(test)]
@@ -1080,6 +1474,18 @@ fn build_computer_use(asm: &mut Assembly) -> Result<(), AppError> {
         asm.wiring.computeruse_recorder = Some(computeruse_recorder);
     }
     Ok(())
+}
+
+/// `plugins.json` → `entries.computer-use.config`.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct ComputerUsePluginConfig {
+    /// `memory` (default) or `subprocess`.
+    driver: String,
+    command: String,
+    args: Vec<String>,
+    env: std::collections::BTreeMap<String, String>,
+    timeout_ms: u64,
 }
 
 fn build_delivery(asm: &mut Assembly) -> Result<(), AppError> {
@@ -1099,7 +1505,11 @@ fn build_delivery(asm: &mut Assembly) -> Result<(), AppError> {
 
 fn build_scheduler(asm: &mut Assembly) -> Result<(), AppError> {
     let runtime = asm.state.runtime.clone().expect("kernel runtime");
-    let workflow_launcher = asm.seams.get::<WorkflowLauncherSeam>().expect("kernel launcher").0;
+    let workflow_launcher = asm
+        .seams
+        .get::<WorkflowLauncherSeam>()
+        .expect("kernel launcher")
+        .0;
     asm.state.scheduler = Some(Arc::new(Scheduler::new(SchedulerDependencies {
         environment: asm.cfg.environment,
         runtime,
@@ -1131,12 +1541,20 @@ fn build_scheduler(asm: &mut Assembly) -> Result<(), AppError> {
 }
 
 fn build_reminders(asm: &mut Assembly) -> Result<(), AppError> {
-    let workflow_launcher = asm.seams.get::<WorkflowLauncherSeam>().expect("kernel launcher").0;
+    let workflow_launcher = asm
+        .seams
+        .get::<WorkflowLauncherSeam>()
+        .expect("kernel launcher")
+        .0;
     asm.state.reminders = Some(Arc::new(RemindersManager::new(RemindersDependencies {
         environment_scope: asm.env_scope.to_string(),
         store: asm.store.clone(),
         event_bus: Some((*asm.event_bus).clone()),
-        delivery: asm.state.delivery.as_ref().map(|delivery| (**delivery).clone()),
+        delivery: asm
+            .state
+            .delivery
+            .as_ref()
+            .map(|delivery| (**delivery).clone()),
         workflow_launcher: Some(workflow_launcher),
         clock: None,
         tick_interval: Duration::ZERO,
@@ -1188,7 +1606,11 @@ impl kura_plugin::Hook for MemoryCaptureHook {
     fn handle(&self, payload: &mut serde_json::Value) -> kura_plugin::HookOutcome {
         use serde_json::Value;
         let text_of = |key: &str| -> String {
-            payload.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
+            payload
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
         };
         let Some(state) = self.state.get() else {
             return kura_plugin::HookOutcome::Continue;
@@ -1222,7 +1644,11 @@ impl kura_plugin::Hook for MemoryCaptureHook {
         if links.is_empty() {
             return kura_plugin::HookOutcome::Continue;
         }
-        let text = format!("user: {}\nassistant: {}", text_of("query").trim(), text_of("output"));
+        let text = format!(
+            "user: {}\nassistant: {}",
+            text_of("query").trim(),
+            text_of("output")
+        );
         let captured = kura_api::routes::memory::capture_l0(
             state,
             &tenant_id,
@@ -1264,7 +1690,9 @@ fn build_memory(asm: &mut Assembly) -> Result<(), AppError> {
         bus.register(
             kura_plugin::points::CHAT_TURN_END,
             "memory",
-            Arc::new(MemoryCaptureHook { state: asm.late_state.clone() }),
+            Arc::new(MemoryCaptureHook {
+                state: asm.late_state.clone(),
+            }),
         );
     }
     // The 60s consolidation/retention tick is plugin-owned lifecycle: idle
@@ -1299,7 +1727,11 @@ fn build_triage(asm: &mut Assembly) -> Result<(), AppError> {
 
 fn build_webhooks(asm: &mut Assembly) -> Result<(), AppError> {
     let billing = asm.state.billing.clone().expect("billing plugin built");
-    let workflow_launcher = asm.seams.get::<WorkflowLauncherSeam>().expect("kernel launcher").0;
+    let workflow_launcher = asm
+        .seams
+        .get::<WorkflowLauncherSeam>()
+        .expect("kernel launcher")
+        .0;
     let mut webhook_manager = WebhookManager::new(
         asm.env_scope,
         Some(Box::new(adapters::WebhookFirerImpl::new(workflow_launcher))),
@@ -1319,8 +1751,12 @@ fn build_catalog(asm: &mut Assembly) -> Result<(), AppError> {
     let sandboxes = asm.state.sandboxes.clone().expect("sandbox plugin built");
     let mut catalog_manager = kura_catalog::Manager::new(
         asm.env_scope,
-        Some(Box::new(adapters::CatalogSandboxRequirementChecker::new(sandboxes))),
-        Some(Box::new(adapters::CatalogTenantPermissionGate::new(asm.store.clone()))),
+        Some(Box::new(adapters::CatalogSandboxRequirementChecker::new(
+            sandboxes,
+        ))),
+        Some(Box::new(adapters::CatalogTenantPermissionGate::new(
+            asm.store.clone(),
+        ))),
     );
     catalog_manager.with_store(asm.store.clone());
     asm.state.catalog = Some(Arc::new(catalog_manager));
@@ -1337,8 +1773,12 @@ fn build_exec_profiles(asm: &mut Assembly) -> Result<(), AppError> {
     let mut exec_profile_manager = ExecProfileManager::new(
         asm.env_scope,
         Some(Box::new(SandboxHealthChecker::new(Some(sandboxes.clone())))),
-        Some(Box::new(adapters::ExecProfileSandboxRequirementChecker::new(sandboxes))),
-        Some(Box::new(adapters::ExecProfileTenantPermissionGate::new(asm.store.clone()))),
+        Some(Box::new(
+            adapters::ExecProfileSandboxRequirementChecker::new(sandboxes),
+        )),
+        Some(Box::new(adapters::ExecProfileTenantPermissionGate::new(
+            asm.store.clone(),
+        ))),
     );
     exec_profile_manager.with_store(asm.store.clone());
     asm.state.exec_profiles = Some(Arc::new(exec_profile_manager));
@@ -1355,7 +1795,9 @@ fn build_evidence(asm: &mut Assembly) -> Result<(), AppError> {
     let mut evidence_manager = EvidenceManager::new(
         asm.env_scope,
         Some(Box::new(RoutineCollector::new(Some(routines)))),
-        Some(Box::new(adapters::EvidenceSupportPermissionGate::new(asm.store.clone()))),
+        Some(Box::new(adapters::EvidenceSupportPermissionGate::new(
+            asm.store.clone(),
+        ))),
     );
     evidence_manager.with_store(asm.store.clone());
     asm.state.evidence = Some(Arc::new(evidence_manager));
@@ -1406,13 +1848,63 @@ fn build_setup_wizard(asm: &mut Assembly) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Tool provider profiles. Restored from the store at build time so a
+/// configured search provider survives a restart; credentials are not restored
+/// because they were never here — a profile holds only a `secretRef`.
+fn build_tools(asm: &mut Assembly) -> Result<(), AppError> {
+    let manager = kura_tools::Manager::new();
+    match asm.store.lock().list_all_tool_profiles() {
+        Ok(profiles) => manager.restore(profiles),
+        // A corrupt profile row must not brick the boot: the daemon starts
+        // with no tool providers, which is the same state as a fresh install
+        // and is visible through /v1/tools/capabilities.
+        Err(err) => {
+            eprintln!("[kura] tools: restoring profiles failed ({err}); starting with none")
+        }
+    }
+    asm.state.tools = Some(Arc::new(manager));
+
+    // The guarded call path: quota reserve -> egress check -> provider ->
+    // commit/release. Built here with the real billing gate so no family can
+    // be invoked outside it.
+    let billing = asm.state.billing.clone().expect("billing plugin built");
+    asm.state.tool_runtime = Some(Arc::new(kura_tools::ToolRuntime::new(
+        Arc::new(crate::adapters::ToolQuotaGateImpl::new(billing)),
+        asm.cfg.egress.clone(),
+    )));
+    Ok(())
+}
+
+/// Swarm runs are restored from the store at boot; anything a restart
+/// interrupted is marked cancelled rather than left pending forever.
+fn build_swarm(asm: &mut Assembly) -> Result<(), AppError> {
+    let config_object = asm.profile.config_for("swarm");
+    let config: kura_swarm::SwarmConfig =
+        serde_json::from_value(serde_json::Value::Object(config_object))
+            .map_err(|err| AppError::PluginProfile(format!("swarm config: {err}")))?;
+    let manager = kura_swarm::Manager::new(config);
+    match kura_store::list_documents::<kura_swarm::SwarmRun>(
+        &asm.store.lock(),
+        kura_swarm::DOC_KIND_SWARM_RUN,
+    ) {
+        Ok(runs) => manager.restore(runs),
+        Err(err) => eprintln!("[kura] swarm: restoring runs failed ({err}); starting with none"),
+    }
+    let billing = asm.state.billing.clone().expect("billing plugin built");
+    asm.state.swarm_quota = Some(Arc::new(crate::adapters::SwarmQuotaGateImpl::new(billing)));
+    asm.state.swarm = Some(Arc::new(manager));
+    Ok(())
+}
+
 fn build_self_improve(asm: &mut Assembly) -> Result<(), AppError> {
     let config_object = asm.profile.config_for("self-improve");
     let config: kura_improvement::ImprovementConfig =
         serde_json::from_value(serde_json::Value::Object(config_object))
             .map_err(|err| AppError::PluginProfile(format!("self-improve config: {err}")))?;
-    asm.state.improvement =
-        Some(Arc::new(kura_improvement::Manager::new(&asm.cfg.data_dir, config)));
+    asm.state.improvement = Some(Arc::new(kura_improvement::Manager::new(
+        &asm.cfg.data_dir,
+        config,
+    )));
     Ok(())
 }
 

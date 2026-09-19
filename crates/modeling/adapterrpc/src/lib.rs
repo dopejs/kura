@@ -17,9 +17,9 @@ mod error;
 mod transport;
 mod types;
 
-pub use client::{CredentialResolver, ResolverError, Client, DEFAULT_DEADLINE};
+pub use client::{Client, CredentialResolver, DEFAULT_DEADLINE, ResolverError};
 pub use codec::{read_request, read_response, write_message};
-pub use conformance::{run_conformance, ConformanceReport, ConformanceResult, CONFORMANCE_OPS};
-pub use credentials::{scoped_resolver, IntegrationCredentialFetcher};
-pub use error::{is_ambiguous, AdapterError, CodecError, Error, FailureKind};
-pub use types::{Request, Response, Status, CONTRACT_VERSION};
+pub use conformance::{CONFORMANCE_OPS, ConformanceReport, ConformanceResult, run_conformance};
+pub use credentials::{IntegrationCredentialFetcher, scoped_resolver};
+pub use error::{AdapterError, CodecError, Error, FailureKind, is_ambiguous};
+pub use types::{CONTRACT_VERSION, Request, Response, Status};

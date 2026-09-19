@@ -110,6 +110,28 @@ authentication / a reverse proxy in front — see [Security](#security).
 Secrets (LLM keys, connector tokens) go in `deploy/docker/.env` (gitignored) as
 `KURA_*` variables, then uncomment `env_file` in `docker-compose.yml`.
 
+### TLS for a team deployment
+
+The daemon never terminates TLS itself (decision recorded 2026-09-19, Stage
+10.4): a reverse proxy does, so certificates, renewal and cipher policy live
+in a tool built for them and the daemon keeps binding a private address.
+The reference is Caddy, which provisions and renews Let's Encrypt
+certificates on its own:
+
+```bash
+cd deploy/docker
+KURA_PUBLIC_HOST=kura.example.com docker compose \
+  -f docker-compose.yml -f docker-compose.tls.yml up -d --build
+```
+
+`docker-compose.tls.yml` removes the daemon's host port and publishes only
+Caddy on 80/443; `Caddyfile` proxies to `kura-agent:19191`, keeps SSE
+streams unbuffered, forwards `X-Request-Id` (echoed by the daemon and
+written to its access log), and sets HSTS. Every request still needs a
+bearer token — TLS protects the transport, the daemon's auth protects the
+data. A team deployment reachable beyond loopback with neither is not
+supported.
+
 Plain `docker` without compose:
 ```bash
 docker build -f deploy/docker/Dockerfile -t kura-agent .   # run from repo root
@@ -135,6 +157,28 @@ pnpm dev:web
 ```
 
 ---
+
+## Observability
+
+`GET /metrics` (bearer-authenticated like every other route) serves a
+Prometheus text exposition: request latency by route template, LLM
+dispatch latency and token spend by tenant, store lock wait by role, hook
+waterfall duration, and chat tool calls. Every response carries an
+`x-request-id` (echoed when the client sent one) and the daemon writes one
+`http.request` access-log line per request with that id, the tenant, the
+route template, the status and the latency. Scrape with a token:
+
+```yaml
+scrape_configs:
+  - job_name: kura
+    authorization: { credentials: "<bearer token>" }
+    static_configs: [{ targets: ["kura.example.com"] }]
+    scheme: https
+```
+
+`store.readers` in `config.json` (or `KURA_STORE_READERS`) opens query-only
+reader connections beside the single writer so reads run concurrently with
+writes under WAL; `0` (the default) is the single-connection behaviour.
 
 ## Configuration & secrets
 

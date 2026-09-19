@@ -109,7 +109,9 @@ fn diagnostic_results_mark_stale_and_hide_expired() {
         retention_expires_at: now + Duration::hours(1),
         ..DiagnosticResult::default()
     };
-    store.save_integration_diagnostic_result(&stale_result).unwrap();
+    store
+        .save_integration_diagnostic_result(&stale_result)
+        .unwrap();
 
     let expired_result = DiagnosticResult {
         diagnostic_result_id: "diag_result_expired".to_string(),
@@ -118,7 +120,9 @@ fn diagnostic_results_mark_stale_and_hide_expired() {
         retention_expires_at: now - Duration::minutes(1),
         ..stale_result.clone()
     };
-    store.save_integration_diagnostic_result(&expired_result).unwrap();
+    store
+        .save_integration_diagnostic_result(&expired_result)
+        .unwrap();
 
     // Expired rows are hidden; the retained stale result is refreshed to Stale.
     let visible = store
@@ -200,10 +204,14 @@ fn diagnostic_runs_list_and_get_are_tenant_scoped() {
     assert_eq!(items[0].tenant_id, "ten_a");
 
     // Tenant A must not read tenant B's run.
-    let cross = store.get_integration_diagnostic_run("ten_a", "diag_run_b", false, now).unwrap();
+    let cross = store
+        .get_integration_diagnostic_run("ten_a", "diag_run_b", false, now)
+        .unwrap();
     assert!(cross.is_none());
 
-    let own = store.get_integration_diagnostic_run("ten_a", "diag_run_a", false, now).unwrap();
+    let own = store
+        .get_integration_diagnostic_run("ten_a", "diag_run_a", false, now)
+        .unwrap();
     assert_eq!(own.expect("run found").diagnostic_run_id, "diag_run_a");
 }
 
@@ -214,19 +222,36 @@ fn retention_records_track_and_apply_expired_evidence() {
     let now = Utc.with_ymd_and_hms(2026, 5, 10, 10, 0, 0).unwrap();
     let created_at = now - Duration::days(91);
 
-    let record = new_diagnostic_retention_record("ten_diag", "diagnostic_run", "diag_run_expired", created_at);
+    let record = new_diagnostic_retention_record(
+        "ten_diag",
+        "diagnostic_run",
+        "diag_run_expired",
+        created_at,
+    );
     store.save_diagnostic_retention_record(&record).unwrap();
 
-    let expired = store.expired_diagnostic_retention_records("ten_diag", now, 10).unwrap();
+    let expired = store
+        .expired_diagnostic_retention_records("ten_diag", now, 10)
+        .unwrap();
     assert_eq!(expired.len(), 1);
     assert_eq!(expired[0].target_id, "diag_run_expired");
     assert_eq!(expired[0].retention_state, DiagnosticRetentionState::Active);
 
-    let applied = store.apply_expired_diagnostic_retention_records("ten_diag", now, 10).unwrap();
+    let applied = store
+        .apply_expired_diagnostic_retention_records("ten_diag", now, 10)
+        .unwrap();
     assert_eq!(applied.len(), 1);
-    assert_eq!(applied[0].retention_state, DiagnosticRetentionState::Expired);
+    assert_eq!(
+        applied[0].retention_state,
+        DiagnosticRetentionState::Expired
+    );
     assert!(applied[0].applied_at.is_some());
 
-    let after = store.expired_diagnostic_retention_records("ten_diag", now, 10).unwrap();
-    assert!(after.is_empty(), "applied retention records hidden from expiry query");
+    let after = store
+        .expired_diagnostic_retention_records("ten_diag", now, 10)
+        .unwrap();
+    assert!(
+        after.is_empty(),
+        "applied retention records hidden from expiry query"
+    );
 }

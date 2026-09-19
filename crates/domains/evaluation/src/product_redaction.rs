@@ -98,7 +98,11 @@ pub fn candidate_evidence_from_payload(
     if input.discovered_candidate_id.trim().is_empty() {
         return Err(EvaluationError::ProductSourceRequired);
     }
-    let now = if is_zero_time(input.now) { Utc::now() } else { input.now };
+    let now = if is_zero_time(input.now) {
+        Utc::now()
+    } else {
+        input.now
+    };
     let evidence_id = {
         let trimmed = input.evidence_id.trim().to_string();
         if trimmed.is_empty() {
@@ -138,7 +142,10 @@ fn default_sensitive_field_set() -> BTreeSet<String> {
         "secrets",
         "token",
     ];
-    fields.iter().map(|field| normalize_sensitive_field(field)).collect()
+    fields
+        .iter()
+        .map(|field| normalize_sensitive_field(field))
+        .collect()
 }
 
 fn redact_map(

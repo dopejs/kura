@@ -1,19 +1,19 @@
 use chrono::Utc;
 use kura_capabilities::Supervisor;
 use kura_orchestration::{
-    apply_computer_use_projection, dependencies_missing, is_terminal_step_status,
-    is_terminal_workflow_status, plan_workflow, shell_escape, summarize_output,
-    AddDependencyInput, AddHandoffInput, AddWorkflowStepInput, BlockedReason,
-    CreateWorkflowInput, Dependency, DependencyType, Handoff, HandoffStatus,
-    MCPPlanningServer, MCPPlanningSource, MCPPlanningTool, Manager, OrchestrationError,
-    SkillPlanningCandidate, SkillPlanningSource, StepStatus, Workflow, WorkflowStatus,
-    WorkflowStep,
+    AddDependencyInput, AddHandoffInput, AddWorkflowStepInput, BlockedReason, CreateWorkflowInput,
+    Dependency, DependencyType, Handoff, HandoffStatus, MCPPlanningServer, MCPPlanningSource,
+    MCPPlanningTool, Manager, OrchestrationError, SkillPlanningCandidate, SkillPlanningSource,
+    StepStatus, Workflow, WorkflowStatus, WorkflowStep, apply_computer_use_projection,
+    dependencies_missing, is_terminal_step_status, is_terminal_workflow_status, plan_workflow,
+    shell_escape, summarize_output,
 };
 use kura_runtime::{Run, RunStatus, ToolCall, ToolCallStatus};
 use serde_json::json;
 
 fn test_config() -> kura_config::Config {
     kura_config::Config {
+        store: Default::default(),
         environment: kura_config::Environment::Test,
         bind_addr: "127.0.0.1:19192".to_string(),
         data_dir: std::env::temp_dir()
@@ -24,6 +24,7 @@ fn test_config() -> kura_config::Config {
         version: "0.1.0".to_string(),
         llm: kura_config::LlmConfig::default(),
         connectors: kura_config::ConnectorConfig::default(),
+        egress: Default::default(),
     }
 }
 
@@ -84,14 +85,38 @@ impl MCPPlanningSource for TestMCPSource {
 
 #[test]
 fn enum_wire_values() {
-    assert_eq!(serde_json::to_value(WorkflowStatus::PlanningFailed).unwrap(), json!("planning_failed"));
-    assert_eq!(serde_json::to_value(WorkflowStatus::PartialFailed).unwrap(), json!("partial_failed"));
-    assert_eq!(serde_json::to_value(WorkflowStatus::Interrupted).unwrap(), json!("interrupted"));
-    assert_eq!(serde_json::to_value(StepStatus::WaitingDependency).unwrap(), json!("waiting_dependency"));
-    assert_eq!(serde_json::to_value(StepStatus::Skipped).unwrap(), json!("skipped"));
-    assert_eq!(serde_json::to_value(DependencyType::Completion).unwrap(), json!("completion"));
-    assert_eq!(serde_json::to_value(HandoffStatus::Consumed).unwrap(), json!("consumed"));
-    assert_eq!(serde_json::to_value(BlockedReason::PolicyBlocked).unwrap(), json!("policy_blocked"));
+    assert_eq!(
+        serde_json::to_value(WorkflowStatus::PlanningFailed).unwrap(),
+        json!("planning_failed")
+    );
+    assert_eq!(
+        serde_json::to_value(WorkflowStatus::PartialFailed).unwrap(),
+        json!("partial_failed")
+    );
+    assert_eq!(
+        serde_json::to_value(WorkflowStatus::Interrupted).unwrap(),
+        json!("interrupted")
+    );
+    assert_eq!(
+        serde_json::to_value(StepStatus::WaitingDependency).unwrap(),
+        json!("waiting_dependency")
+    );
+    assert_eq!(
+        serde_json::to_value(StepStatus::Skipped).unwrap(),
+        json!("skipped")
+    );
+    assert_eq!(
+        serde_json::to_value(DependencyType::Completion).unwrap(),
+        json!("completion")
+    );
+    assert_eq!(
+        serde_json::to_value(HandoffStatus::Consumed).unwrap(),
+        json!("consumed")
+    );
+    assert_eq!(
+        serde_json::to_value(BlockedReason::PolicyBlocked).unwrap(),
+        json!("policy_blocked")
+    );
     assert_eq!(WorkflowStatus::Planning.as_str(), "planning");
     assert_eq!(StepStatus::Skipped.to_string(), "skipped");
     let status: WorkflowStatus = serde_json::from_str("\"partial_failed\"").unwrap();
@@ -133,14 +158,23 @@ fn shell_escape_quotes_single_quotes() {
 fn create_workflow_planning_and_listed() {
     let manager = Manager::new();
     let workflow = manager
-        .create_workflow("run_1", CreateWorkflowInput { goal: "g".to_string(), ..CreateWorkflowInput::default() })
+        .create_workflow(
+            "run_1",
+            CreateWorkflowInput {
+                goal: "g".to_string(),
+                ..CreateWorkflowInput::default()
+            },
+        )
         .unwrap();
     assert_eq!(workflow.status, WorkflowStatus::Planning);
     assert!(workflow.workflow_id.starts_with("wf_"));
     assert_eq!(workflow.run_id, "run_1");
     assert_eq!(workflow.goal, "g");
     assert_eq!(manager.list_workflows().len(), 1);
-    assert_eq!(manager.list_workflows()[0].workflow_id, workflow.workflow_id);
+    assert_eq!(
+        manager.list_workflows()[0].workflow_id,
+        workflow.workflow_id
+    );
     assert!(manager.get_workflow(&workflow.workflow_id).is_some());
     assert!(manager.get_workflow("missing").is_none());
 }
@@ -148,7 +182,9 @@ fn create_workflow_planning_and_listed() {
 #[test]
 fn add_step_validates_required_fields() {
     let manager = Manager::new();
-    let workflow = manager.create_workflow("run_1", CreateWorkflowInput::default()).unwrap();
+    let workflow = manager
+        .create_workflow("run_1", CreateWorkflowInput::default())
+        .unwrap();
     let err = manager
         .add_step(&workflow.workflow_id, AddWorkflowStepInput::default())
         .unwrap_err();
@@ -156,7 +192,11 @@ fn add_step_validates_required_fields() {
     let err = manager
         .add_step(
             &workflow.workflow_id,
-            AddWorkflowStepInput { title: "A".to_string(), consumer_kind: "skill".to_string(), ..AddWorkflowStepInput::default() },
+            AddWorkflowStepInput {
+                title: "A".to_string(),
+                consumer_kind: "skill".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
         )
         .unwrap_err();
     assert!(matches!(err, OrchestrationError::ConsumerIDRequired));
@@ -165,11 +205,18 @@ fn add_step_validates_required_fields() {
 #[test]
 fn add_step_assigns_position_and_workflow() {
     let manager = Manager::new();
-    let workflow = manager.create_workflow("run_1", CreateWorkflowInput::default()).unwrap();
+    let workflow = manager
+        .create_workflow("run_1", CreateWorkflowInput::default())
+        .unwrap();
     let first = manager
         .add_step(
             &workflow.workflow_id,
-            AddWorkflowStepInput { title: "A".to_string(), consumer_kind: "calendar".to_string(), consumer_id: "cal_1".to_string(), ..AddWorkflowStepInput::default() },
+            AddWorkflowStepInput {
+                title: "A".to_string(),
+                consumer_kind: "calendar".to_string(),
+                consumer_id: "cal_1".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
         )
         .unwrap();
     assert!(first.workflow_step_id.starts_with("wfstep_"));
@@ -180,7 +227,13 @@ fn add_step_assigns_position_and_workflow() {
     let second = manager
         .add_step(
             &workflow.workflow_id,
-            AddWorkflowStepInput { title: "B".to_string(), consumer_kind: "skill".to_string(), consumer_id: "s1".to_string(), max_attempts: 3, ..AddWorkflowStepInput::default() },
+            AddWorkflowStepInput {
+                title: "B".to_string(),
+                consumer_kind: "skill".to_string(),
+                consumer_id: "s1".to_string(),
+                max_attempts: 3,
+                ..AddWorkflowStepInput::default()
+            },
         )
         .unwrap();
     assert_eq!(second.position, 2);
@@ -194,12 +247,30 @@ fn add_step_assigns_position_and_workflow() {
 #[test]
 fn add_dependency_links_target_step() {
     let manager = Manager::new();
-    let workflow = manager.create_workflow("run_1", CreateWorkflowInput::default()).unwrap();
+    let workflow = manager
+        .create_workflow("run_1", CreateWorkflowInput::default())
+        .unwrap();
     let first = manager
-        .add_step(&workflow.workflow_id, AddWorkflowStepInput { title: "A".to_string(), consumer_kind: "calendar".to_string(), consumer_id: "cal_1".to_string(), ..AddWorkflowStepInput::default() })
+        .add_step(
+            &workflow.workflow_id,
+            AddWorkflowStepInput {
+                title: "A".to_string(),
+                consumer_kind: "calendar".to_string(),
+                consumer_id: "cal_1".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
         .unwrap();
     let second = manager
-        .add_step(&workflow.workflow_id, AddWorkflowStepInput { title: "B".to_string(), consumer_kind: "skill".to_string(), consumer_id: "s1".to_string(), ..AddWorkflowStepInput::default() })
+        .add_step(
+            &workflow.workflow_id,
+            AddWorkflowStepInput {
+                title: "B".to_string(),
+                consumer_kind: "skill".to_string(),
+                consumer_id: "s1".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
         .unwrap();
     let dependency = manager
         .add_dependency(
@@ -216,35 +287,75 @@ fn add_dependency_links_target_step() {
     assert_eq!(dependency.workflow_id, workflow.workflow_id);
     let stored = manager.get_workflow(&workflow.workflow_id).unwrap();
     assert_eq!(stored.dependencies.len(), 1);
-    let target = stored.steps.iter().find(|step| step.workflow_step_id == second.workflow_step_id).unwrap();
+    let target = stored
+        .steps
+        .iter()
+        .find(|step| step.workflow_step_id == second.workflow_step_id)
+        .unwrap();
     assert_eq!(target.dependency_ids, vec![dependency.dependency_id]);
 }
 
 #[test]
 fn add_dependency_rejects_missing_or_unknown_steps() {
     let manager = Manager::new();
-    let workflow = manager.create_workflow("run_1", CreateWorkflowInput::default()).unwrap();
+    let workflow = manager
+        .create_workflow("run_1", CreateWorkflowInput::default())
+        .unwrap();
     let err = manager
-        .add_dependency(&workflow.workflow_id, AddDependencyInput { from_workflow_step_id: String::new(), to_workflow_step_id: "b".to_string(), ..AddDependencyInput::default() })
+        .add_dependency(
+            &workflow.workflow_id,
+            AddDependencyInput {
+                from_workflow_step_id: String::new(),
+                to_workflow_step_id: "b".to_string(),
+                ..AddDependencyInput::default()
+            },
+        )
         .unwrap_err();
     assert!(matches!(err, OrchestrationError::StepIDRequired));
     let err = manager
-        .add_dependency(&workflow.workflow_id, AddDependencyInput { from_workflow_step_id: "a".to_string(), to_workflow_step_id: "b".to_string(), ..AddDependencyInput::default() })
+        .add_dependency(
+            &workflow.workflow_id,
+            AddDependencyInput {
+                from_workflow_step_id: "a".to_string(),
+                to_workflow_step_id: "b".to_string(),
+                ..AddDependencyInput::default()
+            },
+        )
         .unwrap_err();
     assert!(matches!(err, OrchestrationError::StepNotFound));
-    let err = manager.add_dependency("missing", AddDependencyInput::default()).unwrap_err();
+    let err = manager
+        .add_dependency("missing", AddDependencyInput::default())
+        .unwrap_err();
     assert!(matches!(err, OrchestrationError::WorkflowNotFound));
 }
 
 #[test]
 fn add_handoff_pending() {
     let manager = Manager::new();
-    let workflow = manager.create_workflow("run_1", CreateWorkflowInput::default()).unwrap();
+    let workflow = manager
+        .create_workflow("run_1", CreateWorkflowInput::default())
+        .unwrap();
     let first = manager
-        .add_step(&workflow.workflow_id, AddWorkflowStepInput { title: "A".to_string(), consumer_kind: "calendar".to_string(), consumer_id: "cal_1".to_string(), ..AddWorkflowStepInput::default() })
+        .add_step(
+            &workflow.workflow_id,
+            AddWorkflowStepInput {
+                title: "A".to_string(),
+                consumer_kind: "calendar".to_string(),
+                consumer_id: "cal_1".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
         .unwrap();
     let second = manager
-        .add_step(&workflow.workflow_id, AddWorkflowStepInput { title: "B".to_string(), consumer_kind: "skill".to_string(), consumer_id: "s1".to_string(), ..AddWorkflowStepInput::default() })
+        .add_step(
+            &workflow.workflow_id,
+            AddWorkflowStepInput {
+                title: "B".to_string(),
+                consumer_kind: "skill".to_string(),
+                consumer_id: "s1".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
         .unwrap();
     let handoff = manager
         .add_handoff(
@@ -267,26 +378,59 @@ fn add_handoff_pending() {
 #[test]
 fn initialize_execution_marks_ready_and_waiting() {
     let manager = Manager::new();
-    let workflow = manager.create_workflow("run_1", CreateWorkflowInput::default()).unwrap();
+    let workflow = manager
+        .create_workflow("run_1", CreateWorkflowInput::default())
+        .unwrap();
     let first = manager
-        .add_step(&workflow.workflow_id, AddWorkflowStepInput { title: "A".to_string(), consumer_kind: "calendar".to_string(), consumer_id: "cal_1".to_string(), ..AddWorkflowStepInput::default() })
+        .add_step(
+            &workflow.workflow_id,
+            AddWorkflowStepInput {
+                title: "A".to_string(),
+                consumer_kind: "calendar".to_string(),
+                consumer_id: "cal_1".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
         .unwrap();
     let second = manager
-        .add_step(&workflow.workflow_id, AddWorkflowStepInput { title: "B".to_string(), consumer_kind: "skill".to_string(), consumer_id: "s1".to_string(), ..AddWorkflowStepInput::default() })
+        .add_step(
+            &workflow.workflow_id,
+            AddWorkflowStepInput {
+                title: "B".to_string(),
+                consumer_kind: "skill".to_string(),
+                consumer_id: "s1".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
         .unwrap();
     manager
         .add_dependency(
             &workflow.workflow_id,
-            AddDependencyInput { from_workflow_step_id: first.workflow_step_id.clone(), to_workflow_step_id: second.workflow_step_id.clone(), dependency_type: DependencyType::Success, ..AddDependencyInput::default() },
+            AddDependencyInput {
+                from_workflow_step_id: first.workflow_step_id.clone(),
+                to_workflow_step_id: second.workflow_step_id.clone(),
+                dependency_type: DependencyType::Success,
+                ..AddDependencyInput::default()
+            },
         )
         .unwrap();
     let now = Utc::now();
-    let wf = manager.initialize_execution(&workflow.workflow_id, now).unwrap();
+    let wf = manager
+        .initialize_execution(&workflow.workflow_id, now)
+        .unwrap();
     assert_eq!(wf.status, WorkflowStatus::Running);
     assert!(wf.started_at.is_some());
     assert_eq!(wf.updated_at, now);
-    let a = wf.steps.iter().find(|step| step.workflow_step_id == first.workflow_step_id).unwrap();
-    let b = wf.steps.iter().find(|step| step.workflow_step_id == second.workflow_step_id).unwrap();
+    let a = wf
+        .steps
+        .iter()
+        .find(|step| step.workflow_step_id == first.workflow_step_id)
+        .unwrap();
+    let b = wf
+        .steps
+        .iter()
+        .find(|step| step.workflow_step_id == second.workflow_step_id)
+        .unwrap();
     assert_eq!(a.status, StepStatus::Ready);
     assert_eq!(b.status, StepStatus::WaitingDependency);
 }
@@ -294,48 +438,97 @@ fn initialize_execution_marks_ready_and_waiting() {
 #[test]
 fn advance_ready_steps_unblocks_after_dependency_completes() {
     let manager = Manager::new();
-    let workflow = manager.create_workflow("run_1", CreateWorkflowInput::default()).unwrap();
+    let workflow = manager
+        .create_workflow("run_1", CreateWorkflowInput::default())
+        .unwrap();
     let first = manager
-        .add_step(&workflow.workflow_id, AddWorkflowStepInput { title: "A".to_string(), consumer_kind: "calendar".to_string(), consumer_id: "cal_1".to_string(), ..AddWorkflowStepInput::default() })
+        .add_step(
+            &workflow.workflow_id,
+            AddWorkflowStepInput {
+                title: "A".to_string(),
+                consumer_kind: "calendar".to_string(),
+                consumer_id: "cal_1".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
         .unwrap();
     let second = manager
-        .add_step(&workflow.workflow_id, AddWorkflowStepInput { title: "B".to_string(), consumer_kind: "skill".to_string(), consumer_id: "s1".to_string(), ..AddWorkflowStepInput::default() })
+        .add_step(
+            &workflow.workflow_id,
+            AddWorkflowStepInput {
+                title: "B".to_string(),
+                consumer_kind: "skill".to_string(),
+                consumer_id: "s1".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
         .unwrap();
     manager
         .add_dependency(
             &workflow.workflow_id,
-            AddDependencyInput { from_workflow_step_id: first.workflow_step_id.clone(), to_workflow_step_id: second.workflow_step_id.clone(), dependency_type: DependencyType::Success, ..AddDependencyInput::default() },
+            AddDependencyInput {
+                from_workflow_step_id: first.workflow_step_id.clone(),
+                to_workflow_step_id: second.workflow_step_id.clone(),
+                dependency_type: DependencyType::Success,
+                ..AddDependencyInput::default()
+            },
         )
         .unwrap();
     let now = Utc::now();
-    let _ = manager.initialize_execution(&workflow.workflow_id, now).unwrap();
+    let _ = manager
+        .initialize_execution(&workflow.workflow_id, now)
+        .unwrap();
 
     let completed = tool_call(&first.workflow_step_id, ToolCallStatus::Completed, "");
     let wf = manager
         .apply_tool_call_result(&workflow.workflow_id, &completed, None, "", now)
         .unwrap();
-    let a = wf.steps.iter().find(|step| step.workflow_step_id == first.workflow_step_id).unwrap();
+    let a = wf
+        .steps
+        .iter()
+        .find(|step| step.workflow_step_id == first.workflow_step_id)
+        .unwrap();
     assert_eq!(a.status, StepStatus::Completed);
     assert!(a.side_effects_visible);
     assert_eq!(a.output_summary, json!({ "ok": true }).to_string());
 
-    let (wf, changed) = manager.advance_ready_steps(&workflow.workflow_id, now).unwrap();
+    let (wf, changed) = manager
+        .advance_ready_steps(&workflow.workflow_id, now)
+        .unwrap();
     assert!(changed);
-    let b = wf.steps.iter().find(|step| step.workflow_step_id == second.workflow_step_id).unwrap();
+    let b = wf
+        .steps
+        .iter()
+        .find(|step| step.workflow_step_id == second.workflow_step_id)
+        .unwrap();
     assert_eq!(b.status, StepStatus::Ready);
 }
 
 #[test]
 fn completion_reconciles_workflow_completed() {
     let manager = Manager::new();
-    let workflow = manager.create_workflow("run_1", CreateWorkflowInput::default()).unwrap();
+    let workflow = manager
+        .create_workflow("run_1", CreateWorkflowInput::default())
+        .unwrap();
     let step = manager
-        .add_step(&workflow.workflow_id, AddWorkflowStepInput { title: "A".to_string(), consumer_kind: "calendar".to_string(), consumer_id: "cal_1".to_string(), ..AddWorkflowStepInput::default() })
+        .add_step(
+            &workflow.workflow_id,
+            AddWorkflowStepInput {
+                title: "A".to_string(),
+                consumer_kind: "calendar".to_string(),
+                consumer_id: "cal_1".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
         .unwrap();
     let now = Utc::now();
-    let _ = manager.initialize_execution(&workflow.workflow_id, now).unwrap();
+    let _ = manager
+        .initialize_execution(&workflow.workflow_id, now)
+        .unwrap();
     let completed = tool_call(&step.workflow_step_id, ToolCallStatus::Completed, "");
-    let wf = manager.apply_tool_call_result(&workflow.workflow_id, &completed, None, "", now).unwrap();
+    let wf = manager
+        .apply_tool_call_result(&workflow.workflow_id, &completed, None, "", now)
+        .unwrap();
     assert_eq!(wf.status, WorkflowStatus::Completed);
     assert!(wf.completed_at.is_some());
 }
@@ -343,93 +536,212 @@ fn completion_reconciles_workflow_completed() {
 #[test]
 fn denied_outcome_blocks_workflow() {
     let manager = Manager::new();
-    let workflow = manager.create_workflow("run_1", CreateWorkflowInput::default()).unwrap();
+    let workflow = manager
+        .create_workflow("run_1", CreateWorkflowInput::default())
+        .unwrap();
     let step = manager
-        .add_step(&workflow.workflow_id, AddWorkflowStepInput { title: "A".to_string(), consumer_kind: "skill".to_string(), consumer_id: "s1".to_string(), ..AddWorkflowStepInput::default() })
+        .add_step(
+            &workflow.workflow_id,
+            AddWorkflowStepInput {
+                title: "A".to_string(),
+                consumer_kind: "skill".to_string(),
+                consumer_id: "s1".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
         .unwrap();
     let now = Utc::now();
-    let _ = manager.initialize_execution(&workflow.workflow_id, now).unwrap();
+    let _ = manager
+        .initialize_execution(&workflow.workflow_id, now)
+        .unwrap();
     let denied = tool_call(&step.workflow_step_id, ToolCallStatus::Denied, "");
-    let wf = manager.apply_tool_call_result(&workflow.workflow_id, &denied, None, "", now).unwrap();
-    let updated = wf.steps.iter().find(|s| s.workflow_step_id == step.workflow_step_id).unwrap();
+    let wf = manager
+        .apply_tool_call_result(&workflow.workflow_id, &denied, None, "", now)
+        .unwrap();
+    let updated = wf
+        .steps
+        .iter()
+        .find(|s| s.workflow_step_id == step.workflow_step_id)
+        .unwrap();
     assert_eq!(updated.status, StepStatus::Blocked);
-    assert_eq!(updated.blocked_reason, BlockedReason::ApprovalDenied.as_str());
+    assert_eq!(
+        updated.blocked_reason,
+        BlockedReason::ApprovalDenied.as_str()
+    );
     assert_eq!(wf.status, WorkflowStatus::Blocked);
 }
 
 #[test]
 fn failed_outcome_retries_then_fails() {
     let manager = Manager::new();
-    let workflow = manager.create_workflow("run_1", CreateWorkflowInput::default()).unwrap();
+    let workflow = manager
+        .create_workflow("run_1", CreateWorkflowInput::default())
+        .unwrap();
     let step = manager
         .add_step(
             &workflow.workflow_id,
-            AddWorkflowStepInput { title: "A".to_string(), consumer_kind: "skill".to_string(), consumer_id: "s1".to_string(), max_attempts: 2, ..AddWorkflowStepInput::default() },
+            AddWorkflowStepInput {
+                title: "A".to_string(),
+                consumer_kind: "skill".to_string(),
+                consumer_id: "s1".to_string(),
+                max_attempts: 2,
+                ..AddWorkflowStepInput::default()
+            },
         )
         .unwrap();
     let now = Utc::now();
-    let _ = manager.initialize_execution(&workflow.workflow_id, now).unwrap();
-    let _ = manager.start_step_attempt(&workflow.workflow_id, &step.workflow_step_id, "rt_1", now).unwrap();
+    let _ = manager
+        .initialize_execution(&workflow.workflow_id, now)
+        .unwrap();
+    let _ = manager
+        .start_step_attempt(&workflow.workflow_id, &step.workflow_step_id, "rt_1", now)
+        .unwrap();
 
-    let failed = tool_call(&step.workflow_step_id, ToolCallStatus::Failed, "transient_error");
-    let wf = manager.apply_tool_call_result(&workflow.workflow_id, &failed, None, "", now).unwrap();
-    let updated = wf.steps.iter().find(|s| s.workflow_step_id == step.workflow_step_id).unwrap();
-    assert_eq!(updated.status, StepStatus::Ready, "attempt 1 of 2 should retry");
+    let failed = tool_call(
+        &step.workflow_step_id,
+        ToolCallStatus::Failed,
+        "transient_error",
+    );
+    let wf = manager
+        .apply_tool_call_result(&workflow.workflow_id, &failed, None, "", now)
+        .unwrap();
+    let updated = wf
+        .steps
+        .iter()
+        .find(|s| s.workflow_step_id == step.workflow_step_id)
+        .unwrap();
+    assert_eq!(
+        updated.status,
+        StepStatus::Ready,
+        "attempt 1 of 2 should retry"
+    );
     assert_eq!(updated.active_tool_call_id, "");
     assert_eq!(updated.last_failure_class, "transient_error");
 
-    let _ = manager.start_step_attempt(&workflow.workflow_id, &step.workflow_step_id, "rt_2", now).unwrap();
-    let wf = manager.apply_tool_call_result(&workflow.workflow_id, &failed, None, "", now).unwrap();
-    let updated = wf.steps.iter().find(|s| s.workflow_step_id == step.workflow_step_id).unwrap();
-    assert_eq!(updated.status, StepStatus::Failed, "attempt 2 of 2 should fail");
+    let _ = manager
+        .start_step_attempt(&workflow.workflow_id, &step.workflow_step_id, "rt_2", now)
+        .unwrap();
+    let wf = manager
+        .apply_tool_call_result(&workflow.workflow_id, &failed, None, "", now)
+        .unwrap();
+    let updated = wf
+        .steps
+        .iter()
+        .find(|s| s.workflow_step_id == step.workflow_step_id)
+        .unwrap();
+    assert_eq!(
+        updated.status,
+        StepStatus::Failed,
+        "attempt 2 of 2 should fail"
+    );
     assert_eq!(wf.status, WorkflowStatus::Failed);
 }
 
 #[test]
 fn consumer_unavailable_blocks_workflow() {
     let manager = Manager::new();
-    let workflow = manager.create_workflow("run_1", CreateWorkflowInput::default()).unwrap();
+    let workflow = manager
+        .create_workflow("run_1", CreateWorkflowInput::default())
+        .unwrap();
     let step = manager
-        .add_step(&workflow.workflow_id, AddWorkflowStepInput { title: "A".to_string(), consumer_kind: "skill".to_string(), consumer_id: "s1".to_string(), ..AddWorkflowStepInput::default() })
+        .add_step(
+            &workflow.workflow_id,
+            AddWorkflowStepInput {
+                title: "A".to_string(),
+                consumer_kind: "skill".to_string(),
+                consumer_id: "s1".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
         .unwrap();
     let now = Utc::now();
-    let _ = manager.initialize_execution(&workflow.workflow_id, now).unwrap();
-    let _ = manager.start_step_attempt(&workflow.workflow_id, &step.workflow_step_id, "rt_1", now).unwrap();
-    let failed = tool_call(&step.workflow_step_id, ToolCallStatus::Failed, "consumer_unavailable");
-    let wf = manager.apply_tool_call_result(&workflow.workflow_id, &failed, None, "", now).unwrap();
-    let updated = wf.steps.iter().find(|s| s.workflow_step_id == step.workflow_step_id).unwrap();
+    let _ = manager
+        .initialize_execution(&workflow.workflow_id, now)
+        .unwrap();
+    let _ = manager
+        .start_step_attempt(&workflow.workflow_id, &step.workflow_step_id, "rt_1", now)
+        .unwrap();
+    let failed = tool_call(
+        &step.workflow_step_id,
+        ToolCallStatus::Failed,
+        "consumer_unavailable",
+    );
+    let wf = manager
+        .apply_tool_call_result(&workflow.workflow_id, &failed, None, "", now)
+        .unwrap();
+    let updated = wf
+        .steps
+        .iter()
+        .find(|s| s.workflow_step_id == step.workflow_step_id)
+        .unwrap();
     assert_eq!(updated.status, StepStatus::Blocked);
-    assert_eq!(updated.blocked_reason, BlockedReason::ConsumerUnavailable.as_str());
+    assert_eq!(
+        updated.blocked_reason,
+        BlockedReason::ConsumerUnavailable.as_str()
+    );
 }
 
 #[test]
 fn handoff_available_on_completion_consumed_on_start() {
     let manager = Manager::new();
-    let workflow = manager.create_workflow("run_1", CreateWorkflowInput::default()).unwrap();
+    let workflow = manager
+        .create_workflow("run_1", CreateWorkflowInput::default())
+        .unwrap();
     let first = manager
-        .add_step(&workflow.workflow_id, AddWorkflowStepInput { title: "A".to_string(), consumer_kind: "computer_use".to_string(), consumer_id: "browser".to_string(), ..AddWorkflowStepInput::default() })
+        .add_step(
+            &workflow.workflow_id,
+            AddWorkflowStepInput {
+                title: "A".to_string(),
+                consumer_kind: "computer_use".to_string(),
+                consumer_id: "browser".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
         .unwrap();
     let second = manager
-        .add_step(&workflow.workflow_id, AddWorkflowStepInput { title: "B".to_string(), consumer_kind: "skill".to_string(), consumer_id: "s1".to_string(), ..AddWorkflowStepInput::default() })
+        .add_step(
+            &workflow.workflow_id,
+            AddWorkflowStepInput {
+                title: "B".to_string(),
+                consumer_kind: "skill".to_string(),
+                consumer_id: "s1".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
         .unwrap();
     manager
         .add_handoff(
             &workflow.workflow_id,
-            AddHandoffInput { from_workflow_step_id: first.workflow_step_id.clone(), to_workflow_step_id: second.workflow_step_id.clone(), payload_summary: "evidence".to_string(), source_path: "step.computerUseArtifacts".to_string() },
+            AddHandoffInput {
+                from_workflow_step_id: first.workflow_step_id.clone(),
+                to_workflow_step_id: second.workflow_step_id.clone(),
+                payload_summary: "evidence".to_string(),
+                source_path: "step.computerUseArtifacts".to_string(),
+            },
         )
         .unwrap();
     let now = Utc::now();
-    let _ = manager.initialize_execution(&workflow.workflow_id, now).unwrap();
+    let _ = manager
+        .initialize_execution(&workflow.workflow_id, now)
+        .unwrap();
     let completed = tool_call(&first.workflow_step_id, ToolCallStatus::Completed, "");
-    let wf = manager.apply_tool_call_result(&workflow.workflow_id, &completed, None, "", now).unwrap();
+    let wf = manager
+        .apply_tool_call_result(&workflow.workflow_id, &completed, None, "", now)
+        .unwrap();
     let handoff = &wf.handoffs[0];
     assert_eq!(handoff.status, HandoffStatus::Available);
 
-    let _ = manager.start_step_attempt(&workflow.workflow_id, &second.workflow_step_id, "rt_2", now).unwrap();
+    let _ = manager
+        .start_step_attempt(&workflow.workflow_id, &second.workflow_step_id, "rt_2", now)
+        .unwrap();
     let stored = manager.get_workflow(&workflow.workflow_id).unwrap();
     assert_eq!(stored.handoffs[0].status, HandoffStatus::Consumed);
     assert!(stored.handoffs[0].consumed_at.is_some());
-    let second_step = stored.steps.iter().find(|s| s.workflow_step_id == second.workflow_step_id).unwrap();
+    let second_step = stored
+        .steps
+        .iter()
+        .find(|s| s.workflow_step_id == second.workflow_step_id)
+        .unwrap();
     assert_eq!(second_step.status, StepStatus::Running);
     assert_eq!(second_step.attempt_count, 1);
     assert_eq!(second_step.runtime_step_id, "rt_2");
@@ -438,9 +750,19 @@ fn handoff_available_on_completion_consumed_on_start() {
 #[test]
 fn apply_computer_use_projection_records_artifacts() {
     let manager = Manager::new();
-    let workflow = manager.create_workflow("run_1", CreateWorkflowInput::default()).unwrap();
+    let workflow = manager
+        .create_workflow("run_1", CreateWorkflowInput::default())
+        .unwrap();
     let step = manager
-        .add_step(&workflow.workflow_id, AddWorkflowStepInput { title: "A".to_string(), consumer_kind: "computer_use".to_string(), consumer_id: "browser".to_string(), ..AddWorkflowStepInput::default() })
+        .add_step(
+            &workflow.workflow_id,
+            AddWorkflowStepInput {
+                title: "A".to_string(),
+                consumer_kind: "computer_use".to_string(),
+                consumer_id: "browser".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
         .unwrap();
     let now = Utc::now();
     let artifact = kura_computeruse::Artifact {
@@ -460,9 +782,16 @@ fn apply_computer_use_projection_records_artifacts() {
         &[artifact],
         now,
     );
-    let updated = wf.steps.iter().find(|s| s.workflow_step_id == step.workflow_step_id).unwrap();
+    let updated = wf
+        .steps
+        .iter()
+        .find(|s| s.workflow_step_id == step.workflow_step_id)
+        .unwrap();
     assert_eq!(updated.computer_use_session_id, "cu_sess_1");
-    assert_eq!(updated.computer_use_action_ids, vec!["navigate".to_string(), "snapshot".to_string()]);
+    assert_eq!(
+        updated.computer_use_action_ids,
+        vec!["navigate".to_string(), "snapshot".to_string()]
+    );
     assert_eq!(updated.computer_use_artifacts.len(), 1);
     assert_eq!(updated.computer_use_artifacts[0].artifact_id, "art_1");
 }
@@ -473,7 +802,17 @@ fn transformations_require_existing_workflow() {
     let now = Utc::now();
     let err = manager.initialize_execution("missing", now).unwrap_err();
     assert!(matches!(err, OrchestrationError::WorkflowNotFound));
-    let err = manager.add_step("missing", AddWorkflowStepInput { title: "A".to_string(), consumer_kind: "skill".to_string(), consumer_id: "s1".to_string(), ..AddWorkflowStepInput::default() }).unwrap_err();
+    let err = manager
+        .add_step(
+            "missing",
+            AddWorkflowStepInput {
+                title: "A".to_string(),
+                consumer_kind: "skill".to_string(),
+                consumer_id: "s1".to_string(),
+                ..AddWorkflowStepInput::default()
+            },
+        )
+        .unwrap_err();
     assert!(matches!(err, OrchestrationError::WorkflowNotFound));
     let err = manager.advance_ready_steps("missing", now).unwrap_err();
     assert!(matches!(err, OrchestrationError::WorkflowNotFound));
@@ -527,7 +866,10 @@ fn dependencies_missing_reports_unmet_deps() {
         ..Workflow::default()
     };
     let step_b = workflow.steps[1].clone();
-    assert_eq!(dependencies_missing(&workflow, &step_b), vec!["d1".to_string()]);
+    assert_eq!(
+        dependencies_missing(&workflow, &step_b),
+        vec!["d1".to_string()]
+    );
     workflow.steps[0].status = StepStatus::Completed;
     assert!(dependencies_missing(&workflow, &step_b).is_empty());
 }
@@ -537,13 +879,20 @@ fn plan_planning_failed_without_consumers() {
     let workflow = plan_workflow(
         &test_config(),
         &test_run("g"),
-        &CreateWorkflowInput { goal: "g".to_string(), ..CreateWorkflowInput::default() },
+        &CreateWorkflowInput {
+            goal: "g".to_string(),
+            ..CreateWorkflowInput::default()
+        },
         None,
         None,
         None,
     );
     assert_eq!(workflow.status, WorkflowStatus::PlanningFailed);
-    assert!(workflow.failure_summary.contains("No executable workflow consumers"));
+    assert!(
+        workflow
+            .failure_summary
+            .contains("No executable workflow consumers")
+    );
     assert!(workflow.workflow_id.starts_with("wf_"));
     assert_eq!(workflow.run_id, "run_test_1");
     assert_eq!(workflow.environment_scope, "test");
@@ -553,12 +902,19 @@ fn plan_planning_failed_without_consumers() {
 fn plan_local_shell_capability() {
     let supervisor = Supervisor::new();
     supervisor
-        .register(kura_capabilities::RegisterInput { capability_id: "cap_shell".to_string(), kind: "shell".to_string(), display_name: "Shell".to_string() })
+        .register(kura_capabilities::RegisterInput {
+            capability_id: "cap_shell".to_string(),
+            kind: "shell".to_string(),
+            display_name: "Shell".to_string(),
+        })
         .unwrap();
     let workflow = plan_workflow(
         &test_config(),
         &test_run("g"),
-        &CreateWorkflowInput { goal: "g".to_string(), ..CreateWorkflowInput::default() },
+        &CreateWorkflowInput {
+            goal: "g".to_string(),
+            ..CreateWorkflowInput::default()
+        },
         Some(&supervisor),
         None,
         None,
@@ -590,31 +946,54 @@ fn plan_mcp_skill_combo_wires_dependency_and_handoff() {
     }]);
     let mcp_source = TestMCPSource(vec![MCPPlanningServer {
         server_id: "mcp_1".to_string(),
-        tools: vec![MCPPlanningTool { tool_name: "lookup".to_string() }],
+        tools: vec![MCPPlanningTool {
+            tool_name: "lookup".to_string(),
+        }],
     }]);
     let workflow = plan_workflow(
         &test_config(),
         &test_run("g"),
-        &CreateWorkflowInput { goal: "g".to_string(), ..CreateWorkflowInput::default() },
+        &CreateWorkflowInput {
+            goal: "g".to_string(),
+            ..CreateWorkflowInput::default()
+        },
         None,
         Some(&skill_source),
         Some(&mcp_source),
     );
     assert_eq!(workflow.status, WorkflowStatus::Planned);
-    assert_eq!(workflow.plan_summary, "Plan one MCP step followed by one executable skill handoff.");
+    assert_eq!(
+        workflow.plan_summary,
+        "Plan one MCP step followed by one executable skill handoff."
+    );
     assert_eq!(workflow.steps.len(), 2);
     assert_eq!(workflow.steps[0].consumer_kind, "mcp_tool");
     assert_eq!(workflow.steps[0].title, "Use MCP tool lookup");
     assert_eq!(workflow.steps[1].consumer_kind, "skill");
     assert_eq!(workflow.steps[1].title, "Run executable skill s1");
     assert_eq!(workflow.dependencies.len(), 1);
-    assert_eq!(workflow.dependencies[0].from_workflow_step_id, workflow.steps[0].workflow_step_id);
-    assert_eq!(workflow.dependencies[0].to_workflow_step_id, workflow.steps[1].workflow_step_id);
-    assert_eq!(workflow.dependencies[0].dependency_type, DependencyType::Success);
-    assert_eq!(workflow.steps[1].dependency_ids, vec![workflow.dependencies[0].dependency_id.clone()]);
+    assert_eq!(
+        workflow.dependencies[0].from_workflow_step_id,
+        workflow.steps[0].workflow_step_id
+    );
+    assert_eq!(
+        workflow.dependencies[0].to_workflow_step_id,
+        workflow.steps[1].workflow_step_id
+    );
+    assert_eq!(
+        workflow.dependencies[0].dependency_type,
+        DependencyType::Success
+    );
+    assert_eq!(
+        workflow.steps[1].dependency_ids,
+        vec![workflow.dependencies[0].dependency_id.clone()]
+    );
     assert_eq!(workflow.handoffs.len(), 1);
     assert_eq!(workflow.handoffs[0].status, HandoffStatus::Pending);
-    assert_eq!(workflow.handoffs[0].from_workflow_step_id, workflow.steps[0].workflow_step_id);
+    assert_eq!(
+        workflow.handoffs[0].from_workflow_step_id,
+        workflow.steps[0].workflow_step_id
+    );
 }
 
 #[test]
@@ -622,13 +1001,19 @@ fn plan_browser_goal_picks_computer_use() {
     let workflow = plan_workflow(
         &test_config(),
         &test_run("automate the browser"),
-        &CreateWorkflowInput { goal: "automate the browser".to_string(), ..CreateWorkflowInput::default() },
+        &CreateWorkflowInput {
+            goal: "automate the browser".to_string(),
+            ..CreateWorkflowInput::default()
+        },
         None,
         None,
         None,
     );
     assert_eq!(workflow.status, WorkflowStatus::Planned);
-    assert_eq!(workflow.plan_summary, "Plan one browser-first computer-use step.");
+    assert_eq!(
+        workflow.plan_summary,
+        "Plan one browser-first computer-use step."
+    );
     assert_eq!(workflow.steps.len(), 1);
     assert_eq!(workflow.steps[0].consumer_kind, "computer_use");
     assert_eq!(workflow.steps[0].consumer_id, "browser");
@@ -648,13 +1033,20 @@ fn plan_calendar_action_step() {
     let workflow = plan_workflow(
         &test_config(),
         &test_run(""),
-        &CreateWorkflowInput { goal: String::new(), calendar_action: Some(action), ..CreateWorkflowInput::default() },
+        &CreateWorkflowInput {
+            goal: String::new(),
+            calendar_action: Some(action),
+            ..CreateWorkflowInput::default()
+        },
         None,
         None,
         None,
     );
     assert_eq!(workflow.status, WorkflowStatus::Planned);
-    assert_eq!(workflow.plan_summary, "Plan one calendar domain step on the normal workflow runtime.");
+    assert_eq!(
+        workflow.plan_summary,
+        "Plan one calendar domain step on the normal workflow runtime."
+    );
     assert_eq!(workflow.steps.len(), 1);
     assert_eq!(workflow.steps[0].title, "Inspect calendar events");
     assert_eq!(workflow.steps[0].consumer_kind, "calendar");
@@ -674,13 +1066,20 @@ fn plan_mail_action_step() {
     let workflow = plan_workflow(
         &test_config(),
         &test_run(""),
-        &CreateWorkflowInput { goal: String::new(), mail_action: Some(action), ..CreateWorkflowInput::default() },
+        &CreateWorkflowInput {
+            goal: String::new(),
+            mail_action: Some(action),
+            ..CreateWorkflowInput::default()
+        },
         None,
         None,
         None,
     );
     assert_eq!(workflow.status, WorkflowStatus::Planned);
-    assert_eq!(workflow.plan_summary, "Plan one mail domain step on the normal workflow runtime.");
+    assert_eq!(
+        workflow.plan_summary,
+        "Plan one mail domain step on the normal workflow runtime."
+    );
     assert_eq!(workflow.steps.len(), 1);
     assert_eq!(workflow.steps[0].title, "Send mail message");
     assert_eq!(workflow.steps[0].consumer_kind, "mail");
@@ -693,12 +1092,19 @@ fn manager_plan_stores_workflow() {
     let manager = Manager::new();
     let supervisor = Supervisor::new();
     supervisor
-        .register(kura_capabilities::RegisterInput { capability_id: "cap_shell".to_string(), kind: "shell".to_string(), display_name: "Shell".to_string() })
+        .register(kura_capabilities::RegisterInput {
+            capability_id: "cap_shell".to_string(),
+            kind: "shell".to_string(),
+            display_name: "Shell".to_string(),
+        })
         .unwrap();
     let workflow = manager.plan(
         &test_config(),
         &test_run("g"),
-        &CreateWorkflowInput { goal: "g".to_string(), ..CreateWorkflowInput::default() },
+        &CreateWorkflowInput {
+            goal: "g".to_string(),
+            ..CreateWorkflowInput::default()
+        },
         Some(&supervisor),
         None,
         None,

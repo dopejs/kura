@@ -30,7 +30,7 @@ use kura_events as events;
 use kura_providers as providers;
 
 use crate::error::ApiError;
-use crate::middleware::{environment_scope_from_config, TenantContext};
+use crate::middleware::{TenantContext, environment_scope_from_config};
 use crate::state::AppState;
 
 use super::{decode_json_or_default, decode_json_required};
@@ -42,11 +42,23 @@ pub fn router() -> Router<AppState> {
         .route("/v1/providers", get(list_providers))
         .route("/v1/providers/{provider_id}", get(get_provider))
         .route("/v1/providers/{provider_id}/auth", get(get_auth_state))
-        .route("/v1/providers/{provider_id}/auth/{action}", post(auth_action))
+        .route(
+            "/v1/providers/{provider_id}/auth/{action}",
+            post(auth_action),
+        )
         .route("/v1/providers/{provider_id}/models", get(list_models))
-        .route("/v1/providers/{provider_id}/default-model", post(set_default_model))
-        .route("/v1/providers/{provider_id}/checks", get(list_checks).post(run_check))
-        .route("/v1/providers/{provider_id}/checks/{check_id}", get(get_check))
+        .route(
+            "/v1/providers/{provider_id}/default-model",
+            post(set_default_model),
+        )
+        .route(
+            "/v1/providers/{provider_id}/checks",
+            get(list_checks).post(run_check),
+        )
+        .route(
+            "/v1/providers/{provider_id}/checks/{check_id}",
+            get(get_check),
+        )
 }
 
 #[derive(Debug, Serialize)]
@@ -101,7 +113,10 @@ struct CredentialDenial {
 fn credential_denial(reason_code: &'static str) -> Response {
     (
         StatusCode::FORBIDDEN,
-        Json(CredentialDenial { error: "credential_access_denied", reason_code }),
+        Json(CredentialDenial {
+            error: "credential_access_denied",
+            reason_code,
+        }),
     )
         .into_response()
 }
@@ -109,19 +124,15 @@ fn credential_denial(reason_code: &'static str) -> Response {
 /// Go requireHostedCredentialReadAny/Permission over IntegrationsManage:
 /// with a resolved tenant the caller must hold credential-inspection rights.
 /// Returns the tenant id ("" without a tenant context) or the denial.
-fn hosted_credential_tenant(
-    tenant: &Option<Extension<TenantContext>>,
-) -> Result<String, Response> {
+fn hosted_credential_tenant(tenant: &Option<Extension<TenantContext>>) -> Result<String, Response> {
     let Some(tc) = tenant.as_ref().map(|extension| &extension.0.0) else {
         return Ok(String::new());
     };
     if tc.tenant_id.trim().is_empty() {
         return Ok(String::new());
     }
-    if !kura_identity::can_inspect_credentials(
-        tc,
-        &[kura_identity::Permission::IntegrationsManage],
-    ) {
+    if !kura_identity::can_inspect_credentials(tc, &[kura_identity::Permission::IntegrationsManage])
+    {
         return Err(credential_denial("missing_permission"));
     }
     Ok(tc.tenant_id.trim().to_string())
@@ -208,15 +219,27 @@ fn json_value<T: Serialize>(value: &T) -> serde_json::Value {
 fn auth_event_payload(auth: &providers::AuthState) -> serde_json::Map<String, serde_json::Value> {
     let mut payload = serde_json::Map::new();
     payload.insert("tenantId".to_string(), serde_json::json!(auth.tenant_id));
-    payload.insert("providerId".to_string(), serde_json::json!(auth.provider_id));
+    payload.insert(
+        "providerId".to_string(),
+        serde_json::json!(auth.provider_id),
+    );
     payload.insert("family".to_string(), json_value(&auth.family));
     payload.insert("authMode".to_string(), json_value(&auth.auth_mode));
     payload.insert("status".to_string(), json_value(&auth.status));
-    payload.insert("cliAvailable".to_string(), serde_json::json!(auth.cli_available));
-    payload.insert("accountLabel".to_string(), serde_json::json!(auth.account_label));
+    payload.insert(
+        "cliAvailable".to_string(),
+        serde_json::json!(auth.cli_available),
+    );
+    payload.insert(
+        "accountLabel".to_string(),
+        serde_json::json!(auth.account_label),
+    );
     payload.insert("accountId".to_string(), serde_json::json!(auth.account_id));
     payload.insert("plan".to_string(), serde_json::json!(auth.plan));
-    payload.insert("authMethod".to_string(), serde_json::json!(auth.auth_method));
+    payload.insert(
+        "authMethod".to_string(),
+        serde_json::json!(auth.auth_method),
+    );
     payload.insert("lastError".to_string(), serde_json::json!(auth.last_error));
     if !auth.metadata.is_empty() {
         payload.insert("metadata".to_string(), json_value(&auth.metadata));
@@ -230,7 +253,10 @@ fn auth_event_payload(auth: &providers::AuthState) -> serde_json::Map<String, se
 /// Go publishProviderCheckEvent payload.
 fn check_event_payload(check: &providers::Check) -> serde_json::Map<String, serde_json::Value> {
     let mut payload = serde_json::Map::new();
-    payload.insert("providerId".to_string(), serde_json::json!(check.provider_id));
+    payload.insert(
+        "providerId".to_string(),
+        serde_json::json!(check.provider_id),
+    );
     payload.insert("family".to_string(), json_value(&check.family));
     payload.insert("authMode".to_string(), json_value(&check.auth_mode));
     payload.insert("status".to_string(), json_value(&check.status));
@@ -238,13 +264,19 @@ fn check_event_payload(check: &providers::Check) -> serde_json::Map<String, serd
     payload.insert("endpoint".to_string(), serde_json::json!(check.endpoint));
     payload.insert("usage".to_string(), json_value(&check.usage));
     if !check.error_class.is_empty() {
-        payload.insert("errorClass".to_string(), serde_json::json!(check.error_class));
+        payload.insert(
+            "errorClass".to_string(),
+            serde_json::json!(check.error_class),
+        );
     }
     if !check.error_code.is_empty() {
         payload.insert("errorCode".to_string(), serde_json::json!(check.error_code));
     }
     if !check.error_message.is_empty() {
-        payload.insert("errorMessage".to_string(), serde_json::json!(check.error_message));
+        payload.insert(
+            "errorMessage".to_string(),
+            serde_json::json!(check.error_message),
+        );
     }
     payload
 }
@@ -254,7 +286,9 @@ async fn list_providers(
     State(state): State<AppState>,
 ) -> Result<Json<ProviderListResponse>, ApiError> {
     let manager = manager(&state)?;
-    Ok(Json(ProviderListResponse { items: manager.list_profiles() }))
+    Ok(Json(ProviderListResponse {
+        items: manager.list_profiles(),
+    }))
 }
 
 /// GET /v1/providers/{provider_id} (Go handleProviderRoutes profile branch).
@@ -320,32 +354,48 @@ async fn auth_action(
     };
     let (result, event_name) = if tenant_id.is_empty() {
         match action.as_str() {
-            "start" => (manager.start_managed_auth(&provider_id).await, "provider.auth_started"),
-            "complete" => {
-                (manager.complete_managed_auth(&provider_id).await, "provider.auth_completed")
-            }
-            "refresh" => {
-                (manager.refresh_managed_auth(&provider_id).await, "provider.auth_refreshed")
-            }
-            "revoke" => (manager.revoke_managed_auth(&provider_id).await, "provider.auth_revoked"),
+            "start" => (
+                manager.start_managed_auth(&provider_id).await,
+                "provider.auth_started",
+            ),
+            "complete" => (
+                manager.complete_managed_auth(&provider_id).await,
+                "provider.auth_completed",
+            ),
+            "refresh" => (
+                manager.refresh_managed_auth(&provider_id).await,
+                "provider.auth_refreshed",
+            ),
+            "revoke" => (
+                manager.revoke_managed_auth(&provider_id).await,
+                "provider.auth_revoked",
+            ),
             _ => return ApiError::NotFound("not found".to_string()).into_response(),
         }
     } else {
         match action.as_str() {
             "start" => (
-                manager.start_managed_auth_for_tenant(&provider_id, &tenant_id).await,
+                manager
+                    .start_managed_auth_for_tenant(&provider_id, &tenant_id)
+                    .await,
                 "provider.auth_started",
             ),
             "complete" => (
-                manager.complete_managed_auth_for_tenant(&provider_id, &tenant_id).await,
+                manager
+                    .complete_managed_auth_for_tenant(&provider_id, &tenant_id)
+                    .await,
                 "provider.auth_completed",
             ),
             "refresh" => (
-                manager.refresh_managed_auth_for_tenant(&provider_id, &tenant_id).await,
+                manager
+                    .refresh_managed_auth_for_tenant(&provider_id, &tenant_id)
+                    .await,
                 "provider.auth_refreshed",
             ),
             "revoke" => (
-                manager.revoke_managed_auth_for_tenant(&provider_id, &tenant_id).await,
+                manager
+                    .revoke_managed_auth_for_tenant(&provider_id, &tenant_id)
+                    .await,
                 "provider.auth_revoked",
             ),
             _ => return ApiError::NotFound("not found".to_string()).into_response(),
@@ -409,8 +459,14 @@ async fn set_default_model(
         .map_err(ApiError::from_store)?;
 
     let mut payload = serde_json::Map::new();
-    payload.insert("providerId".to_string(), serde_json::json!(preference.provider_id));
-    payload.insert("defaultModel".to_string(), serde_json::json!(preference.default_model));
+    payload.insert(
+        "providerId".to_string(),
+        serde_json::json!(preference.provider_id),
+    );
+    payload.insert(
+        "defaultModel".to_string(),
+        serde_json::json!(preference.default_model),
+    );
     publish_provider_event(
         &state,
         "provider.default_model_changed",
@@ -436,8 +492,8 @@ async fn list_checks(
         return Err(ApiError::NotFound("not found".to_string()));
     }
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_provider_checks(provider_id)
         .map_err(ApiError::from_store)?;
     Ok(Json(ProviderCheckListResponse { items }))
@@ -500,8 +556,8 @@ async fn get_check(
 ) -> Result<Json<providers::Check>, ApiError> {
     manager(&state)?;
     let check = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_provider_check(provider_id.trim(), check_id.trim())
         .map_err(ApiError::from_store)?;
     check
@@ -529,10 +585,18 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{listed}");
         let items = listed["items"].as_array().expect("items");
         assert!(!items.is_empty(), "{listed}");
-        let provider_id = items[0]["providerId"].as_str().expect("providerId").to_string();
+        let provider_id = items[0]["providerId"]
+            .as_str()
+            .expect("providerId")
+            .to_string();
 
-        let (status, fetched) =
-            request_json(state.clone(), "GET", &format!("/v1/providers/{provider_id}"), None).await;
+        let (status, fetched) = request_json(
+            state.clone(),
+            "GET",
+            &format!("/v1/providers/{provider_id}"),
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{fetched}");
 
         let (status, models) = request_json(
@@ -544,8 +608,7 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "{models}");
 
-        let (status, _) =
-            request_json(state, "GET", "/v1/providers/provider_missing", None).await;
+        let (status, _) = request_json(state, "GET", "/v1/providers/provider_missing", None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }

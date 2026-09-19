@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::ConfigError;
 use crate::types::{
@@ -12,7 +12,7 @@ use crate::types::{
     TelegramConnectorConfig, normalize_environment,
 };
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct FileConfig {
     environment: String,
@@ -21,9 +21,16 @@ pub(crate) struct FileConfig {
     log_level: String,
     llm: Option<FileLlmConfig>,
     connectors: Option<FileConnectorConfig>,
+    store: Option<FileStoreConfig>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct FileStoreConfig {
+    readers: Option<usize>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct FileLlmConfig {
     default_provider: String,
@@ -35,7 +42,7 @@ struct FileLlmConfig {
     codex: Option<FileManagedCliProviderConfig>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct FileOpenAiCompatibleProviderConfig {
     #[serde(rename = "baseURL")]
@@ -49,7 +56,7 @@ struct FileOpenAiCompatibleProviderConfig {
     stream_max_duration_ms: i64,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct FileManagedCliProviderConfig {
     cli_path: String,
@@ -57,7 +64,7 @@ struct FileManagedCliProviderConfig {
     work_dir: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct FileConnectorConfig {
     discord: Option<FileDiscordConnectorConfig>,
@@ -66,7 +73,7 @@ struct FileConnectorConfig {
     matrix: Option<FileMatrixConnectorConfig>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct FileDiscordConnectorConfig {
     enabled: Option<bool>,
@@ -81,7 +88,7 @@ struct FileDiscordConnectorConfig {
     allowed_channel_ids: Option<Vec<String>>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct FileTelegramConnectorConfig {
     enabled: Option<bool>,
@@ -96,7 +103,7 @@ struct FileTelegramConnectorConfig {
     allowed_group_ids: Option<Vec<String>>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct FileSlackConnectorConfig {
     enabled: Option<bool>,
@@ -118,7 +125,7 @@ struct FileSlackConnectorConfig {
     allowed_dm_user_groups: Option<Vec<String>>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct FileMatrixConnectorConfig {
     enabled: Option<bool>,
@@ -175,6 +182,11 @@ pub(crate) fn apply_file_config(cfg: &mut Config, file: FileConfig) {
     }
     if let Some(connectors) = file.connectors {
         apply_file_connector_config(&mut cfg.connectors, connectors);
+    }
+    if let Some(store) = file.store {
+        if let Some(readers) = store.readers {
+            cfg.store.readers = readers;
+        }
     }
 }
 
@@ -235,7 +247,10 @@ fn apply_file_openai_compatible_config(
     }
 }
 
-fn apply_file_managed_cli_config(cfg: &mut ManagedCliProviderConfig, file: FileManagedCliProviderConfig) {
+fn apply_file_managed_cli_config(
+    cfg: &mut ManagedCliProviderConfig,
+    file: FileManagedCliProviderConfig,
+) {
     if !file.cli_path.is_empty() {
         cfg.cli_path = file.cli_path;
     }
@@ -334,7 +349,10 @@ fn apply_file_telegram_connector_config(
     }
 }
 
-fn apply_file_slack_connector_config(cfg: &mut SlackConnectorConfig, file: FileSlackConnectorConfig) {
+fn apply_file_slack_connector_config(
+    cfg: &mut SlackConnectorConfig,
+    file: FileSlackConnectorConfig,
+) {
     if let Some(enabled) = file.enabled {
         cfg.enabled = enabled;
     }
@@ -419,4 +437,100 @@ fn apply_file_matrix_connector_config(
     if let Some(commands) = file.configured_commands {
         cfg.configured_commands = commands;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Write-path validation (Stage 7.1)
+// ---------------------------------------------------------------------------
+
+/// Dotted paths at which the file format can carry a plaintext secret. The
+/// daemon's own write path refuses these: the indirections (`*Env`, secret
+/// refs) are the supported way, and an operator hand-editing the file is a
+/// different trust decision from an API caller writing to disk.
+pub const INLINE_SECRET_PATHS: &[&str] = &[
+    "llm.openaiCompatible.apiKey",
+    "connectors.discord.botToken",
+    "connectors.telegram.botToken",
+    "connectors.slack.oauthClientSecret",
+    "connectors.matrix.botAccessToken",
+];
+
+/// Outcome of validating a candidate `config.json` body.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileConfigValidation {
+    /// Keys present in the input that the file format does not know. Ignored
+    /// on load (every field is `#[serde(default)]`), which is exactly why a
+    /// strict write must refuse them: a typo would otherwise be accepted and
+    /// silently do nothing.
+    pub unknown_keys: Vec<String>,
+    /// Paths carrying a non-empty inline secret value.
+    pub inline_secrets: Vec<String>,
+}
+
+/// Validates a candidate `config.json` without touching disk.
+///
+/// Parses `raw` as JSON, decodes it as [`FileConfig`] (so a type error
+/// surfaces here rather than at the next boot), then round-trips the decoded
+/// value and reports any input key absent from the round-trip as unknown.
+/// Because every `File*` struct is `#[serde(default)]` with no
+/// `skip_serializing_if`, the round-trip carries every known key, so the
+/// comparison needs no hand-maintained key list.
+pub fn validate_file_config_json(raw: &[u8]) -> Result<FileConfigValidation, ConfigError> {
+    let input: serde_json::Value =
+        serde_json::from_slice(raw).map_err(|source| ConfigError::DecodeFile {
+            path: Path::new("<candidate>").to_path_buf(),
+            source,
+        })?;
+    let decoded: FileConfig =
+        serde_json::from_value(input.clone()).map_err(|source| ConfigError::DecodeFile {
+            path: Path::new("<candidate>").to_path_buf(),
+            source,
+        })?;
+    let known = serde_json::to_value(&decoded).unwrap_or(serde_json::Value::Null);
+
+    let mut unknown_keys = Vec::new();
+    collect_unknown_keys(&input, &known, "", &mut unknown_keys);
+
+    let inline_secrets = INLINE_SECRET_PATHS
+        .iter()
+        .filter(|path| {
+            lookup_path(&input, path)
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|v| !v.trim().is_empty())
+        })
+        .map(|p| (*p).to_string())
+        .collect();
+
+    Ok(FileConfigValidation {
+        unknown_keys,
+        inline_secrets,
+    })
+}
+
+fn collect_unknown_keys(
+    input: &serde_json::Value,
+    known: &serde_json::Value,
+    prefix: &str,
+    out: &mut Vec<String>,
+) {
+    let (Some(input_map), Some(known_map)) = (input.as_object(), known.as_object()) else {
+        return;
+    };
+    for (key, value) in input_map {
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        match known_map.get(key) {
+            None => out.push(path),
+            Some(known_child) => collect_unknown_keys(value, known_child, &path, out),
+        }
+    }
+}
+
+fn lookup_path<'a>(value: &'a serde_json::Value, dotted: &str) -> Option<&'a serde_json::Value> {
+    dotted
+        .split('.')
+        .try_fold(value, |cursor, seg| cursor.get(seg))
 }

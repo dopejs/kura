@@ -71,4 +71,17 @@ describe("thread lifecycle SDK skeleton", () => {
     expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe("POST");
     expect(fetchImpl.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: "Bearer token", "X-Kura-Tenant-ID": "ten_threads" });
   });
+
+  it("sets and reads a session frame (Stage 5.1)", async () => {
+    const frame = { threadId: "thr_1", goal: "ship it", constraints: ["cite"], updatedAt: "t" };
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(frame)).mockResolvedValueOnce(jsonResponse(frame));
+    const client = createKuraClient({ baseURL: "https://daemon.test", fetchImpl });
+    const set = await client.setSessionFrame("thr_1", { goal: "ship it", constraints: ["cite"] });
+    expect(set.goal).toBe("ship it");
+    expect(fetchImpl.mock.calls[0][1].method).toBe("PUT");
+    expect(String(fetchImpl.mock.calls[0][0])).toContain("/v1/threads/thr_1/frame");
+    const got = await client.getSessionFrame("thr_1");
+    expect(got.constraints).toEqual(["cite"]);
+  });
 });
+

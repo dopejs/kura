@@ -1652,6 +1652,7 @@ mod tests {
 
     fn test_config() -> kura_config::Config {
         kura_config::Config {
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-mail-test".to_string(),
@@ -1676,6 +1677,7 @@ mod tests {
                     ..Default::default()
                 },
             },
+            egress: Default::default(),
         }
     }
 

@@ -7,28 +7,27 @@ use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
+use futures::future::BoxFuture;
 use kura_chat::{CancellationToken, Service};
 use kura_checkpoints::Manager as CheckpointManager;
 use kura_connectors::{Connector, RedactionStatus, Status};
 use kura_events::{Bus, Filter};
 use kura_im::{MessageLoop, ReplyProgressor, ReplySender};
 use kura_imtypes::{
-    DeliveryDirection, DeliveryStatus, InboundMessage, OutboundReply, ReplyCapabilities,
-    ReplyEdit, SentReply, ThinkingSignal,
+    DeliveryDirection, DeliveryStatus, InboundMessage, OutboundReply, ReplyCapabilities, ReplyEdit,
+    SentReply, ThinkingSignal,
 };
 use kura_llm::{
-    Dispatcher, Provider, ProviderError, ProviderRequest, ProviderResponse, StreamEmitter,
-    Usage,
+    Dispatcher, Provider, ProviderError, ProviderRequest, ProviderResponse, StreamEmitter, Usage,
 };
 use kura_router::{SessionKind, SessionRouter};
 use kura_runtime::{Manager as RuntimeManager, RunStatus, StepStatus};
-use kura_store::channel_management::RoutePolicy;
 use kura_store::SQLiteStore;
+use kura_store::channel_management::RoutePolicy;
 use kura_threads::{
     LifecycleActionKind, LifecycleMutationInput, LifecycleState, ParticipationDecisionValue,
     RoutingOutcome,
 };
-use futures::future::BoxFuture;
 
 // ---------------------------------------------------------------------------
 // Test providers (Go loopTestProvider / loopChunkedProvider / loopLongProvider /
@@ -54,9 +53,14 @@ impl Provider for EchoTestProvider {
                 .map(|m| m.content.clone())
                 .unwrap_or_default();
             Ok(ProviderResponse {
+                tool_calls: Vec::new(),
                 output: format!("reply:{content}"),
                 finish_reason: "stop".to_string(),
-                usage: Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    total_tokens: 2,
+                },
             })
         })
     }
@@ -81,13 +85,22 @@ impl Provider for EchoTestProvider {
                 delta: content.clone(),
                 output: format!("reply:{content}"),
                 finish_reason: "stop".to_string(),
-                usage: Some(Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 }),
+                usage: Some(Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    total_tokens: 2,
+                }),
                 ..Default::default()
             })?;
             Ok(ProviderResponse {
+                tool_calls: Vec::new(),
                 output: format!("reply:{content}"),
                 finish_reason: "stop".to_string(),
-                usage: Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    total_tokens: 2,
+                },
             })
         })
     }
@@ -113,9 +126,14 @@ impl Provider for LongTestProvider {
         Box::pin(async move {
             let runes = output.chars().count() as i64;
             Ok(ProviderResponse {
+                tool_calls: Vec::new(),
                 output,
                 finish_reason: "stop".to_string(),
-                usage: Usage { input_tokens: 1, output_tokens: runes, total_tokens: runes + 1 },
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: runes,
+                    total_tokens: runes + 1,
+                },
             })
         })
     }
@@ -145,9 +163,14 @@ impl Provider for LongTestProvider {
             }
             let count = runes.len() as i64;
             Ok(ProviderResponse {
+                tool_calls: Vec::new(),
                 output,
                 finish_reason: "stop".to_string(),
-                usage: Usage { input_tokens: 1, output_tokens: count, total_tokens: count + 1 },
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: count,
+                    total_tokens: count + 1,
+                },
             })
         })
     }
@@ -166,7 +189,13 @@ impl Provider for PartialFailureTestProvider {
         &'a self,
         _request: ProviderRequest,
     ) -> BoxFuture<'a, Result<ProviderResponse, ProviderError>> {
-        Box::pin(async { Err(ProviderError::provider("idle_timeout", "stream stalled", true)) })
+        Box::pin(async {
+            Err(ProviderError::provider(
+                "idle_timeout",
+                "stream stalled",
+                true,
+            ))
+        })
     }
 
     fn stream<'a>(
@@ -190,7 +219,11 @@ impl Provider for PartialFailureTestProvider {
                 output: format!("reply:{content}"),
                 ..Default::default()
             })?;
-            Err(ProviderError::provider("idle_timeout", "stream stalled", true))
+            Err(ProviderError::provider(
+                "idle_timeout",
+                "stream stalled",
+                true,
+            ))
         })
     }
 }
@@ -207,7 +240,10 @@ struct TestReplySender {
 
 impl Default for TestReplySender {
     fn default() -> Self {
-        TestReplySender { last: Mutex::new(None), err: None }
+        TestReplySender {
+            last: Mutex::new(None),
+            err: None,
+        }
     }
 }
 
@@ -223,7 +259,9 @@ impl ReplySender for TestReplySender {
         if let Some(err) = &self.err {
             return Err(err.clone());
         }
-        Ok(SentReply { external_message_id: "discord_reply_1".to_string() })
+        Ok(SentReply {
+            external_message_id: "discord_reply_1".to_string(),
+        })
     }
 }
 
@@ -268,7 +306,9 @@ impl ReplySender for ProgressReplySender {
     fn send_reply(&self, reply: OutboundReply) -> Result<SentReply, String> {
         let id = self.next_id.fetch_add(1, AtomicOrdering::SeqCst) + 1;
         self.sent.lock().expect("lock").push(reply);
-        Ok(SentReply { external_message_id: format!("discord_reply_{id}") })
+        Ok(SentReply {
+            external_message_id: format!("discord_reply_{id}"),
+        })
     }
 
     fn reply_progressor(&self) -> Option<&dyn ReplyProgressor> {
@@ -278,7 +318,11 @@ impl ReplySender for ProgressReplySender {
 
 impl ReplyProgressor for ProgressReplySender {
     fn reply_capabilities(&self) -> ReplyCapabilities {
-        let max_len = if self.max_len <= 0 { 2000 } else { self.max_len };
+        let max_len = if self.max_len <= 0 {
+            2000
+        } else {
+            self.max_len
+        };
         ReplyCapabilities {
             supports_thinking: true,
             supports_streaming: true,
@@ -307,13 +351,21 @@ impl ReplyProgressor for ProgressReplySender {
 /// Builds a store-backed loop with the given provider registered as "echo".
 fn test_harness(
     provider: Arc<dyn Provider>,
-) -> (Arc<SQLiteStore>, MessageLoop, Bus, Arc<RuntimeManager>, tempfile::TempDir) {
+) -> (
+    Arc<SQLiteStore>,
+    MessageLoop,
+    Bus,
+    Arc<RuntimeManager>,
+    tempfile::TempDir,
+) {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = Arc::new(SQLiteStore::new(dir.path().to_str().expect("path")).expect("store"));
     let bus = Bus::new();
     let dispatcher = Arc::new(Dispatcher::new());
     dispatcher.register_provider(provider);
-    dispatcher.set_default_provider("echo").expect("default provider");
+    dispatcher
+        .set_default_provider("echo")
+        .expect("default provider");
     dispatcher.set_default_model("echo-v1");
     let chat = Service::new_service(dispatcher, None, None, Some(bus.clone()), None);
     let runtime = Arc::new(RuntimeManager::new());
@@ -452,7 +504,10 @@ fn message_loop_records_thread_lifecycle_evidence_for_accepted_duplicate_and_blo
         )
         .expect("get inbound")
         .expect("found");
-    assert!(!persisted.thread_id.is_empty(), "accepted message must bind a thread");
+    assert!(
+        !persisted.thread_id.is_empty(),
+        "accepted message must bind a thread"
+    );
     assert!(
         !persisted.thread_session_segment_id.is_empty(),
         "accepted message must bind a session segment"
@@ -462,7 +517,11 @@ fn message_loop_records_thread_lifecycle_evidence_for_accepted_duplicate_and_blo
         .get_thread_detail_for_tenant("ten_thread", &persisted.thread_id)
         .expect("thread detail")
         .expect("found");
-    assert_eq!(detail.source_linkages.len(), 1, "expected one accepted source linkage");
+    assert_eq!(
+        detail.source_linkages.len(),
+        1,
+        "expected one accepted source linkage"
+    );
     assert_eq!(
         detail.source_linkages[0].routing_outcome,
         RoutingOutcome::Accepted,
@@ -516,7 +575,10 @@ fn message_loop_records_thread_lifecycle_evidence_for_accepted_duplicate_and_blo
         .expect("blocked turn");
     assert_eq!(blocked.outcome, "blocked");
     assert_eq!(blocked.reason_code, "thread_archived");
-    assert!(blocked.run.run_id.is_empty(), "archived-thread continuation must not create a run");
+    assert!(
+        blocked.run.run_id.is_empty(),
+        "archived-thread continuation must not create a run"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -557,15 +619,25 @@ fn message_loop_applies_group_room_participation_policy_before_assistant_work() 
         })
         .expect("save route policy");
 
-    let inbound = slack_group_inbound("room_policy_msg_1", "ambient room chatter", "ten_participation");
+    let inbound = slack_group_inbound(
+        "room_policy_msg_1",
+        "ambient room chatter",
+        "ten_participation",
+    );
 
     let ignored = loop_
         .process_single_turn(&connector, &inbound, &sender, &cancel)
         .expect("ignored turn");
     assert_eq!(ignored.outcome, "ignored");
     assert_eq!(ignored.reason_code, "missing_qualifying_mention");
-    assert!(ignored.run.run_id.is_empty(), "ignored message must not create a run");
-    assert!(sender.last().is_none(), "ignored message must not send a reply");
+    assert!(
+        ignored.run.run_id.is_empty(),
+        "ignored message must not create a run"
+    );
+    assert!(
+        sender.last().is_none(),
+        "ignored message must not send a reply"
+    );
 
     let persisted = store
         .get_connector_message_by_external_id_for_tenant(
@@ -592,7 +664,10 @@ fn message_loop_applies_group_room_participation_policy_before_assistant_work() 
         .process_single_turn(&connector, &mentioned, &sender, &cancel)
         .expect("mentioned turn");
     assert_eq!(accepted.outcome, "accepted");
-    assert!(!accepted.run.run_id.is_empty(), "mentioned message must create a run");
+    assert!(
+        !accepted.run.run_id.is_empty(),
+        "mentioned message must create a run"
+    );
     let persisted_accepted = store
         .get_connector_message_by_external_id_for_tenant(
             "ten_participation",
@@ -603,7 +678,11 @@ fn message_loop_applies_group_room_participation_policy_before_assistant_work() 
         .expect("get accepted inbound")
         .expect("found");
     let decisions = store
-        .list_participation_decisions_for_thread("ten_participation", &persisted_accepted.thread_id, 10)
+        .list_participation_decisions_for_thread(
+            "ten_participation",
+            &persisted_accepted.thread_id,
+            10,
+        )
         .expect("list accepted decisions");
     assert!(
         decisions
@@ -625,7 +704,10 @@ fn message_loop_applies_group_room_participation_policy_before_assistant_work() 
         .expect("blocked turn");
     assert_eq!(blocked.outcome, "blocked");
     assert_eq!(blocked.reason_code, "not_allowlisted");
-    assert!(blocked.run.run_id.is_empty(), "not-allowlisted message must not create a run");
+    assert!(
+        blocked.run.run_id.is_empty(),
+        "not-allowlisted message must not create a run"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -635,7 +717,10 @@ fn message_loop_applies_group_room_participation_policy_before_assistant_work() 
 #[test]
 fn message_loop_splits_long_streaming_reply_within_channel_limit() {
     let (_store, loop_, _bus, _runtime, _dir) = test_harness(Arc::new(LongTestProvider));
-    let sender = ProgressReplySender { max_len: 10, ..Default::default() };
+    let sender = ProgressReplySender {
+        max_len: 10,
+        ..Default::default()
+    };
     let cancel = CancellationToken::new();
     let connector = discord_connector();
     let long_prompt = "abcdefghij".repeat(4);
@@ -646,7 +731,11 @@ fn message_loop_splits_long_streaming_reply_within_channel_limit() {
         .expect("streamed turn");
     assert_eq!(result.run.status, RunStatus::Completed);
     let sent = sender.sent();
-    assert!(sent.len() >= 2, "expected multipart send for long reply, got {}", sent.len());
+    assert!(
+        sent.len() >= 2,
+        "expected multipart send for long reply, got {}",
+        sent.len()
+    );
     for (index, sent_reply) in sent.iter().enumerate() {
         assert!(
             sent_reply.content.chars().count() <= 10,
@@ -663,7 +752,10 @@ fn message_loop_splits_long_streaming_reply_within_channel_limit() {
 #[test]
 fn message_loop_marks_failure_when_reply_send_fails() {
     let (store, loop_, bus, runtime, _dir) = test_harness(Arc::new(EchoTestProvider));
-    let sender = TestReplySender { err: Some("discord send failed".to_string()), ..Default::default() };
+    let sender = TestReplySender {
+        err: Some("discord send failed".to_string()),
+        ..Default::default()
+    };
     let cancel = CancellationToken::new();
     let connector = discord_connector();
     let mut inbound = discord_inbound("discord_msg_fail_1", "hello");
@@ -676,9 +768,16 @@ fn message_loop_marks_failure_when_reply_send_fails() {
 
     let runs = runtime.list_runs();
     assert_eq!(runs.len(), 1);
-    assert_eq!(runs[0].status, RunStatus::Failed, "run must be failed after send failure");
+    assert_eq!(
+        runs[0].status,
+        RunStatus::Failed,
+        "run must be failed after send failure"
+    );
 
-    let connector_events = bus.list(&Filter { category: "connector".to_string(), ..Filter::default() });
+    let connector_events = bus.list(&Filter {
+        category: "connector".to_string(),
+        ..Filter::default()
+    });
     let failed = connector_events
         .iter()
         .find(|event| event.name == "connector.reply_failed")
@@ -692,7 +791,10 @@ fn message_loop_marks_failure_when_reply_send_fails() {
         Some("reply_failed")
     );
     assert_eq!(
-        failed.payload.get("redactionStatus").and_then(|v| v.as_str()),
+        failed
+            .payload
+            .get("redactionStatus")
+            .and_then(|v| v.as_str()),
         Some("redacted")
     );
 
@@ -739,17 +841,31 @@ fn message_loop_preserves_partial_reply_when_provider_stream_fails_after_visible
 
     let runs = runtime.list_runs();
     assert_eq!(runs.len(), 1);
-    assert_eq!(runs[0].status, RunStatus::Failed, "run must be failed after partial failure");
+    assert_eq!(
+        runs[0].status,
+        RunStatus::Failed,
+        "run must be failed after partial failure"
+    );
 
     let edited = sender.edited();
-    assert!(!edited.is_empty(), "expected visible streamed edits before failure");
     assert!(
-        edited.last().expect("last edit").content.contains("[response interrupted]"),
+        !edited.is_empty(),
+        "expected visible streamed edits before failure"
+    );
+    assert!(
+        edited
+            .last()
+            .expect("last edit")
+            .content
+            .contains("[response interrupted]"),
         "expected partial reply marker, got {:?}",
         edited.last().expect("last edit").content
     );
 
-    let connector_events = bus.list(&Filter { category: "connector".to_string(), ..Filter::default() });
+    let connector_events = bus.list(&Filter {
+        category: "connector".to_string(),
+        ..Filter::default()
+    });
     let partial_count = connector_events
         .iter()
         .filter(|event| event.name == "connector.reply_partial")
@@ -758,13 +874,22 @@ fn message_loop_preserves_partial_reply_when_provider_stream_fails_after_visible
         .iter()
         .filter(|event| event.name == "connector.reply_failed")
         .count();
-    assert_eq!(partial_count, 1, "expected exactly one connector.reply_partial event");
-    assert_eq!(failed_count, 0, "expected no connector.reply_failed for partial failure");
+    assert_eq!(
+        partial_count, 1,
+        "expected exactly one connector.reply_partial event"
+    );
+    assert_eq!(
+        failed_count, 0,
+        "expected no connector.reply_failed for partial failure"
+    );
 
     // The chat service in this harness runs without a store handle, so the
     // dispatch lifecycle surfaces through the llm events (the Go test reads
     // the persisted dispatch; the event carries the same status/partial fields).
-    let llm_events = bus.list(&Filter { category: "llm".to_string(), ..Filter::default() });
+    let llm_events = bus.list(&Filter {
+        category: "llm".to_string(),
+        ..Filter::default()
+    });
     assert!(!llm_events.is_empty(), "expected llm events to be recorded");
     let last_llm = llm_events.last().expect("last llm event");
     assert_eq!(last_llm.name, "llm.dispatch.partial_failed");
@@ -785,7 +910,11 @@ fn message_loop_preserves_partial_reply_when_provider_stream_fails_after_visible
         )
         .expect("get outbound")
         .expect("found");
-    assert_eq!(outbound.status, DeliveryStatus::Partial, "expected partial outbound record");
+    assert_eq!(
+        outbound.status,
+        DeliveryStatus::Partial,
+        "expected partial outbound record"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -808,7 +937,10 @@ fn split_reply_content_respects_rune_limit() {
     use kura_im::split_reply_content;
     assert_eq!(split_reply_content("hello", 0), vec!["hello".to_string()]);
     assert_eq!(split_reply_content("hello", 10), vec!["hello".to_string()]);
-    assert_eq!(split_reply_content("hello", 2), vec!["he".to_string(), "ll".to_string(), "o".to_string()]);
+    assert_eq!(
+        split_reply_content("hello", 2),
+        vec!["he".to_string(), "ll".to_string(), "o".to_string()]
+    );
     // Multi-byte runes split on rune boundaries, not bytes.
     let parts = split_reply_content("he\u{00e9}llo", 3);
     assert_eq!(parts.join(""), "he\u{00e9}llo");
@@ -819,7 +951,8 @@ fn classify_error_returns_class_for_classified_errors() {
     use kura_im::{ClassifiedError, classify_error};
     use std::io;
 
-    let plain: Box<dyn std::error::Error + Send + Sync> = Box::new(io::Error::new(io::ErrorKind::Other, "nope"));
+    let plain: Box<dyn std::error::Error + Send + Sync> =
+        Box::new(io::Error::new(io::ErrorKind::Other, "nope"));
     assert_eq!(classify_error(Some(plain.as_ref())), "");
     assert_eq!(classify_error(None), "");
 
@@ -827,7 +960,13 @@ fn classify_error_returns_class_for_classified_errors() {
         "connector.timeout",
         Box::new(io::Error::new(io::ErrorKind::TimedOut, "dial timed out")),
     ));
-    assert_eq!(classify_error(Some(classified.as_ref())), "connector.timeout");
-    assert_eq!(kura_im::safe_reply_failure_reason(Some(classified.as_ref())), "connector.timeout");
+    assert_eq!(
+        classify_error(Some(classified.as_ref())),
+        "connector.timeout"
+    );
+    assert_eq!(
+        kura_im::safe_reply_failure_reason(Some(classified.as_ref())),
+        "connector.timeout"
+    );
     assert_eq!(kura_im::safe_reply_failure_reason(None), "reply_failed");
 }

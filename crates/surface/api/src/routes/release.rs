@@ -23,9 +23,7 @@ pub fn router() -> Router<AppState> {
 
 /// POST /v1/release/launch-gate (Go handleLaunchGateValidate) — 200 with the
 /// decision; a missing or malformed body is 400.
-async fn validate_launch_gate(
-    body: Bytes,
-) -> Result<Json<opsreadiness::LaunchDecision>, ApiError> {
+async fn validate_launch_gate(body: Bytes) -> Result<Json<opsreadiness::LaunchDecision>, ApiError> {
     let evidence: opsreadiness::LaunchGateEvidence = decode_json_required(&body)?;
     Ok(Json(opsreadiness::validate_launch_gate(&evidence)))
 }

@@ -162,8 +162,14 @@ mod tests {
                 &period.quota_period_id,
             )
             .expect("counter");
-        assert_eq!(counter.committed_amount, 1, "unexpected recovered counter: {counter:?}");
-        assert_eq!(counter.reserved_amount, 1, "unexpected recovered counter: {counter:?}");
+        assert_eq!(
+            counter.committed_amount, 1,
+            "unexpected recovered counter: {counter:?}"
+        );
+        assert_eq!(
+            counter.reserved_amount, 1,
+            "unexpected recovered counter: {counter:?}"
+        );
 
         let want: [(&str, &str); 4] = [
             ("op_commit", ReservationStatus::COMMITTED),
@@ -173,7 +179,11 @@ mod tests {
         ];
         for (key, status) in want {
             let reservation = repo
-                .reservation(TEN_FINITE, &Category::from(Category::INTEGRATION_OPERATIONS), key)
+                .reservation(
+                    TEN_FINITE,
+                    &Category::from(Category::INTEGRATION_OPERATIONS),
+                    key,
+                )
                 .expect("reservation");
             assert_eq!(reservation.status, status, "{key}");
         }
@@ -191,9 +201,16 @@ mod tests {
             .await
             .unwrap();
         let reservation = repo
-            .reservation(TEN_FINITE, &Category::from(Category::RUN_LAUNCHES), "op_ambiguous")
+            .reservation(
+                TEN_FINITE,
+                &Category::from(Category::RUN_LAUNCHES),
+                "op_ambiguous",
+            )
             .expect("reservation");
-        assert_eq!(reservation.status, ReservationStatus::OPERATOR_ACTION_NEEDED);
+        assert_eq!(
+            reservation.status,
+            ReservationStatus::OPERATOR_ACTION_NEEDED
+        );
         assert!(!reservation.recovery_reason.is_empty());
 
         let result = manager

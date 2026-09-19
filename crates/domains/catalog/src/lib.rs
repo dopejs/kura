@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use kura_store::{list_documents, put_document, SQLiteStore};
+use kura_store::{SQLiteStore, list_documents, put_document};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -253,9 +253,12 @@ impl Manager {
 
     /// Go `LoadFromStore`: reloads persisted catalog items + enablements on startup.
     pub fn load_from_store(&self) -> Result<(), String> {
-        let Some(store) = &self.docs else { return Ok(()); };
+        let Some(store) = &self.docs else {
+            return Ok(());
+        };
         let items: Vec<CatalogItem> = list_documents(&store.lock(), DOC_KIND_CATALOG_ITEM)?;
-        let enablements: Vec<Enablement> = list_documents(&store.lock(), DOC_KIND_CATALOG_ENABLEMENT)?;
+        let enablements: Vec<Enablement> =
+            list_documents(&store.lock(), DOC_KIND_CATALOG_ENABLEMENT)?;
         self.restore(items, enablements);
         Ok(())
     }
@@ -299,32 +302,72 @@ impl Manager {
 
     /// Go `Enable`: enables a catalog item version for a tenant after the permission and
     /// requirement gates pass (fail closed). Enablement is recorded with an audit event.
-    pub fn enable(&self, tenant_id: &str, item_id: &str, version: &str, actor: &str) -> Result<Enablement, CatalogError> {
+    pub fn enable(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+        version: &str,
+        actor: &str,
+    ) -> Result<Enablement, CatalogError> {
         let item = self.get_item(item_id).ok_or(CatalogError::ItemNotFound)?;
         let target = resolve_version(&item, version).ok_or(CatalogError::VersionNotFound)?;
         if !self.permissions.allow(tenant_id, &item.permissions) {
             return Err(CatalogError::PermissionDenied);
         }
-        if !self.checker.unmet(tenant_id, &target.requirements).is_empty() {
+        if !self
+            .checker
+            .unmet(tenant_id, &target.requirements)
+            .is_empty()
+        {
             return Err(CatalogError::RequirementsUnmet);
         }
-        Ok(self.record_transition(tenant_id, item_id, EnablementState::Enabled, &target.version, "enabled", actor, ""))
+        Ok(self.record_transition(
+            tenant_id,
+            item_id,
+            EnablementState::Enabled,
+            &target.version,
+            "enabled",
+            actor,
+            "",
+        ))
     }
 
     /// Go `Disable`: disables a catalog item for a tenant (not permission-gated in Go).
-    pub fn disable(&self, tenant_id: &str, item_id: &str, actor: &str) -> Result<Enablement, CatalogError> {
+    pub fn disable(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+        actor: &str,
+    ) -> Result<Enablement, CatalogError> {
         if self.get_item(item_id).is_none() {
             return Err(CatalogError::ItemNotFound);
         }
-        Ok(self.record_transition(tenant_id, item_id, EnablementState::Disabled, "", "disabled", actor, ""))
+        Ok(self.record_transition(
+            tenant_id,
+            item_id,
+            EnablementState::Disabled,
+            "",
+            "disabled",
+            actor,
+            "",
+        ))
     }
 
     /// Go `Rollback`: restores the prior enabled version from the audit history, or disables
     /// safely when there is no prior version (FR-004).
-    pub fn rollback(&self, tenant_id: &str, item_id: &str, actor: &str) -> Result<Enablement, CatalogError> {
+    pub fn rollback(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+        actor: &str,
+    ) -> Result<Enablement, CatalogError> {
         let key = enablement_key(tenant_id, item_id);
         let mut inner = self.inner.write();
-        let mut enablement = inner.enablements.get(&key).cloned().ok_or(CatalogError::NoRollbackTarget)?;
+        let mut enablement = inner
+            .enablements
+            .get(&key)
+            .cloned()
+            .ok_or(CatalogError::NoRollbackTarget)?;
         let now = Utc::now();
         // Pop the current active version off the stack; the new top (if any) is restored.
         if !enablement.version_stack.is_empty() {
@@ -355,7 +398,12 @@ impl Manager {
         enablement.updated_at = now;
         inner.enablements.insert(key.clone(), enablement.clone());
         drop(inner);
-        self.persist(DOC_KIND_CATALOG_ENABLEMENT, &key, &enablement.tenant_id, &enablement);
+        self.persist(
+            DOC_KIND_CATALOG_ENABLEMENT,
+            &key,
+            &enablement.tenant_id,
+            &enablement,
+        );
         Ok(enablement)
     }
 
@@ -365,7 +413,11 @@ impl Manager {
         let item = self.get_item(item_id).ok_or(CatalogError::ItemNotFound)?;
         let enablement = {
             let inner = self.inner.read();
-            inner.enablements.get(&enablement_key(tenant_id, item_id)).cloned().unwrap_or_default()
+            inner
+                .enablements
+                .get(&enablement_key(tenant_id, item_id))
+                .cloned()
+                .unwrap_or_default()
         };
         let version = match resolve_version(&item, &enablement.active_version) {
             Some(version) => version,
@@ -384,15 +436,28 @@ impl Manager {
     pub fn active_version(&self, tenant_id: &str, item_id: &str) -> (String, bool) {
         let enablement = {
             let inner = self.inner.read();
-            inner.enablements.get(&enablement_key(tenant_id, item_id)).cloned()
+            inner
+                .enablements
+                .get(&enablement_key(tenant_id, item_id))
+                .cloned()
         };
-        let Some(enablement) = enablement else { return (String::new(), false); };
+        let Some(enablement) = enablement else {
+            return (String::new(), false);
+        };
         if enablement.state != EnablementState::Enabled {
             return (String::new(), false);
         }
-        let Some(item) = self.get_item(item_id) else { return (String::new(), false); };
-        let Some(version) = resolve_version(&item, &enablement.active_version) else { return (String::new(), false); };
-        if !self.checker.unmet(tenant_id, &version.requirements).is_empty() {
+        let Some(item) = self.get_item(item_id) else {
+            return (String::new(), false);
+        };
+        let Some(version) = resolve_version(&item, &enablement.active_version) else {
+            return (String::new(), false);
+        };
+        if !self
+            .checker
+            .unmet(tenant_id, &version.requirements)
+            .is_empty()
+        {
             return (String::new(), false); // requirements regressed; not safe to execute
         }
         (enablement.active_version, true)
@@ -401,8 +466,14 @@ impl Manager {
     /// Go `Restore`: reloads persisted items + enablements.
     pub fn restore(&self, items: Vec<CatalogItem>, enablements: Vec<Enablement>) {
         let mut inner = self.inner.write();
-        inner.items = items.into_iter().map(|item| (item.item_id.clone(), item)).collect();
-        inner.enablements = enablements.into_iter().map(|e| (enablement_key(&e.tenant_id, &e.item_id), e)).collect();
+        inner.items = items
+            .into_iter()
+            .map(|item| (item.item_id.clone(), item))
+            .collect();
+        inner.enablements = enablements
+            .into_iter()
+            .map(|e| (enablement_key(&e.tenant_id, &e.item_id), e))
+            .collect();
     }
 
     /// Go `recordTransition`: records an enablement transition with an audit event and
@@ -451,7 +522,12 @@ impl Manager {
         enablement.updated_at = now;
         inner.enablements.insert(key.clone(), enablement.clone());
         drop(inner);
-        self.persist(DOC_KIND_CATALOG_ENABLEMENT, &key, &enablement.tenant_id, &enablement);
+        self.persist(
+            DOC_KIND_CATALOG_ENABLEMENT,
+            &key,
+            &enablement.tenant_id,
+            &enablement,
+        );
         enablement
     }
 
@@ -465,7 +541,12 @@ impl Manager {
 
 /// Go `enablementKey`: tenantID + NUL + itemID (both trimmed).
 fn enablement_key(tenant_id: &str, item_id: &str) -> String {
-    format!("{}{}{}", tenant_id.trim(), char::from_u32(0).expect("NUL is a valid char"), item_id.trim())
+    format!(
+        "{}{}{}",
+        tenant_id.trim(),
+        char::from_u32(0).expect("NUL is a valid char"),
+        item_id.trim()
+    )
 }
 
 /// Go `resolveVersion`: empty version resolves to the latest.

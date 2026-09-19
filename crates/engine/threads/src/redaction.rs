@@ -110,12 +110,12 @@ mod tests {
     use chrono::TimeZone;
     use chrono::Utc;
 
-    use crate::continuity::preview_item_for_turn;
     use crate::continuity::ContinuityDecision;
     use crate::continuity::ContinuityReason;
     use crate::continuity::ContinuityRole;
     use crate::continuity::ContinuityTurn;
     use crate::continuity::RuntimeArtifactExcerpt;
+    use crate::continuity::preview_item_for_turn;
     use crate::source::SourceKind;
 
     // Port of TestContinuityPreviewSuppressesUnsafeTurnAndArtifactEvidence.
@@ -142,8 +142,12 @@ mod tests {
             retention_expires_at: Some(now + Duration::days(90)),
             source_event_key: String::new(),
         };
-        let item =
-            preview_item_for_turn(&turn, ContinuityDecision::Excluded, ContinuityReason::RedactionFailed, 0);
+        let item = preview_item_for_turn(
+            &turn,
+            ContinuityDecision::Excluded,
+            ContinuityReason::RedactionFailed,
+            0,
+        );
         assert_eq!(item.safe_summary, "suppressed");
         assert_eq!(item.redaction_status, RedactionStatus::Suppressed);
 
@@ -176,7 +180,11 @@ mod tests {
         ] {
             let summary = safe_continuity_content(input);
             assert_eq!(summary.text, "suppressed", "input: {input}");
-            assert_eq!(summary.status, RedactionStatus::Suppressed, "input: {input}");
+            assert_eq!(
+                summary.status,
+                RedactionStatus::Suppressed,
+                "input: {input}"
+            );
         }
         let summary = safe_continuity_content("ordinary follow-up text");
         assert_eq!(summary.text, "ordinary follow-up text");

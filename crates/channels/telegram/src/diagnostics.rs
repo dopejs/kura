@@ -15,7 +15,9 @@ use crate::{TelegramError, is_unset_time};
 /// Go `DiagnosticReasonForError`: maps a classified Telegram error (by error
 /// class) or the raw error text onto a stable diagnostic reason code.
 #[must_use]
-pub fn diagnostic_reason_for_error(err: &(dyn std::error::Error + 'static)) -> DiagnosticReasonCode {
+pub fn diagnostic_reason_for_error(
+    err: &(dyn std::error::Error + 'static),
+) -> DiagnosticReasonCode {
     if let Some(classified) = err.downcast_ref::<TelegramApiError>() {
         match classified.error_class().as_str() {
             "auth_error" => return DiagnosticReasonCode::AuthMissing,
@@ -28,10 +30,7 @@ pub fn diagnostic_reason_for_error(err: &(dyn std::error::Error + 'static)) -> D
         }
     }
     let message = err.to_string().to_lowercase();
-    if message.contains("401")
-        || message.contains("unauthorized")
-        || message.contains("token")
-    {
+    if message.contains("401") || message.contains("unauthorized") || message.contains("token") {
         return DiagnosticReasonCode::AuthMissing;
     }
     if message.contains("403") || message.contains("forbidden") || message.contains("permission") {
@@ -88,7 +87,11 @@ pub fn build_diagnostic_state(
             format!("redaction_failed_{connector_id}"),
         )
     } else {
-        (RedactionStatus::Redacted, safe_evidence(&evidence), String::new())
+        (
+            RedactionStatus::Redacted,
+            safe_evidence(&evidence),
+            String::new(),
+        )
     };
     Ok(ConnectorDiagnosticState {
         diagnostic_state_id: format!("diag_{connector_id}_{}", reason.as_str()),
@@ -173,7 +176,9 @@ fn retry_safety_for_diagnostic(reason: DiagnosticReasonCode) -> RetrySafety {
 #[must_use]
 fn severity_for_diagnostic(reason: DiagnosticReasonCode) -> &'static str {
     match reason {
-        DiagnosticReasonCode::DuplicateInbound | DiagnosticReasonCode::UnsupportedCapability => "info",
+        DiagnosticReasonCode::DuplicateInbound | DiagnosticReasonCode::UnsupportedCapability => {
+            "info"
+        }
         DiagnosticReasonCode::BlockedRoute | DiagnosticReasonCode::RateLimited => "warning",
         _ => "error",
     }
@@ -214,19 +219,39 @@ mod tests {
     use chrono::TimeZone;
 
     fn ts(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(y, mo, d, h, mi, s).single().expect("valid timestamp")
+        Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
+            .single()
+            .expect("valid timestamp")
     }
 
     // Go TestDiagnosticReasonForErrorMapsTelegramFailures.
     #[test]
     fn diagnostic_reason_for_error_maps_telegram_failures() {
         let cases: [(&str, DiagnosticReasonCode); 6] = [
-            ("401 unauthorized bot token", DiagnosticReasonCode::AuthMissing),
-            ("403 forbidden missing permission", DiagnosticReasonCode::PermissionMissing),
-            ("429 too many requests rate limit", DiagnosticReasonCode::RateLimited),
-            ("telegram provider unavailable 5xx", DiagnosticReasonCode::ProviderUnavailable),
-            ("network connection reset by peer", DiagnosticReasonCode::NetworkFailed),
-            ("unsupported attachment voice input", DiagnosticReasonCode::UnsupportedCapability),
+            (
+                "401 unauthorized bot token",
+                DiagnosticReasonCode::AuthMissing,
+            ),
+            (
+                "403 forbidden missing permission",
+                DiagnosticReasonCode::PermissionMissing,
+            ),
+            (
+                "429 too many requests rate limit",
+                DiagnosticReasonCode::RateLimited,
+            ),
+            (
+                "telegram provider unavailable 5xx",
+                DiagnosticReasonCode::ProviderUnavailable,
+            ),
+            (
+                "network connection reset by peer",
+                DiagnosticReasonCode::NetworkFailed,
+            ),
+            (
+                "unsupported attachment voice input",
+                DiagnosticReasonCode::UnsupportedCapability,
+            ),
         ];
         for (message, want) in cases {
             let err = std::io::Error::new(std::io::ErrorKind::Other, message);

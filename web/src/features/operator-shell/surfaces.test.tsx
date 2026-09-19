@@ -109,4 +109,38 @@ describe("plugin assembly surface (pluginization program)", () => {
       ["webhooks", true],
     ]);
   });
+
+  it("MemoryOverviewView reports what is remembered, what was forgotten, and index lag", async () => {
+    const { MemoryOverviewView } = await import("./surfaces");
+    const overview = {
+      tenantId: "ten_1",
+      counts: [
+        { layer: "l1" as const, status: "ready" as const, count: 10 },
+        { layer: "l1" as const, status: "revoked" as const, count: 2 },
+      ],
+      // Deliberately below the Ready total: the shortfall is the signal that
+      // the derived index has stopped being written.
+      derivedEmbeddings: 7,
+      recentlyRemembered: [
+        { assetId: "mem_1", layer: "l1" as const, status: "ready" as const, title: "reply language", updatedAt: "t1" },
+      ],
+      recentlyForgotten: [
+        { assetId: "mem_2", layer: "l1" as const, status: "revoked" as const, title: "stale fact", updatedAt: "t2" },
+      ],
+    };
+    let rebuilt = 0;
+    render(<MemoryOverviewView overview={overview} state="ready" onRebuildIndexes={() => (rebuilt += 1)} />);
+
+    // "10" also appears in the per-layer count row, so assert against the
+    // summary list specifically rather than the whole panel.
+    expect(screen.getAllByText("10").length).toBeGreaterThan(0);
+    expect(screen.getByText("Remembered")).toBeTruthy();
+    expect(screen.getByText("Retrieval index")).toBeTruthy();
+    expect(screen.getByText("(3 not yet indexed)")).toBeTruthy();
+    expect(screen.getByText("reply language")).toBeTruthy();
+    expect(screen.getByText("stale fact")).toBeTruthy();
+
+    screen.getByRole("button", { name: "Rebuild retrieval index" }).click();
+    expect(rebuilt).toBe(1);
+  });
 });

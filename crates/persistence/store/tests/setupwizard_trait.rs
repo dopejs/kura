@@ -7,13 +7,14 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use kura_setupwizard::{
-    RedactionStatus, RemediationOwner, SafeUseMode, SetupAttempt, SetupOperation,
-    SetupSession, SetupState, SetupStyle, Store, TargetKind,
+    RedactionStatus, RemediationOwner, SafeUseMode, SetupAttempt, SetupOperation, SetupSession,
+    SetupState, SetupStyle, Store, TargetKind,
 };
 use kura_store::{SQLiteStore, SetupWizardStoreHandle};
 
 fn temp_dir(name: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("kura_store_sw_trait_{name}_{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("kura_store_sw_trait_{name}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir.to_string_lossy().to_string()
 }
@@ -85,16 +86,35 @@ async fn setupwizard_store_trait_session_round_trip() {
     session.reason_code = "healthy".to_string();
     handle.save_setup_session(session.clone()).await.unwrap();
 
-    let got = handle.get_setup_session("ten_1", "setup_ten_1_target_test").await.unwrap().expect("session");
+    let got = handle
+        .get_setup_session("ten_1", "setup_ten_1_target_test")
+        .await
+        .unwrap()
+        .expect("session");
     assert_eq!(got.state, SetupState::Ready);
     assert_eq!(got.reason_code, "healthy");
-    assert_eq!(handle.get_setup_session("ten_other", "setup_ten_1_target_test").await.unwrap(), None);
-    assert_eq!(handle.get_setup_session("ten_1", "missing").await.unwrap(), None);
+    assert_eq!(
+        handle
+            .get_setup_session("ten_other", "setup_ten_1_target_test")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        handle.get_setup_session("ten_1", "missing").await.unwrap(),
+        None
+    );
 
     let listed = handle.list_setup_sessions("ten_1").await.unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].setup_session_id, "setup_ten_1_target_test");
-    assert!(handle.list_setup_sessions("ten_other").await.unwrap().is_empty());
+    assert!(
+        handle
+            .list_setup_sessions("ten_other")
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -104,14 +124,38 @@ async fn setupwizard_store_trait_attempt_round_trip() {
     let handle = Arc::new(SetupWizardStoreHandle::new(store));
 
     let session_id = "setup_ten_1_target_test";
-    handle.save_setup_session(make_session(session_id)).await.unwrap();
-    handle.append_setup_attempt(make_attempt("attempt_1", session_id)).await.unwrap();
-    handle.append_setup_attempt(make_attempt("attempt_2", session_id)).await.unwrap();
+    handle
+        .save_setup_session(make_session(session_id))
+        .await
+        .unwrap();
+    handle
+        .append_setup_attempt(make_attempt("attempt_1", session_id))
+        .await
+        .unwrap();
+    handle
+        .append_setup_attempt(make_attempt("attempt_2", session_id))
+        .await
+        .unwrap();
 
-    let attempts = handle.list_setup_attempts("ten_1", session_id).await.unwrap();
+    let attempts = handle
+        .list_setup_attempts("ten_1", session_id)
+        .await
+        .unwrap();
     assert_eq!(attempts.len(), 2);
     assert_eq!(attempts[0].operation, SetupOperation::Start);
     assert_eq!(attempts[0].to_state, SetupState::InProgress);
-    assert!(handle.list_setup_attempts("ten_other", session_id).await.unwrap().is_empty());
-    assert!(handle.list_setup_attempts("ten_1", "missing").await.unwrap().is_empty());
+    assert!(
+        handle
+            .list_setup_attempts("ten_other", session_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        handle
+            .list_setup_attempts("ten_1", "missing")
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

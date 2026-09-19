@@ -95,7 +95,10 @@ pub fn map_condition(condition: MatrixCondition, input: DiagnosticInput) -> Diag
     })
     .unwrap_or_default();
     base.freshness_state = freshness_at(evidence_at, now);
-    DiagnosticState { base, matrix_condition: condition }
+    DiagnosticState {
+        base,
+        matrix_condition: condition,
+    }
 }
 
 /// Go `reasonForCondition`.
@@ -134,7 +137,11 @@ fn classify_diagnostic(input: DiagnosticInputInternal) -> Result<ConnectorDiagno
         now = Utc::now();
     }
     let (redaction, evidence, redaction_failure_id) = if input.redaction_reliable {
-        (RedactionStatus::Redacted, input.safe_evidence, String::new())
+        (
+            RedactionStatus::Redacted,
+            input.safe_evidence,
+            String::new(),
+        )
     } else {
         (
             RedactionStatus::Suppressed,
@@ -143,11 +150,7 @@ fn classify_diagnostic(input: DiagnosticInputInternal) -> Result<ConnectorDiagno
         )
     };
     Ok(ConnectorDiagnosticState {
-        diagnostic_state_id: format!(
-            "diag_{}_{}",
-            input.connector_id,
-            input.reason_code.as_str()
-        ),
+        diagnostic_state_id: format!("diag_{}_{}", input.connector_id, input.reason_code.as_str()),
         tenant_id: input.tenant_id,
         connector_id: input.connector_id,
         connector_account_id: String::new(),

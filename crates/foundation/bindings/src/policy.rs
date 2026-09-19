@@ -3,7 +3,9 @@
 
 use thiserror::Error;
 
-use crate::types::{BindingStatus, RepairStatus, ScopeKind, Visibility, VisibilityScopeKind, WorkspaceStatus};
+use crate::types::{
+    BindingStatus, RepairStatus, ScopeKind, Visibility, VisibilityScopeKind, WorkspaceStatus,
+};
 
 /// All binding-domain failures. `Validation` wraps the safe, user-visible reason
 /// code carried by Go's `ValidationError`; `InvalidBinding` is the bare sentinel.
@@ -101,7 +103,8 @@ pub fn validate_binding_mutation(input: &BindingMutationInput) -> Result<(), Bin
     if input.cross_tenant {
         return Err(invalid_binding_reason("cross_tenant_reference_denied"));
     }
-    if input.scope_kind != ScopeKind::CHANNEL && input.scope_kind != ScopeKind::INTEGRATION_ACCOUNT {
+    if input.scope_kind != ScopeKind::CHANNEL && input.scope_kind != ScopeKind::INTEGRATION_ACCOUNT
+    {
         return Err(invalid_binding_reason("binding_scope_kind_invalid"));
     }
     let scope_ref = input.scope_ref.trim();
@@ -127,14 +130,19 @@ pub fn validate_binding_mutation(input: &BindingMutationInput) -> Result<(), Bin
 
     // Integration-account defaults supply profile only; they must not carry a workspace.
     if input.scope_kind == ScopeKind::INTEGRATION_ACCOUNT && !workspace_id.is_empty() {
-        return Err(invalid_binding_reason("account_binding_workspace_not_allowed"));
+        return Err(invalid_binding_reason(
+            "account_binding_workspace_not_allowed",
+        ));
     }
     // A binding must select at least one of profile/workspace to be meaningful.
     if profile_id.is_empty() && workspace_id.is_empty() {
         return Err(invalid_binding_reason("binding_selects_nothing"));
     }
     if !profile_id.is_empty() {
-        if over_limit(profile_id, 256) || contains_unsafe(profile_id) || !identifier_like(profile_id) {
+        if over_limit(profile_id, 256)
+            || contains_unsafe(profile_id)
+            || !identifier_like(profile_id)
+        {
             return Err(invalid_binding_reason("selected_profile_malformed"));
         }
         if !input.profile_selectable {
@@ -142,7 +150,10 @@ pub fn validate_binding_mutation(input: &BindingMutationInput) -> Result<(), Bin
         }
     }
     if !workspace_id.is_empty() {
-        if over_limit(workspace_id, 256) || contains_unsafe(workspace_id) || !identifier_like(workspace_id) {
+        if over_limit(workspace_id, 256)
+            || contains_unsafe(workspace_id)
+            || !identifier_like(workspace_id)
+        {
             return Err(invalid_binding_reason("selected_workspace_malformed"));
         }
         if !input.workspace_selectable {
@@ -166,7 +177,9 @@ pub struct CapabilityVisibilityMutationInput {
 pub fn validate_capability_visibility_mutation(
     input: &CapabilityVisibilityMutationInput,
 ) -> Result<(), BindingError> {
-    if input.scope_kind != VisibilityScopeKind::PROFILE && input.scope_kind != VisibilityScopeKind::WORKSPACE {
+    if input.scope_kind != VisibilityScopeKind::PROFILE
+        && input.scope_kind != VisibilityScopeKind::WORKSPACE
+    {
         return Err(invalid_binding_reason("visibility_scope_not_editable"));
     }
     let scope_ref = input.scope_ref.trim();
@@ -290,13 +303,21 @@ mod tests {
     #[test]
     fn validate_binding_mutation_reasons() {
         let cases: Vec<(&str, Box<dyn Fn(&mut BindingMutationInput)>, &str)> = vec![
-            ("cross tenant", Box::new(|b| b.cross_tenant = true), "cross_tenant_reference_denied"),
+            (
+                "cross tenant",
+                Box::new(|b| b.cross_tenant = true),
+                "cross_tenant_reference_denied",
+            ),
             (
                 "bad scope kind",
                 Box::new(|b| b.scope_kind = ScopeKind::new("nope")),
                 "binding_scope_kind_invalid",
             ),
-            ("empty ref", Box::new(|b| b.scope_ref.clear()), "binding_scope_ref_malformed"),
+            (
+                "empty ref",
+                Box::new(|b| b.scope_ref.clear()),
+                "binding_scope_ref_malformed",
+            ),
             (
                 "channel unavailable",
                 Box::new(|b| b.scope_ref_available = false),
@@ -331,7 +352,10 @@ mod tests {
             mutate(&mut input);
             let err = validate_binding_mutation(&input).unwrap_err();
             assert!(
-                matches!(err, BindingError::Validation(_) | BindingError::InvalidBinding),
+                matches!(
+                    err,
+                    BindingError::Validation(_) | BindingError::InvalidBinding
+                ),
                 "{name}: expected validation error, got {err:?}"
             );
             assert_eq!(err.reason_code(), Some(reason), "{name}");
@@ -392,7 +416,9 @@ mod tests {
         let mut bad = ok.clone();
         bad.scope_kind = VisibilityScopeKind::new("channel");
         assert_eq!(
-            validate_capability_visibility_mutation(&bad).unwrap_err().reason_code(),
+            validate_capability_visibility_mutation(&bad)
+                .unwrap_err()
+                .reason_code(),
             Some("visibility_scope_not_editable")
         );
 

@@ -6,6 +6,7 @@ version.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+kura-telemetry.workspace = true
 kura-plugin = { workspace = true }
 kura-context = { workspace = true }
 kura-improvement = { workspace = true }
@@ -21,6 +22,7 @@ hyper = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 parking_lot = { workspace = true }
@@ -56,6 +58,10 @@ kura-evidence = { workspace = true }
 kura-connectors = { workspace = true }
 kura-imtypes = { workspace = true }
 kura-memory = { workspace = true }
+kura-egress = { workspace = true }
+kura-session = { workspace = true }
+kura-swarm = { workspace = true }
+kura-tools = { workspace = true }
 kura-threads = { workspace = true }
 kura-profiles = { workspace = true }
 kura-bindings = { workspace = true }

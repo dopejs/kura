@@ -1,0 +1,17 @@
+[package]
+license.workspace = true
+name = "kura-openai-provider"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+kura-llm.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net"] }

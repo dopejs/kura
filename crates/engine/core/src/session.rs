@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use futures::StreamExt;
 use kura_model_provider::ModelProvider;
 use kura_model_provider::Prompt;
 use kura_model_provider::ProviderError;
@@ -9,7 +10,6 @@ use kura_protocol::EventMsg;
 use kura_protocol::ResponseItem;
 use kura_protocol::Role;
 use kura_protocol::ThreadId;
-use futures::StreamExt;
 
 use crate::tools::ToolInvocation;
 use crate::tools::ToolOutput;
@@ -200,9 +200,9 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kura_model_provider::ToolSpec;
     use futures::stream;
     use futures::stream::BoxStream;
+    use kura_model_provider::ToolSpec;
     use parking_lot::Mutex;
     use std::collections::VecDeque;
     use std::future::Future;

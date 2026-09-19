@@ -13,12 +13,12 @@ use rusqlite::params;
 
 use kura_store::SQLiteStore;
 
+use crate::FIXTURE_TIMESTAMP;
 use crate::records::{
-    slack_event_evidence_document, slack_hosted_setup_document, slack_route_policy_document,
-    slack_smoke_evidence_document, SlackConversationRouteDocument,
+    SlackConversationRouteDocument, slack_event_evidence_document, slack_hosted_setup_document,
+    slack_route_policy_document, slack_smoke_evidence_document,
 };
 use crate::seeds::exec_insert;
-use crate::FIXTURE_TIMESTAMP;
 
 /// Table names expected from the Roadmap 51 storage migration (migration v47).
 pub static R51_SLACK_CHANNEL_CONNECTOR_TABLE_NAMES: [&str; 4] = [
@@ -82,7 +82,25 @@ pub fn seed_r51_slack_channel_connector_rows(
         exec_insert(
             &conn,
             "INSERT INTO slack_hosted_setups (tenant_id, connector_id, connector_kind, display_name, status, terminal_state, oauth_state, route_policy_state, delivery_eligible, workspace_binding_id, reason_code, redaction_status, created_at, updated_at, validated_at, retention_expires_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![tenant_id, connector_id, "slack", "Slack R51", "degraded", "action-required", "grant_valid", "none", 0i64, workspace_binding_id, "blocked_route", "redacted", ts, ts, ts, ts, hosted_document],
+            params![
+                tenant_id,
+                connector_id,
+                "slack",
+                "Slack R51",
+                "degraded",
+                "action-required",
+                "grant_valid",
+                "none",
+                0i64,
+                workspace_binding_id,
+                "blocked_route",
+                "redacted",
+                ts,
+                ts,
+                ts,
+                ts,
+                hosted_document
+            ],
         )?;
 
         let route_document = slack_route_policy_document(
@@ -111,7 +129,16 @@ pub fn seed_r51_slack_channel_connector_rows(
         exec_insert(
             &conn,
             "INSERT INTO slack_route_policies (tenant_id, connector_id, workspace_binding_id, validation_state, reason_code, validated_at, redaction_status, document_json) VALUES (?,?,?,?,?,?,?,?)",
-            params![tenant_id, connector_id, workspace_binding_id, "valid", "healthy", ts, "redacted", route_document],
+            params![
+                tenant_id,
+                connector_id,
+                workspace_binding_id,
+                "valid",
+                "healthy",
+                ts,
+                "redacted",
+                route_document
+            ],
         )?;
 
         let smoke_document = slack_smoke_evidence_document(
@@ -132,7 +159,21 @@ pub fn seed_r51_slack_channel_connector_rows(
         exec_insert(
             &conn,
             "INSERT INTO slack_smoke_evidence (smoke_evidence_id, tenant_id, connector_id, workspace_binding_id, status, authorization_mode, owner, reason, remaining_risk, validated_at, retention_expires_at, redaction_status, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![format!("slack_smoke_{suffix}"), tenant_id, connector_id, workspace_binding_id, "skipped", "unavailable", "operator", "safe_slack_authorization_unavailable", "live smoke skipped", ts, ts, "redacted", smoke_document],
+            params![
+                format!("slack_smoke_{suffix}"),
+                tenant_id,
+                connector_id,
+                workspace_binding_id,
+                "skipped",
+                "unavailable",
+                "operator",
+                "safe_slack_authorization_unavailable",
+                "live smoke skipped",
+                ts,
+                ts,
+                "redacted",
+                smoke_document
+            ],
         )?;
 
         let event_document = slack_event_evidence_document(
@@ -152,7 +193,20 @@ pub fn seed_r51_slack_channel_connector_rows(
         exec_insert(
             &conn,
             "INSERT INTO slack_event_evidence (tenant_id, connector_id, workspace_id, conversation_id, message_id, event_id, route_outcome, reason_code, received_at, retention_expires_at, redaction_status, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![tenant_id, connector_id, format!("workspace_{suffix}"), format!("channel_{suffix}"), format!("message_{suffix}"), format!("event_{suffix}"), "accepted", "accepted", ts, ts, "redacted", event_document],
+            params![
+                tenant_id,
+                connector_id,
+                format!("workspace_{suffix}"),
+                format!("channel_{suffix}"),
+                format!("message_{suffix}"),
+                format!("event_{suffix}"),
+                "accepted",
+                "accepted",
+                ts,
+                ts,
+                "redacted",
+                event_document
+            ],
         )?;
     }
     Ok(fixture)
@@ -166,7 +220,9 @@ pub fn count_r51_slack_channel_connector_rows(
     let mut counts = HashMap::new();
     for table in R51_SLACK_CHANNEL_CONNECTOR_TABLE_NAMES {
         let count: i64 = conn
-            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
             .map_err(|e| format!("count {table}: {e}"))?;
         counts.insert(table.to_string(), count);
     }

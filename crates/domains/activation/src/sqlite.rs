@@ -37,14 +37,6 @@ use serde::Serialize;
 use serde_json::Map;
 use serde_json::Value;
 
-use crate::service::BoxFuture;
-use crate::types::FailureReason;
-use crate::types::FirstAction;
-use crate::types::QuotaBaseline;
-use crate::types::ReadinessItem;
-use crate::types::State;
-use crate::types::Status;
-use crate::types::TestChatMetadata;
 use crate::AuditSink;
 use crate::BillingProjector;
 use crate::ChatRunFailure;
@@ -54,6 +46,14 @@ use crate::StateStore;
 use crate::StoreError;
 use crate::TestChatInput;
 use crate::TestChatResult;
+use crate::service::BoxFuture;
+use crate::types::FailureReason;
+use crate::types::FirstAction;
+use crate::types::QuotaBaseline;
+use crate::types::ReadinessItem;
+use crate::types::State;
+use crate::types::Status;
+use crate::types::TestChatMetadata;
 
 const DEFAULT_ACTIVATION_TEST_CHAT_MESSAGE: &str = "Run a safe hosted activation test.";
 
@@ -106,31 +106,62 @@ fn validate_activation_state_for_storage(state: &State) -> Result<(), String> {
         return Err("activation state activation id is required".to_string());
     }
     if state.principal_id.trim().is_empty() {
-        return Err(format!("activation state {} principal id is required", state.activation_id));
+        return Err(format!(
+            "activation state {} principal id is required",
+            state.activation_id
+        ));
     }
     if state.tenant_id.trim().is_empty() {
-        return Err(format!("activation state {} tenant id is required", state.activation_id));
+        return Err(format!(
+            "activation state {} tenant id is required",
+            state.activation_id
+        ));
     }
     if state.environment_scope.trim().is_empty() {
-        return Err(format!("activation state {} environment scope is required", state.activation_id));
+        return Err(format!(
+            "activation state {} environment scope is required",
+            state.activation_id
+        ));
     }
     if state.status.is_empty() {
-        return Err(format!("activation state {} status is required", state.activation_id));
+        return Err(format!(
+            "activation state {} status is required",
+            state.activation_id
+        ));
     }
     if state.current_step_id.trim().is_empty() {
-        return Err(format!("activation state {} current step id is required", state.activation_id));
+        return Err(format!(
+            "activation state {} current step id is required",
+            state.activation_id
+        ));
     }
-    if state.first_action.action_id.trim().is_empty() || state.first_action.action_kind.trim().is_empty() {
-        return Err(format!("activation state {} first action is required", state.activation_id));
+    if state.first_action.action_id.trim().is_empty()
+        || state.first_action.action_kind.trim().is_empty()
+    {
+        return Err(format!(
+            "activation state {} first action is required",
+            state.activation_id
+        ));
     }
     if state.created_at == DateTime::<Utc>::UNIX_EPOCH || is_go_zero_time(state.created_at) {
-        return Err(format!("activation state {} created at is required", state.activation_id));
+        return Err(format!(
+            "activation state {} created at is required",
+            state.activation_id
+        ));
     }
     if state.updated_at == DateTime::<Utc>::UNIX_EPOCH || is_go_zero_time(state.updated_at) {
-        return Err(format!("activation state {} updated at is required", state.activation_id));
+        return Err(format!(
+            "activation state {} updated at is required",
+            state.activation_id
+        ));
     }
-    if state.last_evaluated_at == DateTime::<Utc>::UNIX_EPOCH || is_go_zero_time(state.last_evaluated_at) {
-        return Err(format!("activation state {} last evaluated at is required", state.activation_id));
+    if state.last_evaluated_at == DateTime::<Utc>::UNIX_EPOCH
+        || is_go_zero_time(state.last_evaluated_at)
+    {
+        return Err(format!(
+            "activation state {} last evaluated at is required",
+            state.activation_id
+        ));
     }
     Ok(())
 }
@@ -178,7 +209,9 @@ fn parse_opt_time(value: Option<String>) -> Result<Option<DateTime<Utc>>, String
 }
 
 /// Go `unmarshalNullableJSON` for a nullable JSON column.
-fn decode_opt_json<T: serde::de::DeserializeOwned>(value: Option<String>) -> Result<Option<T>, String> {
+fn decode_opt_json<T: serde::de::DeserializeOwned>(
+    value: Option<String>,
+) -> Result<Option<T>, String> {
     match value {
         None => Ok(None),
         Some(value) => serde_json::from_str::<Option<T>>(&value)
@@ -313,9 +346,13 @@ fn scan_activation_state(row: &rusqlite::Row<'_>) -> Result<State, String> {
 
 fn get_activation_state(conn: &Connection, activation_id: &str) -> Result<Option<State>, String> {
     let mut stmt = conn
-        .prepare(&format!("{ACTIVATION_STATE_SELECT} WHERE activation_id = ?1"))
+        .prepare(&format!(
+            "{ACTIVATION_STATE_SELECT} WHERE activation_id = ?1"
+        ))
         .map_err(|e| format!("prepare get activation state: {e}"))?;
-    let mut rows = stmt.query(rusqlite::params![activation_id]).map_err(|e| e.to_string())?;
+    let mut rows = stmt
+        .query(rusqlite::params![activation_id])
+        .map_err(|e| e.to_string())?;
     match rows.next().map_err(|e| e.to_string())? {
         Some(row) => scan_activation_state(&row).map(Some),
         None => Ok(None),
@@ -386,12 +423,15 @@ impl StateStore for SqliteActivationStore {
         Box::pin(async move { upsert_activation_state(&conn.lock(), &state).map_err(store_err) })
     }
 
-    fn get_activation_state(&self, activation_id: &str) -> BoxFuture<'_, Result<Option<State>, StoreError>> {
+    fn get_activation_state(
+        &self,
+        activation_id: &str,
+    ) -> BoxFuture<'_, Result<Option<State>, StoreError>> {
         let conn = Arc::clone(&self.conn);
         let activation_id = activation_id.to_string();
-        Box::pin(async move {
-            get_activation_state(&conn.lock(), &activation_id).map_err(store_err)
-        })
+        Box::pin(
+            async move { get_activation_state(&conn.lock(), &activation_id).map_err(store_err) },
+        )
     }
 
     fn get_activation_state_for_principal_tenant(
@@ -410,13 +450,19 @@ impl StateStore for SqliteActivationStore {
 }
 
 impl IdentityRepository for SqliteActivationStore {
-    fn get_principal(&self, principal_id: &str) -> BoxFuture<'_, Result<Option<Principal>, StoreError>> {
+    fn get_principal(
+        &self,
+        principal_id: &str,
+    ) -> BoxFuture<'_, Result<Option<Principal>, StoreError>> {
         let store = Arc::clone(&self.store);
         let principal_id = principal_id.to_string();
         Box::pin(async move { store.lock().get_principal(&principal_id).map_err(store_err) })
     }
 
-    fn list_principals(&self, filter: &PrincipalFilter) -> BoxFuture<'_, Result<Vec<Principal>, StoreError>> {
+    fn list_principals(
+        &self,
+        filter: &PrincipalFilter,
+    ) -> BoxFuture<'_, Result<Vec<Principal>, StoreError>> {
         let store = Arc::clone(&self.store);
         let filter = filter.clone();
         Box::pin(async move { store.lock().list_principals(&filter).map_err(store_err) })
@@ -433,7 +479,10 @@ impl IdentityRepository for SqliteActivationStore {
         Box::pin(async move { store.lock().get_tenant(&tenant_id).map_err(store_err) })
     }
 
-    fn list_tenants(&self, filter: &TenantFilter) -> BoxFuture<'_, Result<Vec<Tenant>, StoreError>> {
+    fn list_tenants(
+        &self,
+        filter: &TenantFilter,
+    ) -> BoxFuture<'_, Result<Vec<Tenant>, StoreError>> {
         let store = Arc::clone(&self.store);
         let filter = filter.clone();
         Box::pin(async move { store.lock().list_tenants(&filter).map_err(store_err) })
@@ -444,7 +493,10 @@ impl IdentityRepository for SqliteActivationStore {
         Box::pin(async move { store.lock().upsert_tenant(&tenant).map_err(store_err) })
     }
 
-    fn list_memberships(&self, filter: &MembershipFilter) -> BoxFuture<'_, Result<Vec<Membership>, StoreError>> {
+    fn list_memberships(
+        &self,
+        filter: &MembershipFilter,
+    ) -> BoxFuture<'_, Result<Vec<Membership>, StoreError>> {
         let store = Arc::clone(&self.store);
         let filter = filter.clone();
         Box::pin(async move { store.lock().list_memberships(&filter).map_err(store_err) })
@@ -452,18 +504,39 @@ impl IdentityRepository for SqliteActivationStore {
 
     fn upsert_membership(&self, membership: Membership) -> BoxFuture<'_, Result<(), StoreError>> {
         let store = Arc::clone(&self.store);
-        Box::pin(async move { store.lock().upsert_membership(&membership).map_err(store_err) })
+        Box::pin(async move {
+            store
+                .lock()
+                .upsert_membership(&membership)
+                .map_err(store_err)
+        })
     }
 
-    fn list_token_tenant_grants(&self, token_id: &str) -> BoxFuture<'_, Result<Vec<TokenTenantGrant>, StoreError>> {
+    fn list_token_tenant_grants(
+        &self,
+        token_id: &str,
+    ) -> BoxFuture<'_, Result<Vec<TokenTenantGrant>, StoreError>> {
         let store = Arc::clone(&self.store);
         let token_id = token_id.to_string();
-        Box::pin(async move { store.lock().list_token_tenant_grants(&token_id).map_err(store_err) })
+        Box::pin(async move {
+            store
+                .lock()
+                .list_token_tenant_grants(&token_id)
+                .map_err(store_err)
+        })
     }
 
-    fn upsert_token_tenant_grant(&self, grant: TokenTenantGrant) -> BoxFuture<'_, Result<(), StoreError>> {
+    fn upsert_token_tenant_grant(
+        &self,
+        grant: TokenTenantGrant,
+    ) -> BoxFuture<'_, Result<(), StoreError>> {
         let store = Arc::clone(&self.store);
-        Box::pin(async move { store.lock().upsert_token_tenant_grant(&grant).map_err(store_err) })
+        Box::pin(async move {
+            store
+                .lock()
+                .upsert_token_tenant_grant(&grant)
+                .map_err(store_err)
+        })
     }
 }
 
@@ -579,15 +652,27 @@ impl ChatRunner for ChatRunnerAdapter {
                 provider: dispatch.provider.clone(),
                 model: dispatch.model.clone(),
                 usage: Map::from_iter([
-                    ("inputTokens".to_string(), Value::from(dispatch.usage.input_tokens)),
-                    ("outputTokens".to_string(), Value::from(dispatch.usage.output_tokens)),
-                    ("totalTokens".to_string(), Value::from(dispatch.usage.total_tokens)),
+                    (
+                        "inputTokens".to_string(),
+                        Value::from(dispatch.usage.input_tokens),
+                    ),
+                    (
+                        "outputTokens".to_string(),
+                        Value::from(dispatch.usage.output_tokens),
+                    ),
+                    (
+                        "totalTokens".to_string(),
+                        Value::from(dispatch.usage.total_tokens),
+                    ),
                 ]),
                 finish_reason: dispatch.finish_reason.clone(),
                 completed_at: Some(completed_at),
             };
             match query_err {
-                Some(err) => Err(ChatRunFailure { result, message: err.to_string() }),
+                Some(err) => Err(ChatRunFailure {
+                    result,
+                    message: err.to_string(),
+                }),
                 None => Ok(result),
             }
         })

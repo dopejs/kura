@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use futures::future::BoxFuture;
 use kura_bindings::{
     CapabilityDecision, EffectiveBindingSelection, EffectiveVisibility, ResolutionOutcome,
     RuntimeBindingEvidence,
@@ -37,7 +38,6 @@ use kura_threads::{
     HandoffSourceReferenceStatus, LifecycleState, RedactionStatus, RuntimeArtifactExcerpt,
     SourceKind, Thread,
 };
-use futures::future::BoxFuture;
 use parking_lot::RwLock;
 
 // ------------------------------------------------------------------------
@@ -82,6 +82,7 @@ impl Provider for TestProvider {
         Box::pin(async move {
             requests.write().push(request.clone());
             Ok(ProviderResponse {
+                tool_calls: Vec::new(),
                 output: format!("reply:{}", request.model),
                 finish_reason: "stop".to_string(),
                 usage: Usage {
@@ -118,6 +119,7 @@ impl Provider for TestProvider {
                 ..Default::default()
             })?;
             Ok(ProviderResponse {
+                tool_calls: Vec::new(),
                 output: format!("reply:{}", request.model),
                 finish_reason: "stop".to_string(),
                 usage: Usage {
@@ -153,6 +155,7 @@ impl Provider for SlowProvider {
             requests.write().push(request.clone());
             tokio::time::sleep(delay).await;
             Ok(ProviderResponse {
+                tool_calls: Vec::new(),
                 output: "late reply".to_string(),
                 finish_reason: "stop".to_string(),
                 usage: Usage::default(),
@@ -1491,7 +1494,6 @@ fn manager_is_send_sync() {
     assert_send_sync::<kura_chat::Service>();
 }
 
-
 // ------------------------------------------------------------------------
 // Cancellation token semantics
 // ------------------------------------------------------------------------
@@ -1530,12 +1532,15 @@ fn sqlite_store_adapter_ports_dispatch_and_defers_continuity() {
     let store = kura_store::SQLiteStore::new(dir.path().to_str().expect("path")).expect("store");
     let now = Utc::now();
     let dispatch = Dispatch {
+        tools: Vec::new(),
+        tool_calls: Vec::new(),
         dispatch_id: "d_1".to_string(),
         provider: "echo".to_string(),
         model: "m".to_string(),
         messages: vec![Message {
             role: MessageRole::User,
             content: "hi".to_string(),
+            ..Message::default()
         }],
         stream: false,
         status: DispatchStatus::Completed,
@@ -1679,12 +1684,15 @@ fn query_input_round_trips_camel_case_wire() {
 fn query_result_round_trips_with_dispatch() {
     let now = Utc::now();
     let dispatch = Dispatch {
+        tools: Vec::new(),
+        tool_calls: Vec::new(),
         dispatch_id: "d_1".to_string(),
         provider: "echo".to_string(),
         model: "m".to_string(),
         messages: vec![Message {
             role: MessageRole::User,
             content: "hi".to_string(),
+            ..Message::default()
         }],
         stream: true,
         status: DispatchStatus::Completed,
@@ -1725,6 +1733,7 @@ fn query_result_round_trips_with_dispatch() {
         continuity_status: Some(ContinuityStatus::Applied),
         continuity_included_count: 1,
         continuity_excluded_count: 0,
+        tool_trace: Vec::new(),
     };
     let json = serde_json::to_value(&result).expect("serialize");
     assert_eq!(json["continuityStatus"], "applied");
@@ -1797,7 +1806,8 @@ fn compile_prompt_messages_lays_out_overlays_skills_and_query() {
         messages[2],
         Message {
             role: MessageRole::User,
-            content: "hello".to_string()
+            content: "hello".to_string(),
+            ..Message::default()
         }
     );
 }
@@ -1810,10 +1820,12 @@ fn inject_continuity_messages_inserts_before_first_user_message() {
         Message {
             role: MessageRole::System,
             content: "sys".to_string(),
+            ..Message::default()
         },
         Message {
             role: MessageRole::User,
             content: "current".to_string(),
+            ..Message::default()
         },
     ];
     let out = inject_continuity_messages(&base, &[turn]);
@@ -1823,7 +1835,8 @@ fn inject_continuity_messages_inserts_before_first_user_message() {
         out[1],
         Message {
             role: MessageRole::User,
-            content: "prior".to_string()
+            content: "prior".to_string(),
+            ..Message::default()
         }
     );
     assert_eq!(out[2], base[1]);
@@ -1833,6 +1846,8 @@ fn inject_continuity_messages_inserts_before_first_user_message() {
 fn terminal_dispatch_event_names_match_go() {
     let now = Utc::now();
     let base = Dispatch {
+        tools: Vec::new(),
+        tool_calls: Vec::new(),
         dispatch_id: "d".to_string(),
         provider: "p".to_string(),
         model: "m".to_string(),
@@ -2011,14 +2026,21 @@ fn turn_start_hook_veto_blocks_the_turn() {
         )
         .expect_err("veto must fail the turn");
     match err {
-        ChatError::HookVetoed { point, plugin_id, reason } => {
+        ChatError::HookVetoed {
+            point,
+            plugin_id,
+            reason,
+        } => {
             assert_eq!(point, kura_plugin::points::CHAT_TURN_START);
             assert_eq!(plugin_id, "policy-plugin");
             assert_eq!(reason, "tenant policy forbids this turn");
         }
         other => panic!("expected HookVetoed, got {other:?}"),
     }
-    assert!(provider.requests.read().is_empty(), "no dispatch reached the provider");
+    assert!(
+        provider.requests.read().is_empty(),
+        "no dispatch reached the provider"
+    );
     assert!(store.dispatches().is_empty(), "no dispatch persisted");
     assert!(
         store
@@ -2143,8 +2165,384 @@ fn stream_runs_hook_points() {
     assert!(!chunks.is_empty());
     assert!(provider.saw_message("session-strategy window"));
     let dispatches = store.dispatches();
-    assert!(dispatches.iter().all(|dispatch| dispatch
+    assert!(dispatches.iter().all(|dispatch| {
+        dispatch
+            .messages
+            .first()
+            .is_some_and(|message| message.content == "session-strategy window")
+    }));
+}
+
+// ------------------------------------------------------------------------
+// Stage 9.0: tool calling in the live chat path
+// ------------------------------------------------------------------------
+
+/// A provider that asks for `memory.lookup` on the first request and answers
+/// in text once it has seen a tool result. Records every request so the test
+/// can assert on what each round showed the model.
+struct ToolCallingProvider {
+    requests: Arc<RwLock<Vec<ProviderRequest>>>,
+    /// How many rounds to keep asking for tools before answering. `usize::MAX`
+    /// means "always ask", for the bound test.
+    ask_rounds: usize,
+}
+
+impl ToolCallingProvider {
+    fn new(ask_rounds: usize) -> Self {
+        ToolCallingProvider {
+            requests: Arc::new(RwLock::new(Vec::new())),
+            ask_rounds,
+        }
+    }
+
+    fn respond(&self, request: &ProviderRequest) -> ProviderResponse {
+        let seen_tool_results = request
+            .messages
+            .iter()
+            .filter(|m| m.role == MessageRole::Tool)
+            .count();
+        // Only ask for a tool when one was offered; a round with no tools is
+        // the loop's "answer now" signal.
+        if !request.tools.is_empty() && seen_tool_results < self.ask_rounds {
+            return ProviderResponse {
+                output: String::new(),
+                finish_reason: "tool_calls".to_string(),
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    total_tokens: 2,
+                },
+                tool_calls: vec![kura_llm::ToolCall {
+                    call_id: format!("call_{seen_tool_results}"),
+                    name: "memory.lookup".to_string(),
+                    arguments: "{\"query\":\"caching\"}".to_string(),
+                }],
+            };
+        }
+        let last_tool = request
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MessageRole::Tool)
+            .map(|m| m.content.clone())
+            .unwrap_or_else(|| "no tool result".to_string());
+        ProviderResponse {
+            output: format!("answer using: {last_tool}"),
+            finish_reason: "stop".to_string(),
+            usage: Usage {
+                input_tokens: 1,
+                output_tokens: 1,
+                total_tokens: 2,
+            },
+            tool_calls: Vec::new(),
+        }
+    }
+}
+
+impl Provider for ToolCallingProvider {
+    fn name(&self) -> &str {
+        "tools-test"
+    }
+
+    fn complete<'a>(
+        &'a self,
+        request: ProviderRequest,
+    ) -> BoxFuture<'a, Result<ProviderResponse, ProviderError>> {
+        Box::pin(async move {
+            self.requests.write().push(request.clone());
+            Ok(self.respond(&request))
+        })
+    }
+
+    fn stream<'a>(
+        &'a self,
+        request: ProviderRequest,
+        mut emit: StreamEmitter<'a>,
+    ) -> BoxFuture<'a, Result<ProviderResponse, ProviderError>> {
+        Box::pin(async move {
+            self.requests.write().push(request.clone());
+            let response = self.respond(&request);
+            if !response.output.is_empty() {
+                emit(kura_llm::StreamChunk {
+                    delta: response.output.clone(),
+                    output: response.output.clone(),
+                    ..Default::default()
+                })?;
+            }
+            Ok(response)
+        })
+    }
+}
+
+/// A host offering one tool and recording calls.
+struct RecordingHost {
+    calls: Arc<RwLock<Vec<kura_llm::ToolCall>>>,
+    outcome: kura_chat::ToolOutcome,
+}
+
+impl kura_chat::ToolHost for RecordingHost {
+    fn available_tools(&self, _ctx: &kura_chat::ToolContext) -> Vec<kura_llm::ToolSpec> {
+        vec![kura_llm::ToolSpec {
+            name: "memory.lookup".to_string(),
+            description: "recall".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+        }]
+    }
+    fn call(
+        &self,
+        _ctx: &kura_chat::ToolContext,
+        call: &kura_llm::ToolCall,
+    ) -> kura_chat::ToolOutcome {
+        self.calls.write().push(call.clone());
+        self.outcome.clone()
+    }
+}
+
+fn tool_service(
+    provider: Arc<ToolCallingProvider>,
+    host: Arc<dyn kura_chat::ToolHost>,
+    max_rounds: usize,
+) -> (Service, Bus, Arc<FakeStore>) {
+    let dispatcher = new_dispatcher(provider);
+    let store = FakeStore::new();
+    let bus = Bus::new();
+    let mut svc = Service::new_service(
+        dispatcher,
+        None,
+        None,
+        Some(bus.clone()),
+        Some(store.clone() as Arc<dyn ChatStore>),
+    );
+    svc.set_tool_host(host, max_rounds);
+    (svc, bus, store)
+}
+
+#[test]
+fn a_tool_call_round_trips_and_every_round_is_logged() {
+    let provider = Arc::new(ToolCallingProvider::new(1));
+    let calls = Arc::new(RwLock::new(Vec::new()));
+    let host = Arc::new(RecordingHost {
+        calls: calls.clone(),
+        outcome: kura_chat::ToolOutcome::ok("Memory[l1 mem_1] caching: write-through"),
+    });
+    let (svc, bus, store) = tool_service(provider.clone(), host, 4);
+
+    let execution = svc
+        .query(
+            base_query("tools-test", "m", "what did I decide about caching?"),
+            &CancellationToken::new(),
+        )
+        .expect("query");
+    assert!(execution.exec_error.is_none());
+    let result = execution.result;
+
+    // The model got the tool result back and answered in text.
+    assert_eq!(
+        result.dispatch.output,
+        "answer using: Memory[l1 mem_1] caching: write-through"
+    );
+    assert!(
+        result.dispatch.tool_calls.is_empty(),
+        "final dispatch is a text answer"
+    );
+    assert_eq!(calls.read().len(), 1);
+    assert_eq!(calls.read()[0].arguments, "{\"query\":\"caching\"}");
+
+    // The trace names the call, its arguments and what the model saw.
+    assert_eq!(result.tool_trace.len(), 1);
+    assert_eq!(result.tool_trace[0].name, "memory.lookup");
+    assert_eq!(result.tool_trace[0].round, 0);
+    assert!(!result.tool_trace[0].is_error);
+    assert_eq!(
+        result.tool_trace[0].output,
+        "Memory[l1 mem_1] caching: write-through"
+    );
+
+    // Model-visible = logged: two rounds, two dispatch records; the second
+    // round's messages carry the assistant tool request and the tool result.
+    let requests = provider.requests.read();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].tools.len(),
+        1,
+        "tools offered on the first round"
+    );
+    let second = &requests[1];
+    let assistant = second
         .messages
-        .first()
-        .is_some_and(|message| message.content == "session-strategy window")));
+        .iter()
+        .find(|m| m.role == MessageRole::Assistant)
+        .expect("assistant tool request replayed");
+    assert_eq!(assistant.tool_calls[0].call_id, "call_0");
+    let tool_msg = second
+        .messages
+        .iter()
+        .find(|m| m.role == MessageRole::Tool)
+        .expect("tool result message");
+    assert_eq!(tool_msg.tool_call_id, "call_0");
+    let dispatches = store.dispatches();
+    assert_eq!(dispatches.len(), 2, "one dispatch record per round");
+    let first = dispatches
+        .iter()
+        .find(|d| d.dispatch_id == result.tool_trace[0].dispatch_id)
+        .expect("first round persisted");
+    assert_eq!(
+        first.tool_calls.len(),
+        1,
+        "the round that asked carries its calls"
+    );
+    assert_eq!(first.tools.len(), 1, "and the tools it was offered");
+    assert_eq!(first.status, DispatchStatus::Completed);
+
+    // The audit event exists and carries the arguments and output.
+    let chat_events = bus.list(&Filter {
+        category: "chat".to_string(),
+        ..Filter::default()
+    });
+    let called: Vec<_> = chat_events
+        .iter()
+        .filter(|e| e.name == "chat.tool.called")
+        .collect();
+    assert_eq!(called.len(), 1);
+    assert_eq!(called[0].payload["name"], "memory.lookup");
+    assert_eq!(called[0].payload["isError"], false);
+    let llm_events = bus.list(&Filter {
+        category: "llm".to_string(),
+        ..Filter::default()
+    });
+    assert_eq!(llm_events.len(), 4, "requested+completed per round");
+}
+
+#[test]
+fn the_tool_loop_is_bounded_and_the_last_round_offers_no_tools() {
+    // A model that never stops asking for tools.
+    let provider = Arc::new(ToolCallingProvider::new(usize::MAX));
+    let calls = Arc::new(RwLock::new(Vec::new()));
+    let host = Arc::new(RecordingHost {
+        calls: calls.clone(),
+        outcome: kura_chat::ToolOutcome::ok("r"),
+    });
+    let (svc, _bus, _store) = tool_service(provider.clone(), host, 2);
+
+    let execution = svc
+        .query(
+            base_query("tools-test", "m", "loop"),
+            &CancellationToken::new(),
+        )
+        .expect("query");
+    assert!(execution.exec_error.is_none());
+    let result = execution.result;
+    assert_eq!(calls.read().len(), 2, "exactly max_rounds tool rounds ran");
+    assert_eq!(result.tool_trace.len(), 2);
+    let requests = provider.requests.read();
+    assert_eq!(
+        requests.len(),
+        3,
+        "two tool rounds plus the forced text round"
+    );
+    assert!(
+        requests[2].tools.is_empty(),
+        "the final round offers no tools"
+    );
+    assert!(result.dispatch.tool_calls.is_empty());
+    assert!(result.dispatch.output.starts_with("answer using:"));
+}
+
+#[test]
+fn a_hook_veto_reaches_the_model_as_a_tool_error_and_the_host_is_not_called() {
+    struct Veto;
+    impl kura_plugin::Hook for Veto {
+        fn handle(&self, payload: &mut serde_json::Value) -> kura_plugin::HookOutcome {
+            assert_eq!(payload["name"], "memory.lookup");
+            kura_plugin::HookOutcome::Halt("policy: no recall in this room".to_string())
+        }
+    }
+    let provider = Arc::new(ToolCallingProvider::new(1));
+    let calls = Arc::new(RwLock::new(Vec::new()));
+    let host = Arc::new(RecordingHost {
+        calls: calls.clone(),
+        outcome: kura_chat::ToolOutcome::ok("should not be seen"),
+    });
+    let (mut svc, bus, _store) = tool_service(provider.clone(), host, 4);
+    let hooks = Arc::new(kura_plugin::HookBus::new());
+    hooks.register(kura_plugin::points::CHAT_TOOL_CALL, "veto", Arc::new(Veto));
+    svc.set_hooks(hooks);
+
+    let execution = svc
+        .query(
+            base_query("tools-test", "m", "recall"),
+            &CancellationToken::new(),
+        )
+        .expect("query");
+    let result = execution.result;
+    assert!(calls.read().is_empty(), "the host never ran");
+    assert_eq!(result.tool_trace.len(), 1);
+    assert!(result.tool_trace[0].is_error);
+    assert!(
+        result.tool_trace[0]
+            .output
+            .contains("vetoed by plugin veto")
+    );
+    // The model saw the error and answered anyway.
+    assert!(result.dispatch.output.contains("error: tool call vetoed"));
+    let vetoes = bus
+        .list(&Filter {
+            category: "chat".to_string(),
+            ..Filter::default()
+        })
+        .into_iter()
+        .filter(|e| e.name == "chat.hook.vetoed")
+        .count();
+    assert_eq!(vetoes, 1);
+}
+
+#[test]
+fn without_a_host_the_turn_is_one_dispatch_with_no_tools() {
+    let provider = Arc::new(ToolCallingProvider::new(1));
+    let dispatcher = new_dispatcher(provider.clone());
+    let svc = service(dispatcher, None, None);
+    let execution = svc
+        .query(
+            base_query("tools-test", "m", "plain"),
+            &CancellationToken::new(),
+        )
+        .expect("query");
+    assert!(execution.result.tool_trace.is_empty());
+    let requests = provider.requests.read();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].tools.is_empty());
+}
+
+#[test]
+fn streaming_turns_run_the_tool_loop_too() {
+    let provider = Arc::new(ToolCallingProvider::new(1));
+    let calls = Arc::new(RwLock::new(Vec::new()));
+    let host = Arc::new(RecordingHost {
+        calls: calls.clone(),
+        outcome: kura_chat::ToolOutcome::ok("streamed memory"),
+    });
+    let (svc, _bus, _store) = tool_service(provider.clone(), host, 4);
+    let chunks = Arc::new(RwLock::new(Vec::<StreamChunk>::new()));
+    let sink = chunks.clone();
+    let execution = svc
+        .stream(
+            base_query("tools-test", "m", "stream me"),
+            &CancellationToken::new(),
+            Some(move |chunk: StreamChunk| {
+                sink.write().push(chunk);
+                Ok(())
+            }),
+        )
+        .expect("stream");
+    assert!(execution.exec_error.is_none());
+    assert_eq!(calls.read().len(), 1);
+    assert_eq!(
+        execution.result.dispatch.output,
+        "answer using: streamed memory"
+    );
+    let chunks = chunks.read();
+    assert!(chunks.iter().any(|c| c.delta.contains("streamed memory")));
+    // Chunks of the final round carry the final round's dispatch id.
+    let final_id = &execution.result.dispatch.dispatch_id;
+    assert!(chunks.iter().any(|c| &c.dispatch_id == final_id));
 }

@@ -10,9 +10,9 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use kura_store::{
     ConnectorAccountBindingSummary, DiscordDestinationValidationRecord, DiscordHostedSetupRecord,
     DiscordSmokeEvidenceRecord, MatrixConversationRouteRecord, MatrixEventEvidenceRecord,
-    MatrixHostedSetupRecord, MatrixRoutePolicyRecord, MatrixSmokeEvidenceRecord,
+    MatrixHostedSetupRecord, MatrixRoutePolicyRecord, MatrixSmokeEvidenceRecord, SQLiteStore,
     SlackConversationRouteRecord, SlackEventEvidenceRecord, SlackHostedSetupRecord,
-    SlackRoutePolicyRecord, SlackSmokeEvidenceRecord, SlackWorkspaceBinding, SQLiteStore,
+    SlackRoutePolicyRecord, SlackSmokeEvidenceRecord, SlackWorkspaceBinding,
     TelegramAllowmentRecord, TelegramHostedSetupRecord, TelegramSmokeEvidenceRecord,
     TelegramUpdateEvidenceRecord,
 };
@@ -24,7 +24,9 @@ fn temp_dir(name: &str) -> String {
 }
 
 fn evidence(kv: &[(&str, &str)]) -> HashMap<String, String> {
-    kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    kv.iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
 }
 
 fn at(h: u32) -> DateTime<Utc> {
@@ -85,10 +87,18 @@ fn discord_setup_and_destinations_round_trip_tenant_safe() {
     assert_eq!(got.delivery_mode, "gateway");
     // Destinations are re-read from their own table (authoritative).
     assert_eq!(got.destinations.len(), 1);
-    assert_eq!(got.destinations[0].safe_evidence.get("permission"), Some(&"send_messages".to_string()));
+    assert_eq!(
+        got.destinations[0].safe_evidence.get("permission"),
+        Some(&"send_messages".to_string())
+    );
 
     // Cross-tenant lookup is empty.
-    assert!(store.get_discord_hosted_setup("ten_other", "discord-main").unwrap().is_none());
+    assert!(
+        store
+            .get_discord_hosted_setup("ten_other", "discord-main")
+            .unwrap()
+            .is_none()
+    );
 
     // Upsert again through the ON CONFLICT path with a changed state.
     store
@@ -118,7 +128,10 @@ fn discord_setup_and_destinations_round_trip_tenant_safe() {
             }
         })
         .unwrap();
-    let got = store.get_discord_hosted_setup("ten_discord", "discord-main").unwrap().unwrap();
+    let got = store
+        .get_discord_hosted_setup("ten_discord", "discord-main")
+        .unwrap()
+        .unwrap();
     assert_eq!(got.readiness_state, "hosted_ready");
     assert!(got.hosted_ready);
 }
@@ -151,13 +164,18 @@ fn discord_smoke_evidence_retention_expires() {
         .unwrap()
         .expect("smoke found");
     assert_eq!(latest.status, "skipped");
-    assert_eq!(latest.safe_evidence.get("policy"), Some(&"structured_skip".to_string()));
+    assert_eq!(
+        latest.safe_evidence.get("policy"),
+        Some(&"structured_skip".to_string())
+    );
 
     // After the retention horizon the evidence is no longer visible.
-    assert!(store
-        .latest_discord_smoke_evidence("ten_discord", "discord-main", now + Duration::days(91))
-        .unwrap()
-        .is_none());
+    assert!(
+        store
+            .latest_discord_smoke_evidence("ten_discord", "discord-main", now + Duration::days(91))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -253,14 +271,27 @@ fn telegram_setup_allowments_smoke_and_updates_round_trip_tenant_safe() {
     assert_eq!(got.terminal_state, "ready");
     assert!(got.hosted_ready && got.delivery_eligible);
     assert_eq!(got.allowments.len(), 1);
-    assert_eq!(got.allowments[0].safe_evidence.get("scope"), Some(&"direct_chat".to_string()));
+    assert_eq!(
+        got.allowments[0].safe_evidence.get("scope"),
+        Some(&"direct_chat".to_string())
+    );
     let binding = got.account_binding.expect("account binding round-trips");
     assert_eq!(binding.connector_account_id, "telegram_bot_42");
     assert_eq!(binding.provider_account_hint, "kura_test_bot");
 
     // Cross-tenant lookups are empty.
-    assert!(store.get_telegram_hosted_setup("ten_other", "telegram-main").unwrap().is_none());
-    assert!(store.list_telegram_allowments("ten_other", "telegram-main").unwrap().is_empty());
+    assert!(
+        store
+            .get_telegram_hosted_setup("ten_other", "telegram-main")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .list_telegram_allowments("ten_other", "telegram-main")
+            .unwrap()
+            .is_empty()
+    );
 
     let smoke = store
         .latest_telegram_smoke_evidence("ten_telegram", "telegram-main", now)
@@ -273,11 +304,16 @@ fn telegram_setup_allowments_smoke_and_updates_round_trip_tenant_safe() {
         .unwrap();
     assert_eq!(updates.len(), 1);
     assert_eq!(updates[0].chat_id, "chat_redacted");
-    assert_eq!(updates[0].safe_evidence.get("identityRule"), Some(&"telegram_chat_message_id".to_string()));
-    assert!(store
-        .list_telegram_update_evidence("ten_other", "telegram-main", now, 10)
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        updates[0].safe_evidence.get("identityRule"),
+        Some(&"telegram_chat_message_id".to_string())
+    );
+    assert!(
+        store
+            .list_telegram_update_evidence("ten_other", "telegram-main", now, 10)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -379,27 +415,58 @@ fn slack_setup_route_policy_smoke_and_events_round_trip_tenant_safe() {
         })
         .unwrap();
 
-    let got = store.get_slack_hosted_setup("ten_slack", "slack-main").unwrap().expect("setup found");
+    let got = store
+        .get_slack_hosted_setup("ten_slack", "slack-main")
+        .unwrap()
+        .expect("setup found");
     assert_eq!(got.terminal_state, "action-required");
-    let binding = got.workspace_binding.expect("workspace binding round-trips");
+    let binding = got
+        .workspace_binding
+        .expect("workspace binding round-trips");
     assert_eq!(binding.workspace_id, "workspace_redacted");
     // The route policy is re-read from its own table.
     let policy = got.route_policy.expect("route policy attached");
     assert_eq!(policy.selected_channels.len(), 1);
-    assert_eq!(policy.selected_channels[0].safe_evidence.get("membership"), Some(&"present".to_string()));
+    assert_eq!(
+        policy.selected_channels[0].safe_evidence.get("membership"),
+        Some(&"present".to_string())
+    );
     assert_eq!(policy.allowed_dm_users, vec!["user_hash_1".to_string()]);
     assert_eq!(policy.mention_gate, "agent_mention_required");
 
-    assert!(store.get_slack_hosted_setup("ten_other", "slack-main").unwrap().is_none());
-    assert!(store.get_slack_route_policy("ten_other", "slack-main").unwrap().is_none());
+    assert!(
+        store
+            .get_slack_hosted_setup("ten_other", "slack-main")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .get_slack_route_policy("ten_other", "slack-main")
+            .unwrap()
+            .is_none()
+    );
 
-    let smoke = store.latest_slack_smoke_evidence("ten_slack", "slack-main", now).unwrap().expect("smoke found");
+    let smoke = store
+        .latest_slack_smoke_evidence("ten_slack", "slack-main", now)
+        .unwrap()
+        .expect("smoke found");
     assert_eq!(smoke.authorization_mode, "unavailable");
 
-    let events = store.list_slack_event_evidence("ten_slack", "slack-main", now, 10).unwrap();
+    let events = store
+        .list_slack_event_evidence("ten_slack", "slack-main", now, 10)
+        .unwrap();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].safe_evidence.get("identityRule"), Some(&"slack_workspace_conversation_message_id".to_string()));
-    assert!(store.list_slack_event_evidence("ten_other", "slack-main", now, 10).unwrap().is_empty());
+    assert_eq!(
+        events[0].safe_evidence.get("identityRule"),
+        Some(&"slack_workspace_conversation_message_id".to_string())
+    );
+    assert!(
+        store
+            .list_slack_event_evidence("ten_other", "slack-main", now, 10)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -441,7 +508,10 @@ fn slack_hosted_setup_lifecycle_repair_states() {
             ..base.clone()
         };
         store.save_slack_hosted_setup(&record).unwrap();
-        let got = store.get_slack_hosted_setup("ten_slack_lifecycle", "slack-main").unwrap().unwrap();
+        let got = store
+            .get_slack_hosted_setup("ten_slack_lifecycle", "slack-main")
+            .unwrap()
+            .unwrap();
         assert_eq!(got.terminal_state, terminal);
         assert_eq!(got.reason_code, reason);
         assert!(!got.retention_expires_at.to_rfc3339().is_empty());
@@ -545,19 +615,35 @@ fn matrix_setup_lifecycle_updates_terminal_state_and_route_policy() {
         })
         .unwrap();
 
-    let got = store.get_matrix_hosted_setup("ten_matrix_setup", "matrix-main").unwrap().expect("setup found");
+    let got = store
+        .get_matrix_hosted_setup("ten_matrix_setup", "matrix-main")
+        .unwrap()
+        .expect("setup found");
     assert_eq!(got.terminal_state, "ready");
     assert!(got.delivery_eligible);
     assert_eq!(got.bot_credential_state, "valid");
     let policy = got.route_policy.expect("route policy attached");
     assert_eq!(policy.selected_rooms.len(), 1);
-    assert_eq!(policy.selected_rooms[0].safe_evidence.get("membership"), Some(&"joined".to_string()));
+    assert_eq!(
+        policy.selected_rooms[0].safe_evidence.get("membership"),
+        Some(&"joined".to_string())
+    );
 
-    assert!(store.get_matrix_hosted_setup("ten_other", "matrix-main").unwrap().is_none());
-    let events = store.list_matrix_event_evidence("ten_matrix_setup", "matrix-main", now, 10).unwrap();
+    assert!(
+        store
+            .get_matrix_hosted_setup("ten_other", "matrix-main")
+            .unwrap()
+            .is_none()
+    );
+    let events = store
+        .list_matrix_event_evidence("ten_matrix_setup", "matrix-main", now, 10)
+        .unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].sync_batch_id, "batch_redacted");
-    assert_eq!(events[0].safe_evidence.get("identityRule"), Some(&"matrix_hs_conversation_event_id".to_string()));
+    assert_eq!(
+        events[0].safe_evidence.get("identityRule"),
+        Some(&"matrix_hs_conversation_event_id".to_string())
+    );
 
     let smoke = MatrixSmokeEvidenceRecord {
         smoke_evidence_id: "matrix_smoke_1".to_string(),
@@ -575,10 +661,19 @@ fn matrix_setup_lifecycle_updates_terminal_state_and_route_policy() {
         safe_evidence: evidence(&[("policy", "structured_skip")]),
     };
     store.save_matrix_smoke_evidence(&smoke).unwrap();
-    let latest = store.latest_matrix_smoke_evidence("ten_matrix_setup", "matrix-main", now).unwrap().expect("smoke found");
-    assert_eq!(latest.authorization_mode, "unavailable");
-    assert!(store
-        .latest_matrix_smoke_evidence("ten_matrix_setup", "matrix-main", now + Duration::days(91))
+    let latest = store
+        .latest_matrix_smoke_evidence("ten_matrix_setup", "matrix-main", now)
         .unwrap()
-        .is_none());
+        .expect("smoke found");
+    assert_eq!(latest.authorization_mode, "unavailable");
+    assert!(
+        store
+            .latest_matrix_smoke_evidence(
+                "ten_matrix_setup",
+                "matrix-main",
+                now + Duration::days(91)
+            )
+            .unwrap()
+            .is_none()
+    );
 }

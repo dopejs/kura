@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 kura-plugin = { workspace = true }
 kura-session = { workspace = true }
+kura-threads = { workspace = true }
 kura-improvement = { workspace = true }
 kura-context = { workspace = true }
 uuid = { workspace = true }
@@ -37,6 +38,10 @@ kura-integrations = { workspace = true }
 kura-calendar = { workspace = true }
 kura-mail = { workspace = true }
 kura-reminders = { workspace = true }
+kura-egress = { workspace = true }
+kura-openai-provider = { workspace = true }
+kura-swarm = { workspace = true }
+kura-tools = { workspace = true }
 kura-triage = { workspace = true }
 kura-memory.workspace = true
 kura-routine = { workspace = true }

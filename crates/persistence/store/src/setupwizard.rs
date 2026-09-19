@@ -8,14 +8,11 @@
 
 use rusqlite::{params, params_from_iter, types::Value};
 
-use crate::crud::{enum_str, now_rfc3339, null_string};
 use crate::SQLiteStore;
+use crate::crud::{enum_str, now_rfc3339, null_string};
 
 impl SQLiteStore {
-    pub fn save_setup_session(
-        &self,
-        item: &kura_setupwizard::SetupSession,
-    ) -> Result<(), String> {
+    pub fn save_setup_session(&self, item: &kura_setupwizard::SetupSession) -> Result<(), String> {
         let document_json =
             serde_json::to_string(item).map_err(|e| format!("marshal setup session: {e}"))?;
         self.conn
@@ -65,9 +62,8 @@ impl SQLiteStore {
         tenant_id: &str,
         session_id: &str,
     ) -> Result<Option<kura_setupwizard::SetupSession>, String> {
-        let mut sql = String::from(
-            "SELECT document_json FROM setup_sessions WHERE setup_session_id = ?",
-        );
+        let mut sql =
+            String::from("SELECT document_json FROM setup_sessions WHERE setup_session_id = ?");
         let mut args: Vec<Value> = vec![Value::Text(session_id.trim().to_string())];
         if !tenant_id.trim().is_empty() {
             sql.push_str(" AND tenant_id = ?");
@@ -77,7 +73,9 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("get setup session {session_id}: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -97,12 +95,14 @@ impl SQLiteStore {
                 "SELECT document_json FROM setup_sessions WHERE tenant_id = ?1 ORDER BY updated_at DESC, setup_session_id DESC",
             )
             .map_err(|e| format!("list setup sessions: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id.trim()]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id.trim()])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
-            let item = serde_json::from_str(&raw)
-                .map_err(|e| format!("decode setup session: {e}"))?;
+            let item =
+                serde_json::from_str(&raw).map_err(|e| format!("decode setup session: {e}"))?;
             items.push(item);
         }
         Ok(items)
@@ -163,12 +163,14 @@ impl SQLiteStore {
                 "SELECT document_json FROM setup_attempts WHERE setup_session_id = ?1 AND tenant_id = ?2 ORDER BY created_at ASC, attempt_id ASC",
             )
             .map_err(|e| format!("list setup attempts: {e}"))?;
-        let mut rows = stmt.query(params![session_id.trim(), tenant_id.trim()]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![session_id.trim(), tenant_id.trim()])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
-            let item = serde_json::from_str(&raw)
-                .map_err(|e| format!("decode setup attempt: {e}"))?;
+            let item =
+                serde_json::from_str(&raw).map_err(|e| format!("decode setup attempt: {e}"))?;
             items.push(item);
         }
         Ok(items)
@@ -210,7 +212,10 @@ impl kura_setupwizard::Store for SetupWizardStoreHandle {
         &self,
         tenant_id: &str,
         session_id: &str,
-    ) -> kura_setupwizard::BoxFuture<'_, Result<Option<kura_setupwizard::SetupSession>, kura_setupwizard::SetupError>> {
+    ) -> kura_setupwizard::BoxFuture<
+        '_,
+        Result<Option<kura_setupwizard::SetupSession>, kura_setupwizard::SetupError>,
+    > {
         let tenant_id = tenant_id.to_string();
         let session_id = session_id.to_string();
         Box::pin(async move {
@@ -224,7 +229,10 @@ impl kura_setupwizard::Store for SetupWizardStoreHandle {
     fn list_setup_sessions(
         &self,
         tenant_id: &str,
-    ) -> kura_setupwizard::BoxFuture<'_, Result<Vec<kura_setupwizard::SetupSession>, kura_setupwizard::SetupError>> {
+    ) -> kura_setupwizard::BoxFuture<
+        '_,
+        Result<Vec<kura_setupwizard::SetupSession>, kura_setupwizard::SetupError>,
+    > {
         let tenant_id = tenant_id.to_string();
         Box::pin(async move {
             let store = self.0.lock();
@@ -250,7 +258,10 @@ impl kura_setupwizard::Store for SetupWizardStoreHandle {
         &self,
         tenant_id: &str,
         session_id: &str,
-    ) -> kura_setupwizard::BoxFuture<'_, Result<Vec<kura_setupwizard::SetupAttempt>, kura_setupwizard::SetupError>> {
+    ) -> kura_setupwizard::BoxFuture<
+        '_,
+        Result<Vec<kura_setupwizard::SetupAttempt>, kura_setupwizard::SetupError>,
+    > {
         let tenant_id = tenant_id.to_string();
         let session_id = session_id.to_string();
         Box::pin(async move {

@@ -37,7 +37,7 @@ use kura_router as router_domain;
 use kura_runtime as runtime;
 
 use crate::error::ApiError;
-use crate::middleware::{environment_scope_from_config, TenantContext};
+use crate::middleware::{TenantContext, environment_scope_from_config};
 use crate::state::AppState;
 
 use super::decode_json_required;
@@ -46,18 +46,51 @@ use super::decode_json_required;
 #[must_use]
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/v1/connectors", get(list_connectors).post(register_connector))
+        .route(
+            "/v1/connectors",
+            get(list_connectors).post(register_connector),
+        )
         .route("/v1/connectors/{connector_id}", get(get_connector))
-        .route("/v1/connectors/{connector_id}/{action}", post(connector_action))
-        .route("/v1/connectors/{connector_id}/diagnostics", get(connector_diagnostics))
-        .route("/v1/connectors/{connector_id}/discord-setup", get(discord_setup))
-        .route("/v1/connectors/{connector_id}/discord-smoke", get(discord_smoke))
-        .route("/v1/connectors/{connector_id}/telegram-setup", get(telegram_setup))
-        .route("/v1/connectors/{connector_id}/telegram-smoke", get(telegram_smoke))
-        .route("/v1/connectors/{connector_id}/slack-setup", get(slack_setup))
-        .route("/v1/connectors/{connector_id}/slack-smoke", get(slack_smoke))
-        .route("/v1/connectors/{connector_id}/matrix-setup", get(matrix_setup))
-        .route("/v1/connectors/{connector_id}/matrix-smoke", get(matrix_smoke))
+        .route(
+            "/v1/connectors/{connector_id}/{action}",
+            post(connector_action),
+        )
+        .route(
+            "/v1/connectors/{connector_id}/diagnostics",
+            get(connector_diagnostics),
+        )
+        .route(
+            "/v1/connectors/{connector_id}/discord-setup",
+            get(discord_setup),
+        )
+        .route(
+            "/v1/connectors/{connector_id}/discord-smoke",
+            get(discord_smoke),
+        )
+        .route(
+            "/v1/connectors/{connector_id}/telegram-setup",
+            get(telegram_setup),
+        )
+        .route(
+            "/v1/connectors/{connector_id}/telegram-smoke",
+            get(telegram_smoke),
+        )
+        .route(
+            "/v1/connectors/{connector_id}/slack-setup",
+            get(slack_setup),
+        )
+        .route(
+            "/v1/connectors/{connector_id}/slack-smoke",
+            get(slack_smoke),
+        )
+        .route(
+            "/v1/connectors/{connector_id}/matrix-setup",
+            get(matrix_setup),
+        )
+        .route(
+            "/v1/connectors/{connector_id}/matrix-smoke",
+            get(matrix_smoke),
+        )
         .route(
             "/v1/connectors/{connector_id}/ingress/messages",
             post(ingress_messages),
@@ -139,7 +172,10 @@ struct CredentialDenial {
 fn credential_denial(reason_code: &'static str) -> Response {
     (
         StatusCode::FORBIDDEN,
-        Json(CredentialDenial { error: "credential_access_denied", reason_code }),
+        Json(CredentialDenial {
+            error: "credential_access_denied",
+            reason_code,
+        }),
     )
         .into_response()
 }
@@ -173,10 +209,7 @@ fn persist_connector(state: &AppState, connector: &connectors::Connector) -> Res
         .map_err(ApiError::from_store)
 }
 
-fn publish_event(
-    state: &AppState,
-    mut event: events::Event,
-) -> Result<events::Event, ApiError> {
+fn publish_event(state: &AppState, mut event: events::Event) -> Result<events::Event, ApiError> {
     event.environment_scope = environment_scope_from_config(&state.config);
     let stored = state
         .store
@@ -224,8 +257,14 @@ fn project_connector_resource(mut connector: connectors::Connector) -> connector
         .collect();
     if connector.account_binding.is_empty() && !connector.tenant_id.is_empty() {
         let mut binding = serde_json::Map::new();
-        binding.insert("tenantId".to_string(), serde_json::json!(connector.tenant_id));
-        binding.insert("connectorId".to_string(), serde_json::json!(connector.connector_id));
+        binding.insert(
+            "tenantId".to_string(),
+            serde_json::json!(connector.tenant_id),
+        );
+        binding.insert(
+            "connectorId".to_string(),
+            serde_json::json!(connector.connector_id),
+        );
         binding.insert(
             "connectorAccountId".to_string(),
             serde_json::json!(connector.connector_id),
@@ -263,7 +302,11 @@ async fn list_connectors(
 ) -> Result<Json<ConnectorListResponse>, ApiError> {
     let supervisor = supervisor(&state)?;
     Ok(Json(ConnectorListResponse {
-        items: supervisor.list().into_iter().map(project_connector_resource).collect(),
+        items: supervisor
+            .list()
+            .into_iter()
+            .map(project_connector_resource)
+            .collect(),
     }))
 }
 
@@ -275,22 +318,33 @@ async fn register_connector(
 ) -> Result<(StatusCode, Json<connectors::Connector>), ApiError> {
     let input: connectors::RegisterInput = decode_json_required(&body)?;
     let supervisor = supervisor(&state)?;
-    let (connector, created) = supervisor
-        .register(input)
-        .map_err(map_connectors_error)?;
+    let (connector, created) = supervisor.register(input).map_err(map_connectors_error)?;
     persist_connector(&state, &connector)?;
     let mut payload = serde_json::Map::new();
-    payload.insert("tenantId".to_string(), serde_json::json!(connector.tenant_id));
+    payload.insert(
+        "tenantId".to_string(),
+        serde_json::json!(connector.tenant_id),
+    );
     payload.insert("kind".to_string(), serde_json::json!(connector.kind));
     payload.insert("status".to_string(), json_value(&connector.status));
     payload.insert("created".to_string(), serde_json::json!(created));
-    payload.insert("displayName".to_string(), serde_json::json!(connector.display_name));
-    payload.insert("secretRefs".to_string(), serde_json::json!(connector.secret_refs));
+    payload.insert(
+        "displayName".to_string(),
+        serde_json::json!(connector.display_name),
+    );
+    payload.insert(
+        "secretRefs".to_string(),
+        serde_json::json!(connector.secret_refs),
+    );
     publish_event(
         &state,
         connector_event("connector.registered", &connector.connector_id, payload),
     )?;
-    let status = if created { StatusCode::CREATED } else { StatusCode::OK };
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
     Ok((status, Json(project_connector_resource(connector))))
 }
 
@@ -326,7 +380,10 @@ async fn connector_action(
                 .report_health(connector_id, input)
                 .map_err(map_connectors_error)?;
             let mut payload = serde_json::Map::new();
-            payload.insert("tenantId".to_string(), serde_json::json!(connector.tenant_id));
+            payload.insert(
+                "tenantId".to_string(),
+                serde_json::json!(connector.tenant_id),
+            );
             payload.insert("status".to_string(), json_value(&connector.status));
             (connector, "connector.health_changed", payload)
         }
@@ -336,9 +393,15 @@ async fn connector_action(
                 .report_failure(connector_id, input)
                 .map_err(map_connectors_error)?;
             let mut payload = serde_json::Map::new();
-            payload.insert("tenantId".to_string(), serde_json::json!(connector.tenant_id));
+            payload.insert(
+                "tenantId".to_string(),
+                serde_json::json!(connector.tenant_id),
+            );
             payload.insert("status".to_string(), json_value(&connector.status));
-            payload.insert("failureCount".to_string(), serde_json::json!(connector.failure_count));
+            payload.insert(
+                "failureCount".to_string(),
+                serde_json::json!(connector.failure_count),
+            );
             payload.insert(
                 "backoffSeconds".to_string(),
                 serde_json::json!(connector.backoff_seconds),
@@ -354,9 +417,15 @@ async fn connector_action(
                 .restart(connector_id)
                 .map_err(map_connectors_error)?;
             let mut payload = serde_json::Map::new();
-            payload.insert("tenantId".to_string(), serde_json::json!(connector.tenant_id));
+            payload.insert(
+                "tenantId".to_string(),
+                serde_json::json!(connector.tenant_id),
+            );
             payload.insert("status".to_string(), json_value(&connector.status));
-            payload.insert("restartCount".to_string(), serde_json::json!(connector.restart_count));
+            payload.insert(
+                "restartCount".to_string(),
+                serde_json::json!(connector.restart_count),
+            );
             payload.insert(
                 "disabledReason".to_string(),
                 serde_json::json!(connector.disabled_reason),
@@ -396,7 +465,10 @@ fn hosted_read_tenant(
     }
     match supervisor(state) {
         Ok(supervisor) => {
-            if supervisor.get_for_tenant(connector_id, &tc.tenant_id).is_none() {
+            if supervisor
+                .get_for_tenant(connector_id, &tc.tenant_id)
+                .is_none()
+            {
                 return Err(ApiError::NotFound("not found".to_string()).into_response());
             }
         }
@@ -423,11 +495,11 @@ async fn connector_diagnostics(
         Ok(tenant_id) => tenant_id,
         Err(response) => return response,
     };
-    match state
-        .store
-        .lock()
-        .list_connector_diagnostic_states(&tenant_id, connector_id.trim(), Utc::now())
-    {
+    match state.store_pool.read().list_connector_diagnostic_states(
+        &tenant_id,
+        connector_id.trim(),
+        Utc::now(),
+    ) {
         Ok(items) => Json(serde_json::json!({ "items": items })).into_response(),
         Err(err) => ApiError::from_store(err).into_response(),
     }
@@ -472,14 +544,46 @@ macro_rules! hosted_smoke_read {
     };
 }
 
-hosted_setup_read!(discord_setup, get_discord_hosted_setup, "GET /v1/connectors/{id}/discord-setup.");
-hosted_smoke_read!(discord_smoke, latest_discord_smoke_evidence, "GET /v1/connectors/{id}/discord-smoke.");
-hosted_setup_read!(telegram_setup, get_telegram_hosted_setup, "GET /v1/connectors/{id}/telegram-setup.");
-hosted_smoke_read!(telegram_smoke, latest_telegram_smoke_evidence, "GET /v1/connectors/{id}/telegram-smoke.");
-hosted_setup_read!(slack_setup, get_slack_hosted_setup, "GET /v1/connectors/{id}/slack-setup.");
-hosted_smoke_read!(slack_smoke, latest_slack_smoke_evidence, "GET /v1/connectors/{id}/slack-smoke.");
-hosted_setup_read!(matrix_setup, get_matrix_hosted_setup, "GET /v1/connectors/{id}/matrix-setup.");
-hosted_smoke_read!(matrix_smoke, latest_matrix_smoke_evidence, "GET /v1/connectors/{id}/matrix-smoke.");
+hosted_setup_read!(
+    discord_setup,
+    get_discord_hosted_setup,
+    "GET /v1/connectors/{id}/discord-setup."
+);
+hosted_smoke_read!(
+    discord_smoke,
+    latest_discord_smoke_evidence,
+    "GET /v1/connectors/{id}/discord-smoke."
+);
+hosted_setup_read!(
+    telegram_setup,
+    get_telegram_hosted_setup,
+    "GET /v1/connectors/{id}/telegram-setup."
+);
+hosted_smoke_read!(
+    telegram_smoke,
+    latest_telegram_smoke_evidence,
+    "GET /v1/connectors/{id}/telegram-smoke."
+);
+hosted_setup_read!(
+    slack_setup,
+    get_slack_hosted_setup,
+    "GET /v1/connectors/{id}/slack-setup."
+);
+hosted_smoke_read!(
+    slack_smoke,
+    latest_slack_smoke_evidence,
+    "GET /v1/connectors/{id}/slack-smoke."
+);
+hosted_setup_read!(
+    matrix_setup,
+    get_matrix_hosted_setup,
+    "GET /v1/connectors/{id}/matrix-setup."
+);
+hosted_smoke_read!(
+    matrix_smoke,
+    latest_matrix_smoke_evidence,
+    "GET /v1/connectors/{id}/matrix-smoke."
+);
 
 // ---------------------------------------------------------------------------
 // Ingress (Go handleConnectorIngressMessages)
@@ -546,8 +650,11 @@ fn resolve_route_input(
 }
 
 fn contains_route_value(allowed: &[String], values: &[&str]) -> bool {
-    let allowed: Vec<&str> =
-        allowed.iter().map(|item| item.trim()).filter(|item| !item.is_empty()).collect();
+    let allowed: Vec<&str> = allowed
+        .iter()
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .collect();
     if allowed.is_empty() {
         return true;
     }
@@ -563,8 +670,8 @@ fn route_policy_allows(
     message: &ConnectorIngressMessage,
 ) -> Result<(bool, &'static str), ApiError> {
     let policy = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_channel_route_policy(tenant_id, connector_id)
         .map_err(ApiError::from_store)?;
     let Some(policy) = policy else {
@@ -619,8 +726,14 @@ fn publish_session_route_events(
         let mut payload = serde_json::Map::new();
         payload.insert("kind".to_string(), json_value(&session.kind));
         payload.insert("channel".to_string(), serde_json::json!(session.channel));
-        payload.insert("routingKey".to_string(), serde_json::json!(session.routing_key));
-        payload.insert("generation".to_string(), serde_json::json!(session.generation));
+        payload.insert(
+            "routingKey".to_string(),
+            serde_json::json!(session.routing_key),
+        );
+        payload.insert(
+            "generation".to_string(),
+            serde_json::json!(session.generation),
+        );
         for (key, value) in extra {
             payload.insert(key.clone(), value.clone());
         }
@@ -641,9 +754,15 @@ fn publish_session_route_events(
         ..events::Event::default()
     };
     if created {
-        publish_event(state, session_event("session.created", base_payload(session)))?;
+        publish_event(
+            state,
+            session_event("session.created", base_payload(session)),
+        )?;
     }
-    publish_event(state, session_event("session.routed", base_payload(session)))?;
+    publish_event(
+        state,
+        session_event("session.routed", base_payload(session)),
+    )?;
     Ok(())
 }
 
@@ -686,7 +805,9 @@ async fn ingress_messages(
     }
     if let Some(run) = &request.run {
         if run.entrypoint.trim().is_empty() {
-            return Err(ApiError::BadRequest("run entrypoint is required".to_string()));
+            return Err(ApiError::BadRequest(
+                "run entrypoint is required".to_string(),
+            ));
         }
     }
     let supervisor = supervisor(&state)?;
@@ -734,7 +855,9 @@ async fn ingress_messages(
                 &request.message.message_id,
             ),
         )?;
-        return Err(ApiError::Conflict("connector is not accepting ingress".to_string()));
+        return Err(ApiError::Conflict(
+            "connector is not accepting ingress".to_string(),
+        ));
     }
 
     let ingress_id = new_ingress_id();
@@ -757,7 +880,10 @@ async fn ingress_messages(
             )?;
             let mut payload = serde_json::Map::new();
             payload.insert("tenantId".to_string(), serde_json::json!(tenant_id));
-            payload.insert("messageId".to_string(), serde_json::json!(request.message.message_id));
+            payload.insert(
+                "messageId".to_string(),
+                serde_json::json!(request.message.message_id),
+            );
             payload.insert("outcome".to_string(), serde_json::json!("blocked"));
             payload.insert("reasonCode".to_string(), serde_json::json!("blocked_route"));
             payload.insert("error".to_string(), serde_json::json!(message));
@@ -770,13 +896,24 @@ async fn ingress_messages(
                     payload,
                 ),
             )?;
-            return Ok(blocked_response(&state, &ingress_id, &connector, "blocked_route", accepted_at)
-                .into_response());
+            return Ok(blocked_response(
+                &state,
+                &ingress_id,
+                &connector,
+                "blocked_route",
+                accepted_at,
+            )
+            .into_response());
         }
     };
 
-    let (allowed, reason_code) =
-        route_policy_allows(&state, &tenant_id, &connector.connector_id, &route_input, &request.message)?;
+    let (allowed, reason_code) = route_policy_allows(
+        &state,
+        &tenant_id,
+        &connector.connector_id,
+        &route_input,
+        &request.message,
+    )?;
     if !allowed {
         persist_routing_decision(
             &state,
@@ -789,8 +926,10 @@ async fn ingress_messages(
                 &request.message.message_id,
             ),
         )?;
-        return Ok(blocked_response(&state, &ingress_id, &connector, reason_code, accepted_at)
-            .into_response());
+        return Ok(
+            blocked_response(&state, &ingress_id, &connector, reason_code, accepted_at)
+                .into_response(),
+        );
     }
     persist_routing_decision(
         &state,
@@ -814,8 +953,14 @@ async fn ingress_messages(
         .map_err(ApiError::from_store)?;
     let mut extra = serde_json::Map::new();
     extra.insert("source".to_string(), serde_json::json!("connector.ingress"));
-    extra.insert("connectorId".to_string(), serde_json::json!(connector.connector_id));
-    extra.insert("messageId".to_string(), serde_json::json!(request.message.message_id));
+    extra.insert(
+        "connectorId".to_string(),
+        serde_json::json!(connector.connector_id),
+    );
+    extra.insert(
+        "messageId".to_string(),
+        serde_json::json!(request.message.message_id),
+    );
     publish_session_route_events(&state, &session, created_session, &extra)?;
 
     let now = Utc::now();
@@ -865,14 +1010,23 @@ async fn ingress_messages(
     if !created_message {
         let mut payload = serde_json::Map::new();
         payload.insert("tenantId".to_string(), serde_json::json!(tenant_id));
-        payload.insert("messageId".to_string(), serde_json::json!(request.message.message_id));
-        payload.insert("providerMessageId".to_string(), serde_json::json!(provider_message_id));
+        payload.insert(
+            "messageId".to_string(),
+            serde_json::json!(request.message.message_id),
+        );
+        payload.insert(
+            "providerMessageId".to_string(),
+            serde_json::json!(provider_message_id),
+        );
         payload.insert(
             "existingDeliveryId".to_string(),
             serde_json::json!(message_record.delivery_id),
         );
         payload.insert("outcome".to_string(), serde_json::json!("duplicate"));
-        payload.insert("reasonCode".to_string(), serde_json::json!("duplicate_inbound"));
+        payload.insert(
+            "reasonCode".to_string(),
+            serde_json::json!("duplicate_inbound"),
+        );
         payload.insert("redactionStatus".to_string(), serde_json::json!("redacted"));
         publish_event(
             &state,
@@ -936,11 +1090,17 @@ async fn ingress_messages(
                 .map_err(ApiError::from_store)?;
         }
         let mut payload = serde_json::Map::new();
-        payload.insert("entrypoint".to_string(), serde_json::json!(created_run.entrypoint));
+        payload.insert(
+            "entrypoint".to_string(),
+            serde_json::json!(created_run.entrypoint),
+        );
         payload.insert("goal".to_string(), serde_json::json!(created_run.goal));
         payload.insert("status".to_string(), json_value(&created_run.status));
         payload.insert("source".to_string(), serde_json::json!("connector.ingress"));
-        payload.insert("messageId".to_string(), serde_json::json!(request.message.message_id));
+        payload.insert(
+            "messageId".to_string(),
+            serde_json::json!(request.message.message_id),
+        );
         publish_event(
             &state,
             events::Event {
@@ -970,7 +1130,10 @@ async fn ingress_messages(
     payload.insert("reasonCode".to_string(), serde_json::json!("accepted"));
     payload.insert("kind".to_string(), json_value(&session.kind));
     payload.insert("channel".to_string(), serde_json::json!(session.channel));
-    payload.insert("messageId".to_string(), serde_json::json!(request.message.message_id));
+    payload.insert(
+        "messageId".to_string(),
+        serde_json::json!(request.message.message_id),
+    );
     payload.insert(
         "connectorAccountId".to_string(),
         serde_json::json!(first_non_empty(&[
@@ -986,13 +1149,19 @@ async fn ingress_messages(
             &request.route.peer_id,
         ])),
     );
-    payload.insert("providerMessageId".to_string(), serde_json::json!(provider_message_id));
+    payload.insert(
+        "providerMessageId".to_string(),
+        serde_json::json!(provider_message_id),
+    );
     payload.insert(
         "equivalentRuleId".to_string(),
         serde_json::json!(request.message.equivalent_rule_id),
     );
     payload.insert("redactionStatus".to_string(), serde_json::json!("redacted"));
-    payload.insert("sessionCreated".to_string(), serde_json::json!(created_session));
+    payload.insert(
+        "sessionCreated".to_string(),
+        serde_json::json!(created_session),
+    );
     payload.insert("runCreated".to_string(), serde_json::json!(run_created));
     publish_event(
         &state,
@@ -1093,8 +1262,13 @@ mod tests {
     #[tokio::test]
     async fn register_list_get_and_fail_connector() {
         let state = state_with_supervisor();
-        let (status, registered) =
-            request_json(state.clone(), "POST", "/v1/connectors", Some(register_body())).await;
+        let (status, registered) = request_json(
+            state.clone(),
+            "POST",
+            "/v1/connectors",
+            Some(register_body()),
+        )
+        .await;
         assert_eq!(status, StatusCode::CREATED, "{registered}");
 
         let (status, listed) = request_json(state.clone(), "GET", "/v1/connectors", None).await;
@@ -1131,8 +1305,13 @@ mod tests {
     #[tokio::test]
     async fn ingress_accepts_a_message_and_creates_session_and_run() {
         let state = state_with_supervisor();
-        let (status, _) =
-            request_json(state.clone(), "POST", "/v1/connectors", Some(register_body())).await;
+        let (status, _) = request_json(
+            state.clone(),
+            "POST",
+            "/v1/connectors",
+            Some(register_body()),
+        )
+        .await;
         assert_eq!(status, StatusCode::CREATED);
 
         let body = serde_json::json!({

@@ -4,10 +4,10 @@
 //! UpsertCalendarArtifact, ListCalendarArtifacts). The tenant column is written as NULL
 //! until the tenancy package is ported; `document_json` holds the whole document, matching Go.
 
-use rusqlite::{params, params_from_iter, Row};
+use rusqlite::{Row, params, params_from_iter};
 
-use crate::crud::{enum_str, now_rfc3339, null_string, parse_rfc3339};
 use crate::SQLiteStore;
+use crate::crud::{enum_str, now_rfc3339, null_string, parse_rfc3339};
 
 /// Mirrors Go's `CalendarOperationFilter`: non-empty trimmed fields are ANDed into the query.
 #[derive(Debug, Clone, Default)]
@@ -26,25 +26,31 @@ fn scan_calendar_account(row: &Row) -> Result<kura_calendar::AccountProjection, 
     let updated_at: String = row.get(6).map_err(|e| e.to_string())?;
     parse_rfc3339(&updated_at)?;
     let document_json: String = row.get(7).map_err(|e| e.to_string())?;
-    crate::crud::decode_json_field(&document_json).map_err(|e| format!("decode calendar account: {e}"))
+    crate::crud::decode_json_field(&document_json)
+        .map_err(|e| format!("decode calendar account: {e}"))
 }
 
 fn scan_calendar_operation(row: &Row) -> Result<kura_calendar::Operation, String> {
     let updated_at: String = row.get(11).map_err(|e| e.to_string())?;
     parse_rfc3339(&updated_at)?;
     let document_json: String = row.get(12).map_err(|e| e.to_string())?;
-    crate::crud::decode_json_field(&document_json).map_err(|e| format!("decode calendar operation: {e}"))
+    crate::crud::decode_json_field(&document_json)
+        .map_err(|e| format!("decode calendar operation: {e}"))
 }
 
 fn scan_calendar_artifact(row: &Row) -> Result<kura_calendar::Artifact, String> {
     let created_at: String = row.get(6).map_err(|e| e.to_string())?;
     parse_rfc3339(&created_at)?;
     let document_json: String = row.get(7).map_err(|e| e.to_string())?;
-    crate::crud::decode_json_field(&document_json).map_err(|e| format!("decode calendar artifact: {e}"))
+    crate::crud::decode_json_field(&document_json)
+        .map_err(|e| format!("decode calendar artifact: {e}"))
 }
 
 impl SQLiteStore {
-    pub fn upsert_calendar_account(&self, item: &kura_calendar::AccountProjection) -> Result<(), String> {
+    pub fn upsert_calendar_account(
+        &self,
+        item: &kura_calendar::AccountProjection,
+    ) -> Result<(), String> {
         let document_json = serde_json::to_string(item)
             .map_err(|e| format!("marshal calendar account {}: {e}", item.calendar_account_id))?;
 
@@ -86,7 +92,10 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn list_calendar_accounts(&self, environment_scope: &str) -> Result<Vec<kura_calendar::AccountProjection>, String> {
+    pub fn list_calendar_accounts(
+        &self,
+        environment_scope: &str,
+    ) -> Result<Vec<kura_calendar::AccountProjection>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -96,7 +105,9 @@ impl SQLiteStore {
                 ORDER BY updated_at ASC, calendar_account_id ASC"#,
             )
             .map_err(|e| format!("list calendar accounts for {environment_scope}: {e}"))?;
-        let mut rows = stmt.query(params![environment_scope.trim()]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![environment_scope.trim()])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_calendar_account(row)?);
@@ -217,7 +228,9 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("list calendar operations for {environment_scope}: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(args.iter())).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(args.iter()))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_calendar_operation(row)?);
@@ -231,7 +244,8 @@ impl SQLiteStore {
         operation_id: &str,
     ) -> Result<Option<kura_calendar::Operation>, String> {
         let wanted = operation_id.trim();
-        let items = self.list_calendar_operations(environment_scope, &CalendarOperationFilter::default())?;
+        let items =
+            self.list_calendar_operations(environment_scope, &CalendarOperationFilter::default())?;
         Ok(items.into_iter().find(|item| item.operation_id == wanted))
     }
 
@@ -297,7 +311,9 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("list calendar artifacts for {environment_scope}: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(args.iter())).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(args.iter()))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_calendar_artifact(row)?);

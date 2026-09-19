@@ -19,6 +19,7 @@ mod error;
 mod events;
 mod service;
 mod store;
+mod tools;
 mod types;
 
 pub use cancel::{CancellationToken, KillLink};
@@ -37,4 +38,8 @@ pub use service::{
     selected_skill_contracts, selected_skill_ids_from_skills, terminal_dispatch_event,
 };
 pub use store::{BindingResolutionParams, ChatStore, ContinuityLookupQuery};
+pub use tools::{
+    DEFAULT_MAX_TOOL_ROUNDS, MAX_TOOL_RESULT_CHARS, ToolContext, ToolHost, ToolOutcome,
+    ToolTraceEntry, truncate_tool_output,
+};
 pub use types::{QueryExecution, QueryInput, QueryResult, Service, StreamChunk};

@@ -134,8 +134,9 @@ fn compare_plane(
         baseline_value: baseline.to_string(),
         replay_value: replay.to_string(),
         evidence_refs: refs.to_vec(),
-        recommended_action: "Inspect authoritative replay evidence before treating this drift as expected."
-            .to_string(),
+        recommended_action:
+            "Inspect authoritative replay evidence before treating this drift as expected."
+                .to_string(),
         created_at: now,
         ..DriftFinding::default()
     }]

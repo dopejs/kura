@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
-use kura_store::{list_documents, put_document, SQLiteStore};
+use kura_store::{SQLiteStore, list_documents, put_document};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -203,7 +203,9 @@ impl Manager {
     /// Go `LoadFromStore`: reloads persisted evidence bundles on startup (merges into the
     /// in-memory map; the audit trail is not persisted).
     pub fn load_from_store(&self) -> Result<(), String> {
-        let Some(store) = &self.docs else { return Ok(()); };
+        let Some(store) = &self.docs else {
+            return Ok(());
+        };
         let bundles: Vec<Bundle> = list_documents(&store.lock(), DOC_KIND_BUNDLE)?;
         let mut inner = self.inner.write();
         for bundle in bundles {
@@ -215,14 +217,22 @@ impl Manager {
     /// Go `Generate`: produces a redacted, tenant-scoped, audited evidence bundle. It fails
     /// closed when the caller lacks support permission or redaction cannot guarantee secret
     /// removal.
-    pub fn generate(&self, tenant_id: &str, actor: &str, scope: Scope) -> Result<Bundle, EvidenceError> {
+    pub fn generate(
+        &self,
+        tenant_id: &str,
+        actor: &str,
+        scope: Scope,
+    ) -> Result<Bundle, EvidenceError> {
         if tenant_id.trim().is_empty() || !valid_scope(&scope) {
             return Err(EvidenceError::InvalidScope);
         }
         if !self.perms.allow_support(actor, tenant_id) {
             return Err(EvidenceError::PermissionDenied);
         }
-        let collected = self.collector.collect(tenant_id, &scope).map_err(EvidenceError::Collect)?;
+        let collected = self
+            .collector
+            .collect(tenant_id, &scope)
+            .map_err(EvidenceError::Collect)?;
         let (redacted, ok) = redact_sections(collected);
         if !ok {
             // Fail closed: do not persist or return a bundle that could leak secrets.
@@ -240,7 +250,9 @@ impl Manager {
             retention_expires_at: now + DEFAULT_RETENTION,
         };
         let mut inner = self.inner.write();
-        inner.bundles.insert(bundle.bundle_id.clone(), bundle.clone());
+        inner
+            .bundles
+            .insert(bundle.bundle_id.clone(), bundle.clone());
         inner.audit.push(AccessEvent {
             bundle_id: bundle.bundle_id.clone(),
             tenant_id: bundle.tenant_id.clone(),
@@ -249,18 +261,30 @@ impl Manager {
             occurred_at: now,
         });
         drop(inner);
-        self.persist(DOC_KIND_BUNDLE, &bundle.bundle_id, &bundle.tenant_id, &bundle);
+        self.persist(
+            DOC_KIND_BUNDLE,
+            &bundle.bundle_id,
+            &bundle.tenant_id,
+            &bundle,
+        );
         Ok(bundle)
     }
 
     /// Go `Get`: returns a bundle for an authorized support actor within the owning tenant,
     /// recording an access audit event. Cross-tenant access is denied.
-    pub fn get(&self, tenant_id: &str, actor: &str, bundle_id: &str) -> Result<Bundle, EvidenceError> {
+    pub fn get(
+        &self,
+        tenant_id: &str,
+        actor: &str,
+        bundle_id: &str,
+    ) -> Result<Bundle, EvidenceError> {
         let bundle = {
             let inner = self.inner.read();
             inner.bundles.get(bundle_id.trim()).cloned()
         };
-        let Some(bundle) = bundle else { return Err(EvidenceError::BundleNotFound); };
+        let Some(bundle) = bundle else {
+            return Err(EvidenceError::BundleNotFound);
+        };
         if bundle.tenant_id != tenant_id.trim() {
             return Err(EvidenceError::CrossTenantAccess);
         }
@@ -279,7 +303,11 @@ impl Manager {
     }
 
     /// Go `ListForTenant`: returns bundle metadata for a tenant (permission-gated).
-    pub fn list_for_tenant(&self, tenant_id: &str, actor: &str) -> Result<Vec<Bundle>, EvidenceError> {
+    pub fn list_for_tenant(
+        &self,
+        tenant_id: &str,
+        actor: &str,
+    ) -> Result<Vec<Bundle>, EvidenceError> {
         if !self.perms.allow_support(actor, tenant_id) {
             return Err(EvidenceError::PermissionDenied);
         }
@@ -390,14 +418,18 @@ pub fn redact_sections(sections: Vec<Section>) -> (Vec<Section>, bool) {
             redacted.summary.reserve(section.summary.len());
             for (key, value) in &section.summary {
                 if is_sensitive_key(key) {
-                    redacted.summary.insert(key.clone(), REDACTED_PLACEHOLDER.to_string());
+                    redacted
+                        .summary
+                        .insert(key.clone(), REDACTED_PLACEHOLDER.to_string());
                     continue;
                 }
                 if SECRET_MARKER.is_match(value) {
                     // A non-sensitive-keyed value carrying raw secret material cannot be safely
                     // redacted in place — fail the whole bundle closed (FR redaction-fail-closed).
                     ok = false;
-                    redacted.summary.insert(key.clone(), REDACTED_PLACEHOLDER.to_string());
+                    redacted
+                        .summary
+                        .insert(key.clone(), REDACTED_PLACEHOLDER.to_string());
                     continue;
                 }
                 redacted.summary.insert(key.clone(), value.clone());
@@ -413,7 +445,6 @@ pub fn redact_sections(sections: Vec<Section>) -> (Vec<Section>, bool) {
     }
     (out, ok)
 }
-
 
 // ---------------------------------------------------------------------------
 // Routine-backed Collector (wave 8 parity)

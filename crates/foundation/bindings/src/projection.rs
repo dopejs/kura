@@ -5,7 +5,8 @@ use chrono::{DateTime, Utc};
 
 use crate::redaction::safe_reason;
 use crate::types::{
-    CapabilityDecision, Classification, EffectiveBindingSelection, RedactionStatus, ResolutionOutcome, RuntimeBindingEvidence,
+    CapabilityDecision, Classification, EffectiveBindingSelection, RedactionStatus,
+    ResolutionOutcome, RuntimeBindingEvidence,
 };
 use crate::visibility::safe_scope_label;
 

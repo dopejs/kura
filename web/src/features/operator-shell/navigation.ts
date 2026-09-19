@@ -42,6 +42,7 @@ export const OPERATOR_SHELL_SECTIONS: ShellSection[] = [
     id: "memory",
     label: "Memory",
     surfaces: [
+      { id: "memory-overview", label: "What is remembered", route: "/memory/overview", requiresTenant: true },
       { id: "memory-assets", label: "Memory assets", route: "/memory", requiresTenant: true },
       { id: "memory-review", label: "Pending review", route: "/memory/review", requiresTenant: true, critical: { approval: "per_action", sideEffect: true } },
     ],

@@ -3,10 +3,10 @@
 //! NULL until the tenancy package is ported; `document_json` holds the whole document.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
-use crate::crud::{now_rfc3339, null_string, opt_time_string, parse_opt_rfc3339, parse_rfc3339};
 use crate::SQLiteStore;
+use crate::crud::{now_rfc3339, null_string, opt_time_string, parse_opt_rfc3339, parse_rfc3339};
 
 /// A consumer-policy evaluation ledger row. `document` is the JSON-serialized policy record.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -68,7 +68,10 @@ fn scan_consumer_policy_record(row: &Row) -> Result<ConsumerPolicyRecordRecord, 
 }
 
 impl SQLiteStore {
-    pub fn upsert_consumer_policy_record(&self, record: &ConsumerPolicyRecordRecord) -> Result<(), String> {
+    pub fn upsert_consumer_policy_record(
+        &self,
+        record: &ConsumerPolicyRecordRecord,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 r#"INSERT INTO consumer_policy_records (

@@ -132,10 +132,7 @@ impl Supervisor {
     }
 
     /// Registers a capability, returning it and whether it was newly created.
-    pub fn register(
-        &self,
-        input: RegisterInput,
-    ) -> Result<(Capability, bool), SupervisorError> {
+    pub fn register(&self, input: RegisterInput) -> Result<(Capability, bool), SupervisorError> {
         if input.capability_id.is_empty() {
             return Err(SupervisorError::CapabilityIdRequired);
         }
@@ -168,7 +165,9 @@ impl Supervisor {
             created_at: now,
             updated_at: now,
         };
-        inner.by_id.insert(input.capability_id.clone(), capability.clone());
+        inner
+            .by_id
+            .insert(input.capability_id.clone(), capability.clone());
         inner.order.push(input.capability_id);
         Ok((capability, true))
     }
@@ -177,7 +176,12 @@ impl Supervisor {
     #[must_use]
     pub fn list(&self) -> Vec<Capability> {
         let inner = self.inner.read();
-        inner.order.iter().filter_map(|id| inner.by_id.get(id)).cloned().collect()
+        inner
+            .order
+            .iter()
+            .filter_map(|id| inner.by_id.get(id))
+            .cloned()
+            .collect()
     }
 
     /// Returns a capability by id.
@@ -312,7 +316,9 @@ mod tests {
             .expect("report failure");
         assert_eq!(capability.status, Status::BackingOff);
 
-        let capability = supervisor.restart(&capability.capability_id).expect("restart");
+        let capability = supervisor
+            .restart(&capability.capability_id)
+            .expect("restart");
         assert_eq!(capability.status, Status::Registered);
         assert_eq!(capability.restart_count, 1);
     }

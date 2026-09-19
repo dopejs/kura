@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use kura_evaluation::{
     CandidateKind, CreateReplayAttemptInput, Dependencies, Manager, PlaneSummaries,
-    ReplayAttempt, ReplayCandidate, ReplayRecordInput, ReplayRuntime, ReplayRuntimeStore,
-    RuntimeReplayRecorder, RuntimeRecorder, SourceKind, SourceRef, ReadinessStatus, ReplayMode,
+    ReadinessStatus, ReplayAttempt, ReplayCandidate, ReplayMode, ReplayRecordInput, ReplayRuntime,
+    ReplayRuntimeStore, RuntimeRecorder, RuntimeReplayRecorder, SourceKind, SourceRef,
     redact_replay_credential_string, redact_replay_credential_strings,
 };
 use kura_runtime::Manager as RuntimeManager;
@@ -34,7 +34,9 @@ impl ReplayRuntimeStore for MemoryRuntimeStore {
         Ok(())
     }
     fn upsert_workflow(&self, workflow: kura_orchestration::Workflow) -> Result<(), String> {
-        self.workflows.lock().insert(workflow.workflow_id.clone(), workflow);
+        self.workflows
+            .lock()
+            .insert(workflow.workflow_id.clone(), workflow);
         Ok(())
     }
     fn replace_workflow_steps(
@@ -169,10 +171,16 @@ async fn manager_records_completed_replay_in_runtime_plane() {
         .expect("UpsertReplayCandidate returned error");
 
     let attempt = manager
-        .create_replay_attempt("candidate_runtime_record", CreateReplayAttemptInput::default())
+        .create_replay_attempt(
+            "candidate_runtime_record",
+            CreateReplayAttemptInput::default(),
+        )
         .await
         .expect("CreateReplayAttempt returned error");
-    assert!(!attempt.result_run_id.is_empty(), "expected replay attempt to link a runtime run");
+    assert!(
+        !attempt.result_run_id.is_empty(),
+        "expected replay attempt to link a runtime run"
+    );
     assert!(
         !attempt.result_workflow_id.is_empty(),
         "expected replay attempt to link a workflow"

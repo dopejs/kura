@@ -21,7 +21,9 @@ fn save_and_read_artifact() {
     assert_eq!(artifact.byte_size, 16);
     assert_eq!(artifact.sha256.len(), 64);
 
-    let content = service.read_computer_use_artifact_content(&artifact.storage_key).unwrap();
+    let content = service
+        .read_computer_use_artifact_content(&artifact.storage_key)
+        .unwrap();
     assert_eq!(content, b"screenshot bytes".to_vec());
 }
 

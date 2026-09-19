@@ -69,8 +69,14 @@ pub fn connector_matrix_setup_validated(input: ConnectorMatrixSetupValidatedInpu
     Event {
         category: "connector".to_string(),
         name: CONNECTOR_EVENT_MATRIX_SETUP_VALIDATED.to_string(),
-        scope: Scope { connector_id: input.connector_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "matrix_hosted_setup".to_string(), id: input.connector_id.clone() },
+        scope: Scope {
+            connector_id: input.connector_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "matrix_hosted_setup".to_string(),
+            id: input.connector_id.clone(),
+        },
         payload: payload![
             "tenantId" => input.tenant_id,
             "connectorId" => input.connector_id,
@@ -91,12 +97,20 @@ pub fn connector_matrix_setup_validated(input: ConnectorMatrixSetupValidatedInpu
 
 /// Go: `ConnectorMatrixRouteOutcomeRecorded`.
 #[must_use]
-pub fn connector_matrix_route_outcome_recorded(input: ConnectorMatrixRouteOutcomeRecordedInput) -> Event {
+pub fn connector_matrix_route_outcome_recorded(
+    input: ConnectorMatrixRouteOutcomeRecordedInput,
+) -> Event {
     Event {
         category: "connector".to_string(),
         name: CONNECTOR_EVENT_ROUTE_OUTCOME_RECORDED.to_string(),
-        scope: Scope { connector_id: input.connector_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "connector_route_outcome".to_string(), id: input.matrix_event_id.clone() },
+        scope: Scope {
+            connector_id: input.connector_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "connector_route_outcome".to_string(),
+            id: input.matrix_event_id.clone(),
+        },
         payload: payload![
             "tenantId" => input.tenant_id,
             "connectorId" => input.connector_id,
@@ -116,13 +130,21 @@ pub fn connector_matrix_route_outcome_recorded(input: ConnectorMatrixRouteOutcom
 
 /// Go: `ConnectorMatrixSmokeEvidenceRecorded`.
 #[must_use]
-pub fn connector_matrix_smoke_evidence_recorded(input: ConnectorMatrixSmokeEvidenceRecordedInput) -> Event {
+pub fn connector_matrix_smoke_evidence_recorded(
+    input: ConnectorMatrixSmokeEvidenceRecordedInput,
+) -> Event {
     Event {
         tenant_id: input.tenant_id.clone(),
         category: "connector".to_string(),
         name: CONNECTOR_EVENT_MATRIX_SMOKE_EVIDENCE_RECORDED.to_string(),
-        scope: Scope { connector_id: input.connector_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "matrix_smoke_evidence".to_string(), id: input.smoke_evidence_id.clone() },
+        scope: Scope {
+            connector_id: input.connector_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "matrix_smoke_evidence".to_string(),
+            id: input.smoke_evidence_id.clone(),
+        },
         payload: payload![
             "tenantId" => input.tenant_id,
             "connectorId" => input.connector_id,

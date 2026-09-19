@@ -616,21 +616,112 @@ pub struct OperationFilter {
 
 pub trait Backend: Send + Sync {
     fn supports_resource(&self, resource: &kura_integrations::Resource) -> bool;
-    fn project_account(&self, resource: &kura_integrations::Resource) -> Result<AccountProjection, MailError>;
-    fn list_threads(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &ListThreadsInput) -> Result<Vec<ThreadSnapshot>, MailError>;
-    fn get_thread(&self, resource: &kura_integrations::Resource, account: &AccountProjection, thread_id: &str) -> Result<ThreadSnapshot, MailError>;
-    fn get_message(&self, resource: &kura_integrations::Resource, account: &AccountProjection, message_id: &str) -> Result<MessageSnapshot, MailError>;
-    fn list_drafts(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &ListDraftsInput) -> Result<Vec<DraftSnapshot>, MailError>;
-    fn get_draft(&self, resource: &kura_integrations::Resource, account: &AccountProjection, draft_id: &str) -> Result<DraftSnapshot, MailError>;
-    fn create_draft(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &CreateDraftInput) -> Result<(DraftSnapshot, Vec<AttachmentReference>), MailError>;
-    fn update_draft(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &UpdateDraftInput) -> Result<(DraftSnapshot, Vec<AttachmentReference>), MailError>;
-    fn send_message(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &SendMessageInput) -> Result<(MessageSnapshot, Vec<AttachmentReference>), MailError>;
-    fn send_draft(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &SendDraftInput) -> Result<(DraftSnapshot, MessageSnapshot, Vec<AttachmentReference>), MailError>;
-    fn reply_message(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &ReplyMessageInput) -> Result<(Option<DraftSnapshot>, Option<MessageSnapshot>, Vec<AttachmentReference>), MailError>;
-    fn forward_message(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &ForwardMessageInput) -> Result<(Option<DraftSnapshot>, Option<MessageSnapshot>, Vec<AttachmentReference>), MailError>;
-    fn resolve_attachments(&self, resource: &kura_integrations::Resource, account: &AccountProjection, refs: &[AttachmentRefInput], parent_kind: &str, parent_id: &str) -> Vec<AttachmentReference>;
-    fn download_attachment(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &DownloadAttachmentInput) -> Result<AttachmentReference, MailError>;
-    fn restore_integration_state(&self, integration_id: &str, threads: Vec<ThreadSnapshot>, messages: Vec<MessageSnapshot>, drafts: Vec<DraftSnapshot>, attachments: Vec<AttachmentReference>);
+    fn project_account(
+        &self,
+        resource: &kura_integrations::Resource,
+    ) -> Result<AccountProjection, MailError>;
+    fn list_threads(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &ListThreadsInput,
+    ) -> Result<Vec<ThreadSnapshot>, MailError>;
+    fn get_thread(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        thread_id: &str,
+    ) -> Result<ThreadSnapshot, MailError>;
+    fn get_message(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        message_id: &str,
+    ) -> Result<MessageSnapshot, MailError>;
+    fn list_drafts(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &ListDraftsInput,
+    ) -> Result<Vec<DraftSnapshot>, MailError>;
+    fn get_draft(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        draft_id: &str,
+    ) -> Result<DraftSnapshot, MailError>;
+    fn create_draft(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &CreateDraftInput,
+    ) -> Result<(DraftSnapshot, Vec<AttachmentReference>), MailError>;
+    fn update_draft(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &UpdateDraftInput,
+    ) -> Result<(DraftSnapshot, Vec<AttachmentReference>), MailError>;
+    fn send_message(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &SendMessageInput,
+    ) -> Result<(MessageSnapshot, Vec<AttachmentReference>), MailError>;
+    fn send_draft(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &SendDraftInput,
+    ) -> Result<(DraftSnapshot, MessageSnapshot, Vec<AttachmentReference>), MailError>;
+    fn reply_message(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &ReplyMessageInput,
+    ) -> Result<
+        (
+            Option<DraftSnapshot>,
+            Option<MessageSnapshot>,
+            Vec<AttachmentReference>,
+        ),
+        MailError,
+    >;
+    fn forward_message(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &ForwardMessageInput,
+    ) -> Result<
+        (
+            Option<DraftSnapshot>,
+            Option<MessageSnapshot>,
+            Vec<AttachmentReference>,
+        ),
+        MailError,
+    >;
+    fn resolve_attachments(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        refs: &[AttachmentRefInput],
+        parent_kind: &str,
+        parent_id: &str,
+    ) -> Vec<AttachmentReference>;
+    fn download_attachment(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &DownloadAttachmentInput,
+    ) -> Result<AttachmentReference, MailError>;
+    fn restore_integration_state(
+        &self,
+        integration_id: &str,
+        threads: Vec<ThreadSnapshot>,
+        messages: Vec<MessageSnapshot>,
+        drafts: Vec<DraftSnapshot>,
+        attachments: Vec<AttachmentReference>,
+    );
 }
 
 #[must_use]
@@ -679,7 +770,10 @@ pub fn attachment_refs_from_ids(ids: &[String]) -> Vec<AttachmentRefInput> {
         return Vec::new();
     }
     ids.iter()
-        .map(|id| AttachmentRefInput { attachment_ref_id: id.clone(), ..AttachmentRefInput::default() })
+        .map(|id| AttachmentRefInput {
+            attachment_ref_id: id.clone(),
+            ..AttachmentRefInput::default()
+        })
         .collect()
 }
 
@@ -716,7 +810,12 @@ pub fn summarize_list_threads(input: &ListThreadsInput) -> String {
 }
 
 #[must_use]
-pub fn summarize_draft_input(subject: &str, to: &[String], cc: &[String], bcc: &[String]) -> String {
+pub fn summarize_draft_input(
+    subject: &str,
+    to: &[String],
+    cc: &[String],
+    bcc: &[String],
+) -> String {
     let recipients = join_recipients(&[to, cc, bcc]);
     if recipients.is_empty() {
         return subject.trim().to_string();
@@ -870,7 +969,11 @@ pub struct AttachmentPolicyResult {
 }
 
 #[must_use]
-pub fn evaluate_attachment(display_name: &str, media_type: &str, size_bytes: i64) -> AttachmentPolicyResult {
+pub fn evaluate_attachment(
+    display_name: &str,
+    media_type: &str,
+    size_bytes: i64,
+) -> AttachmentPolicyResult {
     if size_bytes > MAX_ATTACHMENT_BYTES {
         return AttachmentPolicyResult {
             status: AttachmentResolutionStatus::Failed,
@@ -883,7 +986,8 @@ pub fn evaluate_attachment(display_name: &str, media_type: &str, size_bytes: i64
     if is_blocked_attachment(display_name, media_type) {
         return AttachmentPolicyResult {
             status: AttachmentResolutionStatus::Failed,
-            failure_reason: "unsupported_type: attachment media type is not permitted for transfer".to_string(),
+            failure_reason: "unsupported_type: attachment media type is not permitted for transfer"
+                .to_string(),
             ..AttachmentPolicyResult::default()
         };
     }
@@ -914,7 +1018,11 @@ fn extension(name: &str) -> String {
 }
 
 pub fn apply_attachment_policy(reference: &mut AttachmentReference) {
-    let result = evaluate_attachment(&reference.display_name, &reference.media_type, reference.size_bytes.unwrap_or(0));
+    let result = evaluate_attachment(
+        &reference.display_name,
+        &reference.media_type,
+        reference.size_bytes.unwrap_or(0),
+    );
     reference.resolution_status = result.status;
     reference.retention_class = result.retention_class;
     reference.redacted = result.redacted;

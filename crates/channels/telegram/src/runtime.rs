@@ -6,9 +6,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use kura_chat::CancellationToken;
 use kura_connectors::{
-    CapabilityProfile, ConformanceArea, ConformanceResultStatus, Connector,
-    DiagnosticReasonCode, GroupRoomCapabilities, HandoffCapabilities, RegisterInput, Status,
-    Supervisor, SurfaceSupport, core_invariant_areas,
+    CapabilityProfile, ConformanceArea, ConformanceResultStatus, Connector, DiagnosticReasonCode,
+    GroupRoomCapabilities, HandoffCapabilities, RegisterInput, Status, Supervisor, SurfaceSupport,
+    core_invariant_areas,
 };
 use kura_events::{Bus, Event, Resource, Scope};
 use kura_im::MessageLoop;
@@ -101,7 +101,9 @@ impl Runtime {
             cancel: CancellationToken::new(),
             started: false,
         };
-        Ok(Some(Runtime { inner: Arc::new(Mutex::new(inner)) }))
+        Ok(Some(Runtime {
+            inner: Arc::new(Mutex::new(inner)),
+        }))
     }
 
     /// Go `Start`: registers the connector with the supervisor, persists it,
@@ -124,7 +126,9 @@ impl Runtime {
             })
             .map_err(TelegramError::from)?;
         if let Some(store) = &inner.store {
-            store.upsert_connector(&connector).map_err(TelegramError::Store)?;
+            store
+                .upsert_connector(&connector)
+                .map_err(TelegramError::Store)?;
         }
         // The store and message loop are not Send in this workspace (the
         // SQLite connection is single-threaded), so the transport long-poll
@@ -137,7 +141,10 @@ impl Runtime {
         let handle: Arc<dyn Fn(InboundUpdate) + Send + Sync> = Arc::new(move |update| {
             let _ = tx.send(update);
         });
-        inner.transport.start(handle).map_err(TelegramError::Transport)?;
+        inner
+            .transport
+            .start(handle)
+            .map_err(TelegramError::Transport)?;
         drop(inner);
         while let Ok(update) = rx.recv() {
             self.handle_update(update);
@@ -197,13 +204,19 @@ impl Runtime {
                         connector_account_id: setup.account_binding.connector_account_id.clone(),
                         display_name: setup.account_binding.provider_account_label.clone(),
                         provider_account_hint: setup.account_binding.provider_account_label.clone(),
-                        redaction_status: setup.account_binding.redaction_status.as_str().to_string(),
+                        redaction_status: setup
+                            .account_binding
+                            .redaction_status
+                            .as_str()
+                            .to_string(),
                         updated_at: setup.account_binding.validated_at,
                     })
                 },
                 allowments: Vec::new(),
             };
-            store.save_telegram_hosted_setup(&record).map_err(TelegramError::Store)?;
+            store
+                .save_telegram_hosted_setup(&record)
+                .map_err(TelegramError::Store)?;
             for allowment in &setup.allowments {
                 store
                     .save_telegram_allowment(&TelegramAllowmentRecord {
@@ -228,17 +241,19 @@ impl Runtime {
             }
         }
         if let Some(bus) = &inner.event_bus {
-            bus.publish(telegram_setup_validated_event(TelegramSetupValidatedInput {
-                tenant_id: setup.tenant_id.clone(),
-                connector_id: setup.connector_id.clone(),
-                terminal_state: setup.terminal_state.as_str().to_string(),
-                hosted_ready: setup.hosted_ready,
-                credential_state: setup.credential_state.as_str().to_string(),
-                allowment_state: setup.allowment_state.as_str().to_string(),
-                reason_code: setup.reason_code.clone(),
-                redaction_status: setup.redaction_status.as_str().to_string(),
-                validated_at: setup.validated_at,
-            }));
+            bus.publish(telegram_setup_validated_event(
+                TelegramSetupValidatedInput {
+                    tenant_id: setup.tenant_id.clone(),
+                    connector_id: setup.connector_id.clone(),
+                    terminal_state: setup.terminal_state.as_str().to_string(),
+                    hosted_ready: setup.hosted_ready,
+                    credential_state: setup.credential_state.as_str().to_string(),
+                    allowment_state: setup.allowment_state.as_str().to_string(),
+                    reason_code: setup.reason_code.clone(),
+                    redaction_status: setup.redaction_status.as_str().to_string(),
+                    validated_at: setup.validated_at,
+                },
+            ));
         }
         Ok(setup)
     }
@@ -284,7 +299,9 @@ impl RuntimeInner {
                         &update,
                         &RouteDecision {
                             outcome: RouteOutcome::Duplicate,
-                            reason_code: DiagnosticReasonCode::DuplicateInbound.as_str().to_string(),
+                            reason_code: DiagnosticReasonCode::DuplicateInbound
+                                .as_str()
+                                .to_string(),
                             surface: surface.clone(),
                         },
                     );
@@ -315,7 +332,8 @@ impl RuntimeInner {
         // Go treats the empty conversation type as direct; the enum default is
         // already `Direct`, so no normalization is needed here.
         if !update.mentioned && !self.cfg.bot_username.trim().is_empty() {
-            let (text, mentioned, command) = normalize_command_text(&update.text, &self.cfg.bot_username);
+            let (text, mentioned, command) =
+                normalize_command_text(&update.text, &self.cfg.bot_username);
             update.text = text;
             update.mentioned = mentioned;
             update.command = update.command || command;
@@ -343,8 +361,16 @@ impl RuntimeInner {
             update.received_at
         };
         let group = update.conversation_type == ConversationType::Group;
-        let kind = if group { SessionKind::Group } else { SessionKind::Direct };
-        let peer_id = if group { update.chat_id.clone() } else { update.sender_id.clone() };
+        let kind = if group {
+            SessionKind::Group
+        } else {
+            SessionKind::Direct
+        };
+        let peer_id = if group {
+            update.chat_id.clone()
+        } else {
+            update.sender_id.clone()
+        };
         let account_id = self.connector_account_id();
         Some(InboundMessage {
             connector_id: self.cfg.connector_id.clone(),
@@ -402,7 +428,10 @@ impl RuntimeInner {
             retention_expires_at: received_at + chrono::Duration::days(90),
             redaction_status: "redacted".to_string(),
             safe_evidence: HashMap::from([
-                ("identityRule".to_string(), "telegram_chat_message_id".to_string()),
+                (
+                    "identityRule".to_string(),
+                    "telegram_chat_message_id".to_string(),
+                ),
                 ("surface".to_string(), decision.surface.clone()),
             ]),
         });
@@ -429,7 +458,9 @@ impl RuntimeInner {
     }
 
     /// Go `diagnosticReasonForRouteDecision`.
-    fn diagnostic_reason_for_route_decision(decision: &RouteDecision) -> Option<DiagnosticReasonCode> {
+    fn diagnostic_reason_for_route_decision(
+        decision: &RouteDecision,
+    ) -> Option<DiagnosticReasonCode> {
         match decision.outcome {
             RouteOutcome::Blocked => Some(DiagnosticReasonCode::BlockedRoute),
             RouteOutcome::Unsupported => Some(DiagnosticReasonCode::UnsupportedCapability),
@@ -467,7 +498,11 @@ impl RuntimeInner {
 /// surface declarations and the equivalent durable identity rule.
 #[must_use]
 pub fn conformance_profile(cfg: &Config, declared_at: DateTime<Utc>) -> CapabilityProfile {
-    let declared_at = if is_unset_time(&declared_at) { Utc::now() } else { declared_at };
+    let declared_at = if is_unset_time(&declared_at) {
+        Utc::now()
+    } else {
+        declared_at
+    };
     let core = core_invariant_areas()
         .into_iter()
         .map(|area| (area, ConformanceResultStatus::Pass))
@@ -483,17 +518,35 @@ pub fn conformance_profile(cfg: &Config, declared_at: DateTime<Utc>) -> Capabili
             ("group_message".to_string(), SurfaceSupport::Supported),
             ("mention_gating".to_string(), SurfaceSupport::Supported),
             ("command_gating".to_string(), SurfaceSupport::Supported),
-            ("final_only_foreground_reply".to_string(), SurfaceSupport::Supported),
-            ("connector_backed_delivery".to_string(), SurfaceSupport::Supported),
+            (
+                "final_only_foreground_reply".to_string(),
+                SurfaceSupport::Supported,
+            ),
+            (
+                "connector_backed_delivery".to_string(),
+                SurfaceSupport::Supported,
+            ),
             ("attachments".to_string(), SurfaceSupport::Unsupported),
             ("voice".to_string(), SurfaceSupport::Unsupported),
             ("payments".to_string(), SurfaceSupport::Unsupported),
             ("mini_apps".to_string(), SurfaceSupport::Unsupported),
             ("media_transfer".to_string(), SurfaceSupport::Unsupported),
-            ("thinking_visibility".to_string(), SurfaceSupport::Unsupported),
-            ("incremental_visible_updates".to_string(), SurfaceSupport::Unsupported),
-            ("standard_durable_identity".to_string(), SurfaceSupport::Supported),
-            ("blocked_route_classification".to_string(), SurfaceSupport::Supported),
+            (
+                "thinking_visibility".to_string(),
+                SurfaceSupport::Unsupported,
+            ),
+            (
+                "incremental_visible_updates".to_string(),
+                SurfaceSupport::Unsupported,
+            ),
+            (
+                "standard_durable_identity".to_string(),
+                SurfaceSupport::Supported,
+            ),
+            (
+                "blocked_route_classification".to_string(),
+                SurfaceSupport::Supported,
+            ),
         ]),
         group_room_capabilities: GroupRoomCapabilities {
             mention_evidence: Some(SurfaceSupport::Supported),
@@ -509,7 +562,8 @@ pub fn conformance_profile(cfg: &Config, declared_at: DateTime<Utc>) -> Capabili
             first_response_source_references: Some(SurfaceSupport::Supported),
         },
         equivalent_durable_identity_rule_id: "telegram_chat_message_id".to_string(),
-        equivalent_durable_identity_rule: "tenant_id + connector_account_id + telegram_chat_id + telegram_message_id".to_string(),
+        equivalent_durable_identity_rule:
+            "tenant_id + connector_account_id + telegram_chat_id + telegram_message_id".to_string(),
         declared_at,
     }
 }
@@ -536,8 +590,14 @@ pub fn telegram_setup_validated_event(input: TelegramSetupValidatedInput) -> Eve
     Event {
         category: "connector".to_string(),
         name: "connector.telegram_setup_validated".to_string(),
-        scope: Scope { connector_id: input.connector_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "telegram_hosted_setup".to_string(), id: input.connector_id.clone() },
+        scope: Scope {
+            connector_id: input.connector_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "telegram_hosted_setup".to_string(),
+            id: input.connector_id.clone(),
+        },
         payload: serde_json::json!({
             "tenantId": input.tenant_id,
             "connectorId": input.connector_id,
@@ -572,16 +632,19 @@ impl std::error::Error for PlainError {}
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use futures::future::BoxFuture;
     use kura_chat::Service as ChatService;
     use kura_checkpoints::Manager as CheckpointManager;
     use kura_events::Filter;
     use kura_im::ReplySender;
     use kura_imtypes::OutboundReply;
-    use kura_llm::{Dispatcher, Provider, ProviderError, ProviderRequest, ProviderResponse, StreamEmitter, Usage};
+    use kura_llm::{
+        Dispatcher, Provider, ProviderError, ProviderRequest, ProviderResponse, StreamEmitter,
+        Usage,
+    };
     use kura_router::SessionRouter;
     use kura_runtime::Manager as RuntimeManager;
     use kura_store::SQLiteStore;
-    use futures::future::BoxFuture;
     use tempfile::tempdir;
 
     use crate::allowment::{AllowmentValidationState, GroupGate, ScopeType};
@@ -589,7 +652,9 @@ mod tests {
     use crate::transport::{FakeTransport, Transport};
 
     fn ts(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(y, mo, d, h, mi, s).single().expect("valid timestamp")
+        Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
+            .single()
+            .expect("valid timestamp")
     }
 
     fn allow_dm() -> AllowmentValidation {
@@ -632,9 +697,14 @@ mod tests {
                     .map(|m| m.content.clone())
                     .unwrap_or_default();
                 Ok(ProviderResponse {
+                    tool_calls: Vec::new(),
                     output: format!("reply:{content}"),
                     finish_reason: "stop".to_string(),
-                    usage: Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+                    usage: Usage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                        total_tokens: 2,
+                    },
                 })
             })
         }
@@ -659,13 +729,22 @@ mod tests {
                     delta: content.clone(),
                     output: format!("reply:{content}"),
                     finish_reason: "stop".to_string(),
-                    usage: Some(Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 }),
+                    usage: Some(Usage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                        total_tokens: 2,
+                    }),
                     ..Default::default()
                 })?;
                 Ok(ProviderResponse {
+                    tool_calls: Vec::new(),
                     output: format!("reply:{content}"),
                     finish_reason: "stop".to_string(),
-                    usage: Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+                    usage: Usage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                        total_tokens: 2,
+                    },
                 })
             })
         }
@@ -675,7 +754,9 @@ mod tests {
     fn build_loop(store: Arc<SQLiteStore>, bus: Bus) -> MessageLoop {
         let dispatcher = Arc::new(Dispatcher::new());
         dispatcher.register_provider(Arc::new(EchoTestProvider));
-        dispatcher.set_default_provider("echo").expect("default provider");
+        dispatcher
+            .set_default_provider("echo")
+            .expect("default provider");
         dispatcher.set_default_model("echo-v1");
         let chat = ChatService::new_service(dispatcher, None, None, Some(bus.clone()), None);
         let runtime = Arc::new(RuntimeManager::new());
@@ -695,7 +776,13 @@ mod tests {
         )
     }
 
-    fn direct_update(update_id: &str, message_id: &str, chat_id: &str, sender_id: &str, text: &str) -> InboundUpdate {
+    fn direct_update(
+        update_id: &str,
+        message_id: &str,
+        chat_id: &str,
+        sender_id: &str,
+        text: &str,
+    ) -> InboundUpdate {
         InboundUpdate {
             update_id: update_id.to_string(),
             message_id: message_id.to_string(),
@@ -724,18 +811,29 @@ mod tests {
 
         let mut inbound = direct_update("update_1", "message_1", "chat_1", "user_1", "hello");
         inbound.received_at = ts(2026, 5, 8, 10, 0, 0);
-        let normalized = runtime.normalize_inbound(inbound).expect("normalized inbound");
+        let normalized = runtime
+            .normalize_inbound(inbound)
+            .expect("normalized inbound");
         assert_eq!(normalized.connector_kind, "telegram");
         assert_eq!(normalized.equivalent_rule_id, "telegram_chat_message_id");
         assert_eq!(normalized.provider_message_id, "message_1");
 
         assert!(
             runtime
-                .normalize_inbound(direct_update("update_2", "message_2", "chat_2", "user_2", "hello"))
+                .normalize_inbound(direct_update(
+                    "update_2",
+                    "message_2",
+                    "chat_2",
+                    "user_2",
+                    "hello"
+                ))
                 .is_none(),
             "unallowed sender/chat must not normalize into accepted inbound"
         );
-        assert_eq!(transport.last_route_outcome().outcome, RouteOutcome::Blocked);
+        assert_eq!(
+            transport.last_route_outcome().outcome,
+            RouteOutcome::Blocked
+        );
     }
 
     // Go TestFakeTransportSendsFinalOnlyReplies.
@@ -841,7 +939,13 @@ mod tests {
         .expect("new runtime")
         .expect("enabled runtime");
 
-        for surface in ["attachment", "media_transfer", "voice", "payment", "mini_app"] {
+        for surface in [
+            "attachment",
+            "media_transfer",
+            "voice",
+            "payment",
+            "mini_app",
+        ] {
             assert!(
                 runtime
                     .normalize_inbound(InboundUpdate {
@@ -888,12 +992,20 @@ mod tests {
         // The Go test lists with the same fixed timestamp as the update, so
         // the 90-day retention window still covers the row.
         let evidence = store
-            .list_telegram_update_evidence("ten_telegram", "telegram-main", ts(2026, 5, 8, 10, 0, 0), 10)
+            .list_telegram_update_evidence(
+                "ten_telegram",
+                "telegram-main",
+                ts(2026, 5, 8, 10, 0, 0),
+                10,
+            )
             .expect("list update evidence");
         assert_eq!(evidence.len(), 1);
         assert_eq!(evidence[0].route_outcome, "accepted");
         assert_eq!(
-            evidence[0].safe_evidence.get("identityRule").map(String::as_str),
+            evidence[0]
+                .safe_evidence
+                .get("identityRule")
+                .map(String::as_str),
             Some("telegram_chat_message_id")
         );
     }
@@ -952,19 +1064,31 @@ mod tests {
             .expect("stored setup");
         assert_eq!(stored.terminal_state, "ready");
         assert_eq!(stored.allowments.len(), 1);
-        let binding = stored.account_binding.as_ref().expect("account binding retained");
+        let binding = stored
+            .account_binding
+            .as_ref()
+            .expect("account binding retained");
         assert_eq!(binding.connector_account_id, "bot_redacted");
         assert_eq!(binding.provider_account_hint, "telegram:bot_redacted");
 
-        let published = event_bus.list(&Filter { category: "connector".to_string(), ..Filter::default() });
+        let published = event_bus.list(&Filter {
+            category: "connector".to_string(),
+            ..Filter::default()
+        });
         assert_eq!(published.len(), 1);
         assert_eq!(published[0].name, "connector.telegram_setup_validated");
         assert_eq!(
-            published[0].payload.get("redactionStatus").and_then(|v| v.as_str()),
+            published[0]
+                .payload
+                .get("redactionStatus")
+                .and_then(|v| v.as_str()),
             Some("redacted")
         );
         assert_eq!(
-            published[0].payload.get("credentialState").and_then(|v| v.as_str()),
+            published[0]
+                .payload
+                .get("credentialState")
+                .and_then(|v| v.as_str()),
             Some("valid")
         );
     }
@@ -997,9 +1121,18 @@ mod tests {
         runtime.handle_update(update);
 
         let evidence = store
-            .list_telegram_update_evidence("ten_telegram", "telegram-main", ts(2026, 5, 8, 10, 0, 0), 10)
+            .list_telegram_update_evidence(
+                "ten_telegram",
+                "telegram-main",
+                ts(2026, 5, 8, 10, 0, 0),
+                10,
+            )
             .expect("list update evidence");
-        assert_eq!(evidence.len(), 1, "duplicate must upsert the same evidence row");
+        assert_eq!(
+            evidence.len(),
+            1,
+            "duplicate must upsert the same evidence row"
+        );
         assert_eq!(evidence[0].route_outcome, "duplicate");
         assert_eq!(evidence[0].reason_code, "duplicate_inbound");
     }
@@ -1008,11 +1141,17 @@ mod tests {
     #[test]
     fn telegram_conformance_profile_declares_explicit_surfaces() {
         let profile = conformance_profile(
-            &Config { connector_id: "telegram-main".to_string(), ..Config::default() },
+            &Config {
+                connector_id: "telegram-main".to_string(),
+                ..Config::default()
+            },
             ts(2026, 5, 8, 10, 0, 0),
         );
         assert_eq!(profile.connector_kind, "telegram");
-        assert_eq!(profile.equivalent_durable_identity_rule_id, "telegram_chat_message_id");
+        assert_eq!(
+            profile.equivalent_durable_identity_rule_id,
+            "telegram_chat_message_id"
+        );
         for surface in [
             "direct_message",
             "group_message",

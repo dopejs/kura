@@ -7,7 +7,7 @@
 //! keeps working before a personal tenant exists.
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
 use crate::SQLiteStore;
 
@@ -60,11 +60,15 @@ pub(crate) fn marshal_json(value: &Option<serde_json::Value>) -> Result<Option<S
     }
 }
 
-pub(crate) fn marshal_map(value: &serde_json::Map<String, serde_json::Value>) -> Result<Option<String>, String> {
+pub(crate) fn marshal_map(
+    value: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Option<String>, String> {
     if value.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(serde_json::to_string(value).map_err(|e| e.to_string())?))
+        Ok(Some(
+            serde_json::to_string(value).map_err(|e| e.to_string())?,
+        ))
     }
 }
 
@@ -72,7 +76,9 @@ pub(crate) fn marshal_vec<T: serde::Serialize>(value: &[T]) -> Result<Option<Str
     if value.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(serde_json::to_string(value).map_err(|e| e.to_string())?))
+        Ok(Some(
+            serde_json::to_string(value).map_err(|e| e.to_string())?,
+        ))
     }
 }
 
@@ -86,7 +92,9 @@ pub(crate) fn decode_opt_json(raw: &Option<String>) -> Result<Option<serde_json:
 
 // Go marshals nil slices/maps as the literal `null`, and Go-era rows carry it
 // in these JSON columns; treat it as empty like the absent-column cases.
-pub(crate) fn decode_map(raw: &Option<String>) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+pub(crate) fn decode_map(
+    raw: &Option<String>,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     match raw {
         None => Ok(serde_json::Map::new()),
         Some(s) if s.is_empty() || s == "null" => Ok(serde_json::Map::new()),
@@ -96,7 +104,9 @@ pub(crate) fn decode_map(raw: &Option<String>) -> Result<serde_json::Map<String,
 
 /// Null-tolerant JSON decode for NOT NULL text columns: Go marshals nil
 /// slices/maps/pointers as the literal `null` and Go-era rows carry it.
-pub(crate) fn decode_json_field<T: serde::de::DeserializeOwned + Default>(raw: &str) -> Result<T, String> {
+pub(crate) fn decode_json_field<T: serde::de::DeserializeOwned + Default>(
+    raw: &str,
+) -> Result<T, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed == "null" {
         return Ok(T::default());
@@ -104,7 +114,9 @@ pub(crate) fn decode_json_field<T: serde::de::DeserializeOwned + Default>(raw: &
     serde_json::from_str(trimmed).map_err(|e| e.to_string())
 }
 
-pub(crate) fn decode_vec<T: serde::de::DeserializeOwned>(raw: &Option<String>) -> Result<Vec<T>, String> {
+pub(crate) fn decode_vec<T: serde::de::DeserializeOwned>(
+    raw: &Option<String>,
+) -> Result<Vec<T>, String> {
     match raw {
         None => Ok(Vec::new()),
         Some(s) if s.is_empty() || s == "null" => Ok(Vec::new()),
@@ -261,12 +273,16 @@ impl SQLiteStore {
             .conn
             .prepare("SELECT tenant_id FROM runs WHERE run_id = ?1")
             .map_err(|e| format!("get run tenant {run_id}: {e}"))?;
-        let mut rows = stmt.query(params![run_id.trim()]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![run_id.trim()])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
         let tenant_id: Option<String> = row.get(0).map_err(|e| e.to_string())?;
-        Ok(tenant_id.filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_string()))
+        Ok(tenant_id
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_string()))
     }
 
     pub fn upsert_step(&self, step: &kura_runtime::Step) -> Result<(), String> {
@@ -421,7 +437,11 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn list_tool_calls(&self, run_id: &str, step_id: &str) -> Result<Vec<kura_runtime::ToolCall>, String> {
+    pub fn list_tool_calls(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<Vec<kura_runtime::ToolCall>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -431,7 +451,9 @@ impl SQLiteStore {
                 ORDER BY created_at ASC, tool_call_id ASC"#,
             )
             .map_err(|e| format!("list tool calls for run {run_id} step {step_id}: {e}"))?;
-        let mut rows = stmt.query(params![run_id, step_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![run_id, step_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_tool_call(row)?);
@@ -458,7 +480,8 @@ impl SQLiteStore {
     }
 
     pub fn save_checkpoint(&self, checkpoint: &kura_runtime::RunCheckpoint) -> Result<(), String> {
-        let snapshot_json = serde_json::to_string(checkpoint).map_err(|e| format!("marshal checkpoint: {e}"))?;
+        let snapshot_json =
+            serde_json::to_string(checkpoint).map_err(|e| format!("marshal checkpoint: {e}"))?;
 
         let parent_tenant: Option<String> = self
             .conn
@@ -512,10 +535,13 @@ impl SQLiteStore {
             let captured_at: String = row.get(2).map_err(|e| e.to_string())?;
             let snapshot_json: String = row.get(3).map_err(|e| e.to_string())?;
 
-            let mut checkpoint: kura_runtime::RunCheckpoint =
-                serde_json::from_str(&snapshot_json).map_err(|e| format!("decode checkpoint snapshot: {e}"))?;
+            let mut checkpoint: kura_runtime::RunCheckpoint = serde_json::from_str(&snapshot_json)
+                .map_err(|e| format!("decode checkpoint snapshot: {e}"))?;
             if checkpoint.run.run_id != run_id {
-                return Err(format!("checkpoint run mismatch: row={run_id} snapshot={}", checkpoint.run.run_id));
+                return Err(format!(
+                    "checkpoint run mismatch: row={run_id} snapshot={}",
+                    checkpoint.run.run_id
+                ));
             }
             checkpoint.captured_at = parse_rfc3339(&captured_at)?;
             items.push(checkpoint);

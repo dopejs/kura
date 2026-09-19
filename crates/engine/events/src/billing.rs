@@ -15,13 +15,20 @@ pub const BILLING_RESERVATION_RECOVERY_DECIDED_NAME: &str = "billing.reservation
 /// Go: `BillingUsageEvent` — projects a metered usage event onto the bus.
 #[must_use]
 pub fn billing_usage_event(name: &str, event: UsageEvent) -> Event {
-    let occurred_at = if is_go_zero_time(event.created_at) { now_utc() } else { event.created_at };
+    let occurred_at = if is_go_zero_time(event.created_at) {
+        now_utc()
+    } else {
+        event.created_at
+    };
     Event {
         tenant_id: event.tenant_id.clone(),
         category: "billing".to_string(),
         name: name.to_string(),
         occurred_at,
-        resource: Resource { kind: "billing_usage_event".to_string(), id: event.usage_event_id.clone() },
+        resource: Resource {
+            kind: "billing_usage_event".to_string(),
+            id: event.usage_event_id.clone(),
+        },
         payload: payload![
             "tenantId" => event.tenant_id,
             "category" => event.category.as_str(),
@@ -38,13 +45,20 @@ pub fn billing_usage_event(name: &str, event: UsageEvent) -> Event {
 /// Go: `BillingQuotaDeniedEvent`.
 #[must_use]
 pub fn billing_quota_denied_event(denial: QuotaDenial) -> Event {
-    let occurred_at = if is_go_zero_time(denial.created_at) { now_utc() } else { denial.created_at };
+    let occurred_at = if is_go_zero_time(denial.created_at) {
+        now_utc()
+    } else {
+        denial.created_at
+    };
     Event {
         tenant_id: denial.tenant_id.clone(),
         category: "billing".to_string(),
         name: BILLING_QUOTA_DENIED_NAME.to_string(),
         occurred_at,
-        resource: Resource { kind: "billing_denial".to_string(), id: denial.denial_id.clone() },
+        resource: Resource {
+            kind: "billing_denial".to_string(),
+            id: denial.denial_id.clone(),
+        },
         payload: payload![
             "tenantId" => denial.tenant_id,
             "category" => denial.category.as_str(),
@@ -63,7 +77,11 @@ pub fn billing_quota_denied_event(denial: QuotaDenial) -> Event {
 #[must_use]
 pub fn billing_recovery_decision_event(decision: RecoveryDecision) -> Event {
     let reservation = &decision.reservation;
-    let occurred_at = if is_go_zero_time(reservation.updated_at) { now_utc() } else { reservation.updated_at };
+    let occurred_at = if is_go_zero_time(reservation.updated_at) {
+        now_utc()
+    } else {
+        reservation.updated_at
+    };
     let reason = if decision.reason.is_empty() {
         reservation.recovery_reason.clone()
     } else {
@@ -79,7 +97,10 @@ pub fn billing_recovery_decision_event(decision: RecoveryDecision) -> Event {
         category: "billing".to_string(),
         name: BILLING_RESERVATION_RECOVERY_DECIDED_NAME.to_string(),
         occurred_at,
-        resource: Resource { kind: "billing_reservation".to_string(), id: reservation.reservation_id.clone() },
+        resource: Resource {
+            kind: "billing_reservation".to_string(),
+            id: reservation.reservation_id.clone(),
+        },
         payload: payload![
             "tenantId" => reservation.tenant_id,
             "category" => reservation.category.as_str(),

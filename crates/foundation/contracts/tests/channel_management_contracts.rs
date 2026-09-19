@@ -6,14 +6,16 @@
 
 mod common;
 
-use common::{schema_root_dir, validate_fixtures, Fixture};
+use common::{Fixture, schema_root_dir, validate_fixtures};
 use kura_contracts::Validator;
 
 #[test]
 fn test_channel_management_schemas_accept_canonical_fixtures() {
     let validator = Validator::new(schema_root_dir());
     let fixtures: &[Fixture] = &[
-        (r##"schemas/api/channel-management-connector-list.response.schema.json"##, r##"{
+        (
+            r##"schemas/api/channel-management-connector-list.response.schema.json"##,
+            r##"{
   "tenantId": "ten_channel_management",
   "page": {
     "limit": 20,
@@ -51,8 +53,11 @@ fn test_channel_management_schemas_accept_canonical_fixtures() {
     }
   ]
 }
-"##),
-        (r##"schemas/api/channel-management-support-evidence.schema.json"##, r##"{
+"##,
+        ),
+        (
+            r##"schemas/api/channel-management-support-evidence.schema.json"##,
+            r##"{
   "supportEvidenceId": "support_slack_main",
   "tenantId": "ten_channel_management",
   "connectorId": "slack-main",
@@ -70,9 +75,16 @@ fn test_channel_management_schemas_accept_canonical_fixtures() {
     "displayName": "Slack Main"
   }
 }
-"##),
-        (r##"schemas/api/channel-management-action.schema.json"##, r##"{"actionKind":"reconnect","reasonCode":"permission_missing","sourceDiagnosticStateId":"diag_slack_permission"}"##),
-        (r##"schemas/events/connector-management.event.schema.json"##, r##"{"eventId":"evt_channel_management_1","sequence":1,"category":"connector","name":"connector.management_support_evidence_generated","occurredAt":"2026-05-10T10:00:00Z","scope":{"connectorId":"slack-main"},"resource":{"kind":"channel_support_evidence","id":"support_slack_main"},"payload":{"tenantId":"ten_channel_management","connectorId":"slack-main","action":"support_evidence","outcome":"succeeded","evidenceId":"support_slack_main","redactionStatus":"redacted"}}"##),
+"##,
+        ),
+        (
+            r##"schemas/api/channel-management-action.schema.json"##,
+            r##"{"actionKind":"reconnect","reasonCode":"permission_missing","sourceDiagnosticStateId":"diag_slack_permission"}"##,
+        ),
+        (
+            r##"schemas/events/connector-management.event.schema.json"##,
+            r##"{"eventId":"evt_channel_management_1","sequence":1,"category":"connector","name":"connector.management_support_evidence_generated","occurredAt":"2026-05-10T10:00:00Z","scope":{"connectorId":"slack-main"},"resource":{"kind":"channel_support_evidence","id":"support_slack_main"},"payload":{"tenantId":"ten_channel_management","connectorId":"slack-main","action":"support_evidence","outcome":"succeeded","evidenceId":"support_slack_main","redactionStatus":"redacted"}}"##,
+        ),
     ];
     validate_fixtures(&validator, fixtures);
 }

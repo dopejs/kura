@@ -8,8 +8,10 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
-use crate::manager::{new_attempt_id, non_empty, DeliveryError, ManagerInner};
-use crate::{AttemptStatus, DeliveryAttempt, DeliveryOutcome, DeliveryTarget, OutcomeStatus, TargetStatus};
+use crate::manager::{DeliveryError, ManagerInner, new_attempt_id, non_empty};
+use crate::{
+    AttemptStatus, DeliveryAttempt, DeliveryOutcome, DeliveryTarget, OutcomeStatus, TargetStatus,
+};
 
 impl ManagerInner {
     /// Port of `dispatchImmediate`.
@@ -100,7 +102,8 @@ impl ManagerInner {
             Ok(result) => {
                 attempt.transport_kind = non_empty(&result.transport_kind, &attempt.transport_kind);
                 attempt.transport_receipt_summary = result.receipt_summary.clone();
-                attempt.connector_message_delivery_id = result.connector_message_delivery_id.clone();
+                attempt.connector_message_delivery_id =
+                    result.connector_message_delivery_id.clone();
                 attempt.completed_at = Some(completed_at);
                 attempt.status = AttemptStatus::Delivered;
                 self.store_attempt(&attempt)?;
@@ -263,7 +266,9 @@ impl ManagerInner {
             if schedules.retry_scheduled.contains_key(delivery_id) {
                 return;
             }
-            schedules.retry_scheduled.insert(delivery_id.to_string(), ());
+            schedules
+                .retry_scheduled
+                .insert(delivery_id.to_string(), ());
         }
         let inner = Arc::clone(self);
         let delivery_id = delivery_id.to_string();
@@ -289,7 +294,10 @@ impl ManagerInner {
         inner_result
     }
 
-    pub(crate) fn resume_outcome_inner(self: &Arc<Self>, delivery_id: &str) -> Result<(), DeliveryError> {
+    pub(crate) fn resume_outcome_inner(
+        self: &Arc<Self>,
+        delivery_id: &str,
+    ) -> Result<(), DeliveryError> {
         let (outcome, ok) = self.get_outcome(delivery_id)?;
         if !ok {
             return Ok(());

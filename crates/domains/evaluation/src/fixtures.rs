@@ -24,7 +24,11 @@ pub struct CapturedEvidence {
     pub runtime_summary: String,
     #[serde(default, skip_serializing_if = "String::is_empty", rename = "policy")]
     pub policy_summary: String,
-    #[serde(default, skip_serializing_if = "String::is_empty", rename = "integration")]
+    #[serde(
+        default,
+        skip_serializing_if = "String::is_empty",
+        rename = "integration"
+    )]
     pub integration_summary: String,
     #[serde(default, skip_serializing_if = "String::is_empty", rename = "delivery")]
     pub delivery_summary: String,
@@ -45,8 +49,8 @@ pub fn load_regression_fixtures(
     root_dir: &str,
     environment_scope: &str,
 ) -> Result<Vec<RegressionFixture>, EvaluationError> {
-    let entries = std::fs::read_dir(root_dir)
-        .map_err(|e| EvaluationError::ReadFixturesDir(e.to_string()))?;
+    let entries =
+        std::fs::read_dir(root_dir).map_err(|e| EvaluationError::ReadFixturesDir(e.to_string()))?;
     let now = Utc::now();
     let mut fixtures = Vec::new();
     for entry in entries {
@@ -58,13 +62,15 @@ pub fn load_regression_fixtures(
             .join(entry.file_name())
             .join("manifest.json");
         let manifest_path = manifest_path.to_string_lossy().to_string();
-        let raw = std::fs::read_to_string(&manifest_path)
-            .map_err(|e| EvaluationError::ReadFixtureManifest(manifest_path.clone(), e.to_string()))?;
+        let raw = std::fs::read_to_string(&manifest_path).map_err(|e| {
+            EvaluationError::ReadFixtureManifest(manifest_path.clone(), e.to_string())
+        })?;
         let mut fixture: RegressionFixture = serde_json::from_str(&raw).map_err(|e| {
             EvaluationError::DecodeFixtureManifest(manifest_path.clone(), e.to_string())
         })?;
         fixture.manifest_path = manifest_path.clone();
-        fixture.environment_scope = first_non_empty(&[&fixture.environment_scope, environment_scope]);
+        fixture.environment_scope =
+            first_non_empty(&[&fixture.environment_scope, environment_scope]);
         fixture.expected_replay_mode = replay_mode_default(Some(fixture.expected_replay_mode));
         fixture.created_at = zero_time_default(fixture.created_at, now);
         fixture.updated_at = zero_time_default(fixture.updated_at, now);
@@ -82,9 +88,13 @@ pub fn load_regression_fixtures(
 }
 
 /// Go `LoadCapturedEvidence`.
-pub fn load_captured_evidence(fixture: &RegressionFixture) -> Result<CapturedEvidence, EvaluationError> {
+pub fn load_captured_evidence(
+    fixture: &RegressionFixture,
+) -> Result<CapturedEvidence, EvaluationError> {
     if fixture.captured_evidence_refs.is_empty() {
-        return Err(EvaluationError::CapturedEvidenceMissing(fixture.fixture_id.clone()));
+        return Err(EvaluationError::CapturedEvidenceMissing(
+            fixture.fixture_id.clone(),
+        ));
     }
     let evidence_ref = &fixture.captured_evidence_refs[0];
     let mut evidence_path = if evidence_ref.route.is_empty() {
@@ -121,8 +131,9 @@ pub fn load_captured_evidence(fixture: &RegressionFixture) -> Result<CapturedEvi
     }
     let raw = std::fs::read_to_string(&evidence_path)
         .map_err(|e| EvaluationError::ReadCapturedEvidence(evidence_path.clone(), e.to_string()))?;
-    let mut evidence: CapturedEvidence = serde_json::from_str(&raw)
-        .map_err(|e| EvaluationError::DecodeCapturedEvidence(evidence_path.clone(), e.to_string()))?;
+    let mut evidence: CapturedEvidence = serde_json::from_str(&raw).map_err(|e| {
+        EvaluationError::DecodeCapturedEvidence(evidence_path.clone(), e.to_string())
+    })?;
     if evidence.terminal_status.as_str().is_empty() {
         evidence.terminal_status = ReplayAttemptStatus::Completed;
     }
@@ -133,7 +144,8 @@ pub fn load_captured_evidence(fixture: &RegressionFixture) -> Result<CapturedEvi
 #[must_use]
 pub fn candidate_from_fixture(fixture: RegressionFixture, now: DateTime<Utc>) -> ReplayCandidate {
     let mut readiness = ReadinessStatus::FullyReplayable;
-    let mut reasons = vec!["fixture has captured evidence and expected comparison summaries".to_string()];
+    let mut reasons =
+        vec!["fixture has captured evidence and expected comparison summaries".to_string()];
     if !fixture.limitations.is_empty() {
         readiness = ReadinessStatus::PartiallyReplayable;
         reasons.extend(fixture.limitations.iter().cloned());

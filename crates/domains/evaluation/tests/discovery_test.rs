@@ -8,7 +8,7 @@ use chrono::Utc;
 use kura_evaluation::{
     CandidateScoringInput, DISCOVERY_PARTIAL_REASON_MAX_INSPECTED_RECORDS, DiscoveryPolicy,
     DiscoveryProgress, DiscoverySourceFilter, DiscoverySourceRecord, EvaluationError,
-    ProductLifecycleStatus, RedactionStatus, ReadinessStatus, ScoreBand, SourceKind, SourceRef,
+    ProductLifecycleStatus, ReadinessStatus, RedactionStatus, ScoreBand, SourceKind, SourceRef,
     StartDiscoveryRunInput, apply_discovery_run_progress, build_discovered_candidate_from_signals,
     build_discovery_run_from_policy, collect_discovery_source_refs, discovery_idempotency_scope,
     discovery_source_route, read_discovery_source_refs,
@@ -105,8 +105,6 @@ fn apply_discovery_run_progress_marks_partial_at_bounds() {
     assert_eq!(updated.updated_at, now + chrono::Duration::minutes(1));
 }
 
-
-
 #[test]
 fn build_discovered_candidate_from_signals_scores_and_explains_candidate() {
     let now = ts("2026-04-29T10:00:00Z");
@@ -139,7 +137,10 @@ fn build_discovered_candidate_from_signals_scores_and_explains_candidate() {
     assert_eq!(candidate.readiness_status, ReadinessStatus::FullyReplayable);
     assert_eq!(candidate.redaction_status, RedactionStatus::Redacted);
     assert_eq!(
-        candidate.explanation_fields.get("toolCallClass").and_then(|v| v.as_str()),
+        candidate
+            .explanation_fields
+            .get("toolCallClass")
+            .and_then(|v| v.as_str()),
         Some("mail.send")
     );
     assert_eq!(
@@ -230,7 +231,10 @@ fn discovery_source_refs_require_single_tenant() {
     assert_eq!(refs[2].route, "/v1/tool-calls/tool_call_1");
     assert_eq!(refs[4].route, "/v1/live-validations/ledger/ledger_1");
     // Route coverage for the raw string kinds:
-    assert_eq!(discovery_source_route(SourceKind::ToolCall, "tc"), "/v1/tool-calls/tc");
+    assert_eq!(
+        discovery_source_route(SourceKind::ToolCall, "tc"),
+        "/v1/tool-calls/tc"
+    );
     assert_eq!(
         discovery_source_route(SourceKind::LiveValidationLedger, "lv"),
         "/v1/live-validations/ledger/lv"
@@ -271,7 +275,8 @@ impl kura_evaluation::DiscoverySourceReader for FakeReader {
         &self,
         filter: &DiscoverySourceFilter,
     ) -> Result<(Vec<DiscoverySourceRecord>, String), EvaluationError> {
-        self.last_limit.store(filter.limit, std::sync::atomic::Ordering::Relaxed);
+        self.last_limit
+            .store(filter.limit, std::sync::atomic::Ordering::Relaxed);
         Ok((self.records.clone(), self.cursor.clone()))
     }
 }
@@ -288,7 +293,11 @@ fn read_discovery_source_refs_normalizes_bounds_and_rejects_cross_tenant_rows() 
         cursor: "cursor_next".to_string(),
         last_limit: std::sync::atomic::AtomicI64::new(0),
     };
-    assert_eq!(reader.last_limit.load(std::sync::atomic::Ordering::Relaxed), 0, "reader not called yet");
+    assert_eq!(
+        reader.last_limit.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "reader not called yet"
+    );
     let (refs, cursor) = read_discovery_source_refs(
         &reader,
         &DiscoverySourceFilter {

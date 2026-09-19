@@ -13,8 +13,8 @@ use crate::lifecycle::LifecycleActionKind;
 use crate::lifecycle::LifecycleState;
 use crate::lifecycle::SessionSegment;
 use crate::lifecycle::Thread;
-use crate::redaction::safe_summary;
 use crate::redaction::RedactionStatus;
+use crate::redaction::safe_summary;
 use crate::source::SourceKind;
 use crate::source::SourceLinkage;
 
@@ -240,7 +240,10 @@ mod tests {
             RuntimeResourceKind::ConnectorMessage,
         ];
         for kind in kinds {
-            let kind_str = serde_json::to_string(&kind).unwrap().trim_matches('"').to_string();
+            let kind_str = serde_json::to_string(&kind)
+                .unwrap()
+                .trim_matches('"')
+                .to_string();
             let projection = build_runtime_projection(&RuntimeProjectionInput {
                 projection_id: format!("rtp_{kind_str}"),
                 thread_id: "thr_1".to_string(),
@@ -290,7 +293,10 @@ mod tests {
             "contextPacking",
             "autonomousPruning",
         ] {
-            assert!(!raw.contains(forbidden), "projection leaked {forbidden} in {raw}");
+            assert!(
+                !raw.contains(forbidden),
+                "projection leaked {forbidden} in {raw}"
+            );
         }
     }
 }

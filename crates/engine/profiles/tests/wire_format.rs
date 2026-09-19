@@ -44,7 +44,10 @@ fn unknown_validation_state_survives_json_and_is_rejected_by_policy() {
     .expect("unknown validation state must decode");
     let err = validate_mutation(&input).expect_err("policy must reject the unknown state");
     assert!(matches!(err, ProfilesError::InvalidProfile(_)));
-    assert_eq!(validation_reason_code(&err), "provider_validation_state_unknown");
+    assert_eq!(
+        validation_reason_code(&err),
+        "provider_validation_state_unknown"
+    );
 }
 
 #[test]

@@ -42,7 +42,7 @@ use kura_billing::{
     UsageSummary,
 };
 
-use kura_identity::{has_permission, Permission};
+use kura_identity::{Permission, has_permission};
 
 use crate::error::ApiError;
 use crate::middleware::TenantContext;
@@ -219,7 +219,9 @@ async fn billing_quotas(
         .usage_summary(&tc.tenant_id, hosted(&state))
         .await
         .map_err(view_error)?;
-    Ok(Json(ListResponse { items: summary.quotas }))
+    Ok(Json(ListResponse {
+        items: summary.quotas,
+    }))
 }
 
 /// GET /v1/billing/quota-dashboard — the full tenant quota dashboard.
@@ -248,7 +250,9 @@ async fn billing_denials(
         .usage_summary(&tc.tenant_id, hosted(&state))
         .await
         .map_err(view_error)?;
-    Ok(Json(ListResponse { items: summary.denials }))
+    Ok(Json(ListResponse {
+        items: summary.denials,
+    }))
 }
 
 /// GET /v1/billing/denials/{denial_id} — denial detail for the caller's
@@ -326,7 +330,9 @@ async fn admin_billing_plan(
         ..Default::default()
     };
     if plan.plan_key.is_empty() {
-        return Err(BillingApiError::BadRequest("planKey is required".to_string()));
+        return Err(BillingApiError::BadRequest(
+            "planKey is required".to_string(),
+        ));
     }
     manager
         .assign_plan(plan.clone(), &tc.principal_id, &request.reason)
@@ -515,7 +521,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use axum::http::header::CONTENT_TYPE;
     use chrono::{DateTime, Utc};
@@ -605,7 +611,14 @@ mod tests {
             });
         }
 
-        fn seed_counter(&self, tenant_id: &str, category: &Category, period_id: &str, committed: i64, reserved: i64) {
+        fn seed_counter(
+            &self,
+            tenant_id: &str,
+            category: &Category,
+            period_id: &str,
+            committed: i64,
+            reserved: i64,
+        ) {
             self.state.lock().counters.insert(
                 counter_key(tenant_id, category, period_id),
                 UsageCounter {
@@ -622,10 +635,10 @@ mod tests {
         }
 
         fn seed_reservation(&self, reservation: UsageReservation) {
-            self.state.lock().reservations.insert(
-                reservation.reservation_id.clone(),
-                reservation,
-            );
+            self.state
+                .lock()
+                .reservations
+                .insert(reservation.reservation_id.clone(), reservation);
         }
     }
 
@@ -687,7 +700,11 @@ mod tests {
 
         fn save_usage_counter(&self, counter: UsageCounter) -> BoxFuture<'_, Result<()>> {
             self.state.lock().counters.insert(
-                counter_key(&counter.tenant_id, &counter.category, &counter.quota_period_id),
+                counter_key(
+                    &counter.tenant_id,
+                    &counter.category,
+                    &counter.quota_period_id,
+                ),
                 counter,
             );
             Box::pin(async { Ok(()) })
@@ -837,7 +854,10 @@ mod tests {
             Box::pin(async { Ok(()) })
         }
 
-        fn save_manual_adjustment(&self, adjustment: ManualAdjustment) -> BoxFuture<'_, Result<()>> {
+        fn save_manual_adjustment(
+            &self,
+            adjustment: ManualAdjustment,
+        ) -> BoxFuture<'_, Result<()>> {
             self.state.lock().adjustments.push(adjustment);
             Box::pin(async { Ok(()) })
         }
@@ -847,6 +867,7 @@ mod tests {
 
     fn test_config() -> kura_config::Config {
         kura_config::Config {
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-billing".to_string(),
@@ -854,11 +875,24 @@ mod tests {
             version: "0.1.0".to_string(),
             llm: kura_config::LlmConfig::default(),
             connectors: kura_config::ConnectorConfig {
-                discord: kura_config::DiscordConnectorConfig { enabled: false, ..Default::default() },
-                telegram: kura_config::TelegramConnectorConfig { enabled: false, ..Default::default() },
-                slack: kura_config::SlackConnectorConfig { enabled: false, ..Default::default() },
-                matrix: kura_config::MatrixConnectorConfig { enabled: false, ..Default::default() },
+                discord: kura_config::DiscordConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                telegram: kura_config::TelegramConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                slack: kura_config::SlackConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                matrix: kura_config::MatrixConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
             },
+            egress: Default::default(),
         }
     }
 
@@ -883,7 +917,9 @@ mod tests {
             .uri(uri)
             .header(CONTENT_TYPE, "application/json");
         let req = match body {
-            Some(payload) => builder.body(Body::from(payload.to_string())).expect("request"),
+            Some(payload) => builder
+                .body(Body::from(payload.to_string()))
+                .expect("request"),
             None => builder.body(Body::empty()).expect("request"),
         };
         req
@@ -900,12 +936,13 @@ mod tests {
         permissions: Vec<Permission>,
     ) -> Request<Body> {
         let mut req = request(method, uri, body);
-        req.extensions_mut().insert(TenantContext(kura_identity::TenantContext {
-            tenant_id: tenant_id.to_string(),
-            principal_id: format!("prn_{tenant_id}"),
-            permissions,
-            ..Default::default()
-        }));
+        req.extensions_mut()
+            .insert(TenantContext(kura_identity::TenantContext {
+                tenant_id: tenant_id.to_string(),
+                principal_id: format!("prn_{tenant_id}"),
+                permissions,
+                ..Default::default()
+            }));
         req
     }
 
@@ -926,7 +963,9 @@ mod tests {
     async fn send(app: &axum::Router, req: Request<Body>) -> (StatusCode, serde_json::Value) {
         let response = app.clone().oneshot(req).await.expect("oneshot");
         let status = response.status();
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let json = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -949,13 +988,37 @@ mod tests {
         repo.seed_plan("ten_r38_b", "finite", EnforcementMode::ENFORCED);
         let app = app(billing_state(repo));
 
-        let (status, json) = send(&app, tenant_request("GET", "/v1/billing/usage", None, "ten_r38_a", owner("ten_r38_a"))).await;
+        let (status, json) = send(
+            &app,
+            tenant_request(
+                "GET",
+                "/v1/billing/usage",
+                None,
+                "ten_r38_a",
+                owner("ten_r38_a"),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "usage should be 200: {json}");
         assert_eq!(json["tenantId"], "ten_r38_a");
         assert_ne!(json["tenantId"], "ten_r38_b");
 
-        let (status, _) = send(&app, tenant_request("GET", "/v1/billing/plan", None, "ten_r38_a", viewer("ten_r38_a"))).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "viewer without billing.view should be 403");
+        let (status, _) = send(
+            &app,
+            tenant_request(
+                "GET",
+                "/v1/billing/plan",
+                None,
+                "ten_r38_a",
+                viewer("ten_r38_a"),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "viewer without billing.view should be 403"
+        );
     }
 
     /// Port of TestHostedBillingInspectionProjectsFiniteUnlimitedAndDevelopmentPlans.
@@ -973,8 +1036,22 @@ mod tests {
             // to the unlimited development plan.
             ("ten_r38_development", "development", "unlimited"),
         ] {
-            let (status, json) = send(&app, tenant_request("GET", "/v1/billing/usage", None, tenant_id, owner(tenant_id))).await;
-            assert_eq!(status, StatusCode::OK, "usage for {tenant_id} should be 200: {json}");
+            let (status, json) = send(
+                &app,
+                tenant_request(
+                    "GET",
+                    "/v1/billing/usage",
+                    None,
+                    tenant_id,
+                    owner(tenant_id),
+                ),
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "usage for {tenant_id} should be 200: {json}"
+            );
             assert_eq!(json["tenantId"], tenant_id);
             assert_eq!(json["planKey"], want_plan_key);
             assert_eq!(json["enforcementMode"], want_enforcement);
@@ -990,13 +1067,41 @@ mod tests {
         repo.seed_plan("ten_r38_evidence_a", "finite", EnforcementMode::ENFORCED);
         repo.seed_plan("ten_r38_evidence_b", "finite", EnforcementMode::ENFORCED);
         let category = Category::from(Category::RUN_LAUNCHES);
-        repo.seed_denial("ten_r38_evidence_a", "denial_ten_r38_evidence_a", &category, "quota_denied:run_launches_exhausted");
-        repo.seed_denial("ten_r38_evidence_b", "denial_ten_r38_evidence_b", &category, "quota_denied:run_launches_exhausted");
-        repo.seed_adjustment("ten_r38_evidence_a", "adjustment_ten_r38_evidence_a", &category);
-        repo.seed_adjustment("ten_r38_evidence_b", "adjustment_ten_r38_evidence_b", &category);
+        repo.seed_denial(
+            "ten_r38_evidence_a",
+            "denial_ten_r38_evidence_a",
+            &category,
+            "quota_denied:run_launches_exhausted",
+        );
+        repo.seed_denial(
+            "ten_r38_evidence_b",
+            "denial_ten_r38_evidence_b",
+            &category,
+            "quota_denied:run_launches_exhausted",
+        );
+        repo.seed_adjustment(
+            "ten_r38_evidence_a",
+            "adjustment_ten_r38_evidence_a",
+            &category,
+        );
+        repo.seed_adjustment(
+            "ten_r38_evidence_b",
+            "adjustment_ten_r38_evidence_b",
+            &category,
+        );
         let app = app(billing_state(repo));
 
-        let (status, json) = send(&app, tenant_request("GET", "/v1/billing/usage", None, "ten_r38_evidence_a", owner("ten_r38_evidence_a"))).await;
+        let (status, json) = send(
+            &app,
+            tenant_request(
+                "GET",
+                "/v1/billing/usage",
+                None,
+                "ten_r38_evidence_a",
+                owner("ten_r38_evidence_a"),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         let body = serde_json::to_string(&json).expect("body string");
         assert!(body.contains("denial_ten_r38_evidence_a"));
@@ -1004,7 +1109,17 @@ mod tests {
         assert!(body.contains("adjustment_ten_r38_evidence_a"));
         assert!(!body.contains("adjustment_ten_r38_evidence_b"));
 
-        let (status, json) = send(&app, tenant_request("GET", "/v1/billing/denials", None, "ten_r38_evidence_a", owner("ten_r38_evidence_a"))).await;
+        let (status, json) = send(
+            &app,
+            tenant_request(
+                "GET",
+                "/v1/billing/denials",
+                None,
+                "ten_r38_evidence_a",
+                owner("ten_r38_evidence_a"),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         let body = serde_json::to_string(&json).expect("body string");
         assert!(body.contains("denial_ten_r38_evidence_a"));
@@ -1018,27 +1133,96 @@ mod tests {
         repo.seed_plan("ten_r47_a", "finite", EnforcementMode::ENFORCED);
         repo.seed_plan("ten_r47_b", "finite", EnforcementMode::ENFORCED);
         let category = Category::from(Category::RUN_LAUNCHES);
-        repo.seed_denial("ten_r47_a", "denial_ten_r47_a", &category, "quota_denied:run_launches_exhausted");
-        repo.seed_denial("ten_r47_b", "denial_ten_r47_b", &category, "quota_denied:run_launches_exhausted");
+        repo.seed_denial(
+            "ten_r47_a",
+            "denial_ten_r47_a",
+            &category,
+            "quota_denied:run_launches_exhausted",
+        );
+        repo.seed_denial(
+            "ten_r47_b",
+            "denial_ten_r47_b",
+            &category,
+            "quota_denied:run_launches_exhausted",
+        );
         let app = app(billing_state(repo));
 
-        let (status, json) = send(&app, tenant_request("GET", "/v1/billing/quota-dashboard", None, "ten_r47_a", owner("ten_r47_a"))).await;
+        let (status, json) = send(
+            &app,
+            tenant_request(
+                "GET",
+                "/v1/billing/quota-dashboard",
+                None,
+                "ten_r47_a",
+                owner("ten_r47_a"),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["tenantId"], "ten_r47_a");
-        assert!(json["sections"].as_array().map(|s| !s.is_empty()).unwrap_or(false));
+        assert!(
+            json["sections"]
+                .as_array()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false)
+        );
 
-        let (status, json) = send(&app, tenant_request("GET", "/v1/billing/denials/denial_ten_r47_a", None, "ten_r47_a", owner("ten_r47_a"))).await;
+        let (status, json) = send(
+            &app,
+            tenant_request(
+                "GET",
+                "/v1/billing/denials/denial_ten_r47_a",
+                None,
+                "ten_r47_a",
+                owner("ten_r47_a"),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert!(!serde_json::to_string(&json).unwrap().contains("ten_r47_b"));
 
-        let (status, _) = send(&app, tenant_request("GET", "/v1/billing/denials/denial_ten_r47_b", None, "ten_r47_a", owner("ten_r47_a"))).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "cross-tenant denial lookup must hide the record");
+        let (status, _) = send(
+            &app,
+            tenant_request(
+                "GET",
+                "/v1/billing/denials/denial_ten_r47_b",
+                None,
+                "ten_r47_a",
+                owner("ten_r47_a"),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "cross-tenant denial lookup must hide the record"
+        );
 
         // billing.view alone cannot export evidence.
-        let (status, _) = send(&app, tenant_request("POST", "/v1/billing/denials/denial_ten_r47_a/evidence-export", None, "ten_r47_a", viewer("ten_r47_a"))).await;
+        let (status, _) = send(
+            &app,
+            tenant_request(
+                "POST",
+                "/v1/billing/denials/denial_ten_r47_a/evidence-export",
+                None,
+                "ten_r47_a",
+                viewer("ten_r47_a"),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
 
-        let (status, json) = send(&app, tenant_request("POST", "/v1/billing/denials/denial_ten_r47_a/evidence-export", None, "ten_r47_a", owner("ten_r47_a"))).await;
+        let (status, json) = send(
+            &app,
+            tenant_request(
+                "POST",
+                "/v1/billing/denials/denial_ten_r47_a/evidence-export",
+                None,
+                "ten_r47_a",
+                owner("ten_r47_a"),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         let body = serde_json::to_string(&json).unwrap();
         assert!(body.contains("\"redactions\""));
@@ -1061,24 +1245,61 @@ mod tests {
         }
         let app = app(billing_state(repo));
 
-        let (status, json) = send(&app, tenant_request("GET", "/v1/billing/denials/denial_run_launches", None, "ten_r47_detail", owner("ten_r47_detail"))).await;
+        let (status, json) = send(
+            &app,
+            tenant_request(
+                "GET",
+                "/v1/billing/denials/denial_run_launches",
+                None,
+                "ten_r47_detail",
+                owner("ten_r47_detail"),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["category"], "run_launches");
         assert_eq!(json["classification"], "quota_exhaustion");
-        assert_ne!(json["operationRef"], json["operationKey"], "operation ref must be redacted");
+        assert_ne!(
+            json["operationRef"], json["operationKey"],
+            "operation ref must be redacted"
+        );
 
         for (denial_id, want) in [
             ("denial_unavailable", "quota_state_unavailable"),
             ("denial_operator", "operator_action_needed"),
             ("denial_abuse", "abuse_restriction"),
         ] {
-            let (status, json) = send(&app, tenant_request("GET", &format!("/v1/billing/denials/{denial_id}"), None, "ten_r47_detail", owner("ten_r47_detail"))).await;
+            let (status, json) = send(
+                &app,
+                tenant_request(
+                    "GET",
+                    &format!("/v1/billing/denials/{denial_id}"),
+                    None,
+                    "ten_r47_detail",
+                    owner("ten_r47_detail"),
+                ),
+            )
+            .await;
             assert_eq!(status, StatusCode::OK, "{denial_id} detail should be 200");
             assert_eq!(json["classification"], want, "{denial_id}");
         }
 
-        let (status, _) = send(&app, tenant_request("GET", "/v1/billing/denials/denial_run_launches", None, "ten_r47_detail", viewer("ten_r47_detail"))).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "unauthorized denial detail must be 403");
+        let (status, _) = send(
+            &app,
+            tenant_request(
+                "GET",
+                "/v1/billing/denials/denial_run_launches",
+                None,
+                "ten_r47_detail",
+                viewer("ten_r47_detail"),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "unauthorized denial detail must be 403"
+        );
     }
 
     /// Port of TestHostedBillingAdminRequiresManagePermission.
@@ -1089,13 +1310,17 @@ mod tests {
         let app = app(billing_state(repo));
 
         // Operator (no billing.manage) -> 403.
-        let (status, _) = send(&app, tenant_request(
-            "POST",
-            "/v1/admin/billing/tenants/ten_r38_admin/plan",
-            Some(r#"{"planKey":"finite","enforcementMode":"enforced","reason":"test"}"#),
-            "ten_r38_admin",
-            vec![],
-        )).await;
+        let (status, _) = send(
+            &app,
+            tenant_request(
+                "POST",
+                "/v1/admin/billing/tenants/ten_r38_admin/plan",
+                Some(r#"{"planKey":"finite","enforcementMode":"enforced","reason":"test"}"#),
+                "ten_r38_admin",
+                vec![],
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
 
         // Admin -> 200 with the assigned plan.
@@ -1106,17 +1331,25 @@ mod tests {
             "ten_r38_admin",
             owner("ten_r38_admin"),
         )).await;
-        assert_eq!(status, StatusCode::OK, "admin plan assignment should be 200: {json}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "admin plan assignment should be 200: {json}"
+        );
         assert_eq!(json["planKey"], "finite");
 
         // Cross-tenant target -> 403.
-        let (status, _) = send(&app, tenant_request(
-            "POST",
-            "/v1/admin/billing/tenants/ten_other/plan",
-            Some(r#"{"planKey":"finite","enforcementMode":"enforced","reason":"test"}"#),
-            "ten_r38_admin",
-            owner("ten_r38_admin"),
-        )).await;
+        let (status, _) = send(
+            &app,
+            tenant_request(
+                "POST",
+                "/v1/admin/billing/tenants/ten_other/plan",
+                Some(r#"{"planKey":"finite","enforcementMode":"enforced","reason":"test"}"#),
+                "ten_r38_admin",
+                owner("ten_r38_admin"),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
@@ -1124,7 +1357,11 @@ mod tests {
     #[tokio::test]
     async fn billing_admin_plan_assignment_persists_evidence() {
         let repo = Arc::new(TestBillingRepo::default());
-        repo.seed_plan("ten_r38_plan_assignment", "development", EnforcementMode::UNLIMITED);
+        repo.seed_plan(
+            "ten_r38_plan_assignment",
+            "development",
+            EnforcementMode::UNLIMITED,
+        );
         let app = app(billing_state(repo.clone()));
 
         let (status, json) = send(&app, tenant_request(
@@ -1134,9 +1371,19 @@ mod tests {
             "ten_r38_plan_assignment",
             owner("ten_r38_plan_assignment"),
         )).await;
-        assert_eq!(status, StatusCode::OK, "plan assignment should be 200: {json}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "plan assignment should be 200: {json}"
+        );
 
-        let plan = repo.state.lock().plans.get("ten_r38_plan_assignment").cloned().expect("plan persisted");
+        let plan = repo
+            .state
+            .lock()
+            .plans
+            .get("ten_r38_plan_assignment")
+            .cloned()
+            .expect("plan persisted");
         assert_eq!(plan.plan_key, "finite");
         assert_eq!(plan.assignment_reason, "customer upgraded");
         assert!(!plan.assigned_by_principal_id.is_empty());
@@ -1146,20 +1393,32 @@ mod tests {
     #[tokio::test]
     async fn billing_admin_quota_override_lowered_below_usage_denies_new_work() {
         let repo = Arc::new(TestBillingRepo::default());
-        repo.seed_plan("ten_r38_lowered_override", "finite", EnforcementMode::ENFORCED);
+        repo.seed_plan(
+            "ten_r38_lowered_override",
+            "finite",
+            EnforcementMode::ENFORCED,
+        );
         let category = Category::from(Category::RUN_LAUNCHES);
         let period_id = format!("period_ten_r38_lowered_override_{category}");
         repo.seed_counter("ten_r38_lowered_override", &category, &period_id, 1, 1);
         let app = app(billing_state(repo.clone()));
 
-        let (status, json) = send(&app, tenant_request(
-            "POST",
-            "/v1/admin/billing/tenants/ten_r38_lowered_override/quota-overrides",
-            Some(r#"{"category":"run_launches","limit":1,"reason":"downgrade"}"#),
-            "ten_r38_lowered_override",
-            owner("ten_r38_lowered_override"),
-        )).await;
-        assert_eq!(status, StatusCode::OK, "quota override should be 200: {json}");
+        let (status, json) = send(
+            &app,
+            tenant_request(
+                "POST",
+                "/v1/admin/billing/tenants/ten_r38_lowered_override/quota-overrides",
+                Some(r#"{"category":"run_launches","limit":1,"reason":"downgrade"}"#),
+                "ten_r38_lowered_override",
+                owner("ten_r38_lowered_override"),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "quota override should be 200: {json}"
+        );
         assert_eq!(json["limit"], 1);
 
         // The manager (backed by the same repo) must now deny new work.
@@ -1175,7 +1434,10 @@ mod tests {
             })
             .await
             .expect("reserve");
-        assert!(matches!(result.failure, Some(BillingError::QuotaDenied)), "{result:?}");
+        assert!(
+            matches!(result.failure, Some(BillingError::QuotaDenied)),
+            "{result:?}"
+        );
         assert!(result.denial.is_some());
         assert!(result.quota.as_ref().map(|q| q.over_limit).unwrap_or(false));
     }
@@ -1202,15 +1464,45 @@ mod tests {
         let app = app(billing_state(repo));
 
         let routes: &[(&str, &str, &str)] = &[
-            ("plan", "/v1/admin/billing/tenants/ten_r38_admin_denied/plan", r#"{"planKey":"finite","enforcementMode":"enforced","reason":"test"}"#),
-            ("override", "/v1/admin/billing/tenants/ten_r38_admin_denied/quota-overrides", r#"{"category":"run_launches","limit":1,"reason":"test"}"#),
-            ("adjustment", "/v1/admin/billing/tenants/ten_r38_admin_denied/manual-adjustments", r#"{"category":"run_launches","quotaPeriodId":"period_ten_r38_admin_denied_run_launches","amountDelta":1,"reason":"test"}"#),
-            ("resolve", "/v1/admin/billing/tenants/ten_r38_admin_denied/reservations/reservation_denied_admin_route/resolve", r#"{"outcome":"released","reason":"test"}"#),
+            (
+                "plan",
+                "/v1/admin/billing/tenants/ten_r38_admin_denied/plan",
+                r#"{"planKey":"finite","enforcementMode":"enforced","reason":"test"}"#,
+            ),
+            (
+                "override",
+                "/v1/admin/billing/tenants/ten_r38_admin_denied/quota-overrides",
+                r#"{"category":"run_launches","limit":1,"reason":"test"}"#,
+            ),
+            (
+                "adjustment",
+                "/v1/admin/billing/tenants/ten_r38_admin_denied/manual-adjustments",
+                r#"{"category":"run_launches","quotaPeriodId":"period_ten_r38_admin_denied_run_launches","amountDelta":1,"reason":"test"}"#,
+            ),
+            (
+                "resolve",
+                "/v1/admin/billing/tenants/ten_r38_admin_denied/reservations/reservation_denied_admin_route/resolve",
+                r#"{"outcome":"released","reason":"test"}"#,
+            ),
         ];
         for denied_permissions in [vec![], vec![Permission::BillingView]] {
             for (name, path, body) in routes {
-                let (status, _) = send(&app, tenant_request("POST", path, Some(body), "ten_r38_admin_denied", denied_permissions.clone())).await;
-                assert_eq!(status, StatusCode::FORBIDDEN, "{name} should be 403 for the denied context");
+                let (status, _) = send(
+                    &app,
+                    tenant_request(
+                        "POST",
+                        path,
+                        Some(body),
+                        "ten_r38_admin_denied",
+                        denied_permissions.clone(),
+                    ),
+                )
+                .await;
+                assert_eq!(
+                    status,
+                    StatusCode::FORBIDDEN,
+                    "{name} should be 403 for the denied context"
+                );
             }
         }
     }
@@ -1227,7 +1519,8 @@ mod tests {
             reservation_id: "reservation_resolve".to_string(),
             tenant_id: "ten_r38_resolve".to_string(),
             category: category.clone(),
-            quota_period_id: period_id.clone(),            operation_key: "tenant:ten_r38_resolve:run:client_1".to_string(),
+            quota_period_id: period_id.clone(),
+            operation_key: "tenant:ten_r38_resolve:run:client_1".to_string(),
             amount_reserved: 1,
             status: ReservationStatus::from(ReservationStatus::OPERATOR_ACTION_NEEDED),
             created_at: Utc::now(),
@@ -1243,13 +1536,32 @@ mod tests {
             "ten_r38_resolve",
             owner("ten_r38_resolve"),
         )).await;
-        assert_eq!(status, StatusCode::OK, "reservation resolution should be 200: {json}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "reservation resolution should be 200: {json}"
+        );
         assert_eq!(json["status"], "released");
 
-        let reservation = repo.state.lock().reservations.get("reservation_resolve").cloned().expect("reservation");
+        let reservation = repo
+            .state
+            .lock()
+            .reservations
+            .get("reservation_resolve")
+            .cloned()
+            .expect("reservation");
         assert_eq!(reservation.status, ReservationStatus::RELEASED);
-        let counter = repo.state.lock().counters.get(&counter_key("ten_r38_resolve", &category, &period_id)).cloned().expect("counter");
-        assert_eq!(counter.reserved_amount, 0, "reserved amount must be released");
+        let counter = repo
+            .state
+            .lock()
+            .counters
+            .get(&counter_key("ten_r38_resolve", &category, &period_id))
+            .cloned()
+            .expect("counter");
+        assert_eq!(
+            counter.reserved_amount, 0,
+            "reserved amount must be released"
+        );
     }
 
     /// Go handleHostedBilling's nil-manager guard: 500 when unconfigured.
@@ -1257,7 +1569,11 @@ mod tests {
     async fn billing_manager_not_configured_returns_500() {
         let state = test_state();
         let app = app(state);
-        let (status, json) = send(&app, tenant_request("GET", "/v1/billing/usage", None, "ten_a", owner("ten_a"))).await;
+        let (status, json) = send(
+            &app,
+            tenant_request("GET", "/v1/billing/usage", None, "ten_a", owner("ten_a")),
+        )
+        .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(json["error"], "billing manager is not configured");
     }
@@ -1272,8 +1588,22 @@ mod tests {
             TestBillingRepo::default(),
         ))));
         let app = app(state);
-        let (status, json) = send(&app, tenant_request("GET", "/v1/billing/usage", None, "ten_hosted_no_plan", owner("ten_hosted_no_plan"))).await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "hosted tenant without a plan fails closed: {json}");
+        let (status, json) = send(
+            &app,
+            tenant_request(
+                "GET",
+                "/v1/billing/usage",
+                None,
+                "ten_hosted_no_plan",
+                owner("ten_hosted_no_plan"),
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "hosted tenant without a plan fails closed: {json}"
+        );
     }
 
     /// Go handleHostedBilling's unknown path default: 404.
@@ -1282,7 +1612,11 @@ mod tests {
         let repo = Arc::new(TestBillingRepo::default());
         repo.seed_plan("ten_a", "finite", EnforcementMode::ENFORCED);
         let app = app(billing_state(repo));
-        let (status, _) = send(&app, tenant_request("GET", "/v1/billing/nope", None, "ten_a", owner("ten_a"))).await;
+        let (status, _) = send(
+            &app,
+            tenant_request("GET", "/v1/billing/nope", None, "ten_a", owner("ten_a")),
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }

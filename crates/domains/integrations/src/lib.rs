@@ -286,13 +286,21 @@ pub struct FakeBackend;
 
 impl FakeBackend {
     fn supports_domain_kind(&self, domain_kind: &str) -> bool {
-        self.supported_domain_kinds().iter().any(|d| d == domain_kind)
+        self.supported_domain_kinds()
+            .iter()
+            .any(|d| d == domain_kind)
     }
 
     #[must_use]
-    pub fn run_fault_drill(&self, resource: &Resource, fault_type: FakeFaultType) -> FakeFaultDrillResult {
+    pub fn run_fault_drill(
+        &self,
+        resource: &Resource,
+        fault_type: FakeFaultType,
+    ) -> FakeFaultDrillResult {
         let (classification, operator_action_needed) = match fault_type {
-            FakeFaultType::AuthExpiry | FakeFaultType::MalformedResponse => ("operator_action_needed", true),
+            FakeFaultType::AuthExpiry | FakeFaultType::MalformedResponse => {
+                ("operator_action_needed", true)
+            }
             FakeFaultType::ProviderUnavailable => ("retry_exhausted", true),
             _ => ("recovered", false),
         };
@@ -317,10 +325,22 @@ impl Backend for FakeBackend {
         input: &Map<String, Value>,
     ) -> Result<ProbeResult, IntegrationError> {
         let mut result_summary = Map::new();
-        result_summary.insert("integrationId".to_string(), Value::String(resource.integration_id.clone()));
-        result_summary.insert("domainKind".to_string(), Value::String(resource.domain_kind.clone()));
-        result_summary.insert("backendKind".to_string(), Value::String(resource.backend_binding.backend_kind.as_str().to_string()));
-        result_summary.insert("probeKind".to_string(), Value::String(probe_kind.as_str().to_string()));
+        result_summary.insert(
+            "integrationId".to_string(),
+            Value::String(resource.integration_id.clone()),
+        );
+        result_summary.insert(
+            "domainKind".to_string(),
+            Value::String(resource.domain_kind.clone()),
+        );
+        result_summary.insert(
+            "backendKind".to_string(),
+            Value::String(resource.backend_binding.backend_kind.as_str().to_string()),
+        );
+        result_summary.insert(
+            "probeKind".to_string(),
+            Value::String(probe_kind.as_str().to_string()),
+        );
         if !input.is_empty() {
             result_summary.insert("input".to_string(), Value::Object(input.clone()));
         }
@@ -329,15 +349,24 @@ impl Backend for FakeBackend {
             ProbeKind::Mutate => format!("fake mutate probe for {}", resource.display_name),
         };
         result_summary.insert("message".to_string(), Value::String(message));
-        Ok(ProbeResult { probe_kind, status: "completed".to_string(), result_summary, ..ProbeResult::default() })
+        Ok(ProbeResult {
+            probe_kind,
+            status: "completed".to_string(),
+            result_summary,
+            ..ProbeResult::default()
+        })
     }
 }
 
 #[must_use]
 pub fn live_validation_matrix_rows() -> Vec<kura_livevalidation::MatrixRow> {
     let classes = [
-        kura_livevalidation::ToolClass::from(kura_livevalidation::ToolClass::INTEGRATION_PROBE_READ),
-        kura_livevalidation::ToolClass::from(kura_livevalidation::ToolClass::INTEGRATION_PROBE_MUTATION),
+        kura_livevalidation::ToolClass::from(
+            kura_livevalidation::ToolClass::INTEGRATION_PROBE_READ,
+        ),
+        kura_livevalidation::ToolClass::from(
+            kura_livevalidation::ToolClass::INTEGRATION_PROBE_MUTATION,
+        ),
     ];
     let mut rows = Vec::new();
     for tool_class in classes {
@@ -377,7 +406,8 @@ impl Manager {
         inner.by_id.clear();
         inner.order.clear();
         for item in items {
-            let id = item.integration_id.clone(); inner.order.push(id.clone());
+            let id = item.integration_id.clone();
+            inner.order.push(id.clone());
             inner.by_id.insert(id, item);
         }
     }
@@ -385,7 +415,11 @@ impl Manager {
     #[must_use]
     pub fn list(&self) -> Vec<Resource> {
         let inner = self.inner.read();
-        inner.order.iter().map(|id| inner.by_id[id].clone()).collect()
+        inner
+            .order
+            .iter()
+            .map(|id| inner.by_id[id].clone())
+            .collect()
     }
 
     #[must_use]
@@ -460,43 +494,83 @@ impl Manager {
         if !inner.by_id.contains_key(&resource.integration_id) {
             inner.order.push(resource.integration_id.clone());
         }
-        inner.by_id.insert(resource.integration_id.clone(), resource.clone());
+        inner
+            .by_id
+            .insert(resource.integration_id.clone(), resource.clone());
         if resource.canonical_default {
             demote_sibling_defaults(&mut inner, &resource);
-            inner.by_id.insert(resource.integration_id.clone(), resource.clone());
+            inner
+                .by_id
+                .insert(resource.integration_id.clone(), resource.clone());
         }
         Ok(resource)
     }
 
-    pub fn update_readiness(&self, integration_id: &str, input: UpdateReadinessInput) -> Result<Resource, IntegrationError> {
+    pub fn update_readiness(
+        &self,
+        integration_id: &str,
+        input: UpdateReadinessInput,
+    ) -> Result<Resource, IntegrationError> {
         let mut inner = self.inner.write();
-        let resource = inner.by_id.get(integration_id.trim()).cloned().ok_or(IntegrationError::IntegrationNotFound)?;
+        let resource = inner
+            .by_id
+            .get(integration_id.trim())
+            .cloned()
+            .ok_or(IntegrationError::IntegrationNotFound)?;
         let resource = update_readiness_locked(resource, input);
-        inner.by_id.insert(resource.integration_id.clone(), resource.clone());
+        inner
+            .by_id
+            .insert(resource.integration_id.clone(), resource.clone());
         Ok(resource)
     }
 
-    pub fn set_canonical_default(&self, integration_id: &str) -> Result<Resource, IntegrationError> {
+    pub fn set_canonical_default(
+        &self,
+        integration_id: &str,
+    ) -> Result<Resource, IntegrationError> {
         let mut inner = self.inner.write();
-        let mut resource = inner.by_id.get(integration_id.trim()).cloned().ok_or(IntegrationError::IntegrationNotFound)?;
+        let mut resource = inner
+            .by_id
+            .get(integration_id.trim())
+            .cloned()
+            .ok_or(IntegrationError::IntegrationNotFound)?;
         resource.canonical_default = true;
         resource.updated_at = Utc::now();
         demote_sibling_defaults(&mut inner, &resource);
-        inner.by_id.insert(resource.integration_id.clone(), resource.clone());
+        inner
+            .by_id
+            .insert(resource.integration_id.clone(), resource.clone());
         Ok(resource)
     }
 
-    pub fn disconnect(&self, integration_id: &str, reason: &str) -> Result<Resource, IntegrationError> {
+    pub fn disconnect(
+        &self,
+        integration_id: &str,
+        reason: &str,
+    ) -> Result<Resource, IntegrationError> {
         let mut inner = self.inner.write();
-        let resource = inner.by_id.get(integration_id.trim()).cloned().ok_or(IntegrationError::IntegrationNotFound)?;
+        let resource = inner
+            .by_id
+            .get(integration_id.trim())
+            .cloned()
+            .ok_or(IntegrationError::IntegrationNotFound)?;
         let resource = disconnect_locked(resource, reason);
-        inner.by_id.insert(resource.integration_id.clone(), resource.clone());
+        inner
+            .by_id
+            .insert(resource.integration_id.clone(), resource.clone());
         Ok(resource)
     }
 
-    pub fn binding_summary(&self, integration_id: &str, captured_at: DateTime<Utc>) -> Result<BindingSummary, IntegrationError> {
+    pub fn binding_summary(
+        &self,
+        integration_id: &str,
+        captured_at: DateTime<Utc>,
+    ) -> Result<BindingSummary, IntegrationError> {
         let inner = self.inner.read();
-        let resource = inner.by_id.get(integration_id.trim()).ok_or(IntegrationError::IntegrationNotFound)?;
+        let resource = inner
+            .by_id
+            .get(integration_id.trim())
+            .ok_or(IntegrationError::IntegrationNotFound)?;
         Ok(resource_binding_summary(resource, captured_at))
     }
 
@@ -508,8 +582,15 @@ impl Manager {
     ) -> Result<(Resource, ProbeResult, BindingSummary), IntegrationError> {
         let (resource, backend) = {
             let inner = self.inner.read();
-            let resource = inner.by_id.get(integration_id.trim()).cloned().ok_or(IntegrationError::IntegrationNotFound)?;
-            let backend = self.backends.get(&resource.backend_binding.backend_kind).cloned();
+            let resource = inner
+                .by_id
+                .get(integration_id.trim())
+                .cloned()
+                .ok_or(IntegrationError::IntegrationNotFound)?;
+            let backend = self
+                .backends
+                .get(&resource.backend_binding.backend_kind)
+                .cloned();
             (resource, backend)
         };
         let Some(backend) = backend else {
@@ -614,11 +695,19 @@ fn resource_binding_summary(resource: &Resource, captured_at: DateTime<Utc>) -> 
         integration_id: resource.integration_id.clone(),
         domain_kind: resource.domain_kind.clone(),
         display_name: resource.display_name.clone(),
-        account_key: resource.account_binding.as_ref().map(|a| a.account_key.clone()).unwrap_or_default(),
+        account_key: resource
+            .account_binding
+            .as_ref()
+            .map(|a| a.account_key.clone())
+            .unwrap_or_default(),
         canonical_default: resource.canonical_default,
         readiness_at_invocation: resource.readiness_status,
         backend_kind: resource.backend_binding.backend_kind,
-        secret_resolution: resource.provenance.as_ref().map(|p| p.secret_resolution.clone()).unwrap_or_default(),
+        secret_resolution: resource
+            .provenance
+            .as_ref()
+            .map(|p| p.secret_resolution.clone())
+            .unwrap_or_default(),
         environment_scope: resource.environment_scope.clone(),
         captured_at,
     }

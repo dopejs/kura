@@ -58,7 +58,9 @@ impl<'de> Deserialize<'de> for TokenStatus {
             "revoked" => Ok(Self::Revoked),
             "expired" => Ok(Self::Expired),
             "rotated" => Ok(Self::Rotated),
-            other => Err(serde::de::Error::custom(format!("unknown token status {other:?}"))),
+            other => Err(serde::de::Error::custom(format!(
+                "unknown token status {other:?}"
+            ))),
         }
     }
 }
@@ -190,7 +192,11 @@ impl Manager {
     /// plaintext code (only the hash is retained).
     pub fn start_pairing(&self, input: StartPairingInput) -> Result<(Pairing, String), AuthError> {
         let mode = input.mode.unwrap_or(PairingMode::Local);
-        let ttl_seconds = if input.ttl_seconds <= 0 { 600 } else { input.ttl_seconds };
+        let ttl_seconds = if input.ttl_seconds <= 0 {
+            600
+        } else {
+            input.ttl_seconds
+        };
 
         let now = Utc::now();
         let code = random_digits(6);
@@ -208,7 +214,9 @@ impl Manager {
         };
 
         let mut state = self.state.write();
-        state.pairings.insert(pairing.pairing_id.clone(), pairing.clone());
+        state
+            .pairings
+            .insert(pairing.pairing_id.clone(), pairing.clone());
         state.pairing_ids.push(pairing.pairing_id.clone());
         Ok((pairing, code))
     }
@@ -262,7 +270,9 @@ impl Manager {
         pairing.updated_at = now;
         pairing.completed_at = Some(now);
         pairing.code_preview = String::new();
-        state.pairings.insert(pairing_id.to_string(), pairing.clone());
+        state
+            .pairings
+            .insert(pairing_id.to_string(), pairing.clone());
         state.tokens.insert(token.token_id.clone(), token.clone());
         state.token_ids.push(token.token_id.clone());
 
@@ -338,7 +348,10 @@ impl Manager {
             TokenStatus::Rotated => return Err(AuthError::TokenRotated),
         }
         let now = Utc::now();
-        if old_token.expires_at.is_some_and(|expires_at| expires_at <= now) {
+        if old_token
+            .expires_at
+            .is_some_and(|expires_at| expires_at <= now)
+        {
             old_token.status = TokenStatus::Expired;
             old_token.updated_at = now;
             state.tokens.insert(token_id.to_string(), old_token);
@@ -366,8 +379,12 @@ impl Manager {
         old_token.status = TokenStatus::Rotated;
         old_token.updated_at = now;
         old_token.rotated_to_token_id = replacement.token_id.clone();
-        state.tokens.insert(old_token.token_id.clone(), old_token.clone());
-        state.tokens.insert(replacement.token_id.clone(), replacement.clone());
+        state
+            .tokens
+            .insert(old_token.token_id.clone(), old_token.clone());
+        state
+            .tokens
+            .insert(replacement.token_id.clone(), replacement.clone());
         state.token_ids.push(replacement.token_id.clone());
         Ok((old_token, replacement, replacement_secret))
     }
@@ -443,7 +460,10 @@ impl Manager {
             .iter()
             .map(|pairing| (pairing.pairing_id.clone(), pairing.clone()))
             .collect();
-        state.pairing_ids = pairings.into_iter().map(|pairing| pairing.pairing_id).collect();
+        state.pairing_ids = pairings
+            .into_iter()
+            .map(|pairing| pairing.pairing_id)
+            .collect();
         state.tokens = tokens
             .iter()
             .map(|token| (token.token_id.clone(), token.clone()))
@@ -483,10 +503,7 @@ mod tests {
         assert_eq!(pairing.status, PairingStatus::Pending);
 
         let (completed_pairing, token, token_secret) = manager
-            .complete_pairing(
-                &pairing.pairing_id,
-                CompletePairingInput { code },
-            )
+            .complete_pairing(&pairing.pairing_id, CompletePairingInput { code })
             .expect("complete pairing");
         assert_eq!(completed_pairing.status, PairingStatus::Completed);
         assert!(!token.token_id.is_empty());
@@ -504,7 +521,10 @@ mod tests {
             manager.authenticate("bad-token"),
             Err(AuthError::TokenInvalid)
         ));
-        assert!(matches!(manager.authenticate(""), Err(AuthError::AuthRequired)));
+        assert!(matches!(
+            manager.authenticate(""),
+            Err(AuthError::AuthRequired)
+        ));
     }
 
     #[test]
@@ -533,7 +553,9 @@ mod tests {
                     ..token.clone()
                 }],
             );
-            let err = manager.authenticate(&token_secret).expect_err("must be denied");
+            let err = manager
+                .authenticate(&token_secret)
+                .expect_err("must be denied");
             assert_eq!(err.to_string(), want.to_string(), "status {status:?}");
         }
     }
@@ -578,14 +600,20 @@ mod tests {
             default_tenant_id: "ten_1".to_string(),
             expires_at: None,
         };
-        assert!(matches!(manager.issue_token(base), Err(AuthError::TokenInvalid)));
+        assert!(matches!(
+            manager.issue_token(base),
+            Err(AuthError::TokenInvalid)
+        ));
         let base = IssueTokenInput {
             principal_id: "prn_1".to_string(),
             label: "automation".to_string(),
             default_tenant_id: String::new(),
             expires_at: None,
         };
-        assert!(matches!(manager.issue_token(base), Err(AuthError::TokenInvalid)));
+        assert!(matches!(
+            manager.issue_token(base),
+            Err(AuthError::TokenInvalid)
+        ));
     }
 
     #[test]
@@ -652,7 +680,12 @@ mod tests {
     fn complete_pairing_rejects_unknown_replayed_and_wrong_code() {
         let manager = Manager::new();
         assert!(matches!(
-            manager.complete_pairing("pair_missing", CompletePairingInput { code: "000000".into() }),
+            manager.complete_pairing(
+                "pair_missing",
+                CompletePairingInput {
+                    code: "000000".into()
+                }
+            ),
             Err(AuthError::PairingNotFound)
         ));
 
@@ -665,14 +698,24 @@ mod tests {
             .expect("start pairing");
         let wrong = if code == "000000" { "000001" } else { "000000" };
         assert!(matches!(
-            manager.complete_pairing(&pairing.pairing_id, CompletePairingInput { code: wrong.to_string() }),
+            manager.complete_pairing(
+                &pairing.pairing_id,
+                CompletePairingInput {
+                    code: wrong.to_string()
+                }
+            ),
             Err(AuthError::PairingCodeInvalid)
         ));
         manager
             .complete_pairing(&pairing.pairing_id, CompletePairingInput { code })
             .expect("complete pairing");
         assert!(matches!(
-            manager.complete_pairing(&pairing.pairing_id, CompletePairingInput { code: "123456".into() }),
+            manager.complete_pairing(
+                &pairing.pairing_id,
+                CompletePairingInput {
+                    code: "123456".into()
+                }
+            ),
             Err(AuthError::PairingNotPending)
         ));
     }
@@ -694,7 +737,9 @@ mod tests {
             manager.complete_pairing(&pairing.pairing_id, CompletePairingInput { code }),
             Err(AuthError::PairingNotPending)
         ));
-        let stored = manager.get_pairing(&pairing.pairing_id).expect("pairing stored");
+        let stored = manager
+            .get_pairing(&pairing.pairing_id)
+            .expect("pairing stored");
         assert_eq!(stored.status, PairingStatus::Expired);
     }
 

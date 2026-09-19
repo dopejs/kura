@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/tool-capability-status.schema.json",
+  "title": "ToolCapabilityStatus",
+  "description": "Whether one agent-facing capability is usable in this deployment. Unconfigured capabilities are reported rather than omitted: 'this deployment cannot search' is an answer the caller needs.",
+  "type": "object",
+  "required": ["capability", "configured", "profileCount"],
+  "additionalProperties": false,
+  "properties": {
+    "capability": { "type": "string", "enum": ["web.search", "image.generate", "video.generate", "browser.session"] },
+    "configured": { "type": "boolean" },
+    "defaultProfileId": { "type": "string" },
+    "profileCount": { "type": "integer", "minimum": 0 }
+  }
+}

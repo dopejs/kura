@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{Duration, TimeZone, Utc};
+use futures::future::BoxFuture;
 use kura_checkpoints::Manager as CheckpointManager;
 use kura_connectors::{
     DiagnosticReasonCode, RedactionStatus as ConnectorRedactionStatus, Supervisor, SurfaceSupport,
@@ -24,7 +25,6 @@ use kura_store::slack_setup::{
     SlackConversationRouteRecord, SlackHostedSetupRecord, SlackRoutePolicyRecord,
     SlackWorkspaceBinding,
 };
-use futures::future::BoxFuture;
 use tempfile::TempDir;
 
 use kura_slack::destinations::{
@@ -64,6 +64,7 @@ impl Provider for EchoTestProvider {
                 .map(|m| m.content.clone())
                 .unwrap_or_default();
             Ok(ProviderResponse {
+                tool_calls: Vec::new(),
                 output: format!("reply:{content}"),
                 finish_reason: "stop".to_string(),
                 usage: Usage {
@@ -102,6 +103,7 @@ impl Provider for EchoTestProvider {
                 }),
             })?;
             Ok(ProviderResponse {
+                tool_calls: Vec::new(),
                 output: format!("reply:{content}"),
                 finish_reason: "stop".to_string(),
                 usage: Usage {

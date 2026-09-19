@@ -1,11 +1,11 @@
 use kura_integrations::{BackendBinding, BackendKind, ReadinessStatus, Resource};
 use kura_mail::{
-    apply_attachment_policy, evaluate_attachment, join_recipients, live_validation_matrix_rows,
-    summarize_draft_input, validate_explicit_recipients, AttachmentReference,
-    AttachmentResolutionStatus, ComposeMode, CreateDraftInput, DeliveryState, DraftStatus,
-    GetThreadInput, ListThreadsInput, MailError, Manager, OperationFilter, OperationStatus,
-    ReplyForwardResultMode, ReplyMessageInput, ResultMode, Selection, SendDraftInput,
-    SendMessageInput, SourceLinkage, MAX_ATTACHMENT_BYTES,
+    AttachmentReference, AttachmentResolutionStatus, ComposeMode, CreateDraftInput, DeliveryState,
+    DraftStatus, GetThreadInput, ListThreadsInput, MAX_ATTACHMENT_BYTES, MailError, Manager,
+    OperationFilter, OperationStatus, ReplyForwardResultMode, ReplyMessageInput, ResultMode,
+    Selection, SendDraftInput, SendMessageInput, SourceLinkage, apply_attachment_policy,
+    evaluate_attachment, join_recipients, live_validation_matrix_rows, summarize_draft_input,
+    validate_explicit_recipients,
 };
 
 fn mail_resource(integration_id: &str, env: &str, canonical: bool) -> Resource {
@@ -36,7 +36,10 @@ fn join_recipients_trims_and_drops_empty() {
 fn summarize_draft_input_shows_recipients() {
     let to = vec!["a@x.com".to_string()];
     assert_eq!(summarize_draft_input("Hi", &to, &[], &[]), "Hi -> a@x.com");
-    assert_eq!(summarize_draft_input("Subject only", &[], &[], &[]), "Subject only");
+    assert_eq!(
+        summarize_draft_input("Subject only", &[], &[], &[]),
+        "Subject only"
+    );
 }
 
 #[test]
@@ -66,7 +69,11 @@ fn evaluate_attachment_blocks_executable_extension() {
 
 #[test]
 fn evaluate_attachment_blocks_too_large() {
-    let result = evaluate_attachment("big.bin", "application/octet-stream", MAX_ATTACHMENT_BYTES + 1);
+    let result = evaluate_attachment(
+        "big.bin",
+        "application/octet-stream",
+        MAX_ATTACHMENT_BYTES + 1,
+    );
     assert_eq!(result.status, AttachmentResolutionStatus::Failed);
     assert!(result.failure_reason.contains("too_large"));
 }
@@ -80,7 +87,10 @@ fn apply_attachment_policy_stamps_reference() {
         ..AttachmentReference::default()
     };
     apply_attachment_policy(&mut reference);
-    assert_eq!(reference.resolution_status, AttachmentResolutionStatus::Failed);
+    assert_eq!(
+        reference.resolution_status,
+        AttachmentResolutionStatus::Failed
+    );
     assert!(reference.failure_reason.contains("unsupported_type"));
 }
 
@@ -93,8 +103,14 @@ fn live_validation_rows_cover_mail_classes() {
 fn list_threads_returns_seed() {
     let manager = Manager::new("test");
     let resources = vec![mail_resource("mail_1", "test", true)];
-    let input = ListThreadsInput { selection: Selection { integration_id: "mail_1".to_string() }, ..ListThreadsInput::default() };
-    let (account, threads, operation, artifacts) = manager.list_threads(&resources, &input).unwrap();
+    let input = ListThreadsInput {
+        selection: Selection {
+            integration_id: "mail_1".to_string(),
+        },
+        ..ListThreadsInput::default()
+    };
+    let (account, threads, operation, artifacts) =
+        manager.list_threads(&resources, &input).unwrap();
     assert_eq!(account.integration_id, "mail_1");
     assert_eq!(threads.len(), 1);
     assert_eq!(threads[0].thread_id, "thread_seed");
@@ -106,7 +122,13 @@ fn list_threads_returns_seed() {
 fn get_thread_missing_records_failed_operation() {
     let manager = Manager::new("test");
     let resources = vec![mail_resource("mail_1", "test", true)];
-    let input = GetThreadInput { selection: Selection { integration_id: "mail_1".to_string() }, thread_id: "nope".to_string(), ..GetThreadInput::default() };
+    let input = GetThreadInput {
+        selection: Selection {
+            integration_id: "mail_1".to_string(),
+        },
+        thread_id: "nope".to_string(),
+        ..GetThreadInput::default()
+    };
     let err = manager.get_thread(&resources, &input).unwrap_err();
     assert!(matches!(err, MailError::MailThreadNotFound));
     let ops = manager.list_operations(&OperationFilter::default());
@@ -121,7 +143,9 @@ fn create_draft_records_draft_only_operation() {
     let manager = Manager::new("test");
     let resources = vec![mail_resource("mail_1", "test", true)];
     let input = CreateDraftInput {
-        selection: Selection { integration_id: "mail_1".to_string() },
+        selection: Selection {
+            integration_id: "mail_1".to_string(),
+        },
         compose_mode: ComposeMode::NewMessage,
         to: vec!["a@x.com".to_string()],
         subject: "Hi".to_string(),
@@ -139,7 +163,9 @@ fn send_message_records_sent_operation() {
     let manager = Manager::new("test");
     let resources = vec![mail_resource("mail_1", "test", true)];
     let input = SendMessageInput {
-        selection: Selection { integration_id: "mail_1".to_string() },
+        selection: Selection {
+            integration_id: "mail_1".to_string(),
+        },
         to: vec!["a@x.com".to_string()],
         subject: "Hi".to_string(),
         body: "Hello".to_string(),
@@ -155,7 +181,12 @@ fn send_message_records_sent_operation() {
 fn send_message_requires_recipients() {
     let manager = Manager::new("test");
     let resources = vec![mail_resource("mail_1", "test", true)];
-    let input = SendMessageInput { selection: Selection { integration_id: "mail_1".to_string() }, ..SendMessageInput::default() };
+    let input = SendMessageInput {
+        selection: Selection {
+            integration_id: "mail_1".to_string(),
+        },
+        ..SendMessageInput::default()
+    };
     let err = manager.send_message(&resources, &input).unwrap_err();
     assert!(matches!(err, MailError::MailRecipientRequired));
     let ops = manager.list_operations(&OperationFilter::default());
@@ -168,9 +199,14 @@ fn send_message_background_blocked_without_permission() {
     let manager = Manager::new("test");
     let resources = vec![mail_resource("mail_1", "test", true)];
     let input = SendMessageInput {
-        selection: Selection { integration_id: "mail_1".to_string() },
+        selection: Selection {
+            integration_id: "mail_1".to_string(),
+        },
         to: vec!["a@x.com".to_string()],
-        source: SourceLinkage { workflow_id: "wf_1".to_string(), ..SourceLinkage::default() },
+        source: SourceLinkage {
+            workflow_id: "wf_1".to_string(),
+            ..SourceLinkage::default()
+        },
         ..SendMessageInput::default()
     };
     let err = manager.send_message(&resources, &input).unwrap_err();
@@ -184,7 +220,13 @@ fn send_message_background_blocked_without_permission() {
 fn send_draft_sends_seed_draft() {
     let manager = Manager::new("test");
     let resources = vec![mail_resource("mail_1", "test", true)];
-    let input = SendDraftInput { selection: Selection { integration_id: "mail_1".to_string() }, draft_id: "draft_seed".to_string(), ..SendDraftInput::default() };
+    let input = SendDraftInput {
+        selection: Selection {
+            integration_id: "mail_1".to_string(),
+        },
+        draft_id: "draft_seed".to_string(),
+        ..SendDraftInput::default()
+    };
     let (_, draft, message, operation, _) = manager.send_draft(&resources, &input).unwrap();
     assert_eq!(message.delivery_state, DeliveryState::Sent);
     assert_eq!(draft.draft_status, DraftStatus::SentFromDraft);
@@ -196,7 +238,9 @@ fn reply_message_draft_mode_returns_draft_only() {
     let manager = Manager::new("test");
     let resources = vec![mail_resource("mail_1", "test", true)];
     let input = ReplyMessageInput {
-        selection: Selection { integration_id: "mail_1".to_string() },
+        selection: Selection {
+            integration_id: "mail_1".to_string(),
+        },
         message_id: "msg_seed".to_string(),
         result_mode: ReplyForwardResultMode::Draft,
         body: "Reply body".to_string(),

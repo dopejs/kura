@@ -40,7 +40,11 @@ impl MemoryStore {
         *self.audit_fail.lock() = true;
     }
 
-    pub(crate) fn insert_tenant(&self, tenant_id: &str, status: crate::types::LifecycleStatus) -> Tenant {
+    pub(crate) fn insert_tenant(
+        &self,
+        tenant_id: &str,
+        status: crate::types::LifecycleStatus,
+    ) -> Tenant {
         let tenant = Tenant {
             tenant_id: tenant_id.to_string(),
             tenant_kind: crate::types::TenantKind::Organization,
@@ -56,7 +60,9 @@ impl MemoryStore {
             default_for_current_token: false,
             default_for_current_principal: false,
         };
-        self.tenants.lock().insert(tenant_id.to_string(), tenant.clone());
+        self.tenants
+            .lock()
+            .insert(tenant_id.to_string(), tenant.clone());
         tenant
     }
 
@@ -127,7 +133,9 @@ impl MemoryStore {
             revoked_at: None,
             granted_by_principal_id: String::new(),
         };
-        self.grants.lock().insert(grant_id.to_string(), grant.clone());
+        self.grants
+            .lock()
+            .insert(grant_id.to_string(), grant.clone());
         grant
     }
 }
@@ -141,7 +149,10 @@ impl ResolverStore for MemoryStore {
         Ok(self.tenants.lock().get(tenant_id).cloned())
     }
 
-    fn list_memberships(&self, filter: &MembershipFilter) -> Result<Vec<Membership>, IdentityError> {
+    fn list_memberships(
+        &self,
+        filter: &MembershipFilter,
+    ) -> Result<Vec<Membership>, IdentityError> {
         Ok(self
             .memberships
             .lock()
@@ -153,7 +164,10 @@ impl ResolverStore for MemoryStore {
             .collect())
     }
 
-    fn list_token_tenant_grants(&self, token_id: &str) -> Result<Vec<TokenTenantGrant>, IdentityError> {
+    fn list_token_tenant_grants(
+        &self,
+        token_id: &str,
+    ) -> Result<Vec<TokenTenantGrant>, IdentityError> {
         Ok(self
             .grants
             .lock()
@@ -165,7 +179,10 @@ impl ResolverStore for MemoryStore {
 }
 
 impl AuditStore for MemoryStore {
-    fn append_tenant_audit_event(&self, event: TenantAuditEvent) -> Result<TenantAuditEvent, IdentityError> {
+    fn append_tenant_audit_event(
+        &self,
+        event: TenantAuditEvent,
+    ) -> Result<TenantAuditEvent, IdentityError> {
         if *self.audit_fail.lock() {
             return Err(IdentityError::Store("audit store down".into()));
         }
@@ -176,7 +193,9 @@ impl AuditStore for MemoryStore {
 
 impl Store for MemoryStore {
     fn upsert_tenant(&self, tenant: &Tenant) -> Result<(), IdentityError> {
-        self.tenants.lock().insert(tenant.tenant_id.clone(), tenant.clone());
+        self.tenants
+            .lock()
+            .insert(tenant.tenant_id.clone(), tenant.clone());
         Ok(())
     }
 
@@ -202,7 +221,9 @@ impl Store for MemoryStore {
     }
 
     fn upsert_token_tenant_grant(&self, grant: &TokenTenantGrant) -> Result<(), IdentityError> {
-        self.grants.lock().insert(grant.grant_id.clone(), grant.clone());
+        self.grants
+            .lock()
+            .insert(grant.grant_id.clone(), grant.clone());
         Ok(())
     }
 
@@ -219,7 +240,10 @@ impl Store for MemoryStore {
         Ok(items)
     }
 
-    fn list_tenant_invitations(&self, _filter: &InvitationFilter) -> Result<Vec<TenantInvitation>, IdentityError> {
+    fn list_tenant_invitations(
+        &self,
+        _filter: &InvitationFilter,
+    ) -> Result<Vec<TenantInvitation>, IdentityError> {
         Ok(self.invitations.lock().values().cloned().collect())
     }
 

@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use kura_store::{list_documents, put_document, SQLiteStore};
+use kura_store::{SQLiteStore, list_documents, put_document};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -250,7 +250,9 @@ impl Manager {
 
     /// Go `LoadFromStore`: reloads persisted profiles + selections on startup.
     pub fn load_from_store(&self) -> Result<(), String> {
-        let Some(store) = &self.docs else { return Ok(()); };
+        let Some(store) = &self.docs else {
+            return Ok(());
+        };
         let profiles: Vec<ExecutionProfile> = list_documents(&store.lock(), DOC_KIND_EXEC_PROFILE)?;
         let selections: Vec<Selection> = list_documents(&store.lock(), DOC_KIND_EXEC_SELECTION)?;
         self.restore(profiles, selections);
@@ -258,7 +260,10 @@ impl Manager {
     }
 
     /// Go `RegisterProfile`: inserts or replaces an execution profile.
-    pub fn register_profile(&self, mut profile: ExecutionProfile) -> Result<ExecutionProfile, ExecProfileError> {
+    pub fn register_profile(
+        &self,
+        mut profile: ExecutionProfile,
+    ) -> Result<ExecutionProfile, ExecProfileError> {
         if profile.name.trim().is_empty() || !valid_backend(profile.backend_kind) {
             return Err(ExecProfileError::InvalidProfile);
         }
@@ -271,7 +276,9 @@ impl Manager {
             profile.created_at = Utc::now();
         }
         let mut inner = self.inner.write();
-        inner.profiles.insert(profile.profile_id.clone(), profile.clone());
+        inner
+            .profiles
+            .insert(profile.profile_id.clone(), profile.clone());
         drop(inner);
         self.persist(DOC_KIND_EXEC_PROFILE, &profile.profile_id, "", &profile);
         Ok(profile)
@@ -320,7 +327,9 @@ impl Manager {
             let inner = self.inner.read();
             inner.profiles.get(profile_id.trim()).cloned()
         };
-        let Some(profile) = profile else { return Err(ExecProfileError::ProfileNotFound); };
+        let Some(profile) = profile else {
+            return Err(ExecProfileError::ProfileNotFound);
+        };
         Ok(ProfileProjection {
             status: self.status(&profile),
             profile,
@@ -339,12 +348,15 @@ impl Manager {
         for proj in self.list_profiles() {
             let missing = missing_capabilities(&proj.profile.provides, required);
             if !missing.is_empty() {
-                exp.missing_capabilities.insert(proj.profile.profile_id.clone(), missing);
+                exp.missing_capabilities
+                    .insert(proj.profile.profile_id.clone(), missing);
                 continue;
             }
             if !proj.status.available {
-                exp.unavailable
-                    .insert(proj.profile.profile_id.clone(), first_non_empty(&[proj.status.reason.as_str(), "unavailable"]));
+                exp.unavailable.insert(
+                    proj.profile.profile_id.clone(),
+                    first_non_empty(&[proj.status.reason.as_str(), "unavailable"]),
+                );
                 continue;
             }
             exp.eligible_profiles.push(proj.profile.profile_id.clone());
@@ -372,7 +384,12 @@ impl Manager {
 
     /// Go `SelectProfile`: sets a tenant's execution profile, permission-gated and audited
     /// (FR-004). Fails closed when the profile is unavailable.
-    pub fn select_profile(&self, tenant_id: &str, profile_id: &str, actor: &str) -> Result<Selection, ExecProfileError> {
+    pub fn select_profile(
+        &self,
+        tenant_id: &str,
+        profile_id: &str,
+        actor: &str,
+    ) -> Result<Selection, ExecProfileError> {
         let proj = self.get_profile(profile_id)?;
         if !self.perms.allow(tenant_id, profile_id) {
             return Err(ExecProfileError::PermissionDenied);
@@ -381,7 +398,11 @@ impl Manager {
             return Err(ExecProfileError::ProfileUnavailable);
         }
         let mut inner = self.inner.write();
-        let mut selection = inner.selections.get(tenant_id.trim()).cloned().unwrap_or_default();
+        let mut selection = inner
+            .selections
+            .get(tenant_id.trim())
+            .cloned()
+            .unwrap_or_default();
         let now = Utc::now();
         selection.tenant_id = tenant_id.trim().to_string();
         selection.profile_id = profile_id.to_string();
@@ -391,9 +412,16 @@ impl Manager {
             occurred_at: now,
         });
         selection.updated_at = now;
-        inner.selections.insert(selection.tenant_id.clone(), selection.clone());
+        inner
+            .selections
+            .insert(selection.tenant_id.clone(), selection.clone());
         drop(inner);
-        self.persist(DOC_KIND_EXEC_SELECTION, &selection.tenant_id, &selection.tenant_id, &selection);
+        self.persist(
+            DOC_KIND_EXEC_SELECTION,
+            &selection.tenant_id,
+            &selection.tenant_id,
+            &selection,
+        );
         Ok(selection)
     }
 
@@ -409,8 +437,14 @@ impl Manager {
     /// Go `Restore`: reloads persisted profiles + selections.
     pub fn restore(&self, profiles: Vec<ExecutionProfile>, selections: Vec<Selection>) {
         let mut inner = self.inner.write();
-        inner.profiles = profiles.into_iter().map(|p| (p.profile_id.clone(), p)).collect();
-        inner.selections = selections.into_iter().map(|s| (s.tenant_id.clone(), s)).collect();
+        inner.profiles = profiles
+            .into_iter()
+            .map(|p| (p.profile_id.clone(), p))
+            .collect();
+        inner.selections = selections
+            .into_iter()
+            .map(|s| (s.tenant_id.clone(), s))
+            .collect();
     }
 
     /// Write-through persistence; skipped when no store is installed (Go nil store no-ops).
@@ -425,7 +459,10 @@ impl Manager {
 /// case-insensitively after trimming, preserving the required order.
 #[must_use]
 pub fn missing_capabilities(provides: &[String], required: &[String]) -> Vec<String> {
-    let have: HashSet<String> = provides.iter().map(|p| p.trim().to_ascii_lowercase()).collect();
+    let have: HashSet<String> = provides
+        .iter()
+        .map(|p| p.trim().to_ascii_lowercase())
+        .collect();
     required
         .iter()
         .filter(|r| !have.contains(&r.trim().to_ascii_lowercase()))
@@ -435,7 +472,10 @@ pub fn missing_capabilities(provides: &[String], required: &[String]) -> Vec<Str
 
 /// Go `validBackend`.
 fn valid_backend(kind: BackendKind) -> bool {
-    matches!(kind, BackendKind::Subprocess | BackendKind::Docker | BackendKind::Ssh | BackendKind::LocalShell)
+    matches!(
+        kind,
+        BackendKind::Subprocess | BackendKind::Docker | BackendKind::Ssh | BackendKind::LocalShell
+    )
 }
 
 /// Go `firstNonEmpty`: the first value whose trimmed form is non-empty (the original,
@@ -459,7 +499,6 @@ fn new_id(prefix: &str) -> String {
     let hex = Uuid::new_v4().simple().to_string();
     format!("{prefix}_{}", &hex[..16])
 }
-
 
 // ---------------------------------------------------------------------------
 // Sandbox-backed HealthChecker (wave 8 parity)

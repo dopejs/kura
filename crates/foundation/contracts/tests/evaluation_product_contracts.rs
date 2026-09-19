@@ -12,5 +12,8 @@ use kura_contracts::Validator;
 #[test]
 fn test_evaluation_product_foundation_schemas_accept_canonical_fixtures() {
     let validator = Validator::new(schema_root_dir());
-    validate_fixtures(&validator, &[common::data::evaluation_product_foundation_fixtures()].concat());
+    validate_fixtures(
+        &validator,
+        &[common::data::evaluation_product_foundation_fixtures()].concat(),
+    );
 }

@@ -389,7 +389,9 @@ impl Default for Manager {
 
 impl Manager {
     pub fn new() -> Self {
-        Manager { inner: parking_lot::RwLock::new(ManagerInner::default()) }
+        Manager {
+            inner: parking_lot::RwLock::new(ManagerInner::default()),
+        }
     }
 
     pub fn create_run(&self, input: CreateRunInput) -> Result<Run, RuntimeError> {
@@ -426,7 +428,11 @@ impl Manager {
 
     pub fn snapshot_run(&self, run_id: &str) -> Result<RunCheckpoint, RuntimeError> {
         let inner = self.inner.read();
-        let run = inner.by_id.get(run_id).cloned().ok_or(RuntimeError::RunNotFound)?;
+        let run = inner
+            .by_id
+            .get(run_id)
+            .cloned()
+            .ok_or(RuntimeError::RunNotFound)?;
         let mut steps = Vec::new();
         let mut tool_calls = Vec::new();
         if let Some(step_ids) = inner.steps_by_run.get(run_id) {
@@ -453,7 +459,11 @@ impl Manager {
 
     pub fn list_runs(&self) -> Vec<Run> {
         let inner = self.inner.read();
-        inner.run_ids.iter().filter_map(|id| inner.by_id.get(id).cloned()).collect()
+        inner
+            .run_ids
+            .iter()
+            .filter_map(|id| inner.by_id.get(id).cloned())
+            .collect()
     }
 
     pub fn get_run(&self, run_id: &str) -> Option<Run> {
@@ -469,7 +479,11 @@ impl Manager {
             return Err(RuntimeError::RunNotFound);
         }
         let now = Utc::now();
-        let kind = if input.kind.is_empty() { "task".to_string() } else { input.kind.clone() };
+        let kind = if input.kind.is_empty() {
+            "task".to_string()
+        } else {
+            input.kind.clone()
+        };
         let step = Step {
             step_id: new_step_id(),
             run_id: run_id.to_string(),
@@ -485,7 +499,11 @@ impl Manager {
             ..Step::default()
         };
         inner.steps_by_id.insert(step.step_id.clone(), step.clone());
-        inner.steps_by_run.entry(run_id.to_string()).or_default().push(step.step_id.clone());
+        inner
+            .steps_by_run
+            .entry(run_id.to_string())
+            .or_default()
+            .push(step.step_id.clone());
         Ok(step)
     }
 
@@ -494,7 +512,15 @@ impl Manager {
         if !inner.by_id.contains_key(run_id) {
             return Err(RuntimeError::RunNotFound);
         }
-        Ok(inner.steps_by_run.get(run_id).map(|ids| ids.iter().filter_map(|id| inner.steps_by_id.get(id).cloned()).collect()).unwrap_or_default())
+        Ok(inner
+            .steps_by_run
+            .get(run_id)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| inner.steps_by_id.get(id).cloned())
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     pub fn get_step(&self, run_id: &str, step_id: &str) -> Option<Step> {
@@ -505,13 +531,20 @@ impl Manager {
         }
     }
 
-    pub fn update_step_status(&self, run_id: &str, step_id: &str, input: UpdateStepStatusInput) -> Result<Step, RuntimeError> {
+    pub fn update_step_status(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        input: UpdateStepStatusInput,
+    ) -> Result<Step, RuntimeError> {
         let mut inner = self.inner.write();
         if !inner.by_id.contains_key(run_id) {
             return Err(RuntimeError::RunNotFound);
         }
         let step = inner.steps_by_id.get(step_id).cloned();
-        let Some(mut step) = step else { return Err(RuntimeError::StepNotFound); };
+        let Some(mut step) = step else {
+            return Err(RuntimeError::StepNotFound);
+        };
         if step.run_id != run_id {
             return Err(RuntimeError::StepNotFound);
         }
@@ -527,11 +560,22 @@ impl Manager {
         Ok(step)
     }
 
-    pub fn update_step_status_and_reconcile_run(&self, run_id: &str, step_id: &str, input: UpdateStepStatusInput) -> Result<(Step, Option<Run>), RuntimeError> {
+    pub fn update_step_status_and_reconcile_run(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        input: UpdateStepStatusInput,
+    ) -> Result<(Step, Option<Run>), RuntimeError> {
         let mut inner = self.inner.write();
-        let run = inner.by_id.get(run_id).cloned().ok_or(RuntimeError::RunNotFound)?;
+        let run = inner
+            .by_id
+            .get(run_id)
+            .cloned()
+            .ok_or(RuntimeError::RunNotFound)?;
         let step = inner.steps_by_id.get(step_id).cloned();
-        let Some(mut step) = step else { return Err(RuntimeError::StepNotFound); };
+        let Some(mut step) = step else {
+            return Err(RuntimeError::StepNotFound);
+        };
         if step.run_id != run_id {
             return Err(RuntimeError::StepNotFound);
         }
@@ -567,7 +611,11 @@ impl Manager {
 
     pub fn cancel_run(&self, run_id: &str) -> Result<(Run, Vec<Step>, bool), RuntimeError> {
         let mut inner = self.inner.write();
-        let run = inner.by_id.get(run_id).cloned().ok_or(RuntimeError::RunNotFound)?;
+        let run = inner
+            .by_id
+            .get(run_id)
+            .cloned()
+            .ok_or(RuntimeError::RunNotFound)?;
         if run.status == RunStatus::Cancelled {
             return Ok((run, Vec::new(), true));
         }
@@ -598,7 +646,11 @@ impl Manager {
 
     pub fn resume_run(&self, run_id: &str) -> Result<(Run, Vec<Step>, bool), RuntimeError> {
         let mut inner = self.inner.write();
-        let run = inner.by_id.get(run_id).cloned().ok_or(RuntimeError::RunNotFound)?;
+        let run = inner
+            .by_id
+            .get(run_id)
+            .cloned()
+            .ok_or(RuntimeError::RunNotFound)?;
         if run.status != RunStatus::Cancelled {
             if is_run_terminal(run.status) {
                 return Err(RuntimeError::RunTerminal);
@@ -628,11 +680,21 @@ impl Manager {
         Ok((run, updated_steps, false))
     }
 
-    pub fn cancel_step(&self, run_id: &str, step_id: &str) -> Result<(Step, Option<Run>, bool), RuntimeError> {
+    pub fn cancel_step(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<(Step, Option<Run>, bool), RuntimeError> {
         let mut inner = self.inner.write();
-        let run = inner.by_id.get(run_id).cloned().ok_or(RuntimeError::RunNotFound)?;
+        let run = inner
+            .by_id
+            .get(run_id)
+            .cloned()
+            .ok_or(RuntimeError::RunNotFound)?;
         let step = inner.steps_by_id.get(step_id).cloned();
-        let Some(mut step) = step else { return Err(RuntimeError::StepNotFound); };
+        let Some(mut step) = step else {
+            return Err(RuntimeError::StepNotFound);
+        };
         if step.run_id != run_id {
             return Err(RuntimeError::StepNotFound);
         }
@@ -661,11 +723,20 @@ impl Manager {
         Ok((step, Some(run), false))
     }
 
-    pub fn create_tool_call(&self, run_id: &str, step_id: &str, input: CreateToolCallInput) -> Result<ToolCall, RuntimeError> {
+    pub fn create_tool_call(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        input: CreateToolCallInput,
+    ) -> Result<ToolCall, RuntimeError> {
         if input.tool_name.is_empty() {
             return Err(RuntimeError::ToolNameRequired);
         }
-        if input.capability_id.trim().is_empty() && input.skill_id.trim().is_empty() && input.mcp_server_id.trim().is_empty() && input.domain_kind.trim().is_empty() {
+        if input.capability_id.trim().is_empty()
+            && input.skill_id.trim().is_empty()
+            && input.mcp_server_id.trim().is_empty()
+            && input.domain_kind.trim().is_empty()
+        {
             return Err(RuntimeError::ToolTargetRequired);
         }
         let mut inner = self.inner.write();
@@ -673,7 +744,9 @@ impl Manager {
             return Err(RuntimeError::RunNotFound);
         }
         let step = inner.steps_by_id.get(step_id).cloned();
-        let Some(step) = step else { return Err(RuntimeError::StepNotFound); };
+        let Some(step) = step else {
+            return Err(RuntimeError::StepNotFound);
+        };
         if step.run_id != run_id {
             return Err(RuntimeError::StepNotFound);
         }
@@ -721,25 +794,50 @@ impl Manager {
             sandbox: input.sandbox.clone(),
             ..ToolCall::default()
         };
-        inner.tool_calls_by_id.insert(tool_call_id.clone(), tool_call.clone());
-        inner.tool_calls_by_step.entry(step_id.to_string()).or_default().push(tool_call_id);
+        inner
+            .tool_calls_by_id
+            .insert(tool_call_id.clone(), tool_call.clone());
+        inner
+            .tool_calls_by_step
+            .entry(step_id.to_string())
+            .or_default()
+            .push(tool_call_id);
         Ok(tool_call)
     }
 
-    pub fn list_tool_calls(&self, run_id: &str, step_id: &str) -> Result<Vec<ToolCall>, RuntimeError> {
+    pub fn list_tool_calls(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<Vec<ToolCall>, RuntimeError> {
         let inner = self.inner.read();
         if !inner.by_id.contains_key(run_id) {
             return Err(RuntimeError::RunNotFound);
         }
         let step = inner.steps_by_id.get(step_id);
-        let Some(step) = step else { return Err(RuntimeError::StepNotFound); };
+        let Some(step) = step else {
+            return Err(RuntimeError::StepNotFound);
+        };
         if step.run_id != run_id {
             return Err(RuntimeError::StepNotFound);
         }
-        Ok(inner.tool_calls_by_step.get(step_id).map(|ids| ids.iter().filter_map(|id| inner.tool_calls_by_id.get(id).cloned()).collect()).unwrap_or_default())
+        Ok(inner
+            .tool_calls_by_step
+            .get(step_id)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| inner.tool_calls_by_id.get(id).cloned())
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
-    pub fn get_tool_call(&self, run_id: &str, step_id: &str, tool_call_id: &str) -> Option<ToolCall> {
+    pub fn get_tool_call(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        tool_call_id: &str,
+    ) -> Option<ToolCall> {
         let inner = self.inner.read();
         match inner.tool_calls_by_id.get(tool_call_id) {
             Some(tc) if tc.run_id == run_id && tc.step_id == step_id => Some(tc.clone()),
@@ -747,10 +845,18 @@ impl Manager {
         }
     }
 
-    pub fn complete_tool_call(&self, run_id: &str, step_id: &str, tool_call_id: &str, input: CompleteToolCallInput) -> Result<ToolCall, RuntimeError> {
+    pub fn complete_tool_call(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        tool_call_id: &str,
+        input: CompleteToolCallInput,
+    ) -> Result<ToolCall, RuntimeError> {
         let mut inner = self.inner.write();
         let mut tool_call = require_mutable_tool_call(&inner, run_id, step_id, tool_call_id)?;
-        if tool_call.status != ToolCallStatus::Requested && tool_call.status != ToolCallStatus::Running {
+        if tool_call.status != ToolCallStatus::Requested
+            && tool_call.status != ToolCallStatus::Running
+        {
             return Err(RuntimeError::InvalidToolCallStatus);
         }
         tool_call.status = ToolCallStatus::Completed;
@@ -765,14 +871,24 @@ impl Manager {
         if !input.sandbox.is_empty() {
             tool_call.sandbox = input.sandbox.clone();
         }
-        inner.tool_calls_by_id.insert(tool_call_id.to_string(), tool_call.clone());
+        inner
+            .tool_calls_by_id
+            .insert(tool_call_id.to_string(), tool_call.clone());
         Ok(tool_call)
     }
 
-    pub fn fail_tool_call(&self, run_id: &str, step_id: &str, tool_call_id: &str, input: FailToolCallInput) -> Result<ToolCall, RuntimeError> {
+    pub fn fail_tool_call(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        tool_call_id: &str,
+        input: FailToolCallInput,
+    ) -> Result<ToolCall, RuntimeError> {
         let mut inner = self.inner.write();
         let mut tool_call = require_mutable_tool_call(&inner, run_id, step_id, tool_call_id)?;
-        if tool_call.status != ToolCallStatus::Requested && tool_call.status != ToolCallStatus::Running {
+        if tool_call.status != ToolCallStatus::Requested
+            && tool_call.status != ToolCallStatus::Running
+        {
             return Err(RuntimeError::InvalidToolCallStatus);
         }
         tool_call.status = ToolCallStatus::Failed;
@@ -789,14 +905,24 @@ impl Manager {
         if !input.sandbox.is_empty() {
             tool_call.sandbox = input.sandbox.clone();
         }
-        inner.tool_calls_by_id.insert(tool_call_id.to_string(), tool_call.clone());
+        inner
+            .tool_calls_by_id
+            .insert(tool_call_id.to_string(), tool_call.clone());
         Ok(tool_call)
     }
 
-    pub fn deny_tool_call(&self, run_id: &str, step_id: &str, tool_call_id: &str, input: DenyToolCallInput) -> Result<ToolCall, RuntimeError> {
+    pub fn deny_tool_call(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        tool_call_id: &str,
+        input: DenyToolCallInput,
+    ) -> Result<ToolCall, RuntimeError> {
         let mut inner = self.inner.write();
         let mut tool_call = require_mutable_tool_call(&inner, run_id, step_id, tool_call_id)?;
-        if tool_call.status != ToolCallStatus::Requested && tool_call.status != ToolCallStatus::Running {
+        if tool_call.status != ToolCallStatus::Requested
+            && tool_call.status != ToolCallStatus::Running
+        {
             return Err(RuntimeError::InvalidToolCallStatus);
         }
         tool_call.status = ToolCallStatus::Denied;
@@ -813,14 +939,24 @@ impl Manager {
         if !input.sandbox.is_empty() {
             tool_call.sandbox = input.sandbox.clone();
         }
-        inner.tool_calls_by_id.insert(tool_call_id.to_string(), tool_call.clone());
+        inner
+            .tool_calls_by_id
+            .insert(tool_call_id.to_string(), tool_call.clone());
         Ok(tool_call)
     }
 
-    pub fn cancel_tool_call(&self, run_id: &str, step_id: &str, tool_call_id: &str, input: CancelToolCallInput) -> Result<ToolCall, RuntimeError> {
+    pub fn cancel_tool_call(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        tool_call_id: &str,
+        input: CancelToolCallInput,
+    ) -> Result<ToolCall, RuntimeError> {
         let mut inner = self.inner.write();
         let mut tool_call = require_mutable_tool_call(&inner, run_id, step_id, tool_call_id)?;
-        if tool_call.status != ToolCallStatus::Requested && tool_call.status != ToolCallStatus::Running {
+        if tool_call.status != ToolCallStatus::Requested
+            && tool_call.status != ToolCallStatus::Running
+        {
             return Err(RuntimeError::InvalidToolCallStatus);
         }
         tool_call.status = ToolCallStatus::Cancelled;
@@ -837,11 +973,20 @@ impl Manager {
         if !input.sandbox.is_empty() {
             tool_call.sandbox = input.sandbox.clone();
         }
-        inner.tool_calls_by_id.insert(tool_call_id.to_string(), tool_call.clone());
+        inner
+            .tool_calls_by_id
+            .insert(tool_call_id.to_string(), tool_call.clone());
         Ok(tool_call)
     }
 
-    pub fn mark_tool_call_running(&self, run_id: &str, step_id: &str, tool_call_id: &str, sandbox_execution_id: &str, sandbox_view: serde_json::Map<String, serde_json::Value>) -> Result<ToolCall, RuntimeError> {
+    pub fn mark_tool_call_running(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        tool_call_id: &str,
+        sandbox_execution_id: &str,
+        sandbox_view: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<ToolCall, RuntimeError> {
         let mut inner = self.inner.write();
         let mut tool_call = require_mutable_tool_call(&inner, run_id, step_id, tool_call_id)?;
         if tool_call.status != ToolCallStatus::Requested {
@@ -855,7 +1000,9 @@ impl Manager {
         if !sandbox_view.is_empty() {
             tool_call.sandbox = sandbox_view.clone();
         }
-        inner.tool_calls_by_id.insert(tool_call_id.to_string(), tool_call.clone());
+        inner
+            .tool_calls_by_id
+            .insert(tool_call_id.to_string(), tool_call.clone());
         Ok(tool_call)
     }
 
@@ -873,11 +1020,21 @@ impl Manager {
             inner.run_ids.push(run.run_id.clone());
             for step in checkpoint.steps {
                 inner.steps_by_id.insert(step.step_id.clone(), step.clone());
-                inner.steps_by_run.entry(run.run_id.clone()).or_default().push(step.step_id);
+                inner
+                    .steps_by_run
+                    .entry(run.run_id.clone())
+                    .or_default()
+                    .push(step.step_id);
             }
             for tool_call in checkpoint.tool_calls {
-                inner.tool_calls_by_id.insert(tool_call.tool_call_id.clone(), tool_call.clone());
-                inner.tool_calls_by_step.entry(tool_call.step_id.clone()).or_default().push(tool_call.tool_call_id);
+                inner
+                    .tool_calls_by_id
+                    .insert(tool_call.tool_call_id.clone(), tool_call.clone());
+                inner
+                    .tool_calls_by_step
+                    .entry(tool_call.step_id.clone())
+                    .or_default()
+                    .push(tool_call.tool_call_id);
             }
         }
     }
@@ -895,27 +1052,49 @@ impl Manager {
                 inner.tool_calls_by_step.remove(&step_id);
             }
         }
-        let stale: Vec<String> = inner.tool_calls_by_id.iter().filter(|(_, tc)| tc.run_id == run.run_id).map(|(id, _)| id.clone()).collect();
+        let stale: Vec<String> = inner
+            .tool_calls_by_id
+            .iter()
+            .filter(|(_, tc)| tc.run_id == run.run_id)
+            .map(|(id, _)| id.clone())
+            .collect();
         for id in stale {
             inner.tool_calls_by_id.remove(&id);
         }
         for step in checkpoint.steps {
             inner.steps_by_id.insert(step.step_id.clone(), step.clone());
-            inner.steps_by_run.entry(run.run_id.clone()).or_default().push(step.step_id);
+            inner
+                .steps_by_run
+                .entry(run.run_id.clone())
+                .or_default()
+                .push(step.step_id);
         }
         for tool_call in checkpoint.tool_calls {
-            inner.tool_calls_by_id.insert(tool_call.tool_call_id.clone(), tool_call.clone());
-            inner.tool_calls_by_step.entry(tool_call.step_id.clone()).or_default().push(tool_call.tool_call_id);
+            inner
+                .tool_calls_by_id
+                .insert(tool_call.tool_call_id.clone(), tool_call.clone());
+            inner
+                .tool_calls_by_step
+                .entry(tool_call.step_id.clone())
+                .or_default()
+                .push(tool_call.tool_call_id);
         }
     }
 }
 
-fn require_mutable_tool_call(inner: &ManagerInner, run_id: &str, step_id: &str, tool_call_id: &str) -> Result<ToolCall, RuntimeError> {
+fn require_mutable_tool_call(
+    inner: &ManagerInner,
+    run_id: &str,
+    step_id: &str,
+    tool_call_id: &str,
+) -> Result<ToolCall, RuntimeError> {
     if !inner.by_id.contains_key(run_id) {
         return Err(RuntimeError::RunNotFound);
     }
     let step = inner.steps_by_id.get(step_id);
-    let Some(step) = step else { return Err(RuntimeError::StepNotFound); };
+    let Some(step) = step else {
+        return Err(RuntimeError::StepNotFound);
+    };
     if step.run_id != run_id {
         return Err(RuntimeError::StepNotFound);
     }
@@ -927,7 +1106,9 @@ fn require_mutable_tool_call(inner: &ManagerInner, run_id: &str, step_id: &str, 
 
 fn derive_run_status_locked(inner: &ManagerInner, run_id: &str) -> RunStatus {
     let step_ids = inner.steps_by_run.get(run_id);
-    let Some(step_ids) = step_ids else { return RunStatus::Queued; };
+    let Some(step_ids) = step_ids else {
+        return RunStatus::Queued;
+    };
     if step_ids.is_empty() {
         return RunStatus::Queued;
     }
@@ -941,7 +1122,9 @@ fn derive_run_status_locked(inner: &ManagerInner, run_id: &str) -> RunStatus {
     for step_id in step_ids {
         if let Some(step) = inner.steps_by_id.get(step_id) {
             match step.status {
-                StepStatus::Planning | StepStatus::CallingModel | StepStatus::ExecutingTool => has_planning_or_execution = true,
+                StepStatus::Planning | StepStatus::CallingModel | StepStatus::ExecutingTool => {
+                    has_planning_or_execution = true
+                }
                 StepStatus::WaitingInput => has_waiting_input = true,
                 StepStatus::Blocked => has_blocked = true,
                 StepStatus::Failed => has_failed = true,
@@ -977,12 +1160,18 @@ fn derive_run_status_locked(inner: &ManagerInner, run_id: &str) -> RunStatus {
 
 #[must_use]
 pub fn is_run_terminal(status: RunStatus) -> bool {
-    matches!(status, RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled)
+    matches!(
+        status,
+        RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled
+    )
 }
 
 #[must_use]
 pub fn is_step_terminal(status: StepStatus) -> bool {
-    matches!(status, StepStatus::Completed | StepStatus::Failed | StepStatus::Cancelled)
+    matches!(
+        status,
+        StepStatus::Completed | StepStatus::Failed | StepStatus::Cancelled
+    )
 }
 
 #[must_use]
@@ -990,9 +1179,25 @@ fn can_transition(from: StepStatus, to: StepStatus) -> bool {
     use StepStatus::*;
     match (from, to) {
         (Queued, Planning) | (Queued, Cancelled) => true,
-        (Planning, CallingModel) | (Planning, ExecutingTool) | (Planning, WaitingInput) | (Planning, Blocked) | (Planning, Failed) | (Planning, Cancelled) => true,
-        (CallingModel, Planning) | (CallingModel, ExecutingTool) | (CallingModel, WaitingInput) | (CallingModel, Blocked) | (CallingModel, Completed) | (CallingModel, Failed) | (CallingModel, Cancelled) => true,
-        (ExecutingTool, Planning) | (ExecutingTool, WaitingInput) | (ExecutingTool, Blocked) | (ExecutingTool, Completed) | (ExecutingTool, Failed) | (ExecutingTool, Cancelled) => true,
+        (Planning, CallingModel)
+        | (Planning, ExecutingTool)
+        | (Planning, WaitingInput)
+        | (Planning, Blocked)
+        | (Planning, Failed)
+        | (Planning, Cancelled) => true,
+        (CallingModel, Planning)
+        | (CallingModel, ExecutingTool)
+        | (CallingModel, WaitingInput)
+        | (CallingModel, Blocked)
+        | (CallingModel, Completed)
+        | (CallingModel, Failed)
+        | (CallingModel, Cancelled) => true,
+        (ExecutingTool, Planning)
+        | (ExecutingTool, WaitingInput)
+        | (ExecutingTool, Blocked)
+        | (ExecutingTool, Completed)
+        | (ExecutingTool, Failed)
+        | (ExecutingTool, Cancelled) => true,
         (WaitingInput, Planning) | (WaitingInput, Cancelled) | (WaitingInput, Failed) => true,
         (Blocked, Planning) | (Blocked, Cancelled) | (Blocked, Failed) => true,
         _ => false,
@@ -1019,7 +1224,9 @@ fn new_step_id() -> String {
 
 #[must_use]
 pub fn live_validation_matrix_rows() -> Vec<kura_livevalidation::MatrixRow> {
-    let tool_class = kura_livevalidation::ToolClass::from(kura_livevalidation::ToolClass::RUNTIME_LOCAL_TOOL_CALL);
+    let tool_class = kura_livevalidation::ToolClass::from(
+        kura_livevalidation::ToolClass::RUNTIME_LOCAL_TOOL_CALL,
+    );
     match kura_livevalidation::default_matrix_row(&tool_class) {
         Some(row) => vec![row],
         None => Vec::new(),

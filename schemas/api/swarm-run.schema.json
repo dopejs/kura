@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/swarm-run.schema.json",
+  "title": "SwarmRun",
+  "description": "A bounded fan-out of goals to concurrent child turns. Each child is an ordinary chat turn on its own thread, quota-reserved before it spawns; the run carries every child's terminal state as a structured result.",
+  "type": "object",
+  "required": ["runId", "requestedBy", "status", "children", "createdAt", "updatedAt"],
+  "additionalProperties": false,
+  "properties": {
+    "runId": { "type": "string" },
+    "tenantId": { "type": "string" },
+    "requestedBy": { "type": "string" },
+    "provider": { "type": "string" },
+    "model": { "type": "string" },
+    "status": { "type": "string", "enum": ["queued", "running", "completed", "partial_failed", "failed", "cancelled"] },
+    "children": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "goal", "threadId", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "index": { "type": "integer", "minimum": 0 },
+          "goal": { "type": "string" },
+          "threadId": { "type": "string" },
+          "status": { "type": "string", "enum": ["queued", "running", "completed", "failed", "quota_denied", "cancelled"] },
+          "dispatchId": { "type": "string" },
+          "outputPreview": { "type": "string" },
+          "error": { "type": "string" },
+          "startedAt": { "type": "string", "format": "date-time" },
+          "completedAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "completedAt": { "type": "string", "format": "date-time" }
+  }
+}

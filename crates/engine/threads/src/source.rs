@@ -142,6 +142,9 @@ mod tests {
             source_account_id: String::new(),
             source_conversation_id: String::new(),
         });
-        assert_eq!(incomplete.unwrap_err(), ThreadsError::InvalidSourceContinuationKey);
+        assert_eq!(
+            incomplete.unwrap_err(),
+            ThreadsError::InvalidSourceContinuationKey
+        );
     }
 }

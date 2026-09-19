@@ -133,79 +133,265 @@ mod tests {
     fn wire_strings_match_serde_snake_case() {
         use kura_threads::{ContinuityRole, SourceKind};
 
-        assert_wire(redaction_status(&RedactionStatus::Redacted), &RedactionStatus::Redacted);
-        assert_wire(redaction_status(&RedactionStatus::Suppressed), &RedactionStatus::Suppressed);
-        assert_wire(redaction_status(&RedactionStatus::RedactionFailed), &RedactionStatus::RedactionFailed);
+        assert_wire(
+            redaction_status(&RedactionStatus::Redacted),
+            &RedactionStatus::Redacted,
+        );
+        assert_wire(
+            redaction_status(&RedactionStatus::Suppressed),
+            &RedactionStatus::Suppressed,
+        );
+        assert_wire(
+            redaction_status(&RedactionStatus::RedactionFailed),
+            &RedactionStatus::RedactionFailed,
+        );
 
-        assert_wire(continuity_status(&ContinuityStatus::Applied), &ContinuityStatus::Applied);
-        assert_wire(continuity_status(&ContinuityStatus::Empty), &ContinuityStatus::Empty);
-        assert_wire(continuity_status(&ContinuityStatus::Disabled), &ContinuityStatus::Disabled);
-        assert_wire(continuity_status(&ContinuityStatus::Blocked), &ContinuityStatus::Blocked);
-        assert_wire(continuity_status(&ContinuityStatus::Partial), &ContinuityStatus::Partial);
-        assert_wire(continuity_status(&ContinuityStatus::Failed), &ContinuityStatus::Failed);
+        assert_wire(
+            continuity_status(&ContinuityStatus::Applied),
+            &ContinuityStatus::Applied,
+        );
+        assert_wire(
+            continuity_status(&ContinuityStatus::Empty),
+            &ContinuityStatus::Empty,
+        );
+        assert_wire(
+            continuity_status(&ContinuityStatus::Disabled),
+            &ContinuityStatus::Disabled,
+        );
+        assert_wire(
+            continuity_status(&ContinuityStatus::Blocked),
+            &ContinuityStatus::Blocked,
+        );
+        assert_wire(
+            continuity_status(&ContinuityStatus::Partial),
+            &ContinuityStatus::Partial,
+        );
+        assert_wire(
+            continuity_status(&ContinuityStatus::Failed),
+            &ContinuityStatus::Failed,
+        );
 
-        assert_wire(conversation_shape(&ConversationShape::DirectMessage), &ConversationShape::DirectMessage);
-        assert_wire(conversation_shape(&ConversationShape::Group), &ConversationShape::Group);
-        assert_wire(conversation_shape(&ConversationShape::Room), &ConversationShape::Room);
-        assert_wire(conversation_shape(&ConversationShape::Web), &ConversationShape::Web);
-        assert_wire(conversation_shape(&ConversationShape::Unknown), &ConversationShape::Unknown);
-        assert_wire(conversation_shape(&ConversationShape::Unsupported), &ConversationShape::Unsupported);
+        assert_wire(
+            conversation_shape(&ConversationShape::DirectMessage),
+            &ConversationShape::DirectMessage,
+        );
+        assert_wire(
+            conversation_shape(&ConversationShape::Group),
+            &ConversationShape::Group,
+        );
+        assert_wire(
+            conversation_shape(&ConversationShape::Room),
+            &ConversationShape::Room,
+        );
+        assert_wire(
+            conversation_shape(&ConversationShape::Web),
+            &ConversationShape::Web,
+        );
+        assert_wire(
+            conversation_shape(&ConversationShape::Unknown),
+            &ConversationShape::Unknown,
+        );
+        assert_wire(
+            conversation_shape(&ConversationShape::Unsupported),
+            &ConversationShape::Unsupported,
+        );
 
-        assert_wire(shape_evidence_status(&ShapeEvidenceStatus::Proven), &ShapeEvidenceStatus::Proven);
-        assert_wire(shape_evidence_status(&ShapeEvidenceStatus::Partial), &ShapeEvidenceStatus::Partial);
-        assert_wire(shape_evidence_status(&ShapeEvidenceStatus::Unsupported), &ShapeEvidenceStatus::Unsupported);
-        assert_wire(shape_evidence_status(&ShapeEvidenceStatus::Failed), &ShapeEvidenceStatus::Failed);
+        assert_wire(
+            shape_evidence_status(&ShapeEvidenceStatus::Proven),
+            &ShapeEvidenceStatus::Proven,
+        );
+        assert_wire(
+            shape_evidence_status(&ShapeEvidenceStatus::Partial),
+            &ShapeEvidenceStatus::Partial,
+        );
+        assert_wire(
+            shape_evidence_status(&ShapeEvidenceStatus::Unsupported),
+            &ShapeEvidenceStatus::Unsupported,
+        );
+        assert_wire(
+            shape_evidence_status(&ShapeEvidenceStatus::Failed),
+            &ShapeEvidenceStatus::Failed,
+        );
 
-        assert_wire(participation_decision_value(&ParticipationDecisionValue::Accepted), &ParticipationDecisionValue::Accepted);
-        assert_wire(participation_decision_value(&ParticipationDecisionValue::Ignored), &ParticipationDecisionValue::Ignored);
-        assert_wire(participation_decision_value(&ParticipationDecisionValue::Blocked), &ParticipationDecisionValue::Blocked);
-        assert_wire(participation_decision_value(&ParticipationDecisionValue::Denied), &ParticipationDecisionValue::Denied);
-        assert_wire(participation_decision_value(&ParticipationDecisionValue::Duplicate), &ParticipationDecisionValue::Duplicate);
-        assert_wire(participation_decision_value(&ParticipationDecisionValue::Unsupported), &ParticipationDecisionValue::Unsupported);
-        assert_wire(participation_decision_value(&ParticipationDecisionValue::Failed), &ParticipationDecisionValue::Failed);
+        assert_wire(
+            participation_decision_value(&ParticipationDecisionValue::Accepted),
+            &ParticipationDecisionValue::Accepted,
+        );
+        assert_wire(
+            participation_decision_value(&ParticipationDecisionValue::Ignored),
+            &ParticipationDecisionValue::Ignored,
+        );
+        assert_wire(
+            participation_decision_value(&ParticipationDecisionValue::Blocked),
+            &ParticipationDecisionValue::Blocked,
+        );
+        assert_wire(
+            participation_decision_value(&ParticipationDecisionValue::Denied),
+            &ParticipationDecisionValue::Denied,
+        );
+        assert_wire(
+            participation_decision_value(&ParticipationDecisionValue::Duplicate),
+            &ParticipationDecisionValue::Duplicate,
+        );
+        assert_wire(
+            participation_decision_value(&ParticipationDecisionValue::Unsupported),
+            &ParticipationDecisionValue::Unsupported,
+        );
+        assert_wire(
+            participation_decision_value(&ParticipationDecisionValue::Failed),
+            &ParticipationDecisionValue::Failed,
+        );
 
-        assert_wire(reset_event_status(&ResetEventStatus::Succeeded), &ResetEventStatus::Succeeded);
-        assert_wire(reset_event_status(&ResetEventStatus::Denied), &ResetEventStatus::Denied);
-        assert_wire(reset_event_status(&ResetEventStatus::FailedClosed), &ResetEventStatus::FailedClosed);
-        assert_wire(reset_event_status(&ResetEventStatus::Unsupported), &ResetEventStatus::Unsupported);
+        assert_wire(
+            reset_event_status(&ResetEventStatus::Succeeded),
+            &ResetEventStatus::Succeeded,
+        );
+        assert_wire(
+            reset_event_status(&ResetEventStatus::Denied),
+            &ResetEventStatus::Denied,
+        );
+        assert_wire(
+            reset_event_status(&ResetEventStatus::FailedClosed),
+            &ResetEventStatus::FailedClosed,
+        );
+        assert_wire(
+            reset_event_status(&ResetEventStatus::Unsupported),
+            &ResetEventStatus::Unsupported,
+        );
 
-        assert_wire(handoff_status(&HandoffStatus::Succeeded), &HandoffStatus::Succeeded);
-        assert_wire(handoff_status(&HandoffStatus::Denied), &HandoffStatus::Denied);
-        assert_wire(handoff_status(&HandoffStatus::FailedClosed), &HandoffStatus::FailedClosed);
-        assert_wire(handoff_status(&HandoffStatus::Unsupported), &HandoffStatus::Unsupported);
-        assert_wire(handoff_status(&HandoffStatus::Expired), &HandoffStatus::Expired);
+        assert_wire(
+            handoff_status(&HandoffStatus::Succeeded),
+            &HandoffStatus::Succeeded,
+        );
+        assert_wire(
+            handoff_status(&HandoffStatus::Denied),
+            &HandoffStatus::Denied,
+        );
+        assert_wire(
+            handoff_status(&HandoffStatus::FailedClosed),
+            &HandoffStatus::FailedClosed,
+        );
+        assert_wire(
+            handoff_status(&HandoffStatus::Unsupported),
+            &HandoffStatus::Unsupported,
+        );
+        assert_wire(
+            handoff_status(&HandoffStatus::Expired),
+            &HandoffStatus::Expired,
+        );
 
-        assert_wire(handoff_source_reference_status(&HandoffSourceReferenceStatus::Available), &HandoffSourceReferenceStatus::Available);
-        assert_wire(handoff_source_reference_status(&HandoffSourceReferenceStatus::Consumed), &HandoffSourceReferenceStatus::Consumed);
-        assert_wire(handoff_source_reference_status(&HandoffSourceReferenceStatus::Blocked), &HandoffSourceReferenceStatus::Blocked);
-        assert_wire(handoff_source_reference_status(&HandoffSourceReferenceStatus::Expired), &HandoffSourceReferenceStatus::Expired);
-        assert_wire(handoff_source_reference_status(&HandoffSourceReferenceStatus::None), &HandoffSourceReferenceStatus::None);
+        assert_wire(
+            handoff_source_reference_status(&HandoffSourceReferenceStatus::Available),
+            &HandoffSourceReferenceStatus::Available,
+        );
+        assert_wire(
+            handoff_source_reference_status(&HandoffSourceReferenceStatus::Consumed),
+            &HandoffSourceReferenceStatus::Consumed,
+        );
+        assert_wire(
+            handoff_source_reference_status(&HandoffSourceReferenceStatus::Blocked),
+            &HandoffSourceReferenceStatus::Blocked,
+        );
+        assert_wire(
+            handoff_source_reference_status(&HandoffSourceReferenceStatus::Expired),
+            &HandoffSourceReferenceStatus::Expired,
+        );
+        assert_wire(
+            handoff_source_reference_status(&HandoffSourceReferenceStatus::None),
+            &HandoffSourceReferenceStatus::None,
+        );
 
-        assert_wire(routing_outcome(&RoutingOutcome::Accepted), &RoutingOutcome::Accepted);
-        assert_wire(routing_outcome(&RoutingOutcome::Ignored), &RoutingOutcome::Ignored);
-        assert_wire(routing_outcome(&RoutingOutcome::Blocked), &RoutingOutcome::Blocked);
-        assert_wire(routing_outcome(&RoutingOutcome::Duplicate), &RoutingOutcome::Duplicate);
-        assert_wire(routing_outcome(&RoutingOutcome::Disabled), &RoutingOutcome::Disabled);
-        assert_wire(routing_outcome(&RoutingOutcome::Unsupported), &RoutingOutcome::Unsupported);
-        assert_wire(routing_outcome(&RoutingOutcome::Failed), &RoutingOutcome::Failed);
-        assert_wire(routing_outcome(&RoutingOutcome::UnknownSource), &RoutingOutcome::UnknownSource);
-        assert_wire(routing_outcome(&RoutingOutcome::StaleSource), &RoutingOutcome::StaleSource);
-        assert_wire(routing_outcome(&RoutingOutcome::InaccessibleTenantBinding), &RoutingOutcome::InaccessibleTenantBinding);
+        assert_wire(
+            routing_outcome(&RoutingOutcome::Accepted),
+            &RoutingOutcome::Accepted,
+        );
+        assert_wire(
+            routing_outcome(&RoutingOutcome::Ignored),
+            &RoutingOutcome::Ignored,
+        );
+        assert_wire(
+            routing_outcome(&RoutingOutcome::Blocked),
+            &RoutingOutcome::Blocked,
+        );
+        assert_wire(
+            routing_outcome(&RoutingOutcome::Duplicate),
+            &RoutingOutcome::Duplicate,
+        );
+        assert_wire(
+            routing_outcome(&RoutingOutcome::Disabled),
+            &RoutingOutcome::Disabled,
+        );
+        assert_wire(
+            routing_outcome(&RoutingOutcome::Unsupported),
+            &RoutingOutcome::Unsupported,
+        );
+        assert_wire(
+            routing_outcome(&RoutingOutcome::Failed),
+            &RoutingOutcome::Failed,
+        );
+        assert_wire(
+            routing_outcome(&RoutingOutcome::UnknownSource),
+            &RoutingOutcome::UnknownSource,
+        );
+        assert_wire(
+            routing_outcome(&RoutingOutcome::StaleSource),
+            &RoutingOutcome::StaleSource,
+        );
+        assert_wire(
+            routing_outcome(&RoutingOutcome::InaccessibleTenantBinding),
+            &RoutingOutcome::InaccessibleTenantBinding,
+        );
 
-        assert_wire(lifecycle_action_kind(&LifecycleActionKind::Reset), &LifecycleActionKind::Reset);
-        assert_wire(lifecycle_action_kind(&LifecycleActionKind::Archive), &LifecycleActionKind::Archive);
-        assert_wire(lifecycle_action_kind(&LifecycleActionKind::Reopen), &LifecycleActionKind::Reopen);
+        assert_wire(
+            lifecycle_action_kind(&LifecycleActionKind::Reset),
+            &LifecycleActionKind::Reset,
+        );
+        assert_wire(
+            lifecycle_action_kind(&LifecycleActionKind::Archive),
+            &LifecycleActionKind::Archive,
+        );
+        assert_wire(
+            lifecycle_action_kind(&LifecycleActionKind::Reopen),
+            &LifecycleActionKind::Reopen,
+        );
 
-        assert_wire(runtime_resource_kind(&RuntimeResourceKind::Session), &RuntimeResourceKind::Session);
-        assert_wire(runtime_resource_kind(&RuntimeResourceKind::Run), &RuntimeResourceKind::Run);
-        assert_wire(runtime_resource_kind(&RuntimeResourceKind::Workflow), &RuntimeResourceKind::Workflow);
-        assert_wire(runtime_resource_kind(&RuntimeResourceKind::Approval), &RuntimeResourceKind::Approval);
-        assert_wire(runtime_resource_kind(&RuntimeResourceKind::ForegroundReply), &RuntimeResourceKind::ForegroundReply);
-        assert_wire(runtime_resource_kind(&RuntimeResourceKind::BackgroundDelivery), &RuntimeResourceKind::BackgroundDelivery);
-        assert_wire(runtime_resource_kind(&RuntimeResourceKind::ConnectorMessage), &RuntimeResourceKind::ConnectorMessage);
+        assert_wire(
+            runtime_resource_kind(&RuntimeResourceKind::Session),
+            &RuntimeResourceKind::Session,
+        );
+        assert_wire(
+            runtime_resource_kind(&RuntimeResourceKind::Run),
+            &RuntimeResourceKind::Run,
+        );
+        assert_wire(
+            runtime_resource_kind(&RuntimeResourceKind::Workflow),
+            &RuntimeResourceKind::Workflow,
+        );
+        assert_wire(
+            runtime_resource_kind(&RuntimeResourceKind::Approval),
+            &RuntimeResourceKind::Approval,
+        );
+        assert_wire(
+            runtime_resource_kind(&RuntimeResourceKind::ForegroundReply),
+            &RuntimeResourceKind::ForegroundReply,
+        );
+        assert_wire(
+            runtime_resource_kind(&RuntimeResourceKind::BackgroundDelivery),
+            &RuntimeResourceKind::BackgroundDelivery,
+        );
+        assert_wire(
+            runtime_resource_kind(&RuntimeResourceKind::ConnectorMessage),
+            &RuntimeResourceKind::ConnectorMessage,
+        );
 
         // Sanity: non-wire-mapped thread enums still serialize snake_case.
-        assert_eq!(serde_json::to_value(ContinuityRole::User).unwrap(), serde_json::json!("user"));
-        assert_eq!(serde_json::to_value(SourceKind::Chat).unwrap(), serde_json::json!("chat"));
+        assert_eq!(
+            serde_json::to_value(ContinuityRole::User).unwrap(),
+            serde_json::json!("user")
+        );
+        assert_eq!(
+            serde_json::to_value(SourceKind::Chat).unwrap(),
+            serde_json::json!("chat")
+        );
     }
 }

@@ -6,6 +6,7 @@ version.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+kura-egress.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

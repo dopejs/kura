@@ -114,7 +114,10 @@ mod tests {
     #[test]
     fn leak_sentinels_match_substrings_and_ignore_empty() {
         let sentinels = vec!["DO_NOT_LEAK".to_string(), "".to_string()];
-        assert!(contains_any_leak_sentinel("prefix DO_NOT_LEAK suffix", &sentinels));
+        assert!(contains_any_leak_sentinel(
+            "prefix DO_NOT_LEAK suffix",
+            &sentinels
+        ));
         assert!(!contains_any_leak_sentinel("clean value", &sentinels));
         assert!(!contains_any_leak_sentinel("anything", &[]));
     }

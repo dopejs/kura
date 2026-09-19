@@ -16,11 +16,11 @@ mod resolver;
 pub mod tenantctx;
 mod types;
 
-pub use audit::Auditor;
-pub use audit::AuditStore;
 pub use audit::AUDIT_OUTCOME_DENIED;
 pub use audit::AUDIT_OUTCOME_FAILED_CLOSED;
 pub use audit::AUDIT_OUTCOME_SUCCEEDED;
+pub use audit::AuditStore;
+pub use audit::Auditor;
 pub use manager::CreateInvitationInput;
 pub use manager::Manager;
 pub use manager::Store;
@@ -33,10 +33,10 @@ pub use permissions::permissions_for_role;
 pub use permissions::require_permission;
 pub use resolver::Resolver;
 pub use resolver::ResolverStore;
-pub use resolver::TokenAuthority;
 pub use resolver::TENANT_SOURCE_DEFAULT;
 pub use resolver::TENANT_SOURCE_EXPLICIT_HEADER;
-pub use types::stable_denial;
+pub use resolver::TokenAuthority;
+pub use types::ALL_SENSITIVE_PERMISSIONS;
 pub use types::AuditEventFilter;
 pub use types::Denial;
 pub use types::IdentityError;
@@ -57,7 +57,7 @@ pub use types::TenantFilter;
 pub use types::TenantInvitation;
 pub use types::TenantKind;
 pub use types::TokenTenantGrant;
-pub use types::ALL_SENSITIVE_PERMISSIONS;
+pub use types::stable_denial;
 
 #[cfg(test)]
 mod testutil;

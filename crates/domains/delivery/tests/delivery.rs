@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use kura_delivery::{DeliveryOutcome, DeliveryPreference, DeliveryTarget, ResultClass, TargetKind, TargetStatus};
+use kura_delivery::{
+    DeliveryOutcome, DeliveryPreference, DeliveryTarget, ResultClass, TargetKind, TargetStatus,
+};
 
 #[test]
 fn delivery_target_roundtrips() {
@@ -35,7 +37,12 @@ fn preference_enum_key_map_roundtrips() {
     let json = serde_json::to_string(&preference).unwrap();
     assert!(json.contains("urgent"));
     let back: DeliveryPreference = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.preferred_targets_by_class.get(&ResultClass::Urgent).map(|s| s.as_str()), Some("t1"));
+    assert_eq!(
+        back.preferred_targets_by_class
+            .get(&ResultClass::Urgent)
+            .map(|s| s.as_str()),
+        Some("t1")
+    );
 }
 
 #[test]

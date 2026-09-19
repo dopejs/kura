@@ -2,17 +2,19 @@
 //! `daemon/internal/store/store.go` tenantless write paths. The tenant column on auth states,
 //! models, and preferences is written as NULL until the tenancy package is ported.
 
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
+use crate::SQLiteStore;
 use crate::crud::{
     decode_opt_json, enum_str, marshal_json, now_rfc3339, null_string, opt_time_string, parse_enum,
     parse_opt_rfc3339, parse_rfc3339,
 };
-use crate::SQLiteStore;
 
 /// Go marshals nil slices/maps as the literal `null`; Go-era rows carry it in
 /// these NOT NULL json columns. Decode ""/"null" as the type's default.
-fn decode_json_or_default<T: serde::de::DeserializeOwned + Default>(raw: &str) -> Result<T, String> {
+fn decode_json_or_default<T: serde::de::DeserializeOwned + Default>(
+    raw: &str,
+) -> Result<T, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed == "null" {
         return Ok(T::default());
@@ -46,7 +48,8 @@ fn scan_provider_check(row: &Row) -> Result<kura_providers::Check, String> {
         error_class: error_class.unwrap_or_default(),
         error_code: error_code.unwrap_or_default(),
         error_message: error_message.unwrap_or_default(),
-        usage: decode_json_or_default(&usage_raw).map_err(|e| format!("decode provider check usage: {e}"))?,
+        usage: decode_json_or_default(&usage_raw)
+            .map_err(|e| format!("decode provider check usage: {e}"))?,
         created_at: parse_rfc3339(&created_at)?,
         completed_at: parse_rfc3339(&completed_at)?,
     })
@@ -141,8 +144,8 @@ fn scan_provider_preference(row: &Row) -> Result<kura_providers::Preference, Str
 
 impl SQLiteStore {
     pub fn upsert_provider_check(&self, check: &kura_providers::Check) -> Result<(), String> {
-        let usage_json =
-            serde_json::to_string(&check.usage).map_err(|e| format!("marshal provider check usage: {e}"))?;
+        let usage_json = serde_json::to_string(&check.usage)
+            .map_err(|e| format!("marshal provider check usage: {e}"))?;
         self.conn
             .execute(
                 r#"INSERT INTO provider_checks (
@@ -182,7 +185,10 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn list_provider_checks(&self, provider_id: &str) -> Result<Vec<kura_providers::Check>, String> {
+    pub fn list_provider_checks(
+        &self,
+        provider_id: &str,
+    ) -> Result<Vec<kura_providers::Check>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -193,7 +199,9 @@ impl SQLiteStore {
                 ORDER BY created_at DESC, check_id DESC"#,
             )
             .map_err(|e| format!("list provider checks for {provider_id}: {e}"))?;
-        let mut rows = stmt.query(params![provider_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![provider_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_provider_check(row)?);
@@ -201,7 +209,11 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn get_provider_check(&self, provider_id: &str, check_id: &str) -> Result<Option<kura_providers::Check>, String> {
+    pub fn get_provider_check(
+        &self,
+        provider_id: &str,
+        check_id: &str,
+    ) -> Result<Option<kura_providers::Check>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -211,20 +223,25 @@ impl SQLiteStore {
                 WHERE provider_id = ?1 AND check_id = ?2"#,
             )
             .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query(params![provider_id, check_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![provider_id, check_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
         scan_provider_check(row).map(Some)
     }
 
-    pub fn upsert_provider_auth_state(&self, state: &kura_providers::AuthState) -> Result<(), String> {
-        let login_command_json =
-            serde_json::to_string(&state.login_command).map_err(|e| format!("marshal provider auth login command: {e}"))?;
-        let logout_command_json =
-            serde_json::to_string(&state.logout_command).map_err(|e| format!("marshal provider auth logout command: {e}"))?;
-        let metadata_json =
-            serde_json::to_string(&state.metadata).map_err(|e| format!("marshal provider auth metadata: {e}"))?;
+    pub fn upsert_provider_auth_state(
+        &self,
+        state: &kura_providers::AuthState,
+    ) -> Result<(), String> {
+        let login_command_json = serde_json::to_string(&state.login_command)
+            .map_err(|e| format!("marshal provider auth login command: {e}"))?;
+        let logout_command_json = serde_json::to_string(&state.logout_command)
+            .map_err(|e| format!("marshal provider auth logout command: {e}"))?;
+        let metadata_json = serde_json::to_string(&state.metadata)
+            .map_err(|e| format!("marshal provider auth metadata: {e}"))?;
         let sandbox_json = marshal_json(&state.sandbox)?;
 
         self.conn
@@ -298,7 +315,11 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn replace_provider_models(&self, provider_id: &str, models: &[kura_providers::Model]) -> Result<(), String> {
+    pub fn replace_provider_models(
+        &self,
+        provider_id: &str,
+        models: &[kura_providers::Model],
+    ) -> Result<(), String> {
         let tx = self
             .conn
             .unchecked_transaction()
@@ -311,8 +332,13 @@ impl SQLiteStore {
         .map_err(|e| format!("delete provider models for {provider_id}: {e}"))?;
 
         for model in models {
-            let reasoning_levels_json = serde_json::to_string(&model.reasoning_levels)
-                .map_err(|e| format!("marshal reasoning levels for {provider_id}/{}: {e}", model.model_id))?;
+            let reasoning_levels_json =
+                serde_json::to_string(&model.reasoning_levels).map_err(|e| {
+                    format!(
+                        "marshal reasoning levels for {provider_id}/{}: {e}",
+                        model.model_id
+                    )
+                })?;
             tx.execute(
                 r#"INSERT INTO provider_models (
                     provider_id, model_id, display_name, description, default_flag,
@@ -333,7 +359,12 @@ impl SQLiteStore {
                     reasoning_levels_json,
                 ],
             )
-            .map_err(|e| format!("insert provider model {provider_id}/{}: {e}", model.model_id))?;
+            .map_err(|e| {
+                format!(
+                    "insert provider model {provider_id}/{}: {e}",
+                    model.model_id
+                )
+            })?;
         }
 
         tx.commit()
@@ -344,11 +375,17 @@ impl SQLiteStore {
         self.query_provider_models(None)
     }
 
-    pub fn list_provider_models_by_provider(&self, provider_id: &str) -> Result<Vec<kura_providers::Model>, String> {
+    pub fn list_provider_models_by_provider(
+        &self,
+        provider_id: &str,
+    ) -> Result<Vec<kura_providers::Model>, String> {
         self.query_provider_models(Some(provider_id))
     }
 
-    pub fn upsert_provider_preference(&self, preference: &kura_providers::Preference) -> Result<(), String> {
+    pub fn upsert_provider_preference(
+        &self,
+        preference: &kura_providers::Preference,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 r#"INSERT INTO provider_preferences (provider_id, default_model, updated_at, tenant_id)
@@ -383,7 +420,10 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    fn query_provider_models(&self, provider_id: Option<&str>) -> Result<Vec<kura_providers::Model>, String> {
+    fn query_provider_models(
+        &self,
+        provider_id: Option<&str>,
+    ) -> Result<Vec<kura_providers::Model>, String> {
         let sql = if provider_id.is_some() {
             r#"SELECT provider_id, model_id, display_name, description, default_flag,
                 available_flag, source, chat, stream, coding, tool_use, reasoning_levels_json

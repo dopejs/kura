@@ -28,6 +28,52 @@ pub struct EvidenceLink {
     pub id: String,
 }
 
+/// A measured result backing a proposal (Stage 6.2). "Predicted effect" is
+/// an assertion; this is the observation it rests on: a replay attempt or
+/// campaign in the evaluation plane, the metric read from it, and the
+/// baseline it is compared against.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EvaluationEvidence {
+    /// `replay_attempt` or `campaign`.
+    pub kind: String,
+    /// The attempt/campaign id in the evaluation plane.
+    pub id: String,
+    pub metric: String,
+    pub baseline: f64,
+    pub observed: f64,
+}
+
+impl EvaluationEvidence {
+    #[must_use]
+    pub fn is_usable(&self) -> bool {
+        !self.kind.trim().is_empty() && !self.id.trim().is_empty() && !self.metric.trim().is_empty()
+    }
+}
+
+/// The parameters a proposal may target (Stage 6.1): every tunable this
+/// program introduced, and nothing else. An allowlist rather than "any
+/// profile key" because `apply` rewrites `plugins.json` for the whole daemon
+/// — an agent proposing a change to a key it invented would otherwise land a
+/// silent no-op or, worse, a typo that disables a plugin.
+pub const KNOWN_TARGETS: &[(&str, &str)] = &[
+    ("context", "memoryBudgetChars"),
+    ("context", "retrievalBudgetChars"),
+    ("context", "refThresholdChars"),
+    ("context", "retrievalMaxCorpus"),
+    ("context", "vectorMinSimilarity"),
+    ("session-strategy", "personalBudgetChars"),
+    ("session-strategy", "threadBudgetChars"),
+    ("session-strategy", "keepRecent"),
+];
+
+#[must_use]
+pub fn is_known_target(plugin: &str, key: &str) -> bool {
+    KNOWN_TARGETS
+        .iter()
+        .any(|(p, k)| *p == plugin.trim() && *k == key.trim())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalStatus {
@@ -49,6 +95,9 @@ pub struct ImprovementProposal {
     pub proposed_value: serde_json::Value,
     pub predicted_effect: String,
     pub evidence_links: Vec<EvidenceLink>,
+    /// The measurement the predicted effect rests on (Stage 6.2).
+    #[serde(default)]
+    pub evaluation: EvaluationEvidence,
     pub proposed_by: String,
     pub status: ProposalStatus,
     /// Decision reason (rejection) or rollback reason.
@@ -72,6 +121,7 @@ pub struct ProposeInput {
     pub predicted_effect: String,
     pub evidence_links: Vec<EvidenceLink>,
     pub proposed_by: String,
+    pub evaluation: EvaluationEvidence,
 }
 
 /// Operator configuration (the `config` object of the `self-improve`
@@ -100,6 +150,9 @@ impl ImprovementConfig {
 pub enum ImprovementError {
     NotFound,
     EvidenceRequired,
+    EvaluationRequired,
+    UnknownTarget(String),
+    NonNumericValue(String),
     TargetRequired,
     RateBounded(String),
     InvalidTransition(String),
@@ -112,6 +165,14 @@ impl std::fmt::Display for ImprovementError {
             ImprovementError::EvidenceRequired => {
                 write!(f, "improvement proposals require motivating evidence links")
             }
+            ImprovementError::EvaluationRequired => write!(
+                f,
+                "improvement proposals require an evaluation result (kind, id, metric) — a predicted effect must be measured, not asserted"
+            ),
+            ImprovementError::UnknownTarget(t) => {
+                write!(f, "{t} is not a known improvement target")
+            }
+            ImprovementError::NonNumericValue(t) => write!(f, "{t} takes a numeric value"),
             ImprovementError::TargetRequired => {
                 write!(f, "targetPlugin and configKey are required")
             }
@@ -151,15 +212,19 @@ impl Manager {
                 }
             }
         }
-        Manager { dir, config, inner: parking_lot::RwLock::new(map) }
+        Manager {
+            dir,
+            config,
+            inner: parking_lot::RwLock::new(map),
+        }
     }
 
     fn persist(&self, proposal: &ImprovementProposal) -> Result<(), ImprovementError> {
         std::fs::create_dir_all(&self.dir).map_err(|e| ImprovementError::Io(e.to_string()))?;
         let path = self.dir.join(format!("{}.json", proposal.proposal_id));
         let tmp = self.dir.join(format!("{}.json.tmp", proposal.proposal_id));
-        let encoded = serde_json::to_vec_pretty(proposal)
-            .map_err(|e| ImprovementError::Io(e.to_string()))?;
+        let encoded =
+            serde_json::to_vec_pretty(proposal).map_err(|e| ImprovementError::Io(e.to_string()))?;
         std::fs::write(&tmp, encoded)
             .and_then(|()| std::fs::rename(&tmp, &path))
             .map_err(|e| ImprovementError::Io(e.to_string()))
@@ -167,15 +232,22 @@ impl Manager {
 
     /// Creates a pending proposal, enforcing evidence and the per-target
     /// rate bound over the trailing 24h window.
-    pub fn propose(
-        &self,
-        input: ProposeInput,
-    ) -> Result<ImprovementProposal, ImprovementError> {
+    pub fn propose(&self, input: ProposeInput) -> Result<ImprovementProposal, ImprovementError> {
         if input.target_plugin.trim().is_empty() || input.config_key.trim().is_empty() {
             return Err(ImprovementError::TargetRequired);
         }
         if input.evidence_links.iter().all(|l| l.id.trim().is_empty()) {
             return Err(ImprovementError::EvidenceRequired);
+        }
+        let target_label = format!("{}/{}", input.target_plugin.trim(), input.config_key.trim());
+        if !is_known_target(&input.target_plugin, &input.config_key) {
+            return Err(ImprovementError::UnknownTarget(target_label));
+        }
+        if !input.proposed_value.is_number() {
+            return Err(ImprovementError::NonNumericValue(target_label));
+        }
+        if !input.evaluation.is_usable() {
+            return Err(ImprovementError::EvaluationRequired);
         }
         let now = Utc::now();
         let target = format!("{}/{}", input.target_plugin.trim(), input.config_key.trim());
@@ -202,6 +274,7 @@ impl Manager {
             proposed_value: input.proposed_value,
             predicted_effect: input.predicted_effect.trim().to_string(),
             evidence_links: input.evidence_links,
+            evaluation: input.evaluation,
             proposed_by: input.proposed_by.trim().to_string(),
             status: ProposalStatus::Pending,
             reason: String::new(),
@@ -210,7 +283,9 @@ impl Manager {
             updated_at: now,
         };
         self.persist(&proposal)?;
-        self.inner.write().insert(proposal.proposal_id.clone(), proposal.clone());
+        self.inner
+            .write()
+            .insert(proposal.proposal_id.clone(), proposal.clone());
         Ok(proposal)
     }
 
@@ -223,7 +298,11 @@ impl Manager {
     #[must_use]
     pub fn list(&self) -> Vec<ImprovementProposal> {
         let mut items: Vec<_> = self.inner.read().values().cloned().collect();
-        items.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.proposal_id.cmp(&b.proposal_id)));
+        items.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then(a.proposal_id.cmp(&b.proposal_id))
+        });
         items
     }
 
@@ -234,7 +313,9 @@ impl Manager {
         mutate: impl FnOnce(&mut ImprovementProposal),
     ) -> Result<ImprovementProposal, ImprovementError> {
         let mut inner = self.inner.write();
-        let proposal = inner.get_mut(proposal_id.trim()).ok_or(ImprovementError::NotFound)?;
+        let proposal = inner
+            .get_mut(proposal_id.trim())
+            .ok_or(ImprovementError::NotFound)?;
         if proposal.status != expected {
             return Err(ImprovementError::InvalidTransition(format!(
                 "proposal is {:?}; expected {:?}",
@@ -312,20 +393,61 @@ mod tests {
             current_value: serde_json::json!(48000),
             proposed_value: serde_json::json!(64000),
             predicted_effect: "fewer elisions in long sessions".to_string(),
-            evidence_links: vec![EvidenceLink { kind: "event".to_string(), id: "evt_1".to_string() }],
+            evidence_links: vec![EvidenceLink {
+                kind: "event".to_string(),
+                id: "evt_1".to_string(),
+            }],
             proposed_by: "agent".to_string(),
+            evaluation: EvaluationEvidence {
+                kind: "replay_attempt".into(),
+                id: "att_1".into(),
+                metric: "elisions_per_turn".into(),
+                baseline: 3.0,
+                observed: 1.0,
+            },
         }
+    }
+
+    #[test]
+    fn unknown_targets_and_unmeasured_proposals_are_refused() {
+        let dir = std::env::temp_dir().join(format!("kura-improve-{}", uuid::Uuid::now_v7()));
+        let m = Manager::new(dir.to_str().unwrap(), ImprovementConfig::default());
+        let mut bad = input("personalBudgetChars");
+        bad.config_key = "personalBudgetChras".into();
+        assert!(matches!(
+            m.propose(bad).unwrap_err(),
+            ImprovementError::UnknownTarget(_)
+        ));
+        let mut unmeasured = input("personalBudgetChars");
+        unmeasured.evaluation = EvaluationEvidence::default();
+        assert!(matches!(
+            m.propose(unmeasured).unwrap_err(),
+            ImprovementError::EvaluationRequired
+        ));
+        let mut text = input("personalBudgetChars");
+        text.proposed_value = serde_json::json!("lots");
+        assert!(matches!(
+            m.propose(text).unwrap_err(),
+            ImprovementError::NonNumericValue(_)
+        ));
+        assert!(m.propose(input("keepRecent")).is_ok());
     }
 
     #[test]
     fn lifecycle_apply_requires_snapshot_and_persists_across_restart() {
         let dir = tempdir();
         let manager = Manager::new(&dir, ImprovementConfig::default());
-        let proposal = manager.propose(input("personalBudgetChars")).expect("propose");
+        let proposal = manager
+            .propose(input("personalBudgetChars"))
+            .expect("propose");
         assert_eq!(proposal.status, ProposalStatus::Pending);
 
         // Apply without a snapshot is refused (no change without rollback).
-        assert!(manager.mark_applied(&proposal.proposal_id, serde_json::Value::Null).is_err());
+        assert!(
+            manager
+                .mark_applied(&proposal.proposal_id, serde_json::Value::Null)
+                .is_err()
+        );
         let applied = manager
             .mark_applied(&proposal.proposal_id, serde_json::json!({ "entries": {} }))
             .expect("apply with snapshot");
@@ -346,7 +468,12 @@ mod tests {
 
     #[test]
     fn evidence_and_rate_bound_enforced() {
-        let manager = Manager::new(&tempdir(), ImprovementConfig { max_per_target_per_day: 2 });
+        let manager = Manager::new(
+            &tempdir(),
+            ImprovementConfig {
+                max_per_target_per_day: 2,
+            },
+        );
         let mut no_evidence = input("keepRecent");
         no_evidence.evidence_links.clear();
         assert!(matches!(
@@ -361,17 +488,25 @@ mod tests {
             Err(ImprovementError::RateBounded(_))
         ));
         // A different target is unaffected.
-        manager.propose(input("threadBudgetChars")).expect("other target");
+        manager
+            .propose(input("threadBudgetChars"))
+            .expect("other target");
     }
 
     #[test]
     fn transitions_are_guarded() {
         let manager = Manager::new(&tempdir(), ImprovementConfig::default());
-        let proposal = manager.propose(input("personalBudgetChars")).expect("propose");
-        manager.reject(&proposal.proposal_id, "not now").expect("reject");
+        let proposal = manager
+            .propose(input("personalBudgetChars"))
+            .expect("propose");
+        manager
+            .reject(&proposal.proposal_id, "not now")
+            .expect("reject");
         assert!(manager.reject(&proposal.proposal_id, "again").is_err());
-        assert!(manager
-            .mark_applied(&proposal.proposal_id, serde_json::json!({}))
-            .is_err());
+        assert!(
+            manager
+                .mark_applied(&proposal.proposal_id, serde_json::json!({}))
+                .is_err()
+        );
     }
 }

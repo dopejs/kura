@@ -1,7 +1,7 @@
 //! Failure diagnostics projection (port of `diagnostics.go`).
 
-use crate::error::activation_error;
 use crate::error::ActivationError;
+use crate::error::activation_error;
 use crate::service::GetInput;
 use crate::service::Service;
 use crate::types::Diagnostic;
@@ -111,8 +111,12 @@ fn stage_for_reason(reason: &ReasonCode) -> FailureStage {
     match reason.as_str() {
         ReasonCode::QUOTA_BASELINE_UNAVAILABLE => FailureStage::QUOTA_BASELINE.into(),
         ReasonCode::TENANT_ACCESS_REVOKED => FailureStage::AUTHORIZATION.into(),
-        ReasonCode::PRINCIPAL_DENIED | ReasonCode::PRINCIPAL_DISABLED => FailureStage::ELIGIBILITY.into(),
-        ReasonCode::TEST_CHAT_FAILED | ReasonCode::TEST_CHAT_UNAVAILABLE => FailureStage::TEST_CHAT.into(),
+        ReasonCode::PRINCIPAL_DENIED | ReasonCode::PRINCIPAL_DISABLED => {
+            FailureStage::ELIGIBILITY.into()
+        }
+        ReasonCode::TEST_CHAT_FAILED | ReasonCode::TEST_CHAT_UNAVAILABLE => {
+            FailureStage::TEST_CHAT.into()
+        }
         _ => FailureStage::UNEXPECTED.into(),
     }
 }
@@ -122,20 +126,20 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::readiness::ready_readiness_item;
-    use crate::testutil::*;
-    use crate::types::default_test_chat_first_action;
-    use crate::types::ReadinessKind;
-    use crate::types::Status;
-    use crate::types::TestChatMetadata;
-    use crate::types::STEP_COMPLETED;
-    use crate::types::STEP_QUOTA_BASELINE_READY;
-    use crate::types::STEP_TENANT_RESOLVED;
-    use crate::types::STEP_TEST_CHAT_COMPLETED;
     use crate::Dependencies;
     use crate::GetInput;
     use crate::Service;
     use crate::StateStore;
+    use crate::readiness::ready_readiness_item;
+    use crate::testutil::*;
+    use crate::types::ReadinessKind;
+    use crate::types::STEP_COMPLETED;
+    use crate::types::STEP_QUOTA_BASELINE_READY;
+    use crate::types::STEP_TENANT_RESOLVED;
+    use crate::types::STEP_TEST_CHAT_COMPLETED;
+    use crate::types::Status;
+    use crate::types::TestChatMetadata;
+    use crate::types::default_test_chat_first_action;
 
     #[tokio::test]
     async fn diagnostics_does_not_report_completed_test_chat_as_failure() {

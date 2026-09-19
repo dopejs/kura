@@ -1,7 +1,7 @@
 //! Port of `daemon/internal/delivery/live_validation.go`: the support-matrix rows for the
 //! delivery domain.
 
-use kura_livevalidation::{default_matrix_row, ToolClass};
+use kura_livevalidation::{ToolClass, default_matrix_row};
 
 /// Port of `LiveValidationMatrixRows`: delivery dispatch and connector message send are
 /// non-idempotent mutations requiring per-action approval (see the livevalidation default

@@ -75,7 +75,10 @@ pub struct AdapterError {
 
 impl AdapterError {
     pub fn new(kind: FailureKind, detail: impl Into<String>) -> Self {
-        AdapterError { kind, detail: detail.into() }
+        AdapterError {
+            kind,
+            detail: detail.into(),
+        }
     }
 }
 
@@ -84,7 +87,11 @@ impl std::fmt::Display for AdapterError {
         if self.detail.is_empty() {
             write!(f, "integration adapter failure ({})", self.kind)
         } else {
-            write!(f, "integration adapter failure ({}): {}", self.kind, self.detail)
+            write!(
+                f,
+                "integration adapter failure ({}): {}",
+                self.kind, self.detail
+            )
         }
     }
 }

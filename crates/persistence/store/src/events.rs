@@ -3,10 +3,10 @@
 //! personal-tenant cache is deferred to the tenancy package; the legacy path binds only the
 //! caller-provided tenant id.
 
-use rusqlite::{params, params_from_iter, types::Value, Row};
+use rusqlite::{Row, params, params_from_iter, types::Value};
 
-use crate::crud::{decode_map, now_rfc3339, null_string, parse_rfc3339};
 use crate::SQLiteStore;
+use crate::crud::{decode_map, now_rfc3339, null_string, parse_rfc3339};
 
 fn scan_event(row: &Row) -> Result<kura_events::Event, String> {
     let sequence: i64 = row.get(0).map_err(|e| e.to_string())?;
@@ -47,7 +47,10 @@ fn scan_event(row: &Row) -> Result<kura_events::Event, String> {
             capability_id: capability_id.unwrap_or_default(),
             ..kura_events::Scope::default()
         },
-        resource: kura_events::Resource { kind: resource_kind, id: resource_id },
+        resource: kura_events::Resource {
+            kind: resource_kind,
+            id: resource_id,
+        },
         payload: decode_map(&payload_json)?,
         ..kura_events::Event::default()
     })
@@ -75,9 +78,7 @@ impl SQLiteStore {
         if event.occurred_at == chrono::DateTime::<chrono::Utc>::MIN_UTC {
             event.occurred_at = chrono::Utc::now();
         }
-        if event.tenant_id.trim().is_empty()
-            && !kura_events::is_global_category(&event.category)
-        {
+        if event.tenant_id.trim().is_empty() && !kura_events::is_global_category(&event.category) {
             if let Some(tenant_id) = self.resolve_default_tenant_binding() {
                 event.tenant_id = tenant_id;
             }
@@ -129,7 +130,10 @@ impl SQLiteStore {
         Ok(out)
     }
 
-    pub fn list_events(&self, filter: &kura_events::Filter) -> Result<Vec<kura_events::Event>, String> {
+    pub fn list_events(
+        &self,
+        filter: &kura_events::Filter,
+    ) -> Result<Vec<kura_events::Event>, String> {
         let mut sql = String::from(
             r#"SELECT rowid, event_id, environment_scope, category, name, occurred_at, session_id,
                 run_id, workflow_id, workflow_step_id, schedule_id, schedule_attempt_id, step_id,
@@ -172,8 +176,13 @@ impl SQLiteStore {
         }
         sql.push_str(" ORDER BY rowid ASC");
 
-        let mut stmt = self.conn.prepare(&sql).map_err(|e| format!("list events: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(args.iter())).map_err(|e| e.to_string())?;
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| format!("list events: {e}"))?;
+        let mut rows = stmt
+            .query(params_from_iter(args.iter()))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_event(row)?);

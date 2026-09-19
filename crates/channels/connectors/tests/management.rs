@@ -10,15 +10,15 @@ use std::collections::HashMap;
 use chrono::{DateTime, Duration, Utc};
 use kura_connectors::{
     CapabilitySupport, ChannelConnectorProjection, Connector, ConnectorDiagnosticState,
-    DiagnosticFreshness, DiagnosticReasonCode, DiagnosticInput, LifecycleState,
+    DiagnosticFreshness, DiagnosticInput, DiagnosticReasonCode, LifecycleState,
     ManagementActionKind, ManagementState, ManagementTerminalState, ProjectionInput,
     RedactionStatus, RemediationOwner, RetrySafety, RoutePolicy, Status, SupportEvidenceBundle,
     build_connector_page, build_connector_projection, build_support_evidence_bundle,
     capability_profile_for_kind, classify_diagnostic, contains_route_policy_value,
     default_route_policy, latest_diagnostic, management_state_for_connector,
     next_action_for_diagnostic, next_action_label_for_diagnostic, normalize_route_policy,
-    parse_cursor_offset, route_policy_allows_conversation, route_policy_allows_sender,
-    route_policy_is_valid, retry_safety_for_repair_action, sort_connector_projections,
+    parse_cursor_offset, retry_safety_for_repair_action, route_policy_allows_conversation,
+    route_policy_allows_sender, route_policy_is_valid, sort_connector_projections,
     terminal_state_for_repair_action,
 };
 
@@ -84,7 +84,10 @@ fn default_and_normalized_route_policy_are_redacted_and_future_eligible() {
         },
         now,
     );
-    assert_eq!(normalized.validated_at, now, "normalize fills the validated-at timestamp");
+    assert_eq!(
+        normalized.validated_at, now,
+        "normalize fills the validated-at timestamp"
+    );
     assert_eq!(normalized.validation_state, "valid");
     assert_eq!(normalized.redaction_status, RedactionStatus::Redacted);
 }
@@ -271,11 +274,17 @@ fn management_state_classification_matches_go_table() {
     // The diagnostic status overrides the (healthy) connector status.
     let healthy = connector("c1", "slack", Status::Healthy, now);
     let diagnostic_cases = [
-        (LifecycleState::PermissionBlocked, ManagementState::ActionRequired),
+        (
+            LifecycleState::PermissionBlocked,
+            ManagementState::ActionRequired,
+        ),
         (LifecycleState::Failed, ManagementState::ActionRequired),
         (LifecycleState::RateLimited, ManagementState::Unavailable),
         (LifecycleState::Degraded, ManagementState::Degraded),
-        (LifecycleState::UnsupportedCapability, ManagementState::Degraded),
+        (
+            LifecycleState::UnsupportedCapability,
+            ManagementState::Degraded,
+        ),
         // Statuses outside the diagnostic switch fall through to the connector.
         (LifecycleState::Healthy, ManagementState::Ready),
         (LifecycleState::Configured, ManagementState::Ready),
@@ -310,22 +319,55 @@ fn capability_profile_for_kind_supports_builtin_kinds_and_downgrades_unknown() {
         let profile = capability_profile_for_kind(kind);
         assert_eq!(profile.len(), 9, "kind {kind}");
         assert_eq!(profile.get("disable"), Some(&CapabilitySupport::Supported));
-        assert_eq!(profile.get("re-enable"), Some(&CapabilitySupport::Supported));
+        assert_eq!(
+            profile.get("re-enable"),
+            Some(&CapabilitySupport::Supported)
+        );
         assert_eq!(profile.get("repair"), Some(&CapabilitySupport::Supported));
-        assert_eq!(profile.get("reconnect"), Some(&CapabilitySupport::Supported));
-        assert_eq!(profile.get("credential-rotation"), Some(&CapabilitySupport::Limited));
-        assert_eq!(profile.get("route-edit"), Some(&CapabilitySupport::Supported));
-        assert_eq!(profile.get("foreground-reply-status"), Some(&CapabilitySupport::Supported));
-        assert_eq!(profile.get("background-delivery-status"), Some(&CapabilitySupport::Supported));
-        assert_eq!(profile.get("support-evidence"), Some(&CapabilitySupport::Supported));
+        assert_eq!(
+            profile.get("reconnect"),
+            Some(&CapabilitySupport::Supported)
+        );
+        assert_eq!(
+            profile.get("credential-rotation"),
+            Some(&CapabilitySupport::Limited)
+        );
+        assert_eq!(
+            profile.get("route-edit"),
+            Some(&CapabilitySupport::Supported)
+        );
+        assert_eq!(
+            profile.get("foreground-reply-status"),
+            Some(&CapabilitySupport::Supported)
+        );
+        assert_eq!(
+            profile.get("background-delivery-status"),
+            Some(&CapabilitySupport::Supported)
+        );
+        assert_eq!(
+            profile.get("support-evidence"),
+            Some(&CapabilitySupport::Supported)
+        );
     }
 
     let profile = capability_profile_for_kind("custom");
-    assert_eq!(profile.get("reconnect"), Some(&CapabilitySupport::Unsupported));
-    assert_eq!(profile.get("credential-rotation"), Some(&CapabilitySupport::Unsupported));
-    assert_eq!(profile.get("route-edit"), Some(&CapabilitySupport::Unsupported));
+    assert_eq!(
+        profile.get("reconnect"),
+        Some(&CapabilitySupport::Unsupported)
+    );
+    assert_eq!(
+        profile.get("credential-rotation"),
+        Some(&CapabilitySupport::Unsupported)
+    );
+    assert_eq!(
+        profile.get("route-edit"),
+        Some(&CapabilitySupport::Unsupported)
+    );
     assert_eq!(profile.get("disable"), Some(&CapabilitySupport::Supported));
-    assert_eq!(profile.get("support-evidence"), Some(&CapabilitySupport::Supported));
+    assert_eq!(
+        profile.get("support-evidence"),
+        Some(&CapabilitySupport::Supported)
+    );
 }
 
 #[test]
@@ -341,7 +383,16 @@ fn sort_connector_projections_orders_by_attention_disabled_ready_name_id() {
     sort_connector_projections(&mut items);
     let ids: Vec<&str> = items.iter().map(|i| i.connector_id.as_str()).collect();
     // Rank 0 attention states order by display name, then disabled, then ready.
-    assert_eq!(ids, vec!["c-degraded", "c-unavailable", "c-action", "c-disabled", "c-ready"]);
+    assert_eq!(
+        ids,
+        vec![
+            "c-degraded",
+            "c-unavailable",
+            "c-action",
+            "c-disabled",
+            "c-ready"
+        ]
+    );
 
     // A display-name tie breaks by connector id.
     let mut tie = vec![
@@ -357,19 +408,59 @@ fn sort_connector_projections_orders_by_attention_disabled_ready_name_id() {
 fn next_action_and_label_map_diagnostic_reasons() {
     let now = ts("2026-05-10T10:00:00Z");
     let cases = [
-        (DiagnosticReasonCode::AuthMissing, ManagementActionKind::Reconnect, "Reconnect authorization"),
-        (DiagnosticReasonCode::PermissionMissing, ManagementActionKind::Reconnect, "Reconnect authorization"),
-        (DiagnosticReasonCode::BlockedRoute, ManagementActionKind::RouteRevalidate, "Review route policy"),
-        (DiagnosticReasonCode::UnsupportedCapability, ManagementActionKind::Disable, "Disable unsupported connector"),
-        (DiagnosticReasonCode::RateLimited, ManagementActionKind::Repair, "Repair connector"),
-        (DiagnosticReasonCode::ProviderUnavailable, ManagementActionKind::Repair, "Repair connector"),
-        (DiagnosticReasonCode::NetworkFailed, ManagementActionKind::Repair, "Repair connector"),
-        (DiagnosticReasonCode::ReplyFailed, ManagementActionKind::Repair, "Repair connector"),
+        (
+            DiagnosticReasonCode::AuthMissing,
+            ManagementActionKind::Reconnect,
+            "Reconnect authorization",
+        ),
+        (
+            DiagnosticReasonCode::PermissionMissing,
+            ManagementActionKind::Reconnect,
+            "Reconnect authorization",
+        ),
+        (
+            DiagnosticReasonCode::BlockedRoute,
+            ManagementActionKind::RouteRevalidate,
+            "Review route policy",
+        ),
+        (
+            DiagnosticReasonCode::UnsupportedCapability,
+            ManagementActionKind::Disable,
+            "Disable unsupported connector",
+        ),
+        (
+            DiagnosticReasonCode::RateLimited,
+            ManagementActionKind::Repair,
+            "Repair connector",
+        ),
+        (
+            DiagnosticReasonCode::ProviderUnavailable,
+            ManagementActionKind::Repair,
+            "Repair connector",
+        ),
+        (
+            DiagnosticReasonCode::NetworkFailed,
+            ManagementActionKind::Repair,
+            "Repair connector",
+        ),
+        (
+            DiagnosticReasonCode::ReplyFailed,
+            ManagementActionKind::Repair,
+            "Repair connector",
+        ),
     ];
     for (reason, want_action, want_label) in cases {
         let d = diagnostic(reason, now);
-        assert_eq!(next_action_for_diagnostic(&d), want_action, "reason {reason}");
-        assert_eq!(next_action_label_for_diagnostic(&d), want_label, "reason {reason}");
+        assert_eq!(
+            next_action_for_diagnostic(&d),
+            want_action,
+            "reason {reason}"
+        );
+        assert_eq!(
+            next_action_label_for_diagnostic(&d),
+            want_label,
+            "reason {reason}"
+        );
     }
 }
 
@@ -386,7 +477,10 @@ fn projection_reflects_diagnostic_freshness_health_and_next_action() {
     };
 
     // A fresh failing diagnostic drives action-required + reconnect.
-    let fresh = diagnostic(DiagnosticReasonCode::AuthMissing, now - Duration::minutes(5));
+    let fresh = diagnostic(
+        DiagnosticReasonCode::AuthMissing,
+        now - Duration::minutes(5),
+    );
     let projection = build_connector_projection(connector.clone(), Some(&fresh), now);
     assert_eq!(projection.enablement_state, ManagementState::ActionRequired);
     assert_eq!(projection.diagnostic_freshness, DiagnosticFreshness::Fresh);
@@ -400,7 +494,10 @@ fn projection_reflects_diagnostic_freshness_health_and_next_action() {
     assert_eq!(next.remediation_owner, Some(RemediationOwner::User));
 
     // Evidence older than 15 minutes marks the projection stale.
-    let stale = diagnostic(DiagnosticReasonCode::RateLimited, now - Duration::minutes(20));
+    let stale = diagnostic(
+        DiagnosticReasonCode::RateLimited,
+        now - Duration::minutes(20),
+    );
     let projection = build_connector_projection(connector.clone(), Some(&stale), now);
     assert_eq!(projection.diagnostic_freshness, DiagnosticFreshness::Stale);
     assert_eq!(projection.enablement_state, ManagementState::Unavailable);
@@ -440,11 +537,26 @@ fn projection_serializes_camel_case_with_next_action() {
     assert_eq!(obj["diagnosticFreshness"], serde_json::json!("fresh"));
     assert_eq!(obj["deliveryEligible"], serde_json::json!(false));
     assert!(obj.contains_key("nextAction"));
-    assert_eq!(obj["nextAction"]["actionKind"], serde_json::json!("reconnect"));
-    assert_eq!(obj["nextAction"]["label"], serde_json::json!("Reconnect authorization"));
-    assert_eq!(obj["nextAction"]["reasonCode"], serde_json::json!("auth_missing"));
-    assert_eq!(obj["nextAction"]["remediationOwner"], serde_json::json!("product_user"));
-    assert_eq!(obj["capabilities"]["disable"], serde_json::json!("supported"));
+    assert_eq!(
+        obj["nextAction"]["actionKind"],
+        serde_json::json!("reconnect")
+    );
+    assert_eq!(
+        obj["nextAction"]["label"],
+        serde_json::json!("Reconnect authorization")
+    );
+    assert_eq!(
+        obj["nextAction"]["reasonCode"],
+        serde_json::json!("auth_missing")
+    );
+    assert_eq!(
+        obj["nextAction"]["remediationOwner"],
+        serde_json::json!("product_user")
+    );
+    assert_eq!(
+        obj["capabilities"]["disable"],
+        serde_json::json!("supported")
+    );
     assert_eq!(obj["redactionStatus"], serde_json::json!("redacted"));
 
     let back: ChannelConnectorProjection = serde_json::from_value(json).unwrap();
@@ -457,8 +569,14 @@ fn latest_diagnostic_picks_newest_evidence() {
     assert_eq!(latest_diagnostic(&[]), None);
 
     let older = diagnostic(DiagnosticReasonCode::RateLimited, now - Duration::hours(2));
-    let middle = diagnostic(DiagnosticReasonCode::NetworkFailed, now - Duration::hours(1));
-    let newest = diagnostic(DiagnosticReasonCode::AuthMissing, now - Duration::minutes(30));
+    let middle = diagnostic(
+        DiagnosticReasonCode::NetworkFailed,
+        now - Duration::hours(1),
+    );
+    let newest = diagnostic(
+        DiagnosticReasonCode::AuthMissing,
+        now - Duration::minutes(30),
+    );
     let items = [older.clone(), middle.clone(), newest.clone()];
     let latest = latest_diagnostic(&items).unwrap();
     assert_eq!(latest.diagnostic_state_id, newest.diagnostic_state_id);
@@ -492,12 +610,23 @@ fn support_evidence_bundle_redacts_and_tracks_projection_state() {
     assert_eq!(bundle.current_state, ManagementState::Ready);
     assert_eq!(
         bundle.redactions,
-        vec!["message_body", "raw_provider_payload", "credentials", "authorization_grants"]
+        vec![
+            "message_body",
+            "raw_provider_payload",
+            "credentials",
+            "authorization_grants"
+        ]
     );
     assert_eq!(bundle.retention_expires_at, now + Duration::days(90));
     assert_eq!(bundle.redaction_status, RedactionStatus::Redacted);
-    assert_eq!(bundle.safe_evidence.get("connectorKind"), Some(&"discord".to_string()));
-    assert_eq!(bundle.safe_evidence.get("displayName"), Some(&"Discord Main".to_string()));
+    assert_eq!(
+        bundle.safe_evidence.get("connectorKind"),
+        Some(&"discord".to_string())
+    );
+    assert_eq!(
+        bundle.safe_evidence.get("displayName"),
+        Some(&"Discord Main".to_string())
+    );
     assert!(bundle.support_evidence_id.is_empty());
 
     // The bundle carries the projection state even for attention connectors.
@@ -567,24 +696,36 @@ fn build_connector_page_paginates_filters_and_orders() {
     assert_eq!(page.items[0].connector_id, "discord-main");
 
     // Page 2 via the returned cursor.
-    let next = ProjectionInput { cursor: "1".to_string(), ..input.clone() };
+    let next = ProjectionInput {
+        cursor: "1".to_string(),
+        ..input.clone()
+    };
     let page = build_connector_page(&next);
     assert_eq!(page.page.next_cursor, "");
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].connector_id, "slack-main");
 
     // A cursor beyond the list yields an empty page.
-    let beyond = ProjectionInput { cursor: "99".to_string(), ..input.clone() };
+    let beyond = ProjectionInput {
+        cursor: "99".to_string(),
+        ..input.clone()
+    };
     let page = build_connector_page(&beyond);
     assert!(page.items.is_empty());
     assert_eq!(page.page.next_cursor, "");
 
     // Kind filter excludes the other tenant's matrix connector.
-    let kind = ProjectionInput { kind_filter: "matrix".to_string(), ..input.clone() };
+    let kind = ProjectionInput {
+        kind_filter: "matrix".to_string(),
+        ..input.clone()
+    };
     assert!(build_connector_page(&kind).items.is_empty());
 
     // State filter matches the enablement-state literal.
-    let state = ProjectionInput { state_filter: "disabled".to_string(), ..input.clone() };
+    let state = ProjectionInput {
+        state_filter: "disabled".to_string(),
+        ..input.clone()
+    };
     let page = build_connector_page(&state);
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].connector_id, "discord-main");
@@ -659,10 +800,19 @@ fn wire_records_round_trip_camel_case() {
     assert!(obj.contains_key("supportEvidenceId"));
     assert!(obj.contains_key("generatedByPrincipalId"));
     assert_eq!(obj["currentState"], serde_json::json!("degraded"));
-    assert_eq!(obj["stateTransitions"], serde_json::json!(["ready", "degraded"]));
+    assert_eq!(
+        obj["stateTransitions"],
+        serde_json::json!(["ready", "degraded"])
+    );
     // Go omitempty omits empty slice fields entirely.
-    assert!(!obj.contains_key("routingDecisionRefs"), "empty omitempty list is absent");
-    assert!(!obj.contains_key("repairRefs"), "empty omitempty list is absent");
+    assert!(
+        !obj.contains_key("routingDecisionRefs"),
+        "empty omitempty list is absent"
+    );
+    assert!(
+        !obj.contains_key("repairRefs"),
+        "empty omitempty list is absent"
+    );
     let back: SupportEvidenceBundle = serde_json::from_value(json).unwrap();
     assert_eq!(back, bundle);
 }

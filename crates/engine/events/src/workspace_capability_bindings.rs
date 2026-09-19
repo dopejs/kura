@@ -43,7 +43,10 @@ pub fn binding_lifecycle_event(input: BindingLifecycleInput) -> Event {
         name: input.event_name.clone(),
         tenant_id: input.tenant_id.clone(),
         occurred_at: crate::util::now_utc(),
-        resource: Resource { kind: "workspace_capability_binding".to_string(), id: resource_id },
+        resource: Resource {
+            kind: "workspace_capability_binding".to_string(),
+            id: resource_id,
+        },
         payload: payload![
             "bindingId" => input.binding_id,
             "workspaceId" => input.workspace_id,
@@ -83,7 +86,10 @@ pub fn capability_visibility_changed_event(input: CapabilityVisibilityChangedInp
         name: "capability_visibility.changed".to_string(),
         tenant_id: input.tenant_id.clone(),
         occurred_at: crate::util::now_utc(),
-        resource: Resource { kind: "capability_visibility_policy".to_string(), id: safe_label(&input.capability_id) },
+        resource: Resource {
+            kind: "capability_visibility_policy".to_string(),
+            id: safe_label(&input.capability_id),
+        },
         payload: payload![
             "actorPrincipalId" => input.actor_principal_id,
             "scopeKind" => input.scope_kind.as_str(),
@@ -105,7 +111,10 @@ pub fn binding_runtime_projected_event(evidence: RuntimeBindingEvidence) -> Even
         name: "binding.runtime_projected".to_string(),
         tenant_id: evidence.tenant_id.clone(),
         occurred_at: evidence.occurred_at,
-        resource: Resource { kind: evidence.resource_kind.clone(), id: evidence.resource_id.clone() },
+        resource: Resource {
+            kind: evidence.resource_kind.clone(),
+            id: evidence.resource_id.clone(),
+        },
         payload: payload![
             "projectionId" => evidence.projection_id,
             "selectedProfileId" => evidence.selected_profile_id,

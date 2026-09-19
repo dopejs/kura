@@ -226,7 +226,11 @@ pub struct BackendCapabilityProfile {
     pub env_injection_mode: String,
     pub approval_behavior: String,
     pub restart_behavior: String,
-    #[serde(default, deserialize_with = "null_default", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub host_prerequisites: Vec<String>,
     pub availability_status: BackendAvailabilityStatus,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -243,21 +247,45 @@ pub struct ConsumerRequirementDeclaration {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub profile_id: String,
     pub execution_mode: ExecutionMode,
-    #[serde(default, deserialize_with = "null_default", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub allowed_backend_kinds: Vec<BackendKind>,
-    #[serde(default, deserialize_with = "null_default", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub read_roots: Vec<String>,
-    #[serde(default, deserialize_with = "null_default", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub write_roots: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_mode: Option<NetworkMode>,
-    #[serde(default, deserialize_with = "null_default", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub allowed_hosts: Vec<String>,
-    #[serde(default, deserialize_with = "null_default", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub allowed_ports: Vec<i64>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_loopback: bool,
-    #[serde(default, deserialize_with = "null_default", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub secret_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_mode: Option<ApprovalMode>,
@@ -340,7 +368,11 @@ pub struct ConsumerPolicyRecord {
 pub struct ConsumerContractView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub declaration: Option<ConsumerRequirementDeclaration>,
-    #[serde(default, deserialize_with = "null_default", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub secret_scope: Vec<SecretScopeOutcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_record: Option<ConsumerPolicyRecord>,
@@ -395,7 +427,11 @@ pub struct ManagedProviderOperation {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub failure_class: String,
     pub enforcement_strength: String,
-    #[serde(default, deserialize_with = "null_default", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub sensitive_state_classes: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub execution_id: String,
@@ -403,7 +439,11 @@ pub struct ManagedProviderOperation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<DateTime<Utc>>,
     pub status: ManagedProviderOperationStatus,
-    #[serde(default, deserialize_with = "null_default", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub local_state_access_summaries: Vec<SensitiveLocalStateAccessSummary>,
 }
 
@@ -519,7 +559,11 @@ pub struct ExecutionRequest {
     pub args: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cwd: String,
-    #[serde(default, deserialize_with = "null_default", skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     pub env: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub stdin: String,
@@ -537,7 +581,11 @@ pub struct ExecutionRequest {
     pub approval_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
-    #[serde(default, deserialize_with = "null_default", skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     pub metadata: HashMap<String, String>,
     pub access: AccessRequest,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -598,7 +646,11 @@ pub struct Result {
     pub error: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub partial: bool,
-    #[serde(default, deserialize_with = "null_default", skip_serializing_if = "serde_json::Map::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "serde_json::Map::is_empty"
+    )]
     pub backend_metadata: serde_json::Map<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consumer: Option<ConsumerContractView>,
@@ -644,7 +696,11 @@ pub struct Execution {
     pub approval_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
-    #[serde(default, deserialize_with = "null_default", skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_default",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     pub metadata: HashMap<String, String>,
     pub access: AccessRequest,
     pub status: ExecutionStatus,

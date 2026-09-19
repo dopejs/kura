@@ -13,13 +13,14 @@
 
 use std::path::Path;
 
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::routing::get;
-use axum::Router;
 use serde::Serialize;
 
 use crate::error::ApiError;
+use crate::middleware::{TenantContext, require_daemon_global_operator};
 use crate::response::Json;
 use crate::state::AppState;
 
@@ -43,7 +44,9 @@ pub struct PluginsResponse {
 
 /// GET /v1/plugins — the boot-time plugin assembly report.
 #[allow(clippy::unused_async)]
-pub async fn list_plugins(State(state): State<AppState>) -> Result<Json<PluginsResponse>, ApiError> {
+pub async fn list_plugins(
+    State(state): State<AppState>,
+) -> Result<Json<PluginsResponse>, ApiError> {
     let report = state
         .plugins
         .as_ref()
@@ -58,7 +61,10 @@ pub async fn list_plugins(State(state): State<AppState>) -> Result<Json<PluginsR
                 .collect()
         })
         .unwrap_or_default();
-    Ok(Json(PluginsResponse { report: (**report).clone(), hooks }))
+    Ok(Json(PluginsResponse {
+        report: (**report).clone(),
+        hooks,
+    }))
 }
 
 /// GET /v1/plugins/profile — the on-disk plugin profile (what the next boot
@@ -85,8 +91,10 @@ pub struct ProfileUpdateResponse {
 #[allow(clippy::unused_async)]
 pub async fn put_profile(
     State(state): State<AppState>,
+    tenant: Option<axum::extract::Extension<TenantContext>>,
     body: Bytes,
 ) -> Result<Json<ProfileUpdateResponse>, ApiError> {
+    require_daemon_global_operator(tenant.as_ref().map(|e| &e.0), "PUT /v1/plugins/profile")?;
     let profile: kura_plugin::PluginProfile = super::decode_json_required(&body)?;
     let dir = Path::new(&state.config.data_dir);
     let path = dir.join(kura_plugin::PROFILE_FILE_NAME);
@@ -99,7 +107,10 @@ pub async fn put_profile(
         .and_then(|()| std::fs::write(&tmp, &encoded))
         .and_then(|()| std::fs::rename(&tmp, &path))
         .map_err(|err| ApiError::internal(&format!("write plugin profile: {err}")))?;
-    Ok(Json(ProfileUpdateResponse { profile, restart_required: true }))
+    Ok(Json(ProfileUpdateResponse {
+        profile,
+        restart_required: true,
+    }))
 }
 
 /// The `/v1/plugins` route family.
@@ -161,7 +172,10 @@ mod tests {
         assert_eq!(json["plugins"][0]["reason"], "disabled by profile");
         assert_eq!(json["plugins"][0]["source"], "builtin");
         assert_eq!(json["plugins"][1]["id"], "beta");
-        assert_eq!(json["plugins"][1]["reason"], "requires disabled plugin `alpha`");
+        assert_eq!(
+            json["plugins"][1]["reason"],
+            "requires disabled plugin `alpha`"
+        );
         assert_eq!(json["warnings"], serde_json::json!([]));
     }
 
@@ -176,8 +190,8 @@ mod tests {
     /// config points every test at one path; profile writes need isolation).
     fn profile_test_state() -> crate::state::AppState {
         let mut state = test_state();
-        let dir = std::env::temp_dir()
-            .join(format!("kura-plugins-profile-{}", uuid::Uuid::now_v7()));
+        let dir =
+            std::env::temp_dir().join(format!("kura-plugins-profile-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         state.config.data_dir = dir.to_string_lossy().into_owned();
         state
@@ -188,8 +202,7 @@ mod tests {
         let state = profile_test_state();
 
         // Missing file: the default (empty) profile.
-        let (status, json) =
-            request_json(state.clone(), "GET", "/v1/plugins/profile", None).await;
+        let (status, json) = request_json(state.clone(), "GET", "/v1/plugins/profile", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["disabled"], serde_json::json!([]));
 
@@ -198,8 +211,13 @@ mod tests {
             "disabled": ["channel-discord"],
             "entries": { "session-strategy": { "config": { "personalBudgetChars": 1000 } } }
         });
-        let (status, json) =
-            request_json(state.clone(), "PUT", "/v1/plugins/profile", Some(update.clone())).await;
+        let (status, json) = request_json(
+            state.clone(),
+            "PUT",
+            "/v1/plugins/profile",
+            Some(update.clone()),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["restartRequired"], true);
         assert_eq!(json["profile"]["disabled"][0], "channel-discord");
@@ -223,6 +241,9 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         let (_, json) = request_json(state, "GET", "/v1/plugins/profile", None).await;
-        assert_eq!(json["disabled"][0], "channel-discord", "malformed PUT changed nothing");
+        assert_eq!(
+            json["disabled"][0], "channel-discord",
+            "malformed PUT changed nothing"
+        );
     }
 }

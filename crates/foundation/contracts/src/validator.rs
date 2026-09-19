@@ -150,9 +150,7 @@ impl Validator {
             let (resolved_root, resolved_current, resolved_schema) = self
                 .resolve_ref(root_schema_path, current_schema_path, reference)
                 .map_err(|err| {
-                    validation(format!(
-                        "{field_path}: resolve ref {reference:?}: {err}"
-                    ))
+                    validation(format!("{field_path}: resolve ref {reference:?}: {err}"))
                 })?;
             self.validate_schema(
                 &resolved_root,
@@ -315,9 +313,7 @@ impl Validator {
             let root_schema = self.load_schema(root_schema_path)?;
             let resolved = resolve_json_pointer(
                 &root_schema,
-                reference
-                    .strip_prefix('#')
-                    .unwrap_or(reference),
+                reference.strip_prefix('#').unwrap_or(reference),
             )?;
             return Ok((
                 root_schema_path.to_path_buf(),
@@ -340,10 +336,8 @@ impl Validator {
         let target_schema = self.load_schema(&target_path)?;
 
         if !pointer.is_empty() {
-            let resolved = resolve_json_pointer(
-                &target_schema,
-                pointer.strip_prefix('#').unwrap_or(pointer),
-            )?;
+            let resolved =
+                resolve_json_pointer(&target_schema, pointer.strip_prefix('#').unwrap_or(pointer))?;
             return Ok((target_path.clone(), target_path, resolved));
         }
 
@@ -383,9 +377,9 @@ fn resolve_json_pointer(node: &Value, pointer: &str) -> Result<Value, ContractEr
         let part = raw.replace("~1", "/").replace("~0", "~");
         match current {
             Value::Object(map) => {
-                current = map.get(&part).ok_or_else(|| {
-                    validation(format!("pointer segment {part:?} not found"))
-                })?;
+                current = map
+                    .get(&part)
+                    .ok_or_else(|| validation(format!("pointer segment {part:?} not found")))?;
             }
             Value::Array(items) => {
                 let index: i64 = part.parse().map_err(|_| {
@@ -494,9 +488,9 @@ fn validate_min_length(
             go_value(min_length)
         ))
     })?;
-    let text = value.as_str().ok_or_else(|| {
-        validation(format!("{field_path}: minLength requires string value"))
-    })?;
+    let text = value
+        .as_str()
+        .ok_or_else(|| validation(format!("{field_path}: minLength requires string value")))?;
     // Go compares int64(len(text)) against the declared length: byte
     // length, not rune count, and signed (a negative declaration never
     // fails).
@@ -520,9 +514,9 @@ fn validate_min_items(
             go_value(min_items)
         ))
     })?;
-    let items = value.as_array().ok_or_else(|| {
-        validation(format!("{field_path}: minItems requires array value"))
-    })?;
+    let items = value
+        .as_array()
+        .ok_or_else(|| validation(format!("{field_path}: minItems requires array value")))?;
     if (items.len() as i64) < required_length {
         return Err(validation(format!(
             "{field_path}: array length {} is smaller than minItems {required_length}",
@@ -593,11 +587,7 @@ fn go_value(value: &Value) -> String {
 
 /// Renders a list the way Go's `%v` verb prints `[]any`: `[a b c]`.
 fn go_list(items: &[Value]) -> String {
-    let inner = items
-        .iter()
-        .map(go_value)
-        .collect::<Vec<_>>()
-        .join(" ");
+    let inner = items.iter().map(go_value).collect::<Vec<_>>().join(" ");
     format!("[{inner}]")
 }
 
@@ -607,10 +597,8 @@ mod tests {
     use serde_json::json;
 
     fn temp_root(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "kura-contracts-test-{}-{tag}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("kura-contracts-test-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp schema root");
         dir
@@ -621,8 +609,11 @@ mod tests {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("create schema parent dir");
         }
-        std::fs::write(&path, serde_json::to_vec_pretty(schema).expect("encode schema"))
-            .expect("write schema");
+        std::fs::write(
+            &path,
+            serde_json::to_vec_pretty(schema).expect("encode schema"),
+        )
+        .expect("write schema");
     }
 
     #[test]
@@ -663,10 +654,7 @@ mod tests {
         );
 
         let negative = resolve_json_pointer(&doc, "/list/-1").unwrap_err();
-        assert!(
-            negative.to_string().contains("out of range"),
-            "{negative}"
-        );
+        assert!(negative.to_string().contains("out of range"), "{negative}");
 
         let through_scalar = resolve_json_pointer(&doc, "/obj/scalar/deeper").unwrap_err();
         assert!(
@@ -719,7 +707,10 @@ mod tests {
                 "additional property is not allowed",
             ),
             (br#"{"name": 3, "count": 1}"#, "does not match schema type"),
-            (br#"{"name": "w", "count": 1.5}"#, "does not match schema type"),
+            (
+                br#"{"name": "w", "count": 1.5}"#,
+                "does not match schema type",
+            ),
             (br#"{"name": "w", "count": 0}"#, "smaller than minimum"),
             (br#"{"name": "w", "count": 1}"#, "smaller than minLength"),
             (
@@ -734,10 +725,7 @@ mod tests {
                 br#"{"name": "ww", "count": 1, "tags": []}"#,
                 "smaller than minItems",
             ),
-            (
-                br#"{"name": "ww", "count": 1, "tags": [3]}"#,
-                "$.tags[0]",
-            ),
+            (br#"{"name": "ww", "count": 1, "tags": [3]}"#, "$.tags[0]"),
             (
                 br#"{"name": "ww", "count": 1, "createdAt": "not-a-date"}"#,
                 "invalid date-time",
@@ -811,15 +799,18 @@ mod tests {
             .expect("document satisfying both refs should pass");
 
         let local_err = validator
-            .validate_relative("schemas/entry.schema.json", br#"{"id": "a", "refId": "abc"}"#)
+            .validate_relative(
+                "schemas/entry.schema.json",
+                br#"{"id": "a", "refId": "abc"}"#,
+            )
             .expect_err("local ref constraint should apply");
-        assert!(
-            local_err.to_string().contains("$.id"),
-            "{local_err}"
-        );
+        assert!(local_err.to_string().contains("$.id"), "{local_err}");
 
         let external_err = validator
-            .validate_relative("schemas/entry.schema.json", br#"{"id": "ab", "refId": "x"}"#)
+            .validate_relative(
+                "schemas/entry.schema.json",
+                br#"{"id": "ab", "refId": "x"}"#,
+            )
             .expect_err("external ref constraint should apply");
         assert!(
             external_err.to_string().contains("$.refId"),
@@ -852,7 +843,8 @@ mod tests {
             .validate_relative("schemas/bad-local.schema.json", b"{}")
             .expect_err("unsupported local ref should fail");
         assert!(
-            err.to_string().contains("$: resolve ref \"#nope\": unsupported local ref"),
+            err.to_string()
+                .contains("$: resolve ref \"#nope\": unsupported local ref"),
             "{err}"
         );
 
@@ -860,17 +852,15 @@ mod tests {
             .validate_relative("schemas/missing-pointer.schema.json", b"{}")
             .expect_err("missing pointer target should fail");
         assert!(
-            err.to_string().contains("resolve ref \"#/definitions/absent\""),
+            err.to_string()
+                .contains("resolve ref \"#/definitions/absent\""),
             "{err}"
         );
 
         let err = validator
             .validate_relative("schemas/missing-file.schema.json", b"{}")
             .expect_err("missing ref target should fail");
-        assert!(
-            err.to_string().contains("read schema"),
-            "{err}"
-        );
+        assert!(err.to_string().contains("read schema"), "{err}");
     }
 
     #[test]
@@ -899,25 +889,22 @@ mod tests {
     #[test]
     fn non_object_schema_nodes_are_rejected() {
         let root = temp_root("non-object-schema");
-        write_schema(&root, "schemas/list.schema.json", &json!(["not", "an", "object"]));
+        write_schema(
+            &root,
+            "schemas/list.schema.json",
+            &json!(["not", "an", "object"]),
+        );
         let validator = Validator::new(&root);
         let err = validator
             .validate_relative("schemas/list.schema.json", b"{}")
             .expect_err("array schema node should fail");
-        assert!(
-            err.to_string().contains("unsupported schema node"),
-            "{err}"
-        );
+        assert!(err.to_string().contains("unsupported schema node"), "{err}");
     }
 
     #[test]
     fn invalid_documents_and_schemas_report_decode_errors() {
         let root = temp_root("decode-errors");
-        write_schema(
-            &root,
-            "schemas/ok.schema.json",
-            &json!({"type": "object"}),
-        );
+        write_schema(&root, "schemas/ok.schema.json", &json!({"type": "object"}));
         std::fs::write(root.join("schemas/broken.schema.json"), b"{not json")
             .expect("write broken schema");
 
@@ -934,10 +921,7 @@ mod tests {
         let err = validator
             .validate_relative("schemas/broken.schema.json", b"{}")
             .expect_err("invalid schema should fail");
-        assert!(
-            matches!(err, ContractError::DecodeSchema { .. }),
-            "{err:?}"
-        );
+        assert!(matches!(err, ContractError::DecodeSchema { .. }), "{err:?}");
 
         let err = validator
             .validate_relative("schemas/absent.schema.json", b"{}")
@@ -968,10 +952,7 @@ mod tests {
 
     #[test]
     fn clean_path_normalizes_dot_segments() {
-        assert_eq!(
-            clean_path(Path::new("a/./b/../c")),
-            PathBuf::from("a/c")
-        );
+        assert_eq!(clean_path(Path::new("a/./b/../c")), PathBuf::from("a/c"));
         assert_eq!(clean_path(Path::new("./a")), PathBuf::from("a"));
         assert_eq!(clean_path(Path::new("../a")), PathBuf::from("../a"));
     }

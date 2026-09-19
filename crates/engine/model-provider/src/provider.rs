@@ -1,5 +1,5 @@
-use kura_protocol::ResponseItem;
 use futures::stream::BoxStream;
+use kura_protocol::ResponseItem;
 use serde::Deserialize;
 use serde::Serialize;
 

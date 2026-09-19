@@ -115,6 +115,19 @@
         }
       }
     },
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Persistence settings (Stage 10.2).",
+      "properties": {
+        "readers": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Query-only reader connections beside the single writer. 0 = every read goes through the writer (pre-pool behaviour)."
+        }
+      }
+    },
     "connectors": {
       "type": "object",
       "additionalProperties": false,

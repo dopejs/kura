@@ -72,7 +72,12 @@ string_enum!(RecurrenceScope {
 impl RecurrenceScope {
     #[must_use]
     pub fn valid(self) -> bool {
-        matches!(self, RecurrenceScope::ThisOccurrence | RecurrenceScope::ThisAndFollowing | RecurrenceScope::EntireSeries)
+        matches!(
+            self,
+            RecurrenceScope::ThisOccurrence
+                | RecurrenceScope::ThisAndFollowing
+                | RecurrenceScope::EntireSeries
+        )
     }
 }
 
@@ -562,19 +567,60 @@ pub struct OperationFilter {
 }
 
 pub trait Backend: Send + Sync {
-    fn project_account(&self, resource: &kura_integrations::Resource) -> Result<AccountProjection, CalendarError>;
-    fn list_events(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &ListEventsInput) -> Result<Vec<Event>, CalendarError>;
-    fn get_event(&self, resource: &kura_integrations::Resource, account: &AccountProjection, event_id: &str) -> Result<Event, CalendarError>;
-    fn busy_free(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &BusyFreeInput) -> Result<AvailabilityQuery, CalendarError>;
-    fn create_event(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &CreateEventInput) -> Result<Event, CalendarError>;
-    fn update_event(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &UpdateEventInput) -> Result<Event, CalendarError>;
-    fn cancel_event(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &CancelEventInput) -> Result<Event, CalendarError>;
-    fn update_attendees(&self, resource: &kura_integrations::Resource, account: &AccountProjection, input: &UpdateAttendeesInput) -> Result<Event, CalendarError>;
+    fn project_account(
+        &self,
+        resource: &kura_integrations::Resource,
+    ) -> Result<AccountProjection, CalendarError>;
+    fn list_events(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &ListEventsInput,
+    ) -> Result<Vec<Event>, CalendarError>;
+    fn get_event(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        event_id: &str,
+    ) -> Result<Event, CalendarError>;
+    fn busy_free(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &BusyFreeInput,
+    ) -> Result<AvailabilityQuery, CalendarError>;
+    fn create_event(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &CreateEventInput,
+    ) -> Result<Event, CalendarError>;
+    fn update_event(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &UpdateEventInput,
+    ) -> Result<Event, CalendarError>;
+    fn cancel_event(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &CancelEventInput,
+    ) -> Result<Event, CalendarError>;
+    fn update_attendees(
+        &self,
+        resource: &kura_integrations::Resource,
+        account: &AccountProjection,
+        input: &UpdateAttendeesInput,
+    ) -> Result<Event, CalendarError>;
     fn restore_integration_state(&self, integration_id: &str, events: Vec<Event>);
 }
 
 #[must_use]
-pub fn resolve_attendee_requests(requests: &[AttendeeRequest], emails: &[String]) -> Vec<AttendeeRequest> {
+pub fn resolve_attendee_requests(
+    requests: &[AttendeeRequest],
+    emails: &[String],
+) -> Vec<AttendeeRequest> {
     if !requests.is_empty() {
         return requests
             .iter()
@@ -617,11 +663,17 @@ pub fn build_attendee_outcome(notify: bool, details: &[Attendee]) -> Option<Atte
         attendees: details.to_vec(),
         ..AttendeeOutcome::default()
     };
-    let mut behavior = if notify { NotificationBehavior::Notify } else { NotificationBehavior::Silent };
+    let mut behavior = if notify {
+        NotificationBehavior::Notify
+    } else {
+        NotificationBehavior::Silent
+    };
     for a in details {
         if a.invitation_status == InvitationStatus::Unsupported.as_str() {
             out.unsupported = true;
-            out.unsupported_reason = "provider does not support the requested attendee notification behavior".to_string();
+            out.unsupported_reason =
+                "provider does not support the requested attendee notification behavior"
+                    .to_string();
             behavior = NotificationBehavior::Unsupported;
         }
     }
@@ -651,7 +703,9 @@ pub fn live_validation_matrix_rows() -> Vec<kura_livevalidation::MatrixRow> {
         kura_livevalidation::ToolClass::from(kura_livevalidation::ToolClass::CALENDAR_EVENT_CREATE),
         kura_livevalidation::ToolClass::from(kura_livevalidation::ToolClass::CALENDAR_EVENT_UPDATE),
         kura_livevalidation::ToolClass::from(kura_livevalidation::ToolClass::CALENDAR_EVENT_CANCEL),
-        kura_livevalidation::ToolClass::from(kura_livevalidation::ToolClass::CALENDAR_ATTENDEE_UPDATE),
+        kura_livevalidation::ToolClass::from(
+            kura_livevalidation::ToolClass::CALENDAR_ATTENDEE_UPDATE,
+        ),
     ];
     let mut rows = Vec::new();
     for tool_class in classes {

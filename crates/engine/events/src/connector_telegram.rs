@@ -27,8 +27,14 @@ pub fn connector_telegram_setup_validated(input: ConnectorTelegramSetupValidated
     Event {
         category: "connector".to_string(),
         name: "connector.telegram_setup_validated".to_string(),
-        scope: Scope { connector_id: input.connector_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "telegram_hosted_setup".to_string(), id: input.connector_id.clone() },
+        scope: Scope {
+            connector_id: input.connector_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "telegram_hosted_setup".to_string(),
+            id: input.connector_id.clone(),
+        },
         payload: payload![
             "tenantId" => input.tenant_id,
             "connectorId" => input.connector_id,

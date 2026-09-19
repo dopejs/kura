@@ -4,12 +4,12 @@ mod common;
 
 use chrono::DateTime;
 use chrono::Utc;
+use kura_evaluation::SuppressionRecord;
 use kura_evaluation::{
     CreateSuppressionInput, DiscoveredCandidate, ProductResourceKind, SourceKind,
     filter_suppressed_candidates, find_active_suppression, new_suppression_record,
     revoke_suppression_record, suppression_applies,
 };
-use kura_evaluation::SuppressionRecord;
 
 fn ts(s: &str) -> DateTime<Utc> {
     s.parse::<DateTime<Utc>>().expect("ts")
@@ -29,7 +29,10 @@ fn new_suppression_record_defaults_and_requires_target() {
         now,
     )
     .expect("NewSuppressionRecord");
-    assert_eq!(record.suppression_id, "suppression_discovered_candidate_candidate_1");
+    assert_eq!(
+        record.suppression_id,
+        "suppression_discovered_candidate_candidate_1"
+    );
     assert_eq!(record.reason_code, "operator_hidden");
     assert!(record.active);
 
@@ -42,7 +45,10 @@ fn new_suppression_record_defaults_and_requires_target() {
         now,
     )
     .expect_err("missing target must fail");
-    assert!(matches!(err, kura_evaluation::EvaluationError::ProductSuppressionTargetRequired));
+    assert!(matches!(
+        err,
+        kura_evaluation::EvaluationError::ProductSuppressionTargetRequired
+    ));
 }
 
 #[test]
@@ -73,7 +79,10 @@ fn suppression_matches_target_and_source_families() {
             ..Default::default()
         },
     ];
-    assert!(suppression_applies(&candidate, &records, now), "target suppression must apply");
+    assert!(
+        suppression_applies(&candidate, &records, now),
+        "target suppression must apply"
+    );
 
     let source_family = vec![SuppressionRecord {
         tenant_id: "ten_eval".to_string(),
@@ -83,7 +92,10 @@ fn suppression_matches_target_and_source_families() {
         created_at: now,
         ..Default::default()
     }];
-    assert!(suppression_applies(&candidate, &source_family, now), "source family suppression must apply");
+    assert!(
+        suppression_applies(&candidate, &source_family, now),
+        "source family suppression must apply"
+    );
 }
 
 #[test]
@@ -172,10 +184,16 @@ fn suppression_lookup_revocation_and_candidate_filtering() {
 
     let revoked = revoke_suppression_record(record, now + chrono::Duration::minutes(1));
     assert!(
-        find_active_suppression(&[revoked.clone()], "ten_eval", "suppression_1", now + chrono::Duration::minutes(2))
-            .is_none(),
+        find_active_suppression(
+            &[revoked.clone()],
+            "ten_eval",
+            "suppression_1",
+            now + chrono::Duration::minutes(2)
+        )
+        .is_none(),
         "revoked suppression should not be active"
     );
-    let filtered = filter_suppressed_candidates(candidates, &[revoked], now + chrono::Duration::minutes(2));
+    let filtered =
+        filter_suppressed_candidates(candidates, &[revoked], now + chrono::Duration::minutes(2));
     assert_eq!(filtered.len(), 2, "revoked suppression filtered candidates");
 }

@@ -107,17 +107,35 @@ fn build_dashboard_projection_aggregates_tenant_scoped_product_signals() {
     })
     .expect("BuildDashboardProjection");
 
-    assert_eq!(projection.campaign_status_counts[ProductLifecycleStatus::Completed.as_str()], 1);
-    assert_eq!(projection.campaign_status_counts[ProductLifecycleStatus::Failed.as_str()], 1);
+    assert_eq!(
+        projection.campaign_status_counts[ProductLifecycleStatus::Completed.as_str()],
+        1
+    );
+    assert_eq!(
+        projection.campaign_status_counts[ProductLifecycleStatus::Failed.as_str()],
+        1
+    );
     assert_eq!(projection.drift_summary["total"], 2);
     assert_eq!(projection.failure_summary["total"], 1);
     assert_eq!(projection.unsupported_summary["total"], 3);
     assert_eq!(projection.operator_action_needed_summary["total"], 4);
     assert_eq!(projection.live_validation_summary["linked"], 2);
-    assert_eq!(projection.candidate_summary[RetentionState::Active.as_str()], 1);
-    assert_eq!(projection.candidate_summary[SuppressionState::Suppressed.as_str()], 1);
-    assert_eq!(projection.fixture_summary[ProductLifecycleStatus::Approved.as_str()], 1);
-    assert_eq!(projection.fixture_summary[RetentionState::Expired.as_str()], 1);
+    assert_eq!(
+        projection.candidate_summary[RetentionState::Active.as_str()],
+        1
+    );
+    assert_eq!(
+        projection.candidate_summary[SuppressionState::Suppressed.as_str()],
+        1
+    );
+    assert_eq!(
+        projection.fixture_summary[ProductLifecycleStatus::Approved.as_str()],
+        1
+    );
+    assert_eq!(
+        projection.fixture_summary[RetentionState::Expired.as_str()],
+        1
+    );
 }
 
 #[test]

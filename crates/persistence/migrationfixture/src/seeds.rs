@@ -4,11 +4,11 @@
 
 use std::collections::HashMap;
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 use kura_store::SQLiteStore;
 
-use crate::{open_fixture_connection, FIXTURE_TIMESTAMP};
+use crate::{FIXTURE_TIMESTAMP, open_fixture_connection};
 
 pub const TS: &str = FIXTURE_TIMESTAMP;
 
@@ -19,15 +19,21 @@ pub(crate) fn query_head(query: &str) -> &str {
     query.split('(').next().unwrap_or(query).trim()
 }
 
-pub(crate) fn exec_insert(conn: &Connection, query: &str, values: &[&dyn rusqlite::ToSql]) -> Result<(), String> {
+pub(crate) fn exec_insert(
+    conn: &Connection,
+    query: &str,
+    values: &[&dyn rusqlite::ToSql],
+) -> Result<(), String> {
     conn.execute(query, values)
         .map(|_| ())
         .map_err(|e| format!("seed {}: {e}", query_head(query)))
 }
 
 fn count_rows(conn: &Connection, table: &str) -> Result<i64, String> {
-    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
-        .map_err(|e| format!("count {table}: {e}"))
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+        row.get(0)
+    })
+    .map_err(|e| format!("count {table}: {e}"))
 }
 
 /// Seeds the pre-tenant rows into a store opened at v21 (Go BuildPreTenantV21Fixture
@@ -54,7 +60,18 @@ fn seed_runtime(conn: &Connection) -> Result<(), String> {
     exec_insert(
         conn,
         "INSERT INTO sessions (session_id, kind, status, channel, peer_id, routing_key, generation, created_at, updated_at, last_active_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        params!["sess_seed", "chat", "active", "test", "peer_1", "rk_seed", 1i64, TS, TS, TS],
+        params![
+            "sess_seed",
+            "chat",
+            "active",
+            "test",
+            "peer_1",
+            "rk_seed",
+            1i64,
+            TS,
+            TS,
+            TS
+        ],
     )?;
     exec_insert(
         conn,
@@ -69,12 +86,35 @@ fn seed_runtime(conn: &Connection) -> Result<(), String> {
     exec_insert(
         conn,
         "INSERT INTO tool_calls (tool_call_id, run_id, step_id, capability_id, tool_name, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
-        params!["tc_seed", "run_seed", "step_seed", "cap_a", "tool_a", "requested", TS, TS],
+        params![
+            "tc_seed",
+            "run_seed",
+            "step_seed",
+            "cap_a",
+            "tool_a",
+            "requested",
+            TS,
+            TS
+        ],
     )?;
     exec_insert(
         conn,
         "INSERT INTO llm_dispatches (dispatch_id, provider, model, messages_json, stream, status, output_text, usage_json, timeout_ms, max_retries, attempt_count, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        params!["dsp_seed", "openai", "gpt", "[]", 0i64, "completed", "", "{}", 1000i64, 0i64, 1i64, TS, TS],
+        params![
+            "dsp_seed",
+            "openai",
+            "gpt",
+            "[]",
+            0i64,
+            "completed",
+            "",
+            "{}",
+            1000i64,
+            0i64,
+            1i64,
+            TS,
+            TS
+        ],
     )?;
     exec_insert(
         conn,
@@ -93,7 +133,9 @@ fn seed_schedules(conn: &Connection) -> Result<(), String> {
     exec_insert(
         conn,
         "INSERT INTO schedules (schedule_id, environment_scope, kind, status, target_ref_id, created_at, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?)",
-        params!["sch_seed", "test", "cron", "active", "tgt_seed", TS, TS, "{}"],
+        params![
+            "sch_seed", "test", "cron", "active", "tgt_seed", TS, TS, "{}"
+        ],
     )?;
     exec_insert(
         conn,
@@ -103,7 +145,21 @@ fn seed_schedules(conn: &Connection) -> Result<(), String> {
     exec_insert(
         conn,
         "INSERT INTO schedule_dispatch_attempts (attempt_id, schedule_id, due_at, trigger_source, dispatch_status, retry_count, retry_budget, resolved_target_revision, downstream_status, missed_count, created_at, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        params!["atm_sch_seed", "sch_seed", TS, "auto", "queued", 0i64, 3i64, 1i64, "pending", 0i64, TS, TS, "{}"],
+        params![
+            "atm_sch_seed",
+            "sch_seed",
+            TS,
+            "auto",
+            "queued",
+            0i64,
+            3i64,
+            1i64,
+            "pending",
+            0i64,
+            TS,
+            TS,
+            "{}"
+        ],
     )?;
     Ok(())
 }
@@ -136,7 +192,9 @@ fn seed_integrations_delivery(conn: &Connection) -> Result<(), String> {
     exec_insert(
         conn,
         "INSERT INTO integrations (integration_id, domain_kind, environment_scope, backend_kind, readiness_status, canonical_default, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?)",
-        params!["int_seed", "calendar", "test", "google", "ready", 1i64, TS, "{}"],
+        params![
+            "int_seed", "calendar", "test", "google", "ready", 1i64, TS, "{}"
+        ],
     )?;
     exec_insert(
         conn,
@@ -156,12 +214,28 @@ fn seed_integrations_delivery(conn: &Connection) -> Result<(), String> {
     exec_insert(
         conn,
         "INSERT INTO delivery_attempts (attempt_id, delivery_id, attempt_number, target_id, status, document_json) VALUES (?,?,?,?,?,?)",
-        params!["atm_del_seed", "delout_seed", 1i64, "deltgt_seed", "queued", "{}"],
+        params![
+            "atm_del_seed",
+            "delout_seed",
+            1i64,
+            "deltgt_seed",
+            "queued",
+            "{}"
+        ],
     )?;
     exec_insert(
         conn,
         "INSERT INTO delivery_summary_windows (summary_window_id, environment_scope, target_id, preference_id, status, window_ends_at, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?)",
-        params!["sw_seed", "test", "deltgt_seed", "delpref_seed", "open", TS, TS, "{}"],
+        params![
+            "sw_seed",
+            "test",
+            "deltgt_seed",
+            "delpref_seed",
+            "open",
+            TS,
+            TS,
+            "{}"
+        ],
     )?;
     Ok(())
 }
@@ -175,33 +249,85 @@ fn seed_calendar_mail_reminders(conn: &Connection) -> Result<(), String> {
     exec_insert(
         conn,
         "INSERT INTO calendar_operations (operation_id, integration_id, calendar_account_id, environment_scope, operation_class, status, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?)",
-        params!["calop_seed", "int_seed", "cal_seed", "test", "list", "ok", TS, "{}"],
+        params![
+            "calop_seed",
+            "int_seed",
+            "cal_seed",
+            "test",
+            "list",
+            "ok",
+            TS,
+            "{}"
+        ],
     )?;
     exec_insert(
         conn,
         "INSERT INTO calendar_artifacts (artifact_id, operation_id, integration_id, environment_scope, kind, created_at, document_json) VALUES (?,?,?,?,?,?,?)",
-        params!["calart_seed", "calop_seed", "int_seed", "test", "event", TS, "{}"],
+        params![
+            "calart_seed",
+            "calop_seed",
+            "int_seed",
+            "test",
+            "event",
+            TS,
+            "{}"
+        ],
     )?;
     // Mail uses its own integration row (FK is UNIQUE on integration_id).
     exec_insert(
         conn,
         "INSERT INTO integrations (integration_id, domain_kind, environment_scope, backend_kind, readiness_status, canonical_default, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?)",
-        params!["int_mail_seed", "mail", "test", "gmail", "ready", 1i64, TS, "{}"],
+        params![
+            "int_mail_seed",
+            "mail",
+            "test",
+            "gmail",
+            "ready",
+            1i64,
+            TS,
+            "{}"
+        ],
     )?;
     exec_insert(
         conn,
         "INSERT INTO mail_accounts (mail_account_id, integration_id, environment_scope, readiness_status, canonical_default, updated_at, document_json) VALUES (?,?,?,?,?,?,?)",
-        params!["mail_seed", "int_mail_seed", "test", "ready", 1i64, TS, "{}"],
+        params![
+            "mail_seed",
+            "int_mail_seed",
+            "test",
+            "ready",
+            1i64,
+            TS,
+            "{}"
+        ],
     )?;
     exec_insert(
         conn,
         "INSERT INTO mail_operations (operation_id, integration_id, mail_account_id, environment_scope, operation_class, status, result_mode, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?,?)",
-        params!["mailop_seed", "int_mail_seed", "mail_seed", "test", "list", "ok", "json", TS, "{}"],
+        params![
+            "mailop_seed",
+            "int_mail_seed",
+            "mail_seed",
+            "test",
+            "list",
+            "ok",
+            "json",
+            TS,
+            "{}"
+        ],
     )?;
     exec_insert(
         conn,
         "INSERT INTO mail_artifacts (artifact_id, operation_id, integration_id, environment_scope, kind, created_at, document_json) VALUES (?,?,?,?,?,?,?)",
-        params!["mailart_seed", "mailop_seed", "int_mail_seed", "test", "message", TS, "{}"],
+        params![
+            "mailart_seed",
+            "mailop_seed",
+            "int_mail_seed",
+            "test",
+            "message",
+            TS,
+            "{}"
+        ],
     )?;
     exec_insert(
         conn,
@@ -225,17 +351,48 @@ fn seed_computer_use(conn: &Connection) -> Result<(), String> {
     exec_insert(
         conn,
         "INSERT INTO computer_use_sessions (computer_use_session_id, environment_scope, run_id, status, driver_kind, started_at, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?)",
-        params!["cus_seed", "test", "run_seed", "active", "playwright", TS, TS, "{}"],
+        params![
+            "cus_seed",
+            "test",
+            "run_seed",
+            "active",
+            "playwright",
+            TS,
+            TS,
+            "{}"
+        ],
     )?;
     exec_insert(
         conn,
         "INSERT INTO computer_use_actions (computer_use_action_id, environment_scope, computer_use_session_id, run_id, action_kind, status, risk_level, requested_at, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        params!["cua_seed", "test", "cus_seed", "run_seed", "click", "completed", "low", TS, TS, "{}"],
+        params![
+            "cua_seed",
+            "test",
+            "cus_seed",
+            "run_seed",
+            "click",
+            "completed",
+            "low",
+            TS,
+            TS,
+            "{}"
+        ],
     )?;
     exec_insert(
         conn,
         "INSERT INTO computer_use_artifacts (artifact_id, environment_scope, computer_use_session_id, computer_use_action_id, run_id, kind, status, byte_size, created_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        params!["cuart_seed", "test", "cus_seed", "cua_seed", "run_seed", "screenshot", "ready", 0i64, TS, "{}"],
+        params![
+            "cuart_seed",
+            "test",
+            "cus_seed",
+            "cua_seed",
+            "run_seed",
+            "screenshot",
+            "ready",
+            0i64,
+            TS,
+            "{}"
+        ],
     )?;
     Ok(())
 }
@@ -258,12 +415,31 @@ fn seed_evaluation(conn: &Connection) -> Result<(), String> {
     exec_insert(
         conn,
         "INSERT INTO evaluation_replay_candidates (candidate_id, environment_scope, candidate_kind, source_kind, source_id, readiness_status, created_at, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?,?)",
-        params!["cand_seed", "test", "run", "run", "run_seed", "ready", TS, TS, "{}"],
+        params![
+            "cand_seed",
+            "test",
+            "run",
+            "run",
+            "run_seed",
+            "ready",
+            TS,
+            TS,
+            "{}"
+        ],
     )?;
     exec_insert(
         conn,
         "INSERT INTO evaluation_replay_attempts (attempt_id, candidate_id, environment_scope, mode, status, created_at, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?)",
-        params!["evatm_seed", "cand_seed", "test", "shadow", "queued", TS, TS, "{}"],
+        params![
+            "evatm_seed",
+            "cand_seed",
+            "test",
+            "shadow",
+            "queued",
+            TS,
+            TS,
+            "{}"
+        ],
     )?;
     Ok(())
 }
@@ -272,7 +448,18 @@ fn seed_harness(conn: &Connection) -> Result<(), String> {
     exec_insert(
         conn,
         "INSERT INTO consumer_policy_records (policy_record_id, consumer_kind, consumer_id, operation_kind, status, decision, approval_status, secret_resolution, started_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        params!["polrec_seed", "skill", "skl_a", "tool_call", "completed", "allow", "n/a", "skipped", TS, "{}"],
+        params![
+            "polrec_seed",
+            "skill",
+            "skl_a",
+            "tool_call",
+            "completed",
+            "allow",
+            "n/a",
+            "skipped",
+            TS,
+            "{}"
+        ],
     )?;
     exec_insert(
         conn,
@@ -282,7 +469,17 @@ fn seed_harness(conn: &Connection) -> Result<(), String> {
     exec_insert(
         conn,
         "INSERT INTO secret_scope_bindings (binding_id, consumer_kind, consumer_id, environment_scope, secret_ref, default_source, delivery_kind, active, document_json) VALUES (?,?,?,?,?,?,?,?,?)",
-        params!["binding_seed", "skill", "skl_a", "test", "ref://x", "env", "header", 1i64, "{}"],
+        params![
+            "binding_seed",
+            "skill",
+            "skl_a",
+            "test",
+            "ref://x",
+            "env",
+            "header",
+            1i64,
+            "{}"
+        ],
     )?;
     exec_insert(
         conn,
@@ -303,17 +500,46 @@ fn seed_connector_messages(conn: &Connection) -> Result<(), String> {
     exec_insert(
         conn,
         "INSERT INTO connector_messages (delivery_id, connector_id, direction, channel_id, content, status, created_at, updated_at, session_id) VALUES (?,?,?,?,?,?,?,?,?)",
-        params!["cm_seed_session", "discord_a", "out", "ch_a", "hi", "queued", TS, TS, "sess_seed"],
+        params![
+            "cm_seed_session",
+            "discord_a",
+            "out",
+            "ch_a",
+            "hi",
+            "queued",
+            TS,
+            TS,
+            "sess_seed"
+        ],
     )?;
     exec_insert(
         conn,
         "INSERT INTO connector_messages (delivery_id, connector_id, direction, channel_id, content, status, created_at, updated_at, run_id) VALUES (?,?,?,?,?,?,?,?,?)",
-        params!["cm_seed_run", "discord_a", "out", "ch_a", "hi", "queued", TS, TS, "run_seed"],
+        params![
+            "cm_seed_run",
+            "discord_a",
+            "out",
+            "ch_a",
+            "hi",
+            "queued",
+            TS,
+            TS,
+            "run_seed"
+        ],
     )?;
     exec_insert(
         conn,
         "INSERT INTO connector_messages (delivery_id, connector_id, direction, channel_id, content, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
-        params!["cm_seed_orphan", "discord_a", "out", "ch_a", "hi", "queued", TS, TS],
+        params![
+            "cm_seed_orphan",
+            "discord_a",
+            "out",
+            "ch_a",
+            "hi",
+            "queued",
+            TS,
+            TS
+        ],
     )?;
     Ok(())
 }
@@ -323,31 +549,75 @@ fn seed_events(conn: &Connection) -> Result<(), String> {
     exec_insert(
         conn,
         "INSERT INTO events (event_id, category, name, occurred_at, run_id, resource_kind, resource_id, payload_json) VALUES (?,?,?,?,?,?,?,?)",
-        params!["evt_run_seed", "run", "run.created", TS, "run_seed", "run", "run_seed", "{}"],
+        params![
+            "evt_run_seed",
+            "run",
+            "run.created",
+            TS,
+            "run_seed",
+            "run",
+            "run_seed",
+            "{}"
+        ],
     )?;
     // Global system event.
     exec_insert(
         conn,
         "INSERT INTO events (event_id, category, name, occurred_at, resource_kind, resource_id, payload_json) VALUES (?,?,?,?,?,?,?)",
-        params!["evt_sys_seed", "system", "system.heartbeat", TS, "system", "heartbeat", "{}"],
+        params![
+            "evt_sys_seed",
+            "system",
+            "system.heartbeat",
+            TS,
+            "system",
+            "heartbeat",
+            "{}"
+        ],
     )?;
     // Connector event with proper resource pointer.
     exec_insert(
         conn,
         "INSERT INTO events (event_id, category, name, occurred_at, connector_id, resource_kind, resource_id, payload_json) VALUES (?,?,?,?,?,?,?,?)",
-        params!["evt_cm_seed", "connector.message", "connector.message.delivered", TS, "discord_a", "connector_message", "cm_seed_session", "{}"],
+        params![
+            "evt_cm_seed",
+            "connector.message",
+            "connector.message.delivered",
+            TS,
+            "discord_a",
+            "connector_message",
+            "cm_seed_session",
+            "{}"
+        ],
     )?;
     // Legacy connector event missing resource pointer - should reclassify to connector_global.
     exec_insert(
         conn,
         "INSERT INTO events (event_id, category, name, occurred_at, connector_id, resource_kind, resource_id, payload_json) VALUES (?,?,?,?,?,?,?,?)",
-        params!["evt_cm_orphan", "connector.legacy", "connector.legacy.event", TS, "discord_a", "", "", "{}"],
+        params![
+            "evt_cm_orphan",
+            "connector.legacy",
+            "connector.legacy.event",
+            TS,
+            "discord_a",
+            "",
+            "",
+            "{}"
+        ],
     )?;
     // Capability-only event - should reclassify to capability_global.
     exec_insert(
         conn,
         "INSERT INTO events (event_id, category, name, occurred_at, capability_id, resource_kind, resource_id, payload_json) VALUES (?,?,?,?,?,?,?,?)",
-        params!["evt_cap_only", "capability.heartbeat", "cap.heartbeat", TS, "cap_a", "capability", "cap_a", "{}"],
+        params![
+            "evt_cap_only",
+            "capability.heartbeat",
+            "cap.heartbeat",
+            TS,
+            "cap_a",
+            "capability",
+            "cap_a",
+            "{}"
+        ],
     )?;
     Ok(())
 }
@@ -357,18 +627,45 @@ fn seed_events(conn: &Connection) -> Result<(), String> {
 pub fn count_seeded_rows(store: &SQLiteStore) -> Result<SeedRowCounts, String> {
     let conn = open_fixture_connection(store.db_path())?;
     let tables = [
-        "sessions", "runs", "steps", "tool_calls", "llm_dispatches", "checkpoints",
-        "schedules", "schedule_targets", "schedule_dispatch_attempts",
-        "workflows", "workflow_steps", "workflow_dependencies", "workflow_handoffs",
-        "integrations", "delivery_targets", "delivery_outcomes", "delivery_attempts",
-        "calendar_accounts", "calendar_operations", "calendar_artifacts",
-        "mail_accounts", "mail_operations", "mail_artifacts",
-        "reminders", "reminder_occurrences", "reminder_actions",
-        "computer_use_sessions", "computer_use_actions", "computer_use_artifacts",
-        "approvals", "decisions",
-        "evaluation_replay_candidates", "evaluation_replay_attempts",
-        "consumer_policy_records", "provider_preferences", "secret_scope_bindings", "sandbox_executions",
-        "connector_messages", "events",
+        "sessions",
+        "runs",
+        "steps",
+        "tool_calls",
+        "llm_dispatches",
+        "checkpoints",
+        "schedules",
+        "schedule_targets",
+        "schedule_dispatch_attempts",
+        "workflows",
+        "workflow_steps",
+        "workflow_dependencies",
+        "workflow_handoffs",
+        "integrations",
+        "delivery_targets",
+        "delivery_outcomes",
+        "delivery_attempts",
+        "calendar_accounts",
+        "calendar_operations",
+        "calendar_artifacts",
+        "mail_accounts",
+        "mail_operations",
+        "mail_artifacts",
+        "reminders",
+        "reminder_occurrences",
+        "reminder_actions",
+        "computer_use_sessions",
+        "computer_use_actions",
+        "computer_use_artifacts",
+        "approvals",
+        "decisions",
+        "evaluation_replay_candidates",
+        "evaluation_replay_attempts",
+        "consumer_policy_records",
+        "provider_preferences",
+        "secret_scope_bindings",
+        "sandbox_executions",
+        "connector_messages",
+        "events",
     ];
     let mut out = SeedRowCounts::new();
     for table in tables {

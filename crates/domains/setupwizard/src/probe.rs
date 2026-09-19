@@ -37,15 +37,22 @@ impl DiagnosticProbe for DefaultDiagnosticProbe {
                 if let Some(secrets) = &secrets {
                     let secret_ref = resource_ref_id(&session.resource_refs, "tenant_secret");
                     if secret_ref.is_empty() {
-                        let (st, o, r) = classify_diagnostic_reason(REASON_CREDENTIAL_MISSING); classified = (st, REASON_CREDENTIAL_MISSING.to_string(), r, o);
+                        let (st, o, r) = classify_diagnostic_reason(REASON_CREDENTIAL_MISSING);
+                        classified = (st, REASON_CREDENTIAL_MISSING.to_string(), r, o);
                     } else {
                         match secrets.get(&session.tenant_id, &secret_ref).await {
                             Ok(_) => {}
-                            Err(SetupError::Secrets(kura_secrets::SecretsError::SecretNotFound)) => {
-                                let (st, o, r) = classify_diagnostic_reason(REASON_CREDENTIAL_MISSING); classified = (st, REASON_CREDENTIAL_MISSING.to_string(), r, o);
+                            Err(SetupError::Secrets(
+                                kura_secrets::SecretsError::SecretNotFound,
+                            )) => {
+                                let (st, o, r) =
+                                    classify_diagnostic_reason(REASON_CREDENTIAL_MISSING);
+                                classified = (st, REASON_CREDENTIAL_MISSING.to_string(), r, o);
                             }
                             Err(_) => {
-                                let (st, o, r) = classify_diagnostic_reason(REASON_PROVIDER_UNAVAILABLE); classified = (st, REASON_PROVIDER_UNAVAILABLE.to_string(), r, o);
+                                let (st, o, r) =
+                                    classify_diagnostic_reason(REASON_PROVIDER_UNAVAILABLE);
+                                classified = (st, REASON_PROVIDER_UNAVAILABLE.to_string(), r, o);
                             }
                         }
                     }
@@ -101,10 +108,13 @@ fn classify(session: &SetupSession, operation: SetupOperation) -> Classification
                 return (s, REASON_TOKEN_MISSING.to_string(), r, o);
             }
             if session.target_id == TARGET_SLACK_CONNECTOR {
-                if !resource_ref_id(&session.resource_refs, "slack_route_policy_validation").is_empty() {
+                if !resource_ref_id(&session.resource_refs, "slack_route_policy_validation")
+                    .is_empty()
+                {
                     return healthy();
                 }
-                if !resource_ref_id(&session.resource_refs, "slack_route_policy_invalid").is_empty() {
+                if !resource_ref_id(&session.resource_refs, "slack_route_policy_invalid").is_empty()
+                {
                     let (s, o, r) = classify_diagnostic_reason(REASON_SLACK_ROUTE_POLICY_INVALID);
                     return (s, REASON_SLACK_ROUTE_POLICY_INVALID.to_string(), r, o);
                 }
@@ -193,7 +203,11 @@ pub fn default_diagnostic_run_id(session: &SetupSession, operation: SetupOperati
 #[must_use]
 pub fn classify_diagnostic_reason(reason: &str) -> (SetupState, RemediationOwner, RetrySafety) {
     match reason {
-        REASON_HEALTHY => (SetupState::Ready, RemediationOwner::NoneRequired, RetrySafety::NoActionNeeded),
+        REASON_HEALTHY => (
+            SetupState::Ready,
+            RemediationOwner::NoneRequired,
+            RetrySafety::NoActionNeeded,
+        ),
         REASON_SCOPE_MISSING
         | REASON_TENANT_APPROVAL_PENDING
         | REASON_CREDENTIAL_MISSING
@@ -203,24 +217,42 @@ pub fn classify_diagnostic_reason(reason: &str) -> (SetupState, RemediationOwner
         | REASON_OAUTH_DENIED
         | REASON_OAUTH_EXPIRED
         | REASON_OAUTH_REPLAY
-        | REASON_TENANT_MISMATCH => (SetupState::ActionRequired, RemediationOwner::TenantAdmin, RetrySafety::Retryable),
-        REASON_DISCORD_DESTINATION_MISSING | REASON_DISCORD_DESTINATION_INVALID => {
-            (SetupState::Degraded, RemediationOwner::TenantAdmin, RetrySafety::Retryable)
-        }
+        | REASON_TENANT_MISMATCH => (
+            SetupState::ActionRequired,
+            RemediationOwner::TenantAdmin,
+            RetrySafety::Retryable,
+        ),
+        REASON_DISCORD_DESTINATION_MISSING | REASON_DISCORD_DESTINATION_INVALID => (
+            SetupState::Degraded,
+            RemediationOwner::TenantAdmin,
+            RetrySafety::Retryable,
+        ),
         REASON_TELEGRAM_ALLOWMENT_MISSING
         | REASON_TELEGRAM_ALLOWMENT_INVALID
         | REASON_SLACK_ROUTE_POLICY_MISSING
         | REASON_SLACK_ROUTE_POLICY_INVALID
         | REASON_MATRIX_ROUTE_POLICY_MISSING
         | REASON_MATRIX_ROUTE_POLICY_INVALID
-        | REASON_MATRIX_OWNERSHIP_MISMATCH => (SetupState::ActionRequired, RemediationOwner::TenantAdmin, RetrySafety::Blocked),
-        REASON_PROVIDER_UNAVAILABLE | REASON_NETWORK_FAILED | REASON_RATE_LIMITED => {
-            (SetupState::Unavailable, RemediationOwner::Provider, RetrySafety::Retryable)
-        }
-        REASON_UNSUPPORTED_TARGET | REASON_REDACTION_FAILED_CLOSED => {
-            (SetupState::ActionRequired, RemediationOwner::Operator, RetrySafety::Blocked)
-        }
-        _ => (SetupState::Unavailable, RemediationOwner::Operator, RetrySafety::Retryable),
+        | REASON_MATRIX_OWNERSHIP_MISMATCH => (
+            SetupState::ActionRequired,
+            RemediationOwner::TenantAdmin,
+            RetrySafety::Blocked,
+        ),
+        REASON_PROVIDER_UNAVAILABLE | REASON_NETWORK_FAILED | REASON_RATE_LIMITED => (
+            SetupState::Unavailable,
+            RemediationOwner::Provider,
+            RetrySafety::Retryable,
+        ),
+        REASON_UNSUPPORTED_TARGET | REASON_REDACTION_FAILED_CLOSED => (
+            SetupState::ActionRequired,
+            RemediationOwner::Operator,
+            RetrySafety::Blocked,
+        ),
+        _ => (
+            SetupState::Unavailable,
+            RemediationOwner::Operator,
+            RetrySafety::Retryable,
+        ),
     }
 }
 

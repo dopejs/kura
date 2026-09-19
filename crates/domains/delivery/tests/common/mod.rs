@@ -2,8 +2,8 @@
 //! adapter (Go `scriptedAdapter`), preference seeding (Go `seedDeliveryPreferenceState`),
 //! and status wait loops (Go `waitForOutcomeStatus` / `waitForWindowStatus`).
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use kura_delivery::{
@@ -59,7 +59,11 @@ impl DeliveryAdapter for ScriptedAdapter {
         kind == self.target_kind
     }
 
-    fn send(&self, _target: DeliveryTarget, _outcome: DeliveryOutcome) -> Result<SendResult, String> {
+    fn send(
+        &self,
+        _target: DeliveryTarget,
+        _outcome: DeliveryOutcome,
+    ) -> Result<SendResult, String> {
         let idx = self.next.fetch_add(1, Ordering::SeqCst);
         self.sends.fetch_add(1, Ordering::SeqCst);
         match self.results.get(idx) {
@@ -121,12 +125,19 @@ pub fn wait_for_outcome_status(
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    let last = manager.get_outcome(delivery_id).map(|(o, _)| o).unwrap_or_default();
+    let last = manager
+        .get_outcome(delivery_id)
+        .map(|(o, _)| o)
+        .unwrap_or_default();
     panic!("delivery {delivery_id} did not reach {expected}, last={last:?}");
 }
 
 /// Port of Go `waitForWindowStatus`: polls up to 3s for the window status.
-pub fn wait_for_window_status(manager: &Manager, summary_window_id: &str, expected: SummaryWindowStatus) {
+pub fn wait_for_window_status(
+    manager: &Manager,
+    summary_window_id: &str,
+    expected: SummaryWindowStatus,
+) {
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
         if let Ok((window, true)) = manager.get_summary_window(summary_window_id) {
@@ -136,7 +147,10 @@ pub fn wait_for_window_status(manager: &Manager, summary_window_id: &str, expect
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    let last = manager.get_summary_window(summary_window_id).map(|(w, _)| w).unwrap_or_default();
+    let last = manager
+        .get_summary_window(summary_window_id)
+        .map(|(w, _)| w)
+        .unwrap_or_default();
     panic!("summary window {summary_window_id} did not reach {expected}, last={last:?}");
 }
 

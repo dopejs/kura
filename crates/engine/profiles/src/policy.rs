@@ -238,7 +238,11 @@ pub(crate) fn valid_validation_state(state: &OverlayValidationState) -> bool {
 pub(crate) fn invalid_validation_state(state: &OverlayValidationState) -> bool {
     matches!(
         state.as_str(),
-        "missing" | "permission_denied" | "out_of_scope" | "too_large" | "unsafe_content"
+        "missing"
+            | "permission_denied"
+            | "out_of_scope"
+            | "too_large"
+            | "unsafe_content"
             | "redaction_failed"
     )
 }
@@ -256,10 +260,7 @@ fn identifier_like(value: &str) -> bool {
 }
 
 /// Go: `CanActivate` — activation gate for a profile at a given version.
-pub fn can_activate(
-    profile: &AgentProfile,
-    version: &ProfileVersion,
-) -> Result<(), ProfilesError> {
+pub fn can_activate(profile: &AgentProfile, version: &ProfileVersion) -> Result<(), ProfilesError> {
     if profile.status == Status::ARCHIVED {
         return Err(ProfilesError::ProfileNotActivatable);
     }
@@ -487,8 +488,7 @@ mod tests {
             ),
         ];
         for (name, input, expected_code) in cases {
-            let err = validate_mutation(&input)
-                .expect_err(&format!("{name}: expected rejection"));
+            let err = validate_mutation(&input).expect_err(&format!("{name}: expected rejection"));
             assert!(
                 matches!(err, ProfilesError::InvalidProfile(_)),
                 "{name}: expected InvalidProfile, got {err}"
@@ -566,8 +566,14 @@ mod tests {
     fn legacy_mapping_and_reason_code_helpers_match_go() {
         let err = invalid_profile_reason("  ");
         assert_eq!(validation_reason_code(&err), "profile_validation_failed");
-        assert_eq!(err.to_string(), "profile validation failed: profile_validation_failed");
-        assert_eq!(validation_reason_code(&ProfilesError::ScopedBindingDeferred), "");
+        assert_eq!(
+            err.to_string(),
+            "profile validation failed: profile_validation_failed"
+        );
+        assert_eq!(
+            validation_reason_code(&ProfilesError::ScopedBindingDeferred),
+            ""
+        );
 
         let mut input = MutationInput {
             display_name: "Support".to_string(),
@@ -591,7 +597,10 @@ mod tests {
         let mut bad_redaction = input;
         bad_redaction.legacy_mapping_evidence[0].redaction_status = RedactionStatus::FAILED;
         let err = validate_mutation(&bad_redaction).expect_err("failed redaction must be rejected");
-        assert_eq!(validation_reason_code(&err), "legacy_mapping_redaction_invalid");
+        assert_eq!(
+            validation_reason_code(&err),
+            "legacy_mapping_redaction_invalid"
+        );
     }
 
     #[test]

@@ -115,20 +115,32 @@ fn enable_disable_rollback_lifecycle() {
     let item = manager.register_item(sample_item()).unwrap();
     let item_id = item.item_id.clone();
 
-    let e1 = manager.enable("tenant-a", &item_id, "1.0.0", "alice").unwrap();
+    let e1 = manager
+        .enable("tenant-a", &item_id, "1.0.0", "alice")
+        .unwrap();
     assert_eq!(e1.state, EnablementState::Enabled);
     assert_eq!(e1.active_version, "1.0.0");
     assert_eq!(e1.version_stack, vec!["1.0.0".to_string()]);
     assert_eq!(e1.history.len(), 1);
     assert_eq!(e1.history[0].action, "enabled");
 
-    let e2 = manager.enable("tenant-a", &item_id, "1.1.0", "alice").unwrap();
+    let e2 = manager
+        .enable("tenant-a", &item_id, "1.1.0", "alice")
+        .unwrap();
     assert_eq!(e2.active_version, "1.1.0");
-    assert_eq!(e2.version_stack, vec!["1.0.0".to_string(), "1.1.0".to_string()]);
+    assert_eq!(
+        e2.version_stack,
+        vec!["1.0.0".to_string(), "1.1.0".to_string()]
+    );
 
     // Re-enabling the same version does not duplicate the stack top.
-    let e3 = manager.enable("tenant-a", &item_id, "1.1.0", "alice").unwrap();
-    assert_eq!(e3.version_stack, vec!["1.0.0".to_string(), "1.1.0".to_string()]);
+    let e3 = manager
+        .enable("tenant-a", &item_id, "1.1.0", "alice")
+        .unwrap();
+    assert_eq!(
+        e3.version_stack,
+        vec!["1.0.0".to_string(), "1.1.0".to_string()]
+    );
     assert_eq!(e3.history.len(), 3);
 
     let r1 = manager.rollback("tenant-a", &item_id, "alice").unwrap();
@@ -153,11 +165,15 @@ fn enable_disable_rollback_lifecycle() {
 
     // Unknown item / version.
     assert!(matches!(
-        manager.enable("tenant-a", "nope", "1.0.0", "alice").unwrap_err(),
+        manager
+            .enable("tenant-a", "nope", "1.0.0", "alice")
+            .unwrap_err(),
         CatalogError::ItemNotFound
     ));
     assert!(matches!(
-        manager.enable("tenant-a", &item_id, "9.9.9", "alice").unwrap_err(),
+        manager
+            .enable("tenant-a", &item_id, "9.9.9", "alice")
+            .unwrap_err(),
         CatalogError::VersionNotFound
     ));
 }
@@ -166,7 +182,9 @@ fn enable_disable_rollback_lifecycle() {
 fn enable_is_permission_gated_but_disable_is_not() {
     let denied = Manager::new("test", None, Some(Box::new(DenyAll)));
     let item = denied.register_item(sample_item()).unwrap();
-    let err = denied.enable("tenant-a", &item.item_id, "1.0.0", "alice").unwrap_err();
+    let err = denied
+        .enable("tenant-a", &item.item_id, "1.0.0", "alice")
+        .unwrap_err();
     assert!(matches!(err, CatalogError::PermissionDenied));
     // Go's Disable is not permission-gated.
     assert!(denied.disable("tenant-a", &item.item_id, "alice").is_ok());
@@ -178,10 +196,16 @@ fn enable_is_permission_gated_but_disable_is_not() {
 fn enable_fails_closed_on_unmet_requirements() {
     let strict = Manager::new("test", Some(Box::new(UnmetAll)), None);
     let item = strict.register_item(sample_item()).unwrap();
-    let err = strict.enable("tenant-a", &item.item_id, "1.0.0", "alice").unwrap_err();
+    let err = strict
+        .enable("tenant-a", &item.item_id, "1.0.0", "alice")
+        .unwrap_err();
     assert!(matches!(err, CatalogError::RequirementsUnmet));
     // A version without requirements passes the gate.
-    assert!(strict.enable("tenant-a", &item.item_id, "1.1.0", "alice").is_ok());
+    assert!(
+        strict
+            .enable("tenant-a", &item.item_id, "1.1.0", "alice")
+            .is_ok()
+    );
 }
 
 #[test]
@@ -189,7 +213,9 @@ fn inspect_projects_enablement_and_gates() {
     let manager = Manager::new("test", None, None);
     let item = manager.register_item(sample_item()).unwrap();
     let item_id = item.item_id.clone();
-    manager.enable("tenant-a", &item_id, "1.1.0", "alice").unwrap();
+    manager
+        .enable("tenant-a", &item_id, "1.1.0", "alice")
+        .unwrap();
 
     let insp = manager.inspect("tenant-a", &item_id).unwrap();
     assert_eq!(insp.item.item_id, item_id);
@@ -210,9 +236,17 @@ fn active_version_fails_closed_when_requirements_regress() {
     let item = manager.register_item(sample_item()).unwrap();
     let item_id = item.item_id.clone();
 
-    assert_eq!(manager.active_version("tenant-a", &item_id), (String::new(), false));
-    manager.enable("tenant-a", &item_id, "1.0.0", "alice").unwrap();
-    assert_eq!(manager.active_version("tenant-a", &item_id), ("1.0.0".to_string(), true));
+    assert_eq!(
+        manager.active_version("tenant-a", &item_id),
+        (String::new(), false)
+    );
+    manager
+        .enable("tenant-a", &item_id, "1.0.0", "alice")
+        .unwrap();
+    assert_eq!(
+        manager.active_version("tenant-a", &item_id),
+        ("1.0.0".to_string(), true)
+    );
 
     // A restored enablement whose active version has unmet requirements must not execute.
     let strict = Manager::new("test", Some(Box::new(UnmetAll)), None);
@@ -228,19 +262,27 @@ fn active_version_fails_closed_when_requirements_regress() {
             updated_at: Utc::now(),
         }],
     );
-    assert_eq!(strict.active_version("tenant-a", &item_id), (String::new(), false));
+    assert_eq!(
+        strict.active_version("tenant-a", &item_id),
+        (String::new(), false)
+    );
 }
 
 #[test]
 fn restore_reloads_items_and_enablements() {
     let manager = Manager::new("test", None, None);
     let item = manager.register_item(sample_item()).unwrap();
-    let enablement = manager.enable("tenant-a", &item.item_id, "1.0.0", "alice").unwrap();
+    let enablement = manager
+        .enable("tenant-a", &item.item_id, "1.0.0", "alice")
+        .unwrap();
 
     let fresh = Manager::new("test", None, None);
     fresh.restore(vec![item.clone()], vec![enablement.clone()]);
     assert_eq!(fresh.get_item(&item.item_id).unwrap(), item);
-    assert_eq!(fresh.inspect("tenant-a", &item.item_id).unwrap().enablement, enablement);
+    assert_eq!(
+        fresh.inspect("tenant-a", &item.item_id).unwrap().enablement,
+        enablement
+    );
 }
 
 #[test]
@@ -259,8 +301,14 @@ fn wire_round_trip() {
     assert_eq!(ItemKind::Capability.as_str(), "capability");
     assert_eq!(TrustTier::Untrusted.as_str(), "untrusted");
     assert_eq!(EnablementState::Enabled.as_str(), "enabled");
-    assert_eq!(serde_json::to_value(ItemKind::McpServer).unwrap(), json!("mcp_server"));
-    assert_eq!(serde_json::to_value(EnablementState::Enabled).unwrap(), json!("enabled"));
+    assert_eq!(
+        serde_json::to_value(ItemKind::McpServer).unwrap(),
+        json!("mcp_server")
+    );
+    assert_eq!(
+        serde_json::to_value(EnablementState::Enabled).unwrap(),
+        json!("enabled")
+    );
 
     // omitempty fields are skipped.
     let empty_item = CatalogItem {
@@ -298,7 +346,9 @@ fn persistence_round_trip() {
     let mut manager = Manager::new("test", None, None);
     manager.with_store(Arc::clone(&store));
     let registered = manager.register_item(sample_item()).unwrap();
-    manager.enable("tenant-a", &registered.item_id, "1.0.0", "alice").unwrap();
+    manager
+        .enable("tenant-a", &registered.item_id, "1.0.0", "alice")
+        .unwrap();
 
     // A fresh manager recovers items + enablements from the store.
     let mut fresh = Manager::new("test", None, None);
@@ -315,4 +365,3 @@ fn manager_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<kura_catalog::Manager>();
 }
-

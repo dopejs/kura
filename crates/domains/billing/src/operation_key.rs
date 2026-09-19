@@ -46,7 +46,11 @@ pub fn tool_call_operation_key(
 }
 
 #[must_use]
-pub fn live_validation_operation_key(tenant_id: &str, validation_id: &str, client_key: &str) -> String {
+pub fn live_validation_operation_key(
+    tenant_id: &str,
+    validation_id: &str,
+    client_key: &str,
+) -> String {
     join_operation_key(&[
         "tenant",
         tenant_id,
@@ -72,7 +76,12 @@ pub fn integration_operation_key(
 }
 
 #[must_use]
-pub fn artifact_operation_key(tenant_id: &str, artifact_id: &str, storage_key: &str, client_key: &str) -> String {
+pub fn artifact_operation_key(
+    tenant_id: &str,
+    artifact_id: &str,
+    storage_key: &str,
+    client_key: &str,
+) -> String {
     join_operation_key(&[
         "tenant",
         tenant_id,

@@ -15,17 +15,19 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json as AxumJson, Router};
 use chrono::{DateTime, Utc};
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
-use kura_billing::{integration_operation_key, Category, ReserveInput, ResolveInput, UsageReservation};
+use kura_billing::{
+    Category, ReserveInput, ResolveInput, UsageReservation, integration_operation_key,
+};
 use kura_calendar as calendar;
 use kura_events as events;
 use kura_integrations as integrations;
 
 use crate::error::ApiError;
-use crate::middleware::{environment_scope_from_config, guard_resource_for_tenant, TenantContext};
+use crate::middleware::{TenantContext, environment_scope_from_config, guard_resource_for_tenant};
 use crate::response::Json;
 use crate::state::AppState;
 use crate::types::{
@@ -49,10 +51,22 @@ pub fn router() -> Router<AppState> {
         .route("/v1/calendar/accounts/{integration_id}", get(get_account))
         .route("/v1/calendar/events", get(list_events).post(create_event))
         .route("/v1/calendar/events/{external_event_id}", get(get_event))
-        .route("/v1/calendar/events/{external_event_id}/update", post(update_event))
-        .route("/v1/calendar/events/{external_event_id}/cancel", post(cancel_event))
-        .route("/v1/calendar/availability/queries", post(create_availability_query))
-        .route("/v1/calendar/availability/queries/{query_id}", get(get_availability_query))
+        .route(
+            "/v1/calendar/events/{external_event_id}/update",
+            post(update_event),
+        )
+        .route(
+            "/v1/calendar/events/{external_event_id}/cancel",
+            post(cancel_event),
+        )
+        .route(
+            "/v1/calendar/availability/queries",
+            post(create_availability_query),
+        )
+        .route(
+            "/v1/calendar/availability/queries/{query_id}",
+            get(get_availability_query),
+        )
         .route("/v1/calendar/operations", get(list_operations))
         .route("/v1/calendar/operations/{operation_id}", get(get_operation))
 }
@@ -137,7 +151,9 @@ async fn get_account(
         "calendar_account",
     )
     .await?;
-    let selection = calendar::Selection { integration_id: integration_id.clone() };
+    let selection = calendar::Selection {
+        integration_id: integration_id.clone(),
+    };
     let items = manager
         .list_accounts(&integrations.list(), &selection)
         .map_err(map_calendar_error)?;
@@ -177,21 +193,37 @@ async fn list_events(
     )
     .await?;
     let input = calendar::ListEventsInput {
-        selection: calendar::Selection { integration_id: trim_opt(query.integration_id.as_deref()) },
+        selection: calendar::Selection {
+            integration_id: trim_opt(query.integration_id.as_deref()),
+        },
         starts_at,
         ends_at,
-        source: calendar::SourceLinkage { operation_id: operation_id.clone(), ..Default::default() },
+        source: calendar::SourceLinkage {
+            operation_id: operation_id.clone(),
+            ..Default::default()
+        },
     };
     let result = manager.list_events(&integrations.list(), &input);
     let (account, items, operation, artifacts) = match result {
         Ok(tuple) => tuple,
         Err(err) => {
-            release_billing_reservation(&state, &reservation, "calendar operation failed before backend attempt").await;
+            release_billing_reservation(
+                &state,
+                &reservation,
+                "calendar operation failed before backend attempt",
+            )
+            .await;
             return Err(map_calendar_error(err));
         }
     };
     if !operation.operation_id.is_empty() {
-        record_calendar_activity(&state, tenant.as_ref().map(|e| &e.0), &account, &operation, &artifacts)?;
+        record_calendar_activity(
+            &state,
+            tenant.as_ref().map(|e| &e.0),
+            &account,
+            &operation,
+            &artifacts,
+        )?;
         commit_billing_reservation(
             &state,
             &reservation,
@@ -200,7 +232,12 @@ async fn list_events(
         )
         .await?;
     }
-    Ok(Json(CalendarEventListResponse { account, items, operation, artifacts }))
+    Ok(Json(CalendarEventListResponse {
+        account,
+        items,
+        operation,
+        artifacts,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -227,20 +264,36 @@ async fn get_event(
     )
     .await?;
     let input = calendar::GetEventInput {
-        selection: calendar::Selection { integration_id: String::new() },
+        selection: calendar::Selection {
+            integration_id: String::new(),
+        },
         external_event_id: external_event_id.trim().to_string(),
-        source: calendar::SourceLinkage { operation_id: operation_id.clone(), ..Default::default() },
+        source: calendar::SourceLinkage {
+            operation_id: operation_id.clone(),
+            ..Default::default()
+        },
     };
     let result = manager.get_event(&integrations.list(), &input);
     let (account, item, operation, artifacts) = match result {
         Ok(tuple) => tuple,
         Err(err) => {
-            release_billing_reservation(&state, &reservation, "calendar operation failed before backend attempt").await;
+            release_billing_reservation(
+                &state,
+                &reservation,
+                "calendar operation failed before backend attempt",
+            )
+            .await;
             return Err(map_calendar_error(err));
         }
     };
     if !operation.operation_id.is_empty() {
-        record_calendar_activity(&state, tenant.as_ref().map(|e| &e.0), &account, &operation, &artifacts)?;
+        record_calendar_activity(
+            &state,
+            tenant.as_ref().map(|e| &e.0),
+            &account,
+            &operation,
+            &artifacts,
+        )?;
         commit_billing_reservation(
             &state,
             &reservation,
@@ -249,7 +302,12 @@ async fn get_event(
         )
         .await?;
     }
-    Ok(Json(CalendarEventResponse { account, event: item, operation, artifacts }))
+    Ok(Json(CalendarEventResponse {
+        account,
+        event: item,
+        operation,
+        artifacts,
+    }))
 }
 // ---------------------------------------------------------------------------
 // POST /v1/calendar/events
@@ -282,7 +340,9 @@ async fn create_event(
     )
     .await?;
     let input = calendar::CreateEventInput {
-        selection: calendar::Selection { integration_id: request.integration_id.trim().to_string() },
+        selection: calendar::Selection {
+            integration_id: request.integration_id.trim().to_string(),
+        },
         title: request.title.trim().to_string(),
         description: request.description.trim().to_string(),
         location: request.location.trim().to_string(),
@@ -305,12 +365,23 @@ async fn create_event(
     let (account, item, operation, artifacts) = match result {
         Ok(tuple) => tuple,
         Err(err) => {
-            release_billing_reservation(&state, &reservation, "calendar operation failed before backend attempt").await;
+            release_billing_reservation(
+                &state,
+                &reservation,
+                "calendar operation failed before backend attempt",
+            )
+            .await;
             return Err(map_calendar_error(err));
         }
     };
     if !operation.operation_id.is_empty() {
-        record_calendar_activity(&state, tenant.as_ref().map(|e| &e.0), &account, &operation, &artifacts)?;
+        record_calendar_activity(
+            &state,
+            tenant.as_ref().map(|e| &e.0),
+            &account,
+            &operation,
+            &artifacts,
+        )?;
         commit_billing_reservation(
             &state,
             &reservation,
@@ -319,7 +390,15 @@ async fn create_event(
         )
         .await?;
     }
-    Ok((StatusCode::CREATED, AxumJson(CalendarEventResponse { account, event: item, operation, artifacts })))
+    Ok((
+        StatusCode::CREATED,
+        AxumJson(CalendarEventResponse {
+            account,
+            event: item,
+            operation,
+            artifacts,
+        }),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -354,7 +433,9 @@ async fn update_event(
     )
     .await?;
     let input = calendar::UpdateEventInput {
-        selection: calendar::Selection { integration_id: request.integration_id.trim().to_string() },
+        selection: calendar::Selection {
+            integration_id: request.integration_id.trim().to_string(),
+        },
         external_event_id: external_event_id.trim().to_string(),
         title: request.title.trim().to_string(),
         description: request.description.trim().to_string(),
@@ -379,12 +460,23 @@ async fn update_event(
     let (account, item, operation, artifacts) = match result {
         Ok(tuple) => tuple,
         Err(err) => {
-            release_billing_reservation(&state, &reservation, "calendar operation failed before backend attempt").await;
+            release_billing_reservation(
+                &state,
+                &reservation,
+                "calendar operation failed before backend attempt",
+            )
+            .await;
             return Err(map_calendar_error(err));
         }
     };
     if !operation.operation_id.is_empty() {
-        record_calendar_activity(&state, tenant.as_ref().map(|e| &e.0), &account, &operation, &artifacts)?;
+        record_calendar_activity(
+            &state,
+            tenant.as_ref().map(|e| &e.0),
+            &account,
+            &operation,
+            &artifacts,
+        )?;
         commit_billing_reservation(
             &state,
             &reservation,
@@ -393,7 +485,12 @@ async fn update_event(
         )
         .await?;
     }
-    Ok(Json(CalendarEventResponse { account, event: item, operation, artifacts }))
+    Ok(Json(CalendarEventResponse {
+        account,
+        event: item,
+        operation,
+        artifacts,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -412,7 +509,9 @@ async fn cancel_event(
     let integrations = integrations_manager(&state)?;
     let request: CancelCalendarEventRequest = decode_json_body(&body)?;
     if !request.calendar_ref.trim().is_empty() {
-        return Err(map_calendar_error(calendar::CalendarError::CalendarAlternateCalendarDeny));
+        return Err(map_calendar_error(
+            calendar::CalendarError::CalendarAlternateCalendarDeny,
+        ));
     }
 
     let operation_id = calendar::new_operation_id();
@@ -426,7 +525,9 @@ async fn cancel_event(
     )
     .await?;
     let input = calendar::CancelEventInput {
-        selection: calendar::Selection { integration_id: request.integration_id.trim().to_string() },
+        selection: calendar::Selection {
+            integration_id: request.integration_id.trim().to_string(),
+        },
         external_event_id: external_event_id.trim().to_string(),
         reason: request.reason.trim().to_string(),
         recurrence_scope: calendar_recurrence_scope(&request.recurrence_scope)?,
@@ -436,12 +537,23 @@ async fn cancel_event(
     let (account, item, operation, artifacts) = match result {
         Ok(tuple) => tuple,
         Err(err) => {
-            release_billing_reservation(&state, &reservation, "calendar operation failed before backend attempt").await;
+            release_billing_reservation(
+                &state,
+                &reservation,
+                "calendar operation failed before backend attempt",
+            )
+            .await;
             return Err(map_calendar_error(err));
         }
     };
     if !operation.operation_id.is_empty() {
-        record_calendar_activity(&state, tenant.as_ref().map(|e| &e.0), &account, &operation, &artifacts)?;
+        record_calendar_activity(
+            &state,
+            tenant.as_ref().map(|e| &e.0),
+            &account,
+            &operation,
+            &artifacts,
+        )?;
         commit_billing_reservation(
             &state,
             &reservation,
@@ -450,7 +562,12 @@ async fn cancel_event(
         )
         .await?;
     }
-    Ok(Json(CalendarEventResponse { account, event: item, operation, artifacts }))
+    Ok(Json(CalendarEventResponse {
+        account,
+        event: item,
+        operation,
+        artifacts,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -483,7 +600,9 @@ async fn create_availability_query(
     )
     .await?;
     let input = calendar::BusyFreeInput {
-        selection: calendar::Selection { integration_id: request.integration_id.trim().to_string() },
+        selection: calendar::Selection {
+            integration_id: request.integration_id.trim().to_string(),
+        },
         window_start,
         window_end,
         timezone: request.timezone.trim().to_string(),
@@ -493,12 +612,23 @@ async fn create_availability_query(
     let (account, query, operation, artifacts) = match result {
         Ok(tuple) => tuple,
         Err(err) => {
-            release_billing_reservation(&state, &reservation, "calendar operation failed before backend attempt").await;
+            release_billing_reservation(
+                &state,
+                &reservation,
+                "calendar operation failed before backend attempt",
+            )
+            .await;
             return Err(map_calendar_error(err));
         }
     };
     if !operation.operation_id.is_empty() {
-        record_calendar_activity(&state, tenant.as_ref().map(|e| &e.0), &account, &operation, &artifacts)?;
+        record_calendar_activity(
+            &state,
+            tenant.as_ref().map(|e| &e.0),
+            &account,
+            &operation,
+            &artifacts,
+        )?;
         commit_billing_reservation(
             &state,
             &reservation,
@@ -507,7 +637,15 @@ async fn create_availability_query(
         )
         .await?;
     }
-    Ok((StatusCode::CREATED, AxumJson(CalendarAvailabilityQueryResponse { account, query, operation, artifacts })))
+    Ok((
+        StatusCode::CREATED,
+        AxumJson(CalendarAvailabilityQueryResponse {
+            account,
+            query,
+            operation,
+            artifacts,
+        }),
+    ))
 }
 
 /// GET /v1/calendar/availability/queries/{queryId} — replay one availability
@@ -527,7 +665,9 @@ async fn get_availability_query(
     let artifacts = manager.list_artifacts(&operation.operation_id);
     let mut query = None;
     for item in &artifacts {
-        if item.kind == calendar::ArtifactKind::AvailabilityQuery && item.availability_query.is_some() {
+        if item.kind == calendar::ArtifactKind::AvailabilityQuery
+            && item.availability_query.is_some()
+        {
             query = item.availability_query.clone();
             break;
         }
@@ -536,7 +676,12 @@ async fn get_availability_query(
     let account = manager
         .get_account(&operation.integration_id)
         .ok_or_else(|| ApiError::internal("calendar account projection is unavailable"))?;
-    Ok(Json(CalendarAvailabilityQueryResponse { account, query, operation, artifacts }))
+    Ok(Json(CalendarAvailabilityQueryResponse {
+        account,
+        query,
+        operation,
+        artifacts,
+    }))
 }
 // ---------------------------------------------------------------------------
 // Operations (ledger / diagnostics)
@@ -548,14 +693,39 @@ async fn list_operations(
     Query(query): Query<OperationListQuery>,
 ) -> Result<Json<types::CalendarOperationListResponse>, ApiError> {
     let manager = calendar_manager_only(&state)?;
-    let integration_id = query.integration_id.as_deref().unwrap_or("").trim().to_string();
+    let integration_id = query
+        .integration_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let run_id = query.run_id.as_deref().unwrap_or("").trim().to_string();
-    let workflow_id = query.workflow_id.as_deref().unwrap_or("").trim().to_string();
-    let schedule_id = query.schedule_id.as_deref().unwrap_or("").trim().to_string();
-    let delivery_id = query.delivery_id.as_deref().unwrap_or("").trim().to_string();
+    let workflow_id = query
+        .workflow_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let schedule_id = query
+        .schedule_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let delivery_id = query
+        .delivery_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let operation_class_raw = query.operation_class.as_deref().unwrap_or("").trim();
     let status_raw = query.status.as_deref().unwrap_or("").trim();
-    let external_event_id = query.external_event_id.as_deref().unwrap_or("").trim().to_string();
+    let external_event_id = query
+        .external_event_id
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
 
     // Go casts the raw query strings onto the domain enums; a value that does
     // not parse never equals a real operation class/status, so the list is
@@ -565,7 +735,9 @@ async fn list_operations(
     if (!operation_class_raw.is_empty() && operation_class.is_none())
         || (!status_raw.is_empty() && status.is_none())
     {
-        return Ok(Json(types::CalendarOperationListResponse { items: Vec::new() }));
+        return Ok(Json(types::CalendarOperationListResponse {
+            items: Vec::new(),
+        }));
     }
 
     let filter = calendar::OperationFilter {
@@ -578,7 +750,9 @@ async fn list_operations(
         status: status.unwrap_or_default(),
         external_event_id,
     };
-    Ok(Json(types::CalendarOperationListResponse { items: manager.list_operations(&filter) }))
+    Ok(Json(types::CalendarOperationListResponse {
+        items: manager.list_operations(&filter),
+    }))
 }
 
 /// GET /v1/calendar/operations/{operationId} — one operation plus artifacts,
@@ -607,7 +781,10 @@ async fn get_operation(
         .get_operation(&operation_id)
         .ok_or_else(|| ApiError::NotFound("not found".to_string()))?;
     let artifacts = manager.list_artifacts(&operation_id);
-    Ok(Json(CalendarOperationResponse { operation, artifacts }))
+    Ok(Json(CalendarOperationResponse {
+        operation,
+        artifacts,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -633,7 +810,8 @@ async fn begin_integration_operation_quota(
         return Ok(UsageReservation::default());
     }
     let hosted = matches!(state.config.environment, kura_config::Environment::Prod);
-    let operation_key = integration_operation_key(&tc.0.tenant_id, domain, operation_id, client_key);
+    let operation_key =
+        integration_operation_key(&tc.0.tenant_id, domain, operation_id, client_key);
     let Some(billing) = &state.billing else {
         if hosted {
             // Go: quota-state-unavailable denial (503). ApiError has no
@@ -694,7 +872,11 @@ async fn commit_billing_reservation(
 
 /// Releases a reservation when the backend attempt never happened (Go
 /// releaseBillingReservation — errors are ignored).
-async fn release_billing_reservation(state: &AppState, reservation: &UsageReservation, reason: &str) {
+async fn release_billing_reservation(
+    state: &AppState,
+    reservation: &UsageReservation,
+    reason: &str,
+) {
     let Some(billing) = &state.billing else {
         return;
     };
@@ -755,15 +937,22 @@ fn record_calendar_activity(
         publish_calendar_artifact_recorded(state, tenant, artifact, operation)?;
     }
     match operation.status {
-        calendar::OperationStatus::Completed => publish_calendar_operation_completed(state, tenant, operation),
+        calendar::OperationStatus::Completed => {
+            publish_calendar_operation_completed(state, tenant, operation)
+        }
         calendar::OperationStatus::Failed
         | calendar::OperationStatus::Blocked
-        | calendar::OperationStatus::Cancelled => publish_calendar_operation_failed(state, tenant, operation),
+        | calendar::OperationStatus::Cancelled => {
+            publish_calendar_operation_failed(state, tenant, operation)
+        }
         _ => Ok(()),
     }
 }
 
-fn persist_calendar_account(state: &AppState, item: &calendar::AccountProjection) -> Result<(), ApiError> {
+fn persist_calendar_account(
+    state: &AppState,
+    item: &calendar::AccountProjection,
+) -> Result<(), ApiError> {
     state
         .store
         .lock()
@@ -771,7 +960,10 @@ fn persist_calendar_account(state: &AppState, item: &calendar::AccountProjection
         .map_err(ApiError::from_store)
 }
 
-fn persist_calendar_operation(state: &AppState, item: &calendar::Operation) -> Result<(), ApiError> {
+fn persist_calendar_operation(
+    state: &AppState,
+    item: &calendar::Operation,
+) -> Result<(), ApiError> {
     state
         .store
         .lock()
@@ -790,7 +982,11 @@ fn persist_calendar_artifact(state: &AppState, item: &calendar::Artifact) -> Res
 /// Go publishEvent: bind environment scope + tenant, persist (tenant-owned or
 /// global path), then publish on the bus. `calendar` is not a global category,
 /// so resolved tenants are bound onto the row.
-fn publish_event(state: &AppState, tenant: Option<&TenantContext>, event: events::Event) -> Result<(), ApiError> {
+fn publish_event(
+    state: &AppState,
+    tenant: Option<&TenantContext>,
+    event: events::Event,
+) -> Result<(), ApiError> {
     let mut prepared = event;
     if prepared.environment_scope.is_empty() {
         prepared.environment_scope = environment_scope_from_config(&state.config);
@@ -840,7 +1036,10 @@ fn publish_calendar_account_projected(
         events::Event {
             category: "calendar".to_string(),
             name: "calendar.account_projected".to_string(),
-            resource: events::Resource { kind: "calendar_account".to_string(), id: account.calendar_account_id.clone() },
+            resource: events::Resource {
+                kind: "calendar_account".to_string(),
+                id: account.calendar_account_id.clone(),
+            },
             payload: payload.as_object().cloned().unwrap_or_default(),
             ..events::Event::default()
         },
@@ -903,7 +1102,10 @@ fn publish_calendar_operation_event(
             category: "calendar".to_string(),
             name: name.to_string(),
             scope,
-            resource: events::Resource { kind: "calendar_operation".to_string(), id: operation.operation_id.clone() },
+            resource: events::Resource {
+                kind: "calendar_operation".to_string(),
+                id: operation.operation_id.clone(),
+            },
             payload: payload.as_object().cloned().unwrap_or_default(),
             ..events::Event::default()
         },
@@ -936,7 +1138,10 @@ fn publish_calendar_artifact_recorded(
             category: "calendar".to_string(),
             name: "calendar.artifact_recorded".to_string(),
             scope,
-            resource: events::Resource { kind: "calendar_artifact".to_string(), id: artifact.artifact_id.clone() },
+            resource: events::Resource {
+                kind: "calendar_artifact".to_string(),
+                id: artifact.artifact_id.clone(),
+            },
             payload: payload.as_object().cloned().unwrap_or_default(),
             ..events::Event::default()
         },
@@ -953,7 +1158,9 @@ fn new_event_id() -> String {
 // Small port helpers (Go calendarSourceLinkage / attendee / recurrence / filter)
 // ---------------------------------------------------------------------------
 
-fn calendar_source_linkage(source: Option<&CalendarSourceLinkageRequest>) -> calendar::SourceLinkage {
+fn calendar_source_linkage(
+    source: Option<&CalendarSourceLinkageRequest>,
+) -> calendar::SourceLinkage {
     let Some(s) = source else {
         return calendar::SourceLinkage::default();
     };
@@ -1013,7 +1220,9 @@ fn filter_calendar_accounts(
 /// rejectUnsupportedCalendarMutation).
 fn reject_unsupported_calendar_mutation(calendar_ref: &str) -> Result<(), ApiError> {
     if !calendar_ref.trim().is_empty() {
-        return Err(map_calendar_error(calendar::CalendarError::CalendarAlternateCalendarDeny));
+        return Err(map_calendar_error(
+            calendar::CalendarError::CalendarAlternateCalendarDeny,
+        ));
     }
     Ok(())
 }
@@ -1025,7 +1234,8 @@ fn calendar_recurrence_scope(raw: &str) -> Result<calendar::RecurrenceScope, Api
     if trimmed.is_empty() {
         return Ok(calendar::RecurrenceScope::Unspecified);
     }
-    serde_json::from_str::<calendar::RecurrenceScope>(&format!("\"{trimmed}\"")).map_err(|_| map_calendar_error(calendar::CalendarError::CalendarRecurrenceScopeInvalid))
+    serde_json::from_str::<calendar::RecurrenceScope>(&format!("\"{trimmed}\""))
+        .map_err(|_| map_calendar_error(calendar::CalendarError::CalendarRecurrenceScopeInvalid))
 }
 
 /// Maps API attendee requests to the domain attendee model, skipping empty
@@ -1040,7 +1250,11 @@ fn calendar_attendee_requests(items: &[CalendarAttendeeRequest]) -> Vec<calendar
             continue;
         }
         let mut role = calendar::AttendeeRole::Required.as_str();
-        if attendee.role.trim().eq_ignore_ascii_case(calendar::AttendeeRole::Optional.as_str()) {
+        if attendee
+            .role
+            .trim()
+            .eq_ignore_ascii_case(calendar::AttendeeRole::Optional.as_str())
+        {
             role = calendar::AttendeeRole::Optional.as_str();
         }
         out.push(calendar::AttendeeRequest {
@@ -1058,7 +1272,9 @@ fn map_calendar_error(err: calendar::CalendarError) -> ApiError {
         calendar::CalendarError::CalendarIntegrationNotFound
         | calendar::CalendarError::CalendarEventNotFound
         | calendar::CalendarError::CalendarOperationNotFound
-        | calendar::CalendarError::CalendarAccountNotFound => ApiError::NotFound("not found".to_string()),
+        | calendar::CalendarError::CalendarAccountNotFound => {
+            ApiError::NotFound("not found".to_string())
+        }
         calendar::CalendarError::CalendarUnavailable => ApiError::Conflict(err.to_string()),
         calendar::CalendarError::CalendarSelectionInvalid
         | calendar::CalendarError::CalendarRecurringUnsupported
@@ -1067,7 +1283,9 @@ fn map_calendar_error(err: calendar::CalendarError) -> ApiError {
         | calendar::CalendarError::CalendarAlternateCalendarDeny
         | calendar::CalendarError::CalendarInvalidTimeRange
         | calendar::CalendarError::CalendarRecurrenceScopeRequired
-        | calendar::CalendarError::CalendarRecurrenceScopeInvalid => ApiError::BadRequest(err.to_string()),
+        | calendar::CalendarError::CalendarRecurrenceScopeInvalid => {
+            ApiError::BadRequest(err.to_string())
+        }
         other => ApiError::internal(other),
     }
 }
@@ -1144,7 +1362,7 @@ fn client_key(headers: &HeaderMap) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use parking_lot::Mutex;
     use tower::ServiceExt;
@@ -1152,6 +1370,7 @@ mod tests {
 
     fn test_config() -> kura_config::Config {
         kura_config::Config {
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-calendar-test".to_string(),
@@ -1159,11 +1378,24 @@ mod tests {
             version: "0.1.0".to_string(),
             llm: kura_config::LlmConfig::default(),
             connectors: kura_config::ConnectorConfig {
-                discord: kura_config::DiscordConnectorConfig { enabled: false, ..Default::default() },
-                telegram: kura_config::TelegramConnectorConfig { enabled: false, ..Default::default() },
-                slack: kura_config::SlackConnectorConfig { enabled: false, ..Default::default() },
-                matrix: kura_config::MatrixConnectorConfig { enabled: false, ..Default::default() },
+                discord: kura_config::DiscordConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                telegram: kura_config::TelegramConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                slack: kura_config::SlackConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                matrix: kura_config::MatrixConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
             },
+            egress: Default::default(),
         }
     }
 
@@ -1182,7 +1414,11 @@ mod tests {
     }
 
     /// Go seedHealthyCalendarIntegration.
-    fn seed_healthy_calendar_integration(state: &AppState, integration_id: &str, canonical_default: bool) {
+    fn seed_healthy_calendar_integration(
+        state: &AppState,
+        integration_id: &str,
+        canonical_default: bool,
+    ) {
         let manager = state.integrations.as_ref().expect("integrations manager");
         let resource = manager
             .create(integrations::CreateInput {
@@ -1230,14 +1466,21 @@ mod tests {
         if body.is_some() {
             builder = builder.header(axum::http::header::CONTENT_TYPE, "application/json");
         }
-        let mut req = builder.body(Body::from(body.unwrap_or("").to_string())).expect("request");
+        let mut req = builder
+            .body(Body::from(body.unwrap_or("").to_string()))
+            .expect("request");
         if let Some(tenant_id) = tenant {
-            let ctx = kura_identity::TenantContext { tenant_id: tenant_id.to_string(), ..Default::default() };
+            let ctx = kura_identity::TenantContext {
+                tenant_id: tenant_id.to_string(),
+                ..Default::default()
+            };
             req.extensions_mut().insert(TenantContext(ctx));
         }
         let response = app.clone().oneshot(req).await.expect("oneshot");
         let status = response.status();
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
         (status, json)
     }
@@ -1250,16 +1493,40 @@ mod tests {
         let app = router().with_state(state.clone());
 
         // canonicalDefault filter projects only the default account.
-        let (status, json) = request_json(&app, "GET", "/v1/calendar/accounts?canonicalDefault=true", None, None).await;
+        let (status, json) = request_json(
+            &app,
+            "GET",
+            "/v1/calendar/accounts?canonicalDefault=true",
+            None,
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         let items = json["items"].as_array().expect("items");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["integrationId"], "calendar-a");
-        assert!(!items[0]["primaryTimezone"].as_str().unwrap_or("").is_empty());
-        assert!(!items[0]["primaryCalendarRef"].as_str().unwrap_or("").is_empty());
+        assert!(
+            !items[0]["primaryTimezone"]
+                .as_str()
+                .unwrap_or("")
+                .is_empty()
+        );
+        assert!(
+            !items[0]["primaryCalendarRef"]
+                .as_str()
+                .unwrap_or("")
+                .is_empty()
+        );
 
         // Explicit selection lists events for calendar-b.
-        let (status, json) = request_json(&app, "GET", "/v1/calendar/events?integrationId=calendar-b", None, None).await;
+        let (status, json) = request_json(
+            &app,
+            "GET",
+            "/v1/calendar/events?integrationId=calendar-b",
+            None,
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["account"]["integrationId"], "calendar-b");
         assert_eq!(json["operation"]["selectionMode"], "explicit");
@@ -1290,11 +1557,18 @@ mod tests {
         let persisted = state
             .store
             .lock()
-            .list_calendar_operations("test", &kura_store::calendar::CalendarOperationFilter::default())
+            .list_calendar_operations(
+                "test",
+                &kura_store::calendar::CalendarOperationFilter::default(),
+            )
             .expect("list operations");
         // The default list (calendar-a) also persists its operation, so the
         // ledger holds the explicit list + default list + busy_free entries.
-        assert!(persisted.len() >= 3, "expected list + busy_free operations, got {}", persisted.len());
+        assert!(
+            persisted.len() >= 3,
+            "expected list + busy_free operations, got {}",
+            persisted.len()
+        );
         assert!(
             persisted.iter().any(|op| op.integration_id == "calendar-b"),
             "expected a persisted calendar-b operation"
@@ -1316,7 +1590,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED);
-        let external_event_id = created["event"]["externalEventId"].as_str().expect("event id").to_string();
+        let external_event_id = created["event"]["externalEventId"]
+            .as_str()
+            .expect("event id")
+            .to_string();
         assert!(!external_event_id.is_empty());
 
         let (status, updated) = request_json(
@@ -1379,7 +1656,10 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(
-            alternate["error"].as_str().unwrap_or("").contains("alternate-calendar"),
+            alternate["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("alternate-calendar"),
             "expected alternate-calendar denial, got {alternate}"
         );
 
@@ -1389,7 +1669,10 @@ mod tests {
             .lock()
             .list_calendar_artifacts("test", "")
             .expect("list artifacts");
-        assert!(artifacts.len() >= 3, "expected persisted create/update/cancel artifacts");
+        assert!(
+            artifacts.len() >= 3,
+            "expected persisted create/update/cancel artifacts"
+        );
 
         assert_eq!(created["operation"]["timezoneUsed"], "America/Los_Angeles");
     }
@@ -1422,11 +1705,19 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(json["error"], "invalid calendar time range");
 
-        let (status, json) = request_json(&app, "GET", "/v1/calendar/events?startsAt=bogus", None, None).await;
+        let (status, json) = request_json(
+            &app,
+            "GET",
+            "/v1/calendar/events?startsAt=bogus",
+            None,
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(json["error"], "startsAt must be RFC3339");
 
-        let (status, json) = request_json(&app, "POST", "/v1/calendar/events", Some(""), None).await;
+        let (status, json) =
+            request_json(&app, "POST", "/v1/calendar/events", Some(""), None).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(json["error"], "request body is required");
     }
@@ -1437,16 +1728,38 @@ mod tests {
         seed_healthy_calendar_integration(&state, "calendar-a", true);
         let app = router().with_state(state);
 
-        let (status, _) = request_json(&app, "GET", "/v1/calendar/events/unknown-event", None, None).await;
+        let (status, _) =
+            request_json(&app, "GET", "/v1/calendar/events/unknown-event", None, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
 
-        let (status, _) = request_json(&app, "GET", "/v1/calendar/operations/unknown-op", None, None).await;
+        let (status, _) = request_json(
+            &app,
+            "GET",
+            "/v1/calendar/operations/unknown-op",
+            None,
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
 
-        let (status, _) = request_json(&app, "GET", "/v1/calendar/availability/queries/unknown-query", None, None).await;
+        let (status, _) = request_json(
+            &app,
+            "GET",
+            "/v1/calendar/availability/queries/unknown-query",
+            None,
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
 
-        let (status, _) = request_json(&app, "GET", "/v1/calendar/accounts/calendar-unknown", None, None).await;
+        let (status, _) = request_json(
+            &app,
+            "GET",
+            "/v1/calendar/accounts/calendar-unknown",
+            None,
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
@@ -1482,23 +1795,51 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CREATED);
 
-        let (status, json) = request_json(&app, "GET", "/v1/calendar/operations?integrationId=calendar-a", None, None).await;
+        let (status, json) = request_json(
+            &app,
+            "GET",
+            "/v1/calendar/operations?integrationId=calendar-a",
+            None,
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert!(!json["items"].as_array().unwrap().is_empty());
 
-        let (status, json) = request_json(&app, "GET", "/v1/calendar/operations?operationClass=create_event", None, None).await;
+        let (status, json) = request_json(
+            &app,
+            "GET",
+            "/v1/calendar/operations?operationClass=create_event",
+            None,
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         let items = json["items"].as_array().unwrap();
         assert!(!items.is_empty());
-        assert!(items.iter().all(|item| item["operationClass"] == "create_event"));
+        assert!(
+            items
+                .iter()
+                .all(|item| item["operationClass"] == "create_event")
+        );
 
         // Unknown enum values match nothing (Go direct-cast semantics).
-        let (status, json) = request_json(&app, "GET", "/v1/calendar/operations?operationClass=bogus", None, None).await;
+        let (status, json) = request_json(
+            &app,
+            "GET",
+            "/v1/calendar/operations?operationClass=bogus",
+            None,
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         // ListResponse omits an empty items array (omitempty), so the body is
         // either `{}` or an explicit empty list.
         let items = json.get("items").and_then(|v| v.as_array());
-        assert!(items.map_or(true, |v| v.is_empty()), "expected no items for unknown class, got {json}");
+        assert!(
+            items.map_or(true, |v| v.is_empty()),
+            "expected no items for unknown class, got {json}"
+        );
     }
 
     #[tokio::test]
@@ -1529,12 +1870,35 @@ mod tests {
         state
             .store
             .lock()
-            .bind_row_tenant("calendar_accounts", "calendar_account_id", "calendar-a", "tenant-a")
+            .bind_row_tenant(
+                "calendar_accounts",
+                "calendar_account_id",
+                "calendar-a",
+                "tenant-a",
+            )
             .expect("bind tenant");
 
-        let (status, _) = request_json(&app, "GET", "/v1/calendar/accounts/calendar-a", None, Some("tenant-b")).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "cross-tenant account access must be 404");
-        let (status, json) = request_json(&app, "GET", "/v1/calendar/accounts/calendar-a", None, Some("tenant-a")).await;
+        let (status, _) = request_json(
+            &app,
+            "GET",
+            "/v1/calendar/accounts/calendar-a",
+            None,
+            Some("tenant-b"),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "cross-tenant account access must be 404"
+        );
+        let (status, json) = request_json(
+            &app,
+            "GET",
+            "/v1/calendar/accounts/calendar-a",
+            None,
+            Some("tenant-a"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["integrationId"], "calendar-a");
 
@@ -1549,16 +1913,42 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED);
-        let operation_id = created["operation"]["operationId"].as_str().expect("operation id").to_string();
+        let operation_id = created["operation"]["operationId"]
+            .as_str()
+            .expect("operation id")
+            .to_string();
         state
             .store
             .lock()
-            .bind_row_tenant("calendar_operations", "operation_id", &operation_id, "tenant-a")
+            .bind_row_tenant(
+                "calendar_operations",
+                "operation_id",
+                &operation_id,
+                "tenant-a",
+            )
             .expect("bind operation tenant");
 
-        let (status, _) = request_json(&app, "GET", &format!("/v1/calendar/operations/{operation_id}"), None, Some("tenant-b")).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "cross-tenant operation access must be 404");
-        let (status, json) = request_json(&app, "GET", &format!("/v1/calendar/operations/{operation_id}"), None, Some("tenant-a")).await;
+        let (status, _) = request_json(
+            &app,
+            "GET",
+            &format!("/v1/calendar/operations/{operation_id}"),
+            None,
+            Some("tenant-b"),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "cross-tenant operation access must be 404"
+        );
+        let (status, json) = request_json(
+            &app,
+            "GET",
+            &format!("/v1/calendar/operations/{operation_id}"),
+            None,
+            Some("tenant-a"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["operation"]["operationId"], operation_id);
     }

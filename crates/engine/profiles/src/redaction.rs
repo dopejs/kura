@@ -189,7 +189,10 @@ mod tests {
             reference_kind: "prompt_file".to_string(),
             ..OverlayReferenceInput::default()
         });
-        assert_eq!(overlay.validation_state, OverlayValidationState::UNSAFE_CONTENT);
+        assert_eq!(
+            overlay.validation_state,
+            OverlayValidationState::UNSAFE_CONTENT
+        );
         assert_eq!(overlay.redaction_status, RedactionStatus::REDACTED);
         assert!(!overlay.safe_display_label.is_empty());
     }
@@ -219,7 +222,10 @@ mod tests {
             reference_uri: "prompt://token=hidden".to_string(),
             ..OverlayReferenceInput::default()
         });
-        assert_eq!(overlay.validation_state, OverlayValidationState::UNSAFE_CONTENT);
+        assert_eq!(
+            overlay.validation_state,
+            OverlayValidationState::UNSAFE_CONTENT
+        );
         assert!(!contains_unsafe(&overlay.safe_display_label));
     }
 

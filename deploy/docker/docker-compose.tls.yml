@@ -1,0 +1,32 @@
+# Overlay: TLS termination with Caddy in front of the daemon (Stage 10.4).
+#
+#   KURA_PUBLIC_HOST=kura.example.com docker compose \
+#     -f docker-compose.yml -f docker-compose.tls.yml up -d --build
+#
+# The daemon's host port mapping is removed here: only Caddy is reachable
+# from the network, over 443 (and 80 for the ACME challenge / redirect).
+
+services:
+  kura-agent:
+    ports: !reset []
+
+  caddy:
+    image: caddy:2
+    container_name: kura-caddy
+    restart: unless-stopped
+    depends_on:
+      kura-agent:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      KURA_PUBLIC_HOST: ${KURA_PUBLIC_HOST:?set KURA_PUBLIC_HOST to the public DNS name}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:

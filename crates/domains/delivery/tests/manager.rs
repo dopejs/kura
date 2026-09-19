@@ -16,13 +16,23 @@ use kura_events::Bus;
 use kura_integrations::DiagnosticReasonCode;
 use kura_store::delivery::DeliveryAttemptRecord;
 
-use common::{manager_with, seed_delivery_preference_state, wait_for_outcome_status, ScriptedAdapter, store};
+use common::{
+    ScriptedAdapter, manager_with, seed_delivery_preference_state, store, wait_for_outcome_status,
+};
 
 #[test]
 fn delivery_retries_without_failover_and_retains_attempt_history() {
     let store = store("retry");
-    let adapter = ScriptedAdapter::new(TargetKind::TestSink, vec![Err("transient send failure".to_string())]);
-    let manager = kura_delivery::Manager::new("test", Bus::new(), Arc::clone(&store), vec![Arc::clone(&adapter) as Arc<dyn DeliveryAdapter>]);
+    let adapter = ScriptedAdapter::new(
+        TargetKind::TestSink,
+        vec![Err("transient send failure".to_string())],
+    );
+    let manager = kura_delivery::Manager::new(
+        "test",
+        Bus::new(),
+        Arc::clone(&store),
+        vec![Arc::clone(&adapter) as Arc<dyn DeliveryAdapter>],
+    );
     manager.configure_for_testing(3, Duration::from_millis(10), Duration::from_millis(20));
 
     let (primary, mut pref) = seed_delivery_preference_state(&manager, "primary-target");
@@ -35,7 +45,8 @@ fn delivery_retries_without_failover_and_retains_attempt_history() {
             ..DeliveryTarget::default()
         })
         .unwrap();
-    pref.preferred_targets_by_class.insert(ResultClass::Failure, primary.target_id.clone());
+    pref.preferred_targets_by_class
+        .insert(ResultClass::Failure, primary.target_id.clone());
     manager.upsert_preference(pref).unwrap();
 
     let outcome = manager
@@ -48,12 +59,27 @@ fn delivery_retries_without_failover_and_retains_attempt_history() {
             ..OutcomeInput::default()
         })
         .unwrap();
-    assert_eq!(outcome.status, OutcomeStatus::Queued, "expected queued after first retryable failure: {outcome:?}");
+    assert_eq!(
+        outcome.status,
+        OutcomeStatus::Queued,
+        "expected queued after first retryable failure: {outcome:?}"
+    );
 
-    let final_outcome = wait_for_outcome_status(&manager, &outcome.delivery_id, OutcomeStatus::Delivered);
-    assert_eq!(final_outcome.attempts.len(), 2, "expected two attempts: {final_outcome:?}");
-    assert_eq!(final_outcome.attempts[0].status, kura_delivery::AttemptStatus::RetryableFailure);
-    assert_eq!(final_outcome.attempts[1].status, kura_delivery::AttemptStatus::Delivered);
+    let final_outcome =
+        wait_for_outcome_status(&manager, &outcome.delivery_id, OutcomeStatus::Delivered);
+    assert_eq!(
+        final_outcome.attempts.len(),
+        2,
+        "expected two attempts: {final_outcome:?}"
+    );
+    assert_eq!(
+        final_outcome.attempts[0].status,
+        kura_delivery::AttemptStatus::RetryableFailure
+    );
+    assert_eq!(
+        final_outcome.attempts[1].status,
+        kura_delivery::AttemptStatus::Delivered
+    );
     assert_eq!(final_outcome.attempts[0].target_id, primary.target_id);
     assert_eq!(final_outcome.attempts[1].target_id, primary.target_id);
     assert_ne!(final_outcome.attempts[0].target_id, secondary.target_id);
@@ -66,7 +92,10 @@ fn delivery_restore_resumes_queued_attempt() {
 
     // First manager fails once and schedules a far-future retry; the test rewrites the
     // attempt next_retry_at through the store, exactly like the Go test.
-    let first_adapter = ScriptedAdapter::new(TargetKind::TestSink, vec![Err("transient send failure".to_string())]);
+    let first_adapter = ScriptedAdapter::new(
+        TargetKind::TestSink,
+        vec![Err("transient send failure".to_string())],
+    );
     let first = kura_delivery::Manager::new(
         "test",
         Bus::new(),
@@ -91,15 +120,18 @@ fn delivery_restore_resumes_queued_attempt() {
     assert!(ok);
     let mut attempt = outcome.attempts[0].clone();
     attempt.next_retry_at = Some(Utc::now() + chrono::Duration::milliseconds(20));
-    store.lock().upsert_delivery_attempt(&DeliveryAttemptRecord {
-        attempt_id: attempt.attempt_id.clone(),
-        delivery_id: attempt.delivery_id.clone(),
-        attempt_number: attempt.attempt_number,
-        target_id: attempt.target_id.clone(),
-        status: attempt.status.as_str().to_string(),
-        next_retry_at: attempt.next_retry_at,
-        document: serde_json::to_string(&attempt).unwrap(),
-    }).unwrap();
+    store
+        .lock()
+        .upsert_delivery_attempt(&DeliveryAttemptRecord {
+            attempt_id: attempt.attempt_id.clone(),
+            delivery_id: attempt.delivery_id.clone(),
+            attempt_number: attempt.attempt_number,
+            target_id: attempt.target_id.clone(),
+            status: attempt.status.as_str().to_string(),
+            next_retry_at: attempt.next_retry_at,
+            document: serde_json::to_string(&attempt).unwrap(),
+        })
+        .unwrap();
 
     let second_adapter = ScriptedAdapter::new(TargetKind::TestSink, Vec::new());
     let second = kura_delivery::Manager::new(
@@ -111,9 +143,18 @@ fn delivery_restore_resumes_queued_attempt() {
     second.configure_for_testing(3, Duration::from_millis(10), Duration::from_millis(20));
     second.restore().unwrap();
 
-    let final_outcome = wait_for_outcome_status(&second, &outcome.delivery_id, OutcomeStatus::Delivered);
-    assert_eq!(second_adapter.sends(), 1, "expected one resumed send after restore");
-    assert_eq!(final_outcome.attempts.len(), 2, "expected retained attempt history across restore");
+    let final_outcome =
+        wait_for_outcome_status(&second, &outcome.delivery_id, OutcomeStatus::Delivered);
+    assert_eq!(
+        second_adapter.sends(),
+        1,
+        "expected one resumed send after restore"
+    );
+    assert_eq!(
+        final_outcome.attempts.len(),
+        2,
+        "expected retained attempt history across restore"
+    );
     assert_eq!(final_outcome.attempts[1].target_id, target.target_id);
 }
 
@@ -138,7 +179,9 @@ fn delivery_terminal_failure_projects_diagnostic_failure() {
         })
         .unwrap();
     assert_eq!(outcome.status, OutcomeStatus::Failed);
-    let diagnostic = outcome.diagnostic_failure.expect("expected diagnostic failure projection");
+    let diagnostic = outcome
+        .diagnostic_failure
+        .expect("expected diagnostic failure projection");
     assert_eq!(diagnostic.reason_code, DiagnosticReasonCode::NetworkFailed);
 }
 
@@ -174,7 +217,10 @@ fn delivery_suppression_policy_suppresses_failure_class() {
         .unwrap();
     assert_eq!(outcome.mode, kura_delivery::DeliveryMode::Suppressed);
     assert_eq!(outcome.status, OutcomeStatus::Suppressed);
-    assert_eq!(outcome.suppression_reason, "failure result suppressed by policy");
+    assert_eq!(
+        outcome.suppression_reason,
+        "failure result suppressed by policy"
+    );
 }
 
 #[test]
@@ -195,9 +241,12 @@ fn delivery_no_active_preference_is_suppressed() {
 
 #[test]
 fn delivery_non_active_target_fails_without_retry() {
-    let (manager, _store) = manager_with(vec![ScriptedAdapter::new(TargetKind::TestSink, Vec::new())]);
+    let (manager, _store) =
+        manager_with(vec![ScriptedAdapter::new(TargetKind::TestSink, Vec::new())]);
     let (target, _) = seed_delivery_preference_state(&manager, "disabled-target");
-    let (updated, ok) = manager.update_target_status(&target.target_id, TargetStatus::Disabled).unwrap();
+    let (updated, ok) = manager
+        .update_target_status(&target.target_id, TargetStatus::Disabled)
+        .unwrap();
     assert!(ok);
     assert_eq!(updated.status, TargetStatus::Disabled);
 
@@ -216,7 +265,8 @@ fn delivery_non_active_target_fails_without_retry() {
 
 #[test]
 fn delivery_emit_is_idempotent_per_source() {
-    let (manager, _store) = manager_with(vec![ScriptedAdapter::new(TargetKind::TestSink, Vec::new())]);
+    let (manager, _store) =
+        manager_with(vec![ScriptedAdapter::new(TargetKind::TestSink, Vec::new())]);
     seed_delivery_preference_state(&manager, "idem-target");
     let input = OutcomeInput {
         source_kind: "run".to_string(),
@@ -226,14 +276,19 @@ fn delivery_emit_is_idempotent_per_source() {
     };
     let first = manager.emit_outcome(input.clone()).unwrap();
     let second = manager.emit_outcome(input).unwrap();
-    assert_eq!(first.delivery_id, second.delivery_id, "duplicate emit must reuse the outcome");
+    assert_eq!(
+        first.delivery_id, second.delivery_id,
+        "duplicate emit must reuse the outcome"
+    );
 }
 
 #[test]
 fn delivery_test_sink_records_messages() {
     use kura_delivery::TestSinkAdapter;
     let sink = Arc::new(TestSinkAdapter::new());
-    let (manager, _store) = manager_with(vec![Arc::clone(&sink) as Arc<dyn kura_delivery::DeliveryAdapter>]);
+    let (manager, _store) = manager_with(vec![
+        Arc::clone(&sink) as Arc<dyn kura_delivery::DeliveryAdapter>
+    ]);
     let (target, _) = seed_delivery_preference_state(&manager, "sink-target");
     let outcome = manager
         .emit_outcome(OutcomeInput {

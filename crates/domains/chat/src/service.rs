@@ -49,9 +49,13 @@ use crate::events::{
     thread_continuity_turn_recorded_event,
 };
 use crate::store::{BindingResolutionParams, ChatStore, ContinuityLookupQuery};
+use crate::tools::{ToolContext, ToolHost, ToolOutcome, ToolTraceEntry, truncate_tool_output};
 use crate::types::{
     ContinuityAssembly, QueryExecution, QueryInput, QueryResult, Service, StreamChunk,
 };
+
+/// Emitter type for the non-streaming path (never constructed).
+type NoEmit = fn(StreamChunk) -> Result<(), ChatError>;
 
 /// Go `llm.OpenAICompatibleProviderName`.
 pub const OPENAI_COMPATIBLE_PROVIDER_NAME: &str = "openai_compatible";
@@ -68,6 +72,44 @@ impl Service {
         input: QueryInput,
         cancel: &CancellationToken,
     ) -> Result<QueryExecution, ChatError> {
+        self.run_turn(input, cancel, false, None::<NoEmit>)
+    }
+
+    /// Go `Service.Stream`: prepares and executes a streaming dispatch,
+    /// forwarding each chunk through `emit` (Go's callback emitter). Blocking.
+    pub fn stream<E>(
+        &self,
+        input: QueryInput,
+        cancel: &CancellationToken,
+        emit: Option<E>,
+    ) -> Result<QueryExecution, ChatError>
+    where
+        E: FnMut(StreamChunk) -> Result<(), ChatError> + Send,
+    {
+        self.run_turn(input, cancel, true, emit)
+    }
+
+    /// The one turn pipeline behind `query` and `stream`.
+    ///
+    /// Stage 9.0 made a turn a bounded sequence of dispatch *rounds*: the
+    /// model is offered the host's tools; when it answers with tool calls the
+    /// service runs them, appends the assistant turn and the tool results to
+    /// the conversation, and dispatches again. Every round is its own
+    /// persisted dispatch record and its own `llm.dispatch.*` events, so the
+    /// log holds exactly what each round showed the model. After
+    /// `max_tool_rounds` the model is dispatched once more with no tools, so
+    /// the turn always ends in text (or a dispatch failure), never in an
+    /// unanswered tool request.
+    fn run_turn<E>(
+        &self,
+        input: QueryInput,
+        cancel: &CancellationToken,
+        stream: bool,
+        mut emit: Option<E>,
+    ) -> Result<QueryExecution, ChatError>
+    where
+        E: FnMut(StreamChunk) -> Result<(), ChatError> + Send,
+    {
         self.ensure_configured()?;
         let mut input = input;
         self.run_turn_start_hooks(&mut input)?;
@@ -108,60 +150,149 @@ impl Service {
         }
         self.enforce_provider_setup_gate(&input.tenant_id, &dispatch_input.provider, "chat")?;
         let mut continuity = self.prepare_continuity(&input, &mut dispatch_input)?;
-        let agent_profile_id =
-            if has_active_profile { active_profile.profile_id.clone() } else { String::new() };
+        let agent_profile_id = if has_active_profile {
+            active_profile.profile_id.clone()
+        } else {
+            String::new()
+        };
         self.run_pre_dispatch_hooks(&input, &agent_profile_id, &mut dispatch_input)?;
 
-        let dispatch = self
-            .dispatcher
-            .prepare(dispatch_input, false)
-            .map_err(ChatError::Prepare)?;
-        let dispatch_id = dispatch.dispatch_id.clone();
-        persist_dispatch(self.store.as_deref(), &dispatch)?;
-        if has_active_profile {
-            self.record_active_profile_projection(
-                &input,
-                &active_profile,
-                &active_selection,
-                &continuity,
-                &binding_selection,
-                has_binding,
-            )?;
-        }
-        if has_binding {
-            self.record_runtime_binding_evidence(&input, &binding_selection, false)?;
-        }
-        self.persist_continuity_request(&mut continuity, &input, &dispatch_id, input.query.trim())?;
-        publish_dispatch_event(
-            self.event_bus.as_ref(),
-            self.store.as_deref(),
-            &input.scope,
-            &dispatch,
-            &selected_skills,
-            "llm.dispatch.requested",
-        )?;
-
-        // Execute on a fresh current-thread runtime; killing `cancel` cancels
-        // the kura-llm token and aborts the blocking dispatch.
-        let runtime = bridge_runtime()?;
-        let kura_cancel = kura_llm::CancelToken::new();
-        let child = cancel.child();
-        let _link = child.link_to(&kura_cancel);
-        let exec_result = runtime.block_on(self.dispatcher.dispatch(dispatch, &kura_cancel));
-
-        let final_dispatch = match &exec_result {
-            Ok(d) => d.clone(),
-            Err(failed) => failed.dispatch.clone(),
+        // Tools are resolved after the hooks so a hook cannot inject a tool
+        // the host would not offer, and the host sees the final provider.
+        let mut tool_ctx = ToolContext {
+            tenant_id: input.tenant_id.clone(),
+            thread_id: input.thread_id.clone(),
+            agent_profile_id: agent_profile_id.clone(),
+            dispatch_id: String::new(),
+            provider: dispatch_input.provider.clone(),
+            model: dispatch_input.model.clone(),
         };
-        persist_dispatch(self.store.as_deref(), &final_dispatch)?;
-        publish_dispatch_event(
-            self.event_bus.as_ref(),
-            self.store.as_deref(),
-            &input.scope,
-            &final_dispatch,
-            &selected_skills,
-            &terminal_dispatch_event(&final_dispatch),
-        )?;
+        let offered_tools: Vec<kura_llm::ToolSpec> = match &self.tool_host {
+            Some(host) => host.available_tools(&tool_ctx),
+            None => Vec::new(),
+        };
+
+        let mut messages = std::mem::take(&mut dispatch_input.messages);
+        let mut tool_trace: Vec<ToolTraceEntry> = Vec::new();
+        let mut round: usize = 0;
+        let (final_dispatch, exec_error) = loop {
+            let last_round = round >= self.max_tool_rounds || offered_tools.is_empty();
+            let round_input = CreateDispatchInput {
+                messages: messages.clone(),
+                tools: if last_round {
+                    Vec::new()
+                } else {
+                    offered_tools.clone()
+                },
+                ..dispatch_input.clone()
+            };
+            let dispatch = self
+                .dispatcher
+                .prepare(round_input, stream)
+                .map_err(ChatError::Prepare)?;
+            let dispatch_id = dispatch.dispatch_id.clone();
+            persist_dispatch(self.store.as_deref(), &input.tenant_id, &dispatch)?;
+            if round == 0 {
+                if has_active_profile {
+                    self.record_active_profile_projection(
+                        &input,
+                        &active_profile,
+                        &active_selection,
+                        &continuity,
+                        &binding_selection,
+                        has_binding,
+                    )?;
+                }
+                if has_binding {
+                    self.record_runtime_binding_evidence(&input, &binding_selection, false)?;
+                }
+                self.persist_continuity_request(
+                    &mut continuity,
+                    &input,
+                    &dispatch_id,
+                    input.query.trim(),
+                )?;
+            }
+            publish_dispatch_event(
+                self.event_bus.as_ref(),
+                self.store.as_deref(),
+                &input.scope,
+                &dispatch,
+                &selected_skills,
+                "llm.dispatch.requested",
+            )?;
+
+            let exec_result = self.execute_dispatch(
+                dispatch,
+                cancel,
+                stream,
+                emit.as_mut(),
+                &selected_skills,
+                &continuity,
+            )?;
+            let round_dispatch = match &exec_result {
+                Ok(d) => d.clone(),
+                Err(failed) => failed.dispatch.clone(),
+            };
+            persist_dispatch(self.store.as_deref(), &input.tenant_id, &round_dispatch)?;
+            publish_dispatch_event(
+                self.event_bus.as_ref(),
+                self.store.as_deref(),
+                &input.scope,
+                &round_dispatch,
+                &selected_skills,
+                &terminal_dispatch_event(&round_dispatch),
+            )?;
+
+            record_token_spend(&input.tenant_id, &round_dispatch);
+            let exec_error = match exec_result {
+                Ok(_) => None,
+                Err(failed) => Some(ChatError::Dispatch(failed.error.to_string())),
+            };
+            let wants_tools = exec_error.is_none() && !round_dispatch.tool_calls.is_empty();
+            let Some(host) = self
+                .tool_host
+                .as_deref()
+                .filter(|_| wants_tools && !last_round)
+            else {
+                break (round_dispatch, exec_error);
+            };
+            if cancel.is_cancelled() {
+                break (
+                    round_dispatch,
+                    Some(ChatError::Dispatch(
+                        "cancelled between tool rounds".to_string(),
+                    )),
+                );
+            }
+
+            // The assistant turn that asked, then one tool message per call,
+            // in the order the model asked. Both are what the next round
+            // shows the model and both are persisted with that round.
+            tool_ctx.dispatch_id = round_dispatch.dispatch_id.clone();
+            messages.push(Message {
+                role: MessageRole::Assistant,
+                content: round_dispatch.output.clone(),
+                tool_calls: round_dispatch.tool_calls.clone(),
+                tool_call_id: String::new(),
+            });
+            for call in &round_dispatch.tool_calls {
+                let entry = self.run_tool_call(host, &input, &tool_ctx, round, call);
+                messages.push(Message {
+                    role: MessageRole::Tool,
+                    content: if entry.is_error {
+                        format!("error: {}", entry.output)
+                    } else {
+                        entry.output.clone()
+                    },
+                    tool_calls: Vec::new(),
+                    tool_call_id: call.call_id.clone(),
+                });
+                tool_trace.push(entry);
+            }
+            round += 1;
+        };
+
         self.persist_continuity_response(&mut continuity, &input, &final_dispatch)?;
 
         let mut result = QueryResult {
@@ -169,105 +300,40 @@ impl Service {
             skills: selected_skill_ids_from_skills(&selected_skills),
             skill_contracts: selected_skill_contracts(&selected_skills),
             dispatch: final_dispatch,
+            tool_trace,
             ..QueryResult::default()
         };
         apply_continuity_result(&mut result, &continuity);
         self.run_turn_end_hooks(&input, &result);
-        let exec_error = match exec_result {
-            Ok(_) => None,
-            Err(failed) => Some(ChatError::Dispatch(failed.error.to_string())),
-        };
         Ok(QueryExecution { result, exec_error })
     }
 
-    /// Go `Service.Stream`: prepares and executes a streaming dispatch,
-    /// forwarding each chunk through `emit` (Go's callback emitter). Blocking.
-    pub fn stream<E>(
+    /// Executes one prepared dispatch on a fresh current-thread runtime;
+    /// killing `cancel` cancels the kura-llm token and aborts the blocking
+    /// dispatch. Streaming rounds forward chunks through `emit`.
+    fn execute_dispatch<E>(
         &self,
-        input: QueryInput,
+        dispatch: Dispatch,
         cancel: &CancellationToken,
-        mut emit: Option<E>,
-    ) -> Result<QueryExecution, ChatError>
+        stream: bool,
+        mut emit: Option<&mut E>,
+        selected_skills: &[Skill],
+        continuity: &ContinuityAssembly,
+    ) -> Result<Result<Dispatch, kura_llm::FailedDispatch>, ChatError>
     where
         E: FnMut(StreamChunk) -> Result<(), ChatError> + Send,
     {
-        self.ensure_configured()?;
-        let mut input = input;
-        self.run_turn_start_hooks(&mut input)?;
-
-        let (mut dispatch_input, selected_skills) = self.build_dispatch_input(&input)?;
-        let (active_profile, active_selection, has_active_profile) =
-            self.resolve_active_profile(&input, &mut dispatch_input)?;
-        let (binding_selection, has_binding, binding_res) = self.resolve_binding_for_work(
-            &input,
-            &active_profile,
-            &active_selection,
-            has_active_profile,
-        );
-        let (binding_selection, has_binding) = match binding_res {
-            Ok(()) => (binding_selection, has_binding),
-            Err(err) => {
-                self.record_blocked_binding_evidence(&input, &binding_selection, has_binding, &err);
-                return Err(err);
-            }
-        };
-        if let Err(err) = self.enforce_capability_visibility(
-            &input,
-            &selected_skills,
-            &binding_selection,
-            has_binding,
-        ) {
-            return Err(err);
-        }
-        if let Some(providers) = &self.providers {
-            let (_, effective) = providers
-                .resolve_dispatch_input(dispatch_input.clone())
-                .map_err(|err| ChatError::Provider(err.to_string()))?;
-            dispatch_input = effective;
-        }
-        self.enforce_provider_setup_gate(&input.tenant_id, &dispatch_input.provider, "chat")?;
-        let mut continuity = self.prepare_continuity(&input, &mut dispatch_input)?;
-        let agent_profile_id =
-            if has_active_profile { active_profile.profile_id.clone() } else { String::new() };
-        self.run_pre_dispatch_hooks(&input, &agent_profile_id, &mut dispatch_input)?;
-
-        let dispatch = self
-            .dispatcher
-            .prepare(dispatch_input, true)
-            .map_err(ChatError::Prepare)?;
-        let dispatch_id = dispatch.dispatch_id.clone();
-        let dispatch_provider = dispatch.provider.clone();
-        let dispatch_model = dispatch.model.clone();
-        persist_dispatch(self.store.as_deref(), &dispatch)?;
-        if has_active_profile {
-            self.record_active_profile_projection(
-                &input,
-                &active_profile,
-                &active_selection,
-                &continuity,
-                &binding_selection,
-                has_binding,
-            )?;
-        }
-        if has_binding {
-            self.record_runtime_binding_evidence(&input, &binding_selection, false)?;
-        }
-        self.persist_continuity_request(&mut continuity, &input, &dispatch_id, input.query.trim())?;
-        publish_dispatch_event(
-            self.event_bus.as_ref(),
-            self.store.as_deref(),
-            &input.scope,
-            &dispatch,
-            &selected_skills,
-            "llm.dispatch.requested",
-        )?;
-
         let runtime = bridge_runtime()?;
         let kura_cancel = kura_llm::CancelToken::new();
         let child = cancel.child();
         let _link = child.link_to(&kura_cancel);
-        let mut emit = emit.take();
-        let exec_result = runtime.block_on(async {
+        if !stream {
+            return Ok(runtime.block_on(self.dispatcher.dispatch(dispatch, &kura_cancel)));
+        }
+        let dispatch_id = dispatch.dispatch_id.clone();
+        let dispatch_provider = dispatch.provider.clone();
+        let dispatch_model = dispatch.model.clone();
+        Ok(runtime.block_on(async {
             let mut adapter = |chunk: kura_llm::StreamChunk| -> Result<(), ProviderError> {
                 let Some(emit) = emit.as_mut() else {
                     return Ok(());
@@ -276,8 +342,8 @@ impl Service {
                     dispatch_id: dispatch_id.clone(),
                     provider: dispatch_provider.clone(),
                     model: dispatch_model.clone(),
-                    skills: selected_skill_ids_from_skills(&selected_skills),
-                    skill_contracts: selected_skill_contracts(&selected_skills),
+                    skills: selected_skill_ids_from_skills(selected_skills),
+                    skill_contracts: selected_skill_contracts(selected_skills),
                     delta: chunk.delta,
                     reply: chunk.output,
                     finish_reason: chunk.finish_reason,
@@ -294,37 +360,132 @@ impl Service {
             self.dispatcher
                 .dispatch_stream(dispatch, &kura_cancel, &mut adapter)
                 .await
+        }))
+    }
+
+    /// Runs one tool call through the `chat/tool-call` hook point and the
+    /// host, records it as a `chat.tool.called` event, and returns the trace
+    /// entry (whose `output` is what the model will see).
+    fn run_tool_call(
+        &self,
+        host: &dyn ToolHost,
+        input: &QueryInput,
+        ctx: &ToolContext,
+        round: usize,
+        call: &kura_llm::ToolCall,
+    ) -> ToolTraceEntry {
+        let started = std::time::Instant::now();
+        let mut arguments = call.arguments.clone();
+        let mut vetoed: Option<ToolOutcome> = None;
+        if let Some(hooks) = &self.hooks {
+            let mut payload = serde_json::json!({
+                "tenantId": ctx.tenant_id,
+                "threadId": ctx.thread_id,
+                "dispatchId": ctx.dispatch_id,
+                "callId": call.call_id,
+                "name": call.name,
+                "arguments": arguments,
+            });
+            let outcome = hooks.run(kura_plugin::points::CHAT_TOOL_CALL, &mut payload);
+            if let Some((plugin_id, reason)) = outcome.halted {
+                self.publish_hook_veto(
+                    kura_plugin::points::CHAT_TOOL_CALL,
+                    &plugin_id,
+                    &reason,
+                    &input.scope,
+                );
+                vetoed = Some(ToolOutcome::error(format!(
+                    "tool call vetoed by plugin {plugin_id}: {reason}"
+                )));
+            } else if outcome.ran > 0 {
+                if let Some(rewritten) = payload.get("arguments").and_then(Value::as_str) {
+                    arguments = rewritten.to_string();
+                }
+            }
+        }
+        let outcome = match vetoed {
+            Some(outcome) => outcome,
+            None => {
+                let effective = kura_llm::ToolCall {
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                    arguments: arguments.clone(),
+                };
+                host.call(ctx, &effective)
+            }
+        };
+        let entry = ToolTraceEntry {
+            round,
+            dispatch_id: ctx.dispatch_id.clone(),
+            call_id: call.call_id.clone(),
+            name: call.name.clone(),
+            arguments,
+            output: truncate_tool_output(&outcome.content),
+            is_error: outcome.is_error,
+            duration_ms: started.elapsed().as_millis() as i64,
+        };
+        let metrics = kura_telemetry::metrics::registry();
+        metrics.inc(
+            kura_telemetry::metrics::CHAT_TOOL_CALLS_TOTAL,
+            &[
+                ("name", entry.name.as_str()),
+                ("outcome", if entry.is_error { "error" } else { "ok" }),
+            ],
+        );
+        metrics.observe(
+            kura_telemetry::metrics::CHAT_TOOL_CALL_DURATION_SECONDS,
+            &[("name", entry.name.as_str())],
+            started.elapsed().as_secs_f64(),
+        );
+        self.publish_tool_called(input, &entry);
+        entry
+    }
+
+    /// `chat.tool.called`: the audit record of one tool call. Arguments and
+    /// output are included (already bounded) because the event is how an
+    /// operator reconstructs what the model did with a tool.
+    fn publish_tool_called(&self, input: &QueryInput, entry: &ToolTraceEntry) {
+        let mut payload: Map<String, Value> = Map::new();
+        payload.insert(
+            "tenantId".to_string(),
+            Value::String(input.tenant_id.clone()),
+        );
+        payload.insert(
+            "threadId".to_string(),
+            Value::String(input.thread_id.clone()),
+        );
+        payload.insert(
+            "dispatchId".to_string(),
+            Value::String(entry.dispatch_id.clone()),
+        );
+        payload.insert("round".to_string(), Value::from(entry.round as u64));
+        payload.insert("callId".to_string(), Value::String(entry.call_id.clone()));
+        payload.insert("name".to_string(), Value::String(entry.name.clone()));
+        payload.insert(
+            "arguments".to_string(),
+            Value::String(entry.arguments.clone()),
+        );
+        payload.insert("output".to_string(), Value::String(entry.output.clone()));
+        payload.insert("isError".to_string(), Value::Bool(entry.is_error));
+        payload.insert("durationMs".to_string(), Value::from(entry.duration_ms));
+        let event = normalize_event(kura_events::Event {
+            category: "chat".to_string(),
+            name: "chat.tool.called".to_string(),
+            scope: input.scope.clone(),
+            resource: kura_events::Resource {
+                kind: "tool_call".to_string(),
+                id: entry.call_id.clone(),
+            },
+            payload,
+            ..kura_events::Event::default()
         });
-
-        let final_dispatch = match &exec_result {
-            Ok(d) => d.clone(),
-            Err(failed) => failed.dispatch.clone(),
+        let event = match self.store.as_deref() {
+            Some(store) => store.append_event(&event).unwrap_or(event),
+            None => event,
         };
-        persist_dispatch(self.store.as_deref(), &final_dispatch)?;
-        publish_dispatch_event(
-            self.event_bus.as_ref(),
-            self.store.as_deref(),
-            &input.scope,
-            &final_dispatch,
-            &selected_skills,
-            &terminal_dispatch_event(&final_dispatch),
-        )?;
-        self.persist_continuity_response(&mut continuity, &input, &final_dispatch)?;
-
-        let mut result = QueryResult {
-            query: input.query.trim().to_string(),
-            skills: selected_skill_ids_from_skills(&selected_skills),
-            skill_contracts: selected_skill_contracts(&selected_skills),
-            dispatch: final_dispatch,
-            ..QueryResult::default()
-        };
-        apply_continuity_result(&mut result, &continuity);
-        self.run_turn_end_hooks(&input, &result);
-        let exec_error = match exec_result {
-            Ok(_) => None,
-            Err(failed) => Some(ChatError::Dispatch(failed.error.to_string())),
-        };
-        Ok(QueryExecution { result, exec_error })
+        if let Some(bus) = &self.event_bus {
+            bus.publish(event);
+        }
     }
 
     /// Thread + `std::sync::mpsc` streaming variant: runs the same pipeline as
@@ -381,6 +542,10 @@ impl Service {
             "threadId": input.thread_id,
             "query": input.query,
             "sourceKind": serde_json::to_value(input.source_kind).unwrap_or(Value::Null),
+            // Stage 5.2: channel-native segmentation needs to know which
+            // connector the turn came from and when it happened.
+            "channelScopeRef": input.channel_scope_ref,
+            "sourceTimestamp": serde_json::to_value(input.source_timestamp).unwrap_or(Value::Null),
         });
         let outcome = hooks.run(kura_plugin::points::CHAT_TURN_START, &mut payload);
         if let Some((plugin_id, reason)) = outcome.halted {
@@ -449,12 +614,13 @@ impl Service {
                 dispatch_input.model = model.to_string();
             }
             if let Some(messages) = payload.get("messages") {
-                dispatch_input.messages = serde_json::from_value(messages.clone()).map_err(
-                    |err| ChatError::HookPayload {
-                        point: kura_plugin::points::CHAT_PRE_DISPATCH.to_string(),
-                        reason: format!("messages: {err}"),
-                    },
-                )?;
+                dispatch_input.messages =
+                    serde_json::from_value(messages.clone()).map_err(|err| {
+                        ChatError::HookPayload {
+                            point: kura_plugin::points::CHAT_PRE_DISPATCH.to_string(),
+                            reason: format!("messages: {err}"),
+                        }
+                    })?;
             }
         }
         Ok(())
@@ -476,12 +642,20 @@ impl Service {
             "sourceMessageId": input.source_message_id,
             "requestTurnId": result.request_turn_id,
             "responseTurnId": result.response_turn_id,
+            // Stage 3.4: which skills this turn used, for usage feedback.
+            "skills": result.skills,
         });
         let _ = hooks.run(kura_plugin::points::CHAT_TURN_END, &mut payload);
     }
 
     /// Best-effort `chat.hook.vetoed` event so vetoes are auditable.
-    fn publish_hook_veto(&self, point: &str, plugin_id: &str, reason: &str, scope: &kura_events::Scope) {
+    fn publish_hook_veto(
+        &self,
+        point: &str,
+        plugin_id: &str,
+        reason: &str,
+        scope: &kura_events::Scope,
+    ) {
         let mut payload: Map<String, Value> = Map::new();
         payload.insert("point".to_string(), Value::String(point.to_string()));
         payload.insert("pluginId".to_string(), Value::String(plugin_id.to_string()));
@@ -827,6 +1001,7 @@ impl Service {
                 provider: input.provider.trim().to_string(),
                 model: input.model.trim().to_string(),
                 messages,
+                tools: Vec::new(),
                 timeout_ms: input.timeout_ms,
                 max_retries: input.max_retries,
             },
@@ -1193,6 +1368,7 @@ pub fn profile_context_messages(profile: &AgentProfile) -> Vec<Message> {
         messages.push(Message {
             role: MessageRole::System,
             content: format!("Agent profile persona: {summary}"),
+            ..Message::default()
         });
     }
     let safety = profile.safety_defaults.approval_posture.trim().to_string();
@@ -1200,6 +1376,7 @@ pub fn profile_context_messages(profile: &AgentProfile) -> Vec<Message> {
         messages.push(Message {
             role: MessageRole::System,
             content: format!("Agent profile safety posture: {safety}"),
+            ..Message::default()
         });
     }
     messages
@@ -1254,6 +1431,7 @@ pub fn compile_prompt_messages(
             )
             .trim()
             .to_string(),
+            ..Message::default()
         });
     }
     for skill in selected {
@@ -1273,11 +1451,13 @@ pub fn compile_prompt_messages(
         messages.push(Message {
             role: MessageRole::System,
             content: builder,
+            ..Message::default()
         });
     }
     messages.push(Message {
         role: MessageRole::User,
         content: query.trim().to_string(),
+        ..Message::default()
     });
     messages
 }
@@ -1341,13 +1521,21 @@ pub fn response_continuity_source_event_key(source_event_key: &str) -> String {
     }
 }
 
-/// Go `persistDispatch`.
-fn persist_dispatch(store: Option<&dyn ChatStore>, dispatch: &Dispatch) -> Result<(), ChatError> {
+/// Go `persistDispatch`, plus the tenant binding (D11) so a tenant's own
+/// dispatches are listable by that tenant.
+fn persist_dispatch(
+    store: Option<&dyn ChatStore>,
+    tenant_id: &str,
+    dispatch: &Dispatch,
+) -> Result<(), ChatError> {
     let Some(store) = store else {
         return Ok(());
     };
     store
         .upsert_llm_dispatch(dispatch)
+        .map_err(ChatError::Store)?;
+    store
+        .bind_llm_dispatch_tenant(&dispatch.dispatch_id, tenant_id)
         .map_err(ChatError::Store)
 }
 
@@ -1466,6 +1654,7 @@ pub fn inject_handoff_source_reference_messages(
             prior.push(Message {
                 role: MessageRole::User,
                 content: summary.to_string(),
+                ..Message::default()
             });
         }
     }
@@ -1507,6 +1696,7 @@ pub fn inject_continuity_messages(messages: &[Message], turns: &[ContinuityTurn]
             prior.push(Message {
                 role,
                 content: content.to_string(),
+                ..Message::default()
             });
         }
         for excerpt in &turn.artifact_excerpt_refs {
@@ -1520,6 +1710,7 @@ pub fn inject_continuity_messages(messages: &[Message], turns: &[ContinuityTurn]
             prior.push(Message {
                 role,
                 content: summary.text,
+                ..Message::default()
             });
         }
     }
@@ -1639,6 +1830,29 @@ pub fn handoff_reference_continuity_reason(reference: &HandoffSourceReference) -
 /// Builds the per-call current-thread Tokio runtime that bridges the sync
 /// service into the async `kura-llm` dispatcher. Time is enabled for the
 /// dispatcher's per-attempt timeout.
+/// Stage 10.3: token spend by tenant and provider. The dispatcher cannot
+/// label by tenant (it does not know one); the chat service does.
+fn record_token_spend(tenant_id: &str, dispatch: &Dispatch) {
+    let metrics = kura_telemetry::metrics::registry();
+    let tenant = tenant_id.trim();
+    for (kind, tokens) in [
+        ("input", dispatch.usage.input_tokens),
+        ("output", dispatch.usage.output_tokens),
+    ] {
+        if tokens > 0 {
+            metrics.add(
+                kura_telemetry::metrics::LLM_TOKENS_TOTAL,
+                &[
+                    ("tenant", tenant),
+                    ("provider", dispatch.provider.as_str()),
+                    ("kind", kind),
+                ],
+                tokens as u64,
+            );
+        }
+    }
+}
+
 fn bridge_runtime() -> Result<tokio::runtime::Runtime, ChatError> {
     tokio::runtime::Builder::new_current_thread()
         .enable_time()

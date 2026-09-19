@@ -12,11 +12,17 @@ use kura_migrationfixture::{
 fn head_migrations_are_loss_less_and_preserve_rows() {
     let dir = temp_dir("head_migrations");
     let store = build_pre_tenant_v21_fixture(&dir).unwrap();
-    assert_eq!(store.schema_version().unwrap(), kura_store::CURRENT_SCHEMA_VERSION);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        kura_store::CURRENT_SCHEMA_VERSION
+    );
 
     let before = count_seeded_rows(&store).unwrap();
     apply_head_migrations(&store).unwrap();
-    assert_eq!(store.schema_version().unwrap(), kura_store::CURRENT_SCHEMA_VERSION);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        kura_store::CURRENT_SCHEMA_VERSION
+    );
 
     // Pre/post counts are equal for every seeded table.
     let after = count_seeded_rows(&store).unwrap();
@@ -25,7 +31,11 @@ fn head_migrations_are_loss_less_and_preserve_rows() {
     // Spot-check a few rows still load back with their exact payloads.
     let conn = open_conn(store.db_path());
     let run_status: String = conn
-        .query_row("SELECT status FROM runs WHERE run_id = 'run_seed'", [], |row| row.get(0))
+        .query_row(
+            "SELECT status FROM runs WHERE run_id = 'run_seed'",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(run_status, "queued");
     let snapshot: String = conn
@@ -45,7 +55,9 @@ fn head_migrations_are_loss_less_and_preserve_rows() {
 #[test]
 fn fixture_builder_runs_pre_tenant_then_head_then_roadmap_seeds() {
     let dir = temp_dir("fixture_builder");
-    let output = kura_migrationfixture::FixtureBuilder::new().build(&dir).unwrap();
+    let output = kura_migrationfixture::FixtureBuilder::new()
+        .build(&dir)
+        .unwrap();
     assert_eq!(
         output.store.schema_version().unwrap(),
         kura_store::CURRENT_SCHEMA_VERSION

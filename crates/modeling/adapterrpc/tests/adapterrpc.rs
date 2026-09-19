@@ -11,8 +11,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use kura_adapterrpc::{
-    is_ambiguous, run_conformance, scoped_resolver, write_message, AdapterError, Client, Error,
-    FailureKind, Request, Response, Status, CONTRACT_VERSION,
+    AdapterError, CONTRACT_VERSION, Client, Error, FailureKind, Request, Response, Status,
+    is_ambiguous, run_conformance, scoped_resolver, write_message,
 };
 use serde_json::value::RawValue;
 
@@ -83,7 +83,12 @@ struct RefOptions {
     contract_ver: Option<String>,
 }
 
-const ARRAY_OPS: &[&str] = &["ListEvents", "ListThreads", "ListDrafts", "ResolveAttachments"];
+const ARRAY_OPS: &[&str] = &[
+    "ListEvents",
+    "ListThreads",
+    "ListDrafts",
+    "ResolveAttachments",
+];
 
 fn serve_reference(reader: UnixStream, writer: UnixStream, opts: RefOptions) {
     let mut br = BufReader::new(reader);
@@ -128,7 +133,11 @@ fn serve_reference(reader: UnixStream, writer: UnixStream, opts: RefOptions) {
                 diagnostic: None,
             }
         } else {
-            let payload = if ARRAY_OPS.contains(&req.operation.as_str()) { "[]" } else { "{}" };
+            let payload = if ARRAY_OPS.contains(&req.operation.as_str()) {
+                "[]"
+            } else {
+                "{}"
+            };
             Response {
                 request_id: req.request_id.clone(),
                 contract_version: version,
@@ -155,11 +164,7 @@ fn pipe_client(opts: RefOptions) -> Client {
 
 fn dispatch_no_out(client: &Client, domain: &str, operation: &str) -> Result<(), Error> {
     client.dispatch::<serde_json::Value, serde_json::Value, serde_json::Value>(
-        domain,
-        operation,
-        None,
-        None,
-        None,
+        domain, operation, None, None, None,
     )
 }
 
@@ -180,7 +185,9 @@ fn dispatch_round_trip() {
     struct Out {
         integration_id: String,
     }
-    let mut out = Out { integration_id: String::new() };
+    let mut out = Out {
+        integration_id: String::new(),
+    };
     let payload = serde_json::json!({"x": 1});
     c.dispatch::<serde_json::Value, _, _>(
         "calendar",
@@ -201,7 +208,10 @@ fn dispatch_contract_mismatch() {
         r
     });
     let err = dispatch_no_out(&c, "calendar", "ProjectAccount").unwrap_err();
-    assert!(matches!(err, Error::ContractMismatch), "want ContractMismatch, got {err}");
+    assert!(
+        matches!(err, Error::ContractMismatch),
+        "want ContractMismatch, got {err}"
+    );
 }
 
 #[test]
@@ -237,7 +247,10 @@ fn dispatch_deadline() {
             None,
         )
         .unwrap_err();
-    assert!(is_ambiguous(&err), "want ambiguous deadline error, got {err}");
+    assert!(
+        is_ambiguous(&err),
+        "want ambiguous deadline error, got {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +281,10 @@ fn conformance_refuses_version_mismatch() {
         "want ContractMismatch at readiness, got {:?}",
         report.ready_err
     );
-    assert!(!report.passed(), "conformance must fail on version mismatch");
+    assert!(
+        !report.passed(),
+        "conformance must fail on version mismatch"
+    );
 }
 
 #[test]
@@ -278,7 +294,10 @@ fn conformance_fails_contract_violating_adapter() {
         ..Default::default()
     });
     let report = run_conformance(&client);
-    assert!(!report.passed(), "conformance must fail for a contract-violating adapter");
+    assert!(
+        !report.passed(),
+        "conformance must fail for a contract-violating adapter"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -320,7 +339,10 @@ fn malformed_response_is_ambiguous() {
             None,
         )
         .unwrap_err();
-    assert!(is_ambiguous(&err), "malformed: want ambiguous error, got {err}");
+    assert!(
+        is_ambiguous(&err),
+        "malformed: want ambiguous error, got {err}"
+    );
 }
 
 #[test]
@@ -360,7 +382,10 @@ fn auth_failure_is_confirmed_not_ambiguous() {
             None,
         )
         .unwrap_err();
-    assert!(!is_ambiguous(&err), "auth failure must be confirmed (not ambiguous), got {err}");
+    assert!(
+        !is_ambiguous(&err),
+        "auth failure must be confirmed (not ambiguous), got {err}"
+    );
     match err {
         Error::Adapter(ae) => assert_eq!(ae.kind, FailureKind::Auth, "want AdapterError auth"),
         other => panic!("want AdapterError auth, got {other}"),
@@ -380,7 +405,10 @@ fn dispatch_without_caller_deadline_is_still_bounded() {
 
     let start = Instant::now();
     let err = dispatch_no_out(&client, "calendar", "CreateEvent").unwrap_err();
-    assert!(is_ambiguous(&err), "want ambiguous (timeout) error, got {err}");
+    assert!(
+        is_ambiguous(&err),
+        "want ambiguous (timeout) error, got {err}"
+    );
     assert!(
         start.elapsed() < Duration::from_secs(2),
         "dispatch was not bounded by the default deadline (hung)"
@@ -397,7 +425,10 @@ fn transport_poisoned_after_timeout_fails_fast() {
     .with_default_deadline(Duration::from_millis(40));
 
     let err = dispatch_no_out(&client, "calendar", "CreateEvent").unwrap_err();
-    assert!(is_ambiguous(&err), "first call: want ambiguous timeout, got {err}");
+    assert!(
+        is_ambiguous(&err),
+        "first call: want ambiguous timeout, got {err}"
+    );
 
     // Subsequent call must fail fast (broken transport), not spawn a competing reader.
     let start = Instant::now();
@@ -454,7 +485,8 @@ fn concurrent_calls_are_isolated_per_call() {
                 return;
             }
             if got != id {
-                tx.send(format!("cross-bleed: caller {id} received {got:?}")).unwrap();
+                tx.send(format!("cross-bleed: caller {id} received {got:?}"))
+                    .unwrap();
             }
         }));
     }
@@ -521,7 +553,13 @@ fn envelopes_carry_no_ledger_state() {
 fn capture_adapter(creds: mpsc::Sender<String>) -> Client {
     inline_adapter(move |req| {
         creds
-            .send(req.credential.as_deref().map(RawValue::get).unwrap_or("").to_owned())
+            .send(
+                req.credential
+                    .as_deref()
+                    .map(RawValue::get)
+                    .unwrap_or("")
+                    .to_owned(),
+            )
             .expect("record credential");
         ok_response(&req, "{}")
     })
@@ -550,7 +588,10 @@ fn credentials_injected_per_call_scoped_to_integration() {
     let got: Vec<String> = [rx.recv().unwrap(), rx.recv().unwrap()].into();
     assert_eq!(
         got,
-        vec!["\"secret-for-int-1\"".to_owned(), "\"secret-for-int-2\"".to_owned()],
+        vec![
+            "\"secret-for-int-1\"".to_owned(),
+            "\"secret-for-int-2\"".to_owned()
+        ],
         "credentials not scoped per call"
     );
 }

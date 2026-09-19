@@ -72,7 +72,11 @@ pub fn create_replay_campaign(
     } else {
         ProductLifecycleStatus::Draft
     };
-    let started_at = if input.start_immediately { Some(now) } else { None };
+    let started_at = if input.start_immediately {
+        Some(now)
+    } else {
+        None
+    };
     let campaign = ReplayCampaign {
         campaign_id,
         tenant_id: input.tenant_id.trim().to_string(),
@@ -88,7 +92,12 @@ pub fn create_replay_campaign(
     };
     let mut items = Vec::with_capacity(input.source_selections.len());
     for (idx, selection) in input.source_selections.iter().enumerate() {
-        items.push(campaign_item_from_selection(&campaign, selection, idx + 1, now)?);
+        items.push(campaign_item_from_selection(
+            &campaign,
+            selection,
+            idx + 1,
+            now,
+        )?);
     }
     Ok((campaign, items))
 }
@@ -194,7 +203,11 @@ pub fn campaign_idempotency_scope(campaign: &ReplayCampaign) -> String {
     if campaign.tenant_id.trim().is_empty() || campaign.idempotency_key.trim().is_empty() {
         return String::new();
     }
-    format!("{}:{}", campaign.tenant_id.trim(), campaign.idempotency_key.trim())
+    format!(
+        "{}:{}",
+        campaign.tenant_id.trim(),
+        campaign.idempotency_key.trim()
+    )
 }
 
 /// Go's zero-value checks treat the zero `time.Time` (`0001-01-01`) as

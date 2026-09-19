@@ -32,29 +32,28 @@ pub mod types;
 pub mod unsupported;
 
 pub use conformance::{conformance_profile, support_flag};
-pub use dedupe::{dedupe_key, new_dedupe_cache, DedupeCache};
-pub use diagnostics::{map_condition, DiagnosticInput, DiagnosticState, MatrixCondition};
+pub use dedupe::{DedupeCache, dedupe_key, new_dedupe_cache};
+pub use diagnostics::{DiagnosticInput, DiagnosticState, MatrixCondition, map_condition};
 pub use provider_decision::{
-    phase52_provider_decision, validate_provider_decision, ProviderDecision,
-    ProviderDecisionError,
+    ProviderDecision, ProviderDecisionError, phase52_provider_decision, validate_provider_decision,
 };
 pub use readiness::{
-    homeserver_state, normalize_homeserver_binding, validate_homeserver_binding,
-    ERR_HOMESERVER_BINDING_INVALID,
+    ERR_HOMESERVER_BINDING_INVALID, homeserver_state, normalize_homeserver_binding,
+    validate_homeserver_binding,
 };
 pub use redaction::redact_evidence;
 pub use reply::send_final_reply;
 pub use routes::{decide_route, has_ready_route_policy, normalize_route_policy};
-pub use runtime::{matrix_event_identity_key, new_runtime, normalize_inbound_event, Runtime};
+pub use runtime::{Runtime, matrix_event_identity_key, new_runtime, normalize_inbound_event};
 pub use setup::{evaluate_hosted_setup, reason_for_bot_credential};
 pub use smoke::{
-    execute_safe_live_smoke, structured_skip_smoke_evidence, SafeLiveSmokeInput, SmokeEvidence,
-    SmokeAuthorizationMode, SmokeStatus, SmokeTransport,
+    SafeLiveSmokeInput, SmokeAuthorizationMode, SmokeEvidence, SmokeStatus, SmokeTransport,
+    execute_safe_live_smoke, structured_skip_smoke_evidence,
 };
 pub use transport::{FakeTransport, Transport};
 pub use transport_client::{
-    new_client_transport, AccessTokenProvider, ClientApiError, ClientError, ClientTransport,
-    ClientTransportConfig,
+    AccessTokenProvider, ClientApiError, ClientError, ClientTransport, ClientTransportConfig,
+    new_client_transport,
 };
 pub use types::*;
 pub use unsupported::unsupported_message_kind;

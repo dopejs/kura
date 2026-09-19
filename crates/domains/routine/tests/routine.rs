@@ -6,12 +6,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, Utc};
-use kura_store::SQLiteStore;
 use kura_routine::{
     CreateInput, Definition, Manager, Routine, RoutineError, Schedule, Scheduler,
     SchedulerRetryBackoffKind, SchedulerTargetKind, SchedulerTriggerKind, State, Trigger,
     TriggerKind, Workflow,
 };
+use kura_store::SQLiteStore;
 use uuid::Uuid;
 
 /// Records compiled schedules and lifecycle calls (Go `fakeScheduler`).
@@ -43,29 +43,56 @@ impl Scheduler for FakeScheduler {
         let mut seq = self.seq.lock().unwrap();
         *seq += 1;
         self.created.lock().unwrap().push(input.clone());
-        Ok(Schedule { schedule_id: format!("sched_{seq}"), ..Schedule::default() })
+        Ok(Schedule {
+            schedule_id: format!("sched_{seq}"),
+            ..Schedule::default()
+        })
     }
 
     fn pause(&self, schedule_id: &str) -> Result<(Schedule, bool), String> {
         self.paused.lock().unwrap().push(schedule_id.to_string());
-        Ok((Schedule { schedule_id: schedule_id.to_string(), ..Schedule::default() }, true))
+        Ok((
+            Schedule {
+                schedule_id: schedule_id.to_string(),
+                ..Schedule::default()
+            },
+            true,
+        ))
     }
 
     fn resume(&self, schedule_id: &str) -> Result<(Schedule, bool), String> {
         self.resumed.lock().unwrap().push(schedule_id.to_string());
-        Ok((Schedule { schedule_id: schedule_id.to_string(), ..Schedule::default() }, true))
+        Ok((
+            Schedule {
+                schedule_id: schedule_id.to_string(),
+                ..Schedule::default()
+            },
+            true,
+        ))
     }
 
     fn cancel(&self, schedule_id: &str) -> Result<(Schedule, bool), String> {
         self.cancelled.lock().unwrap().push(schedule_id.to_string());
-        Ok((Schedule { schedule_id: schedule_id.to_string(), ..Schedule::default() }, true))
+        Ok((
+            Schedule {
+                schedule_id: schedule_id.to_string(),
+                ..Schedule::default()
+            },
+            true,
+        ))
     }
 
     fn get(&self, schedule_id: &str) -> Result<(Schedule, bool), String> {
         if self.missing.lock().unwrap().contains(schedule_id) {
             return Ok((Schedule::default(), false));
         }
-        Ok((Schedule { schedule_id: schedule_id.to_string(), ..Schedule::default() }, true))
+        Ok((
+            Schedule {
+                schedule_id: schedule_id.to_string(),
+                ..Schedule::default()
+            },
+            true,
+        ))
     }
 }
 
@@ -87,8 +114,16 @@ fn temp_dir(tag: &str) -> PathBuf {
 fn daily_def() -> Definition {
     Definition {
         name: "Daily summary".to_string(),
-        trigger: Trigger { kind: TriggerKind::Cron, cron_expr: "0 8 * * *".to_string(), timezone: "UTC".to_string(), fire_at: None },
-        workflow: Workflow { entrypoint: String::new(), goal: "summarize my day".to_string() },
+        trigger: Trigger {
+            kind: TriggerKind::Cron,
+            cron_expr: "0 8 * * *".to_string(),
+            timezone: "UTC".to_string(),
+            fire_at: None,
+        },
+        workflow: Workflow {
+            entrypoint: String::new(),
+            goal: "summarize my day".to_string(),
+        },
         approval_expectation: "ask".to_string(),
         delivery_preference_id: String::new(),
         max_retries: 0,
@@ -107,22 +142,34 @@ fn create_compiles_to_workflow_schedule() {
     let created = f.created.lock().unwrap();
     assert_eq!(created.len(), 1);
     assert_eq!(created[0].target.kind, SchedulerTargetKind::Workflow);
-    assert_eq!(created[0].target.workflow.as_ref().unwrap().workflow_goal, "summarize my day");
-    assert_eq!(created[0].target.workflow.as_ref().unwrap().entrypoint, "operator");
+    assert_eq!(
+        created[0].target.workflow.as_ref().unwrap().workflow_goal,
+        "summarize my day"
+    );
+    assert_eq!(
+        created[0].target.workflow.as_ref().unwrap().entrypoint,
+        "operator"
+    );
     assert_eq!(created[0].target.summary, "Daily summary");
     assert!(created[0].target.active);
     assert_eq!(created[0].trigger.kind, SchedulerTriggerKind::Cron);
     assert_eq!(created[0].trigger.cron_expr, "0 8 * * *");
     assert_eq!(created[0].trigger.timezone, "UTC");
     assert_eq!(created[0].retry_policy.max_retries, 1); // defaulted
-    assert_eq!(created[0].retry_policy.backoff_kind, SchedulerRetryBackoffKind::Fixed);
+    assert_eq!(
+        created[0].retry_policy.backoff_kind,
+        SchedulerRetryBackoffKind::Fixed
+    );
     assert_eq!(created[0].retry_policy.base_delay_seconds, 5);
     assert_eq!(created[0].retry_policy.max_delay_seconds, 5);
     drop(created);
     // Version 1 snapshots the definition + schedule id.
     assert_eq!(r.versions.len(), 1);
     assert_eq!(r.versions[0].version, 1);
-    assert_eq!(r.versions[0].schedule_id.as_str(), r.current_schedule_id.as_str());
+    assert_eq!(
+        r.versions[0].schedule_id.as_str(),
+        r.current_schedule_id.as_str()
+    );
     assert_eq!(r.versions[0].definition.name, "Daily summary");
 }
 
@@ -138,13 +185,19 @@ fn update_preserves_prior_evidence() {
     let updated = m.update(&r.routine_id, def2).unwrap();
     assert_eq!(updated.current_version, 2);
     assert_ne!(updated.current_schedule_id, prior_schedule_id);
-    assert_eq!(updated.definition.workflow.goal, "summarize my day and inbox");
+    assert_eq!(
+        updated.definition.workflow.goal,
+        "summarize my day and inbox"
+    );
     let cancelled = f.cancelled.lock().unwrap();
     assert_eq!(cancelled.len(), 1);
     assert_eq!(cancelled[0].as_str(), prior_schedule_id.as_str());
     drop(cancelled);
     // The prior version keeps its schedule id (its execution evidence).
-    assert_eq!(updated.versions[0].schedule_id.as_str(), prior_schedule_id.as_str());
+    assert_eq!(
+        updated.versions[0].schedule_id.as_str(),
+        prior_schedule_id.as_str()
+    );
     assert_eq!(updated.versions[1].version, 2);
 }
 
@@ -181,13 +234,19 @@ fn repair_recreates_missing_schedule() {
     let f = fake();
     let m = Manager::new("test", f.clone());
     let r = m.create(daily_def()).unwrap();
-    f.missing.lock().unwrap().insert(r.current_schedule_id.clone());
+    f.missing
+        .lock()
+        .unwrap()
+        .insert(r.current_schedule_id.clone());
 
     let repaired = m.repair(&r.routine_id).unwrap();
     assert_ne!(repaired.current_schedule_id, r.current_schedule_id);
     assert_eq!(repaired.current_version, 1, "repair must not bump version");
     // The current version reflects the repaired schedule id.
-    assert_eq!(repaired.versions[0].schedule_id.as_str(), repaired.current_schedule_id.as_str());
+    assert_eq!(
+        repaired.versions[0].schedule_id.as_str(),
+        repaired.current_schedule_id.as_str()
+    );
 }
 
 #[test]
@@ -197,7 +256,11 @@ fn repair_is_noop_when_healthy() {
     let r = m.create(daily_def()).unwrap();
     let repaired = m.repair(&r.routine_id).unwrap();
     assert_eq!(repaired.current_schedule_id, r.current_schedule_id);
-    assert_eq!(f.created.lock().unwrap().len(), 1, "healthy repair must not recreate");
+    assert_eq!(
+        f.created.lock().unwrap().len(),
+        1,
+        "healthy repair must not recreate"
+    );
 }
 
 #[test]
@@ -214,19 +277,49 @@ fn preview_and_validation() {
     assert!(f.created.lock().unwrap().is_empty());
 
     // Invalid definitions are rejected with the Go-equivalent messages.
-    let err = m.create(Definition { name: "bad".to_string(), ..Definition::default() }).unwrap_err();
+    let err = m
+        .create(Definition {
+            name: "bad".to_string(),
+            ..Definition::default()
+        })
+        .unwrap_err();
     assert_eq!(err, RoutineError::InvalidGoalRequired);
     let err = m
-        .create(Definition { name: "x".to_string(), trigger: Trigger { kind: TriggerKind::Cron, ..Trigger::default() }, workflow: Workflow { goal: "g".to_string(), ..Workflow::default() }, ..Definition::default() })
+        .create(Definition {
+            name: "x".to_string(),
+            trigger: Trigger {
+                kind: TriggerKind::Cron,
+                ..Trigger::default()
+            },
+            workflow: Workflow {
+                goal: "g".to_string(),
+                ..Workflow::default()
+            },
+            ..Definition::default()
+        })
         .unwrap_err();
     assert_eq!(err, RoutineError::InvalidCronExprRequired);
     let err = m
-        .create(Definition { name: "x".to_string(), trigger: Trigger { kind: TriggerKind::Once, ..Trigger::default() }, workflow: Workflow { goal: "g".to_string(), ..Workflow::default() }, ..Definition::default() })
+        .create(Definition {
+            name: "x".to_string(),
+            trigger: Trigger {
+                kind: TriggerKind::Once,
+                ..Trigger::default()
+            },
+            workflow: Workflow {
+                goal: "g".to_string(),
+                ..Workflow::default()
+            },
+            ..Definition::default()
+        })
         .unwrap_err();
     assert_eq!(err, RoutineError::InvalidFireAtRequired);
     // Unknown routine lookups.
     assert!(m.get("missing").is_none());
-    assert_eq!(m.update("missing", daily_def()).unwrap_err(), RoutineError::RoutineNotFound);
+    assert_eq!(
+        m.update("missing", daily_def()).unwrap_err(),
+        RoutineError::RoutineNotFound
+    );
 }
 
 #[test]
@@ -235,10 +328,18 @@ fn once_definition_compiles_to_once_trigger() {
     let m = Manager::new("test", f.clone());
     let fire_at = Utc::now() + Duration::hours(24);
     let mut def = daily_def();
-    def.trigger = Trigger { kind: TriggerKind::Once, fire_at: Some(fire_at), ..Trigger::default() };
+    def.trigger = Trigger {
+        kind: TriggerKind::Once,
+        fire_at: Some(fire_at),
+        ..Trigger::default()
+    };
     let preview = m.preview(&def).unwrap();
     assert_eq!(preview.schedule_kind, "one_time");
-    assert!(preview.trigger_summary.starts_with("once at "), "{}", preview.trigger_summary);
+    assert!(
+        preview.trigger_summary.starts_with("once at "),
+        "{}",
+        preview.trigger_summary
+    );
     let r = m.create(def.clone()).unwrap();
     let created = f.created.lock().unwrap();
     assert_eq!(created[0].trigger.kind, SchedulerTriggerKind::Once);
@@ -268,7 +369,15 @@ fn routine_wire_round_trip() {
     let m = Manager::new("test", f.clone());
     let r = m.create(daily_def()).unwrap();
     let json = serde_json::to_string(&r).unwrap();
-    for key in ["\"routineId\"", "\"environmentScope\"", "\"currentVersion\"", "\"currentScheduleId\"", "\"versions\"", "\"definition\"", "\"approvalExpectation\""] {
+    for key in [
+        "\"routineId\"",
+        "\"environmentScope\"",
+        "\"currentVersion\"",
+        "\"currentScheduleId\"",
+        "\"versions\"",
+        "\"definition\"",
+        "\"approvalExpectation\"",
+    ] {
         assert!(json.contains(key), "missing {key} in {json}");
     }
     assert!(json.contains("\"cron\""));
@@ -281,7 +390,9 @@ fn persistence_round_trip() {
     let dir = temp_dir("persist");
     let routine_id;
     {
-        let store = Arc::new(parking_lot::Mutex::new(SQLiteStore::new(&dir.to_string_lossy()).unwrap()));
+        let store = Arc::new(parking_lot::Mutex::new(
+            SQLiteStore::new(&dir.to_string_lossy()).unwrap(),
+        ));
         let mut m = Manager::new("test", fake());
         m.with_store(Arc::clone(&store));
         let r = m.create(daily_def()).unwrap();
@@ -289,7 +400,9 @@ fn persistence_round_trip() {
         routine_id = r.routine_id.clone();
     }
     {
-        let store = Arc::new(parking_lot::Mutex::new(SQLiteStore::new(&dir.to_string_lossy()).unwrap()));
+        let store = Arc::new(parking_lot::Mutex::new(
+            SQLiteStore::new(&dir.to_string_lossy()).unwrap(),
+        ));
         let mut m = Manager::new("test", fake());
         m.with_store(Arc::clone(&store));
         m.load_from_store().unwrap();
@@ -305,4 +418,3 @@ fn manager_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<kura_routine::Manager>();
 }
-

@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use kura_checkpoints::Manager;
-use kura_runtime::{CreateRunInput, CreateStepInput, CreateToolCallInput, Manager as RuntimeManager};
+use kura_runtime::{
+    CreateRunInput, CreateStepInput, CreateToolCallInput, Manager as RuntimeManager,
+};
 use kura_store::SQLiteStore;
 
 fn temp_dir(name: &str) -> String {
@@ -66,7 +68,9 @@ fn saves_and_restores_latest_checkpoint() {
     let steps = runtime2.list_steps("run_cp").unwrap();
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].title, "Do work");
-    let tool_calls = runtime2.list_tool_calls("run_cp", &steps[0].step_id).unwrap();
+    let tool_calls = runtime2
+        .list_tool_calls("run_cp", &steps[0].step_id)
+        .unwrap();
     assert_eq!(tool_calls.len(), 1);
     assert_eq!(tool_calls[0].tool_name, "search");
 }
@@ -76,4 +80,3 @@ fn manager_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<kura_checkpoints::Manager>();
 }
-

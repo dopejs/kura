@@ -3060,5 +3060,81 @@ pub fn schema_migrations() -> Vec<SchemaMigration> {
                 ON memory_assets(supersedes_asset_id);"#
                 .to_string(),
         ],
+    },
+    SchemaMigration {
+        version: 3,
+        name: "memory_asset_embeddings".to_string(),
+        statements: vec![
+            // Derived index for the retrieval vector ranker. Keyed by
+            // fingerprint as well as asset so that swapping the embedder
+            // provider does not silently compare vectors from two different
+            // spaces: the new fingerprint simply misses and is recomputed.
+            //
+            // ON DELETE CASCADE is the structural half of the "forget clears
+            // derived indexes" invariant; the revocation path clears rows for
+            // assets that remain present but are no longer recallable.
+            r#"CREATE TABLE IF NOT EXISTS memory_asset_embeddings (
+                asset_id TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                dim INTEGER NOT NULL,
+                vector_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (asset_id, fingerprint),
+                FOREIGN KEY (asset_id) REFERENCES memory_assets(asset_id) ON DELETE CASCADE
+            );"#
+                .to_string(),
+            r#"CREATE INDEX IF NOT EXISTS idx_memory_asset_embeddings_fingerprint
+                ON memory_asset_embeddings(fingerprint);"#
+                .to_string(),
+        ],
+    },
+    SchemaMigration {
+        version: 4,
+        name: "tool_profiles".to_string(),
+        statements: vec![
+            // Tool provider configuration. There is deliberately no credential
+            // column: a profile holds a `secretRef` inside its document and the
+            // value lives only in the tenant secret plane.
+            //
+            // `tenant_id IS NULL` means the single-user assembly's own rows,
+            // the convention shared by every tenant-scoped query here.
+            r#"CREATE TABLE IF NOT EXISTS tool_profiles (
+                profile_id TEXT PRIMARY KEY,
+                tenant_id TEXT,
+                capability TEXT NOT NULL,
+                family TEXT NOT NULL,
+                auth_mode TEXT NOT NULL,
+                source TEXT NOT NULL,
+                enabled INTEGER NOT NULL,
+                is_default INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                document_json TEXT NOT NULL
+            );"#
+                .to_string(),
+            r#"CREATE INDEX IF NOT EXISTS idx_tool_profiles_tenant_capability
+                ON tool_profiles(tenant_id, capability, enabled);"#
+                .to_string(),
+            // Makes "two defaults for one capability" unrepresentable rather
+            // than a validation rule someone forgets. COALESCE keeps NULL and
+            // '' from being two distinct single-user tenants.
+            r#"CREATE UNIQUE INDEX IF NOT EXISTS uq_tool_profiles_default
+                ON tool_profiles(COALESCE(tenant_id, ''), capability)
+                WHERE is_default = 1;"#
+                .to_string(),
+        ],
+    },
+    SchemaMigration {
+        version: 5,
+        name: "llm_dispatch_tools".to_string(),
+        statements: vec![
+            // Stage 9.0 tool calling. What the model was offered (`tools_json`)
+            // and what it asked for (`tool_calls_json`) are part of the
+            // dispatch record so the "model-visible = logged" invariant
+            // covers tools, not just messages. NULL means "none" so rows from
+            // before this version read back unchanged.
+            "ALTER TABLE llm_dispatches ADD COLUMN tools_json TEXT;".to_string(),
+            "ALTER TABLE llm_dispatches ADD COLUMN tool_calls_json TEXT;".to_string(),
+        ],
     }]
 }

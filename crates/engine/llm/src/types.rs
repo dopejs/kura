@@ -15,11 +15,52 @@ pub enum MessageRole {
     Tool,
 }
 
+/// A tool the model may call: name, description, and JSON Schema parameters
+/// (Stage 9.0). Provider-agnostic; each provider encodes it in its own wire
+/// shape.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolSpec {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// JSON Schema for the arguments object.
+    pub parameters: serde_json::Value,
+}
+
+/// A tool invocation the model asked for. `arguments` is the raw JSON text
+/// the model produced, kept verbatim so what was logged is what was run.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCall {
+    pub call_id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
     pub role: MessageRole,
     pub content: String,
+    /// Assistant turns that requested tools carry the calls; absent otherwise.
+    /// `serde(default)` keeps every persisted `messages_json` readable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
+    /// For `role: tool` messages: which call this result answers.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tool_call_id: String,
+}
+
+impl Message {
+    #[must_use]
+    pub fn text(role: MessageRole, content: impl Into<String>) -> Self {
+        Message {
+            role,
+            content: content.into(),
+            ..Message::default()
+        }
+    }
 }
 
 /// Token accounting for one dispatch. `total_tokens` is normalized to
@@ -54,9 +95,17 @@ pub struct Dispatch {
     pub provider: String,
     pub model: String,
     pub messages: Vec<Message>,
+    /// Tools offered to the model on this dispatch (Stage 9.0).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolSpec>,
     pub stream: bool,
     pub status: DispatchStatus,
     pub output: String,
+    /// Tool calls the model answered with instead of (or alongside) text. A
+    /// completed dispatch with calls and no output is not a failure: it is the
+    /// model asking for work before it can answer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub finish_reason: String,
     pub usage: Usage,
@@ -86,6 +135,8 @@ pub struct CreateDispatchInput {
     pub provider: String,
     pub model: String,
     pub messages: Vec<Message>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolSpec>,
     pub timeout_ms: i64,
     pub max_retries: i64,
 }
@@ -110,30 +161,64 @@ mod tests {
 
     #[test]
     fn message_role_wire_values_match_go() {
-        assert_eq!(serde_json::to_string(&MessageRole::System).unwrap(), "\"system\"");
-        assert_eq!(serde_json::to_string(&MessageRole::User).unwrap(), "\"user\"");
-        assert_eq!(serde_json::to_string(&MessageRole::Assistant).unwrap(), "\"assistant\"");
-        assert_eq!(serde_json::to_string(&MessageRole::Tool).unwrap(), "\"tool\"");
+        assert_eq!(
+            serde_json::to_string(&MessageRole::System).unwrap(),
+            "\"system\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageRole::User).unwrap(),
+            "\"user\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageRole::Assistant).unwrap(),
+            "\"assistant\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageRole::Tool).unwrap(),
+            "\"tool\""
+        );
     }
 
     #[test]
     fn dispatch_status_wire_values_match_go() {
-        assert_eq!(serde_json::to_string(&DispatchStatus::Queued).unwrap(), "\"queued\"");
-        assert_eq!(serde_json::to_string(&DispatchStatus::Running).unwrap(), "\"running\"");
-        assert_eq!(serde_json::to_string(&DispatchStatus::Completed).unwrap(), "\"completed\"");
+        assert_eq!(
+            serde_json::to_string(&DispatchStatus::Queued).unwrap(),
+            "\"queued\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DispatchStatus::Running).unwrap(),
+            "\"running\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DispatchStatus::Completed).unwrap(),
+            "\"completed\""
+        );
         assert_eq!(
             serde_json::to_string(&DispatchStatus::PartialFailed).unwrap(),
             "\"partial_failed\""
         );
-        assert_eq!(serde_json::to_string(&DispatchStatus::Failed).unwrap(), "\"failed\"");
-        assert_eq!(serde_json::to_string(&DispatchStatus::Cancelled).unwrap(), "\"cancelled\"");
+        assert_eq!(
+            serde_json::to_string(&DispatchStatus::Failed).unwrap(),
+            "\"failed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DispatchStatus::Cancelled).unwrap(),
+            "\"cancelled\""
+        );
     }
 
     #[test]
     fn usage_serializes_camel_case() {
-        let usage = Usage { input_tokens: 3, output_tokens: 1, total_tokens: 4 };
+        let usage = Usage {
+            input_tokens: 3,
+            output_tokens: 1,
+            total_tokens: 4,
+        };
         let json = serde_json::to_value(usage).unwrap();
-        assert_eq!(json, serde_json::json!({"inputTokens": 3, "outputTokens": 1, "totalTokens": 4}));
+        assert_eq!(
+            json,
+            serde_json::json!({"inputTokens": 3, "outputTokens": 1, "totalTokens": 4})
+        );
     }
 
     #[test]
@@ -144,9 +229,11 @@ mod tests {
             provider: "echo".into(),
             model: "m".into(),
             messages: vec![],
+            tools: vec![],
             stream: false,
             status: DispatchStatus::Queued,
             output: String::new(),
+            tool_calls: vec![],
             finish_reason: String::new(),
             usage: Usage::default(),
             error_code: String::new(),
@@ -176,7 +263,10 @@ mod tests {
 
     #[test]
     fn stream_chunk_omits_empty_optional_fields_like_go() {
-        let chunk = StreamChunk { delta: "hi".into(), ..StreamChunk::default() };
+        let chunk = StreamChunk {
+            delta: "hi".into(),
+            ..StreamChunk::default()
+        };
         let json = serde_json::to_value(&chunk).unwrap();
         assert_eq!(json, serde_json::json!({"delta": "hi"}));
     }

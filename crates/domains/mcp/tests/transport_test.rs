@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use kura_mcp::types::{Server, TransportKind};
 use kura_mcp::{
-    McpError, SessionPipes, StdioTransport, StreamableHTTPTransport, Transport,
-    TransportMux, WebsocketTransport,
+    McpError, SessionPipes, StdioTransport, StreamableHTTPTransport, Transport, TransportMux,
+    WebsocketTransport,
 };
 
 fn stdio_server(id: &str) -> Server {
@@ -185,9 +185,10 @@ fn transport_mux_dispatches_on_server_kind() {
         endpoint: "http://127.0.0.1:1/mcp".to_string(),
         ..Server::default()
     };
-    assert!(mux
-        .open(&server, SessionPipes::default(), Duration::from_secs(2))
-        .is_err());
+    assert!(
+        mux.open(&server, SessionPipes::default(), Duration::from_secs(2))
+            .is_err()
+    );
 
     // websocket without an endpoint: rejected before any connect attempt
     let server = Server {
@@ -203,7 +204,6 @@ fn transport_mux_dispatches_on_server_kind() {
     );
     assert_eq!(err, McpError::TransportUnavailable);
 }
-
 
 /// Opens a transport expecting failure (the session type is not Debug, so
 /// `unwrap_err` is unavailable).

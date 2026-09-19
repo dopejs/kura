@@ -5,10 +5,10 @@
 //! until the tenancy package is ported; UpsertMCPTool follows the Go writer and omits it.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
-use crate::crud::{now_rfc3339, opt_time_string, parse_opt_rfc3339, parse_rfc3339};
 use crate::SQLiteStore;
+use crate::crud::{now_rfc3339, opt_time_string, parse_opt_rfc3339, parse_rfc3339};
 
 /// An MCP server catalog row. `document` is the JSON-serialized server document.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -160,7 +160,10 @@ impl SQLiteStore {
 
     pub fn delete_mcp_server(&self, server_id: &str) -> Result<(), String> {
         self.conn
-            .execute("DELETE FROM mcp_servers WHERE server_id = ?1", params![server_id])
+            .execute(
+                "DELETE FROM mcp_servers WHERE server_id = ?1",
+                params![server_id],
+            )
             .map_err(|e| format!("delete mcp server {server_id}: {e}"))?;
         Ok(())
     }
@@ -226,11 +229,20 @@ impl SQLiteStore {
                     record.document,
                 ],
             )
-            .map_err(|e| format!("upsert mcp tool {}/{}: {e}", record.server_id, record.tool_name))?;
+            .map_err(|e| {
+                format!(
+                    "upsert mcp tool {}/{}: {e}",
+                    record.server_id, record.tool_name
+                )
+            })?;
         Ok(())
     }
 
-    pub fn replace_mcp_tools(&self, server_id: &str, records: &[MCPToolRecord]) -> Result<(), String> {
+    pub fn replace_mcp_tools(
+        &self,
+        server_id: &str,
+        records: &[MCPToolRecord],
+    ) -> Result<(), String> {
         let tx = self
             .conn
             .unchecked_transaction()
@@ -258,7 +270,12 @@ impl SQLiteStore {
                     None::<String>,
                 ],
             )
-            .map_err(|e| format!("insert mcp tool {}/{}: {e}", record.server_id, record.tool_name))?;
+            .map_err(|e| {
+                format!(
+                    "insert mcp tool {}/{}: {e}",
+                    record.server_id, record.tool_name
+                )
+            })?;
         }
 
         tx.commit()
@@ -284,7 +301,10 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn upsert_mcp_tool_exposure_rule(&self, record: &MCPToolExposureRuleRecord) -> Result<(), String> {
+    pub fn upsert_mcp_tool_exposure_rule(
+        &self,
+        record: &MCPToolExposureRuleRecord,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 r#"INSERT INTO mcp_tool_exposure_rules (
@@ -308,11 +328,19 @@ impl SQLiteStore {
                     None::<String>,
                 ],
             )
-            .map_err(|e| format!("upsert mcp tool exposure rule {}/{}/{}: {e}", record.server_id, record.tool_name, record.runtime_surface))?;
+            .map_err(|e| {
+                format!(
+                    "upsert mcp tool exposure rule {}/{}/{}: {e}",
+                    record.server_id, record.tool_name, record.runtime_surface
+                )
+            })?;
         Ok(())
     }
 
-    pub fn list_mcp_tool_exposure_rules(&self, server_id: &str) -> Result<Vec<MCPToolExposureRuleRecord>, String> {
+    pub fn list_mcp_tool_exposure_rules(
+        &self,
+        server_id: &str,
+    ) -> Result<Vec<MCPToolExposureRuleRecord>, String> {
         let mut stmt = self
             .conn
             .prepare(

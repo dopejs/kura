@@ -60,25 +60,25 @@ use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
 use kura_events as events;
-use kura_identity::{can_inspect_credentials, has_permission, Permission};
+use kura_identity::{Permission, can_inspect_credentials, has_permission};
 use kura_integrations::{
-    classify_provider_evidence, complete_diagnostic_run, diagnostic_defaults,
+    DiagnosticInspectionInput, DiagnosticManager, DiagnosticReasonCode, DiagnosticResult,
+    DiagnosticResultFilter, DiagnosticRun, DiagnosticRunFilter, DiagnosticRunInput,
+    DiagnosticRunStatus, DiagnosticStatus, ProbeKind, ProbeResult, ProviderDiagnosticEvidence,
+    RedactionStatus, classify_provider_evidence, complete_diagnostic_run, diagnostic_defaults,
     diagnostic_remediation_hint, diagnostic_retention_expiry, first_non_empty,
-    is_unavailable_probe_error, DiagnosticInspectionInput, DiagnosticManager,
-    DiagnosticReasonCode, DiagnosticResult, DiagnosticResultFilter, DiagnosticRun,
-    DiagnosticRunFilter, DiagnosticRunInput, DiagnosticRunStatus, DiagnosticStatus,
-    ProbeKind, ProbeResult, ProviderDiagnosticEvidence, RedactionStatus,
+    is_unavailable_probe_error,
 };
 
 use crate::error::ApiError;
-use crate::middleware::{environment_scope_from_config, guard_resource_for_tenant, TenantContext};
+use crate::middleware::{TenantContext, environment_scope_from_config, guard_resource_for_tenant};
 use crate::response::Json;
 use crate::state::AppState;
 use crate::types::{
     CreateIntegrationDiagnosticRunRequest, CreateIntegrationDiagnosticSmokeProbe,
-    CreateIntegrationDiagnosticSmokeRequest, CreateIntegrationRequest, IntegrationDiagnosticListResponse,
-    IntegrationDiagnosticRunListResponse, IntegrationListResponse, ListResponse,
-    ReportIntegrationReadinessRequest,
+    CreateIntegrationDiagnosticSmokeRequest, CreateIntegrationRequest,
+    IntegrationDiagnosticListResponse, IntegrationDiagnosticRunListResponse,
+    IntegrationListResponse, ListResponse, ReportIntegrationReadinessRequest,
 };
 
 /// Route family router. Only the methods the Go handlers accept are
@@ -159,11 +159,11 @@ async fn list_integrations(
 ) -> Result<Json<IntegrationListResponse>, ApiError> {
     let manager = integrations_manager(&state)?;
     let items = match tenant {
-        Some(tc) if !tc.0 .0.tenant_id.trim().is_empty() => {
-            if !can_inspect_credentials(&tc.0 .0, &[Permission::IntegrationsManage]) {
+        Some(tc) if !tc.0.0.tenant_id.trim().is_empty() => {
+            if !can_inspect_credentials(&tc.0.0, &[Permission::IntegrationsManage]) {
                 return Err(credential_denial());
             }
-            manager.list_for_tenant(&tc.0 .0.tenant_id)
+            manager.list_for_tenant(&tc.0.0.tenant_id)
         }
         _ => manager.list(),
     };
@@ -181,9 +181,9 @@ async fn create_integration(
     let manager = integrations_manager(&state)?;
     let mut tenant_id = String::new();
     if let Some(tc) = tenant.as_ref() {
-        if !tc.0 .0.tenant_id.trim().is_empty() {
-            require_permission(&tc.0 .0, Permission::IntegrationsManage)?;
-            tenant_id = tc.0 .0.tenant_id.clone();
+        if !tc.0.0.tenant_id.trim().is_empty() {
+            require_permission(&tc.0.0, Permission::IntegrationsManage)?;
+            tenant_id = tc.0.0.tenant_id.clone();
         }
     }
     let input: CreateIntegrationRequest = decode_json_body(&body)?;
@@ -248,11 +248,11 @@ async fn get_integration(
     )
     .await?;
     let item = match tenant {
-        Some(tc) if !tc.0 .0.tenant_id.trim().is_empty() => {
-            if !can_inspect_credentials(&tc.0 .0, &[Permission::IntegrationsManage]) {
+        Some(tc) if !tc.0.0.tenant_id.trim().is_empty() => {
+            if !can_inspect_credentials(&tc.0.0, &[Permission::IntegrationsManage]) {
                 return Err(credential_denial());
             }
-            manager.get_for_tenant(&integration_id, &tc.0 .0.tenant_id)
+            manager.get_for_tenant(&integration_id, &tc.0.0.tenant_id)
         }
         _ => manager.get(&integration_id),
     };
@@ -281,8 +281,8 @@ async fn disconnect_integration(
     )
     .await?;
     if let Some(tc) = tenant.as_ref() {
-        if !tc.0 .0.tenant_id.trim().is_empty() {
-            require_permission(&tc.0 .0, Permission::IntegrationsManage)?;
+        if !tc.0.0.tenant_id.trim().is_empty() {
+            require_permission(&tc.0.0, Permission::IntegrationsManage)?;
         }
     }
     let reason = params
@@ -328,10 +328,10 @@ async fn update_integration_readiness(
     )
     .await?;
     match tenant.as_ref() {
-        Some(tc) if !tc.0 .0.tenant_id.trim().is_empty() => {
-            require_permission(&tc.0 .0, Permission::IntegrationsManage)?;
+        Some(tc) if !tc.0.0.tenant_id.trim().is_empty() => {
+            require_permission(&tc.0.0, Permission::IntegrationsManage)?;
             if manager
-                .get_for_tenant(&integration_id, &tc.0 .0.tenant_id)
+                .get_for_tenant(&integration_id, &tc.0.0.tenant_id)
                 .is_none()
             {
                 return Err(ApiError::NotFound("not found".to_string()));
@@ -399,15 +399,15 @@ async fn set_integration_default(
     )
     .await?;
     let tenant_id = match tenant.as_ref() {
-        Some(tc) if !tc.0 .0.tenant_id.trim().is_empty() => {
-            require_permission(&tc.0 .0, Permission::IntegrationsManage)?;
+        Some(tc) if !tc.0.0.tenant_id.trim().is_empty() => {
+            require_permission(&tc.0.0, Permission::IntegrationsManage)?;
             if manager
-                .get_for_tenant(&integration_id, &tc.0 .0.tenant_id)
+                .get_for_tenant(&integration_id, &tc.0.0.tenant_id)
                 .is_none()
             {
                 return Err(ApiError::NotFound("not found".to_string()));
             }
-            tc.0 .0.tenant_id.clone()
+            tc.0.0.tenant_id.clone()
         }
         _ => {
             if manager.get(&integration_id).is_none() {
@@ -483,8 +483,8 @@ async fn integration_diagnostic_list(
     let now = Utc::now();
     let limit = parse_int_default(query.get("limit").map(String::as_str).unwrap_or(""), 50);
     let mut items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .latest_integration_diagnostic_results(
             &DiagnosticResultFilter {
                 tenant_id: tc.tenant_id.clone(),
@@ -629,8 +629,8 @@ async fn list_integration_diagnostic_runs(
     let tc = require_tenant(tenant.as_ref().map(|e| &e.0))?;
     require_permission(tc, Permission::IntegrationDiagnosticsRead)?;
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_integration_diagnostic_runs(
             &DiagnosticRunFilter {
                 tenant_id: tc.tenant_id.clone(),
@@ -669,8 +669,8 @@ async fn get_integration_diagnostic_run(
     let tc = require_tenant(tenant.as_ref().map(|e| &e.0))?;
     require_permission(tc, Permission::IntegrationDiagnosticsRead)?;
     let item = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_integration_diagnostic_run(&tc.tenant_id, &run_id, false, Utc::now())
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("not found".to_string()))?;
@@ -791,13 +791,16 @@ async fn apply_integration_diagnostic_retention(
             events::integration_diagnostic_retention_applied_event(item.clone()),
         )?;
     }
-    Ok((StatusCode::OK, AxumJson(serde_json::json!({ "items": items }))))
+    Ok((
+        StatusCode::OK,
+        AxumJson(serde_json::json!({ "items": items })),
+    ))
 }
 
 /// GET /v1/integration-diagnostics/reason-codes — the reason-code catalog
 /// (Go handleIntegrationDiagnosticReasonCodes). Fully ported.
-async fn integration_diagnostic_reason_codes(
-) -> Result<Json<ListResponse<kura_integrations::DiagnosticReasonCodeDefinition>>, ApiError> {
+async fn integration_diagnostic_reason_codes()
+-> Result<Json<ListResponse<kura_integrations::DiagnosticReasonCodeDefinition>>, ApiError> {
     Ok(Json(ListResponse {
         items: kura_integrations::default_diagnostic_reason_code_catalog(),
     }))
@@ -1070,7 +1073,8 @@ fn should_run_smoke_probe(probe: &CreateIntegrationDiagnosticSmokeProbe) -> bool
         && probe.safe_credentials_available
         && probe.tenant_approval_available
         && probe.provider_available
-        && (probe.read_only_or_reversible || (probe.tenant_admin_approved && probe.operator_approved))
+        && (probe.read_only_or_reversible
+            || (probe.tenant_admin_approved && probe.operator_approved))
 }
 
 /// Go parseIntDefault: a missing/invalid/non-positive value falls back.
@@ -1138,7 +1142,11 @@ fn parse_redaction_status(raw: &str) -> Option<RedactionStatus> {
 /// Go diagnosticReasonFromProbeResult: the probe's reasonCode summary wins;
 /// otherwise the failure class is classified; otherwise healthy.
 fn diagnostic_reason_from_probe_result(result: &ProbeResult) -> DiagnosticReasonCode {
-    if let Some(raw) = result.result_summary.get("reasonCode").and_then(Value::as_str) {
+    if let Some(raw) = result
+        .result_summary
+        .get("reasonCode")
+        .and_then(Value::as_str)
+    {
         if !raw.trim().is_empty() {
             return parse_diagnostic_reason_code(raw).unwrap_or(DiagnosticReasonCode::Healthy);
         }
@@ -1176,8 +1184,14 @@ fn inspect_diagnostic_capability(
     );
     if !input.evidence_text.trim().is_empty() {
         let mut evidence = Map::new();
-        evidence.insert("code".to_string(), Value::String(input.evidence_text.clone()));
-        evidence.insert("message".to_string(), Value::String(input.evidence_text.clone()));
+        evidence.insert(
+            "code".to_string(),
+            Value::String(input.evidence_text.clone()),
+        );
+        evidence.insert(
+            "message".to_string(),
+            Value::String(input.evidence_text.clone()),
+        );
         probe_input.insert("providerEvidence".to_string(), Value::Object(evidence));
     }
     let Ok((_, probe_result, _)) =
@@ -1217,7 +1231,10 @@ fn publish_diagnostic_result_events(
     publish_event(
         state,
         tenant,
-        events::integration_diagnostic_state_changed_event(result.clone(), DiagnosticStatus::Unknown),
+        events::integration_diagnostic_state_changed_event(
+            result.clone(),
+            DiagnosticStatus::Unknown,
+        ),
     )?;
     if result.redaction_status == RedactionStatus::FailedClosed {
         publish_event(
@@ -1308,7 +1325,10 @@ fn build_smoke_probe_inputs(
             );
             if let Some(evidence) = probe_request.provider_evidence.as_ref() {
                 if !evidence.is_empty() {
-                    probe_input.insert("providerEvidence".to_string(), Value::Object(evidence.clone()));
+                    probe_input.insert(
+                        "providerEvidence".to_string(),
+                        Value::Object(evidence.clone()),
+                    );
                 }
             }
             match manager.run_probe(&resource.integration_id, probe_kind, &probe_input) {
@@ -1337,7 +1357,10 @@ fn build_smoke_probe_inputs(
                 .as_ref()
                 .map(|binding| binding.account_key.clone())
                 .unwrap_or_default(),
-            domain_kind: first_non_empty(&[probe_request.domain_kind.trim(), &resource.domain_kind]),
+            domain_kind: first_non_empty(&[
+                probe_request.domain_kind.trim(),
+                &resource.domain_kind,
+            ]),
             provider_kind: resource.backend_binding.backend_kind.as_str().to_string(),
             probe_action: probe_request.probe_action.trim().to_string(),
             safe_credentials_available: probe_request.safe_credentials_available,
@@ -1386,11 +1409,8 @@ fn smoke_probe_outcome(
     } else {
         probe.checked_at
     };
-    let (mut result, mut blocked_reason, mut reason) = (
-        "passed".to_string(),
-        String::new(),
-        probe.reason_code,
-    );
+    let (mut result, mut blocked_reason, mut reason) =
+        ("passed".to_string(), String::new(), probe.reason_code);
     if probe.operator_deferred {
         result = "skipped".to_string();
         blocked_reason = "operator_deferred".to_string();
@@ -1546,15 +1566,16 @@ mod tests {
 
     use std::sync::Arc;
 
-    use axum::body::{to_bytes, Body};
-    use axum::http::header::CONTENT_TYPE;
+    use axum::body::{Body, to_bytes};
     use axum::http::Request;
+    use axum::http::header::CONTENT_TYPE;
     use parking_lot::Mutex;
     use tower::ServiceExt;
     use uuid::Uuid;
 
     fn test_config() -> kura_config::Config {
         kura_config::Config {
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-integrations".to_string(),
@@ -1579,6 +1600,7 @@ mod tests {
                     ..Default::default()
                 },
             },
+            egress: Default::default(),
         }
     }
 
@@ -1808,10 +1830,12 @@ mod tests {
         let app = router().with_state(state);
         let (status, json) = send(&app, request("GET", "/v1/integrations", None)).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(json["error"]
-            .as_str()
-            .unwrap_or("")
-            .contains("integrations manager is not configured"));
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("integrations manager is not configured")
+        );
     }
 
     /// Port of the permission + cross-tenant non-disclosure shape: a tenant
@@ -1928,8 +1952,12 @@ mod tests {
                 "integration_feishu",
                 kura_integrations::UpdateReadinessInput {
                     readiness_status: kura_integrations::ReadinessStatus::Degraded,
-                    auth_state: kura_integrations::AuthState::Authorized.as_str().to_string(),
-                    health_state: kura_integrations::HealthState::Degraded.as_str().to_string(),
+                    auth_state: kura_integrations::AuthState::Authorized
+                        .as_str()
+                        .to_string(),
+                    health_state: kura_integrations::HealthState::Degraded
+                        .as_str()
+                        .to_string(),
                     reason: "scope missing for calendar.read with bearer secret-token".to_string(),
                     required_operator_action: "grant calendar scope".to_string(),
                     ..kura_integrations::UpdateReadinessInput::default()
@@ -1957,7 +1985,10 @@ mod tests {
         assert_eq!(status, StatusCode::CREATED, "run body: {json}");
         assert_eq!(json["status"], "completed");
         assert_eq!(json["resultIds"].as_array().map(|v| v.len()), Some(1));
-        let run_id = json["diagnosticRunId"].as_str().expect("diagnosticRunId").to_string();
+        let run_id = json["diagnosticRunId"]
+            .as_str()
+            .expect("diagnosticRunId")
+            .to_string();
         assert!(!run_id.is_empty());
 
         // GET diagnostics -> 200 with the classified, redacted state.
@@ -1974,7 +2005,10 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "diagnostics body: {body}");
         let raw = body.to_string();
-        assert!(raw.contains("\"reasonCode\":\"scope_missing\""), "body: {raw}");
+        assert!(
+            raw.contains("\"reasonCode\":\"scope_missing\""),
+            "body: {raw}"
+        );
         assert!(
             raw.contains("\"remediationOwner\":\"tenant_admin\""),
             "body: {raw}"
@@ -2012,10 +2046,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "run detail body: {body}");
-        assert_eq!(
-            body["diagnosticRunId"],
-            serde_json::Value::String(run_id)
-        );
+        assert_eq!(body["diagnosticRunId"], serde_json::Value::String(run_id));
     }
 
     /// An empty diagnostics store auto-inspects and persists (Go
@@ -2062,10 +2093,8 @@ mod tests {
     #[tokio::test]
     async fn smoke_persists_results_and_publishes_event() {
         let bus = Arc::new(kura_events::Bus::new());
-        let dir = std::env::temp_dir().join(format!(
-            "kura-api-integration-smoke-{}",
-            Uuid::now_v7()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("kura-api-integration-smoke-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let store = Arc::new(Mutex::new(
             kura_store::SQLiteStore::new(dir.to_str().expect("path")).expect("store"),
@@ -2136,10 +2165,8 @@ mod tests {
     #[tokio::test]
     async fn retention_apply_flips_expired_records_and_publishes_event() {
         let bus = Arc::new(kura_events::Bus::new());
-        let dir = std::env::temp_dir().join(format!(
-            "kura-api-integration-retention-{}",
-            Uuid::now_v7()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("kura-api-integration-retention-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let store = Arc::new(Mutex::new(
             kura_store::SQLiteStore::new(dir.to_str().expect("path")).expect("store"),
@@ -2172,7 +2199,10 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "retention body: {json}");
         let raw = json.to_string();
-        assert!(raw.contains("\"retentionState\":\"expired\""), "body: {raw}");
+        assert!(
+            raw.contains("\"retentionState\":\"expired\""),
+            "body: {raw}"
+        );
 
         let published = bus.list(&kura_events::Filter {
             category: "integration".to_string(),
@@ -2245,9 +2275,11 @@ mod tests {
         let items = json["items"].as_array().expect("items");
         assert!(!items.is_empty());
         assert!(items.iter().any(|item| item["reasonCode"] == "healthy"));
-        assert!(items
-            .iter()
-            .any(|item| item["reasonCode"] == "scope_missing"));
+        assert!(
+            items
+                .iter()
+                .any(|item| item["reasonCode"] == "scope_missing")
+        );
     }
 
     /// Readiness on an unknown integration -> 404 (Go GetForTenant/Get).

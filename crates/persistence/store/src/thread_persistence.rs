@@ -15,10 +15,10 @@
 //! the retention/tenant/source queries filter on.
 
 use chrono::{DateTime, Duration, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
-use crate::crud::{enum_str, now_rfc3339, null_string, opt_time_string, parse_rfc3339};
 use crate::SQLiteStore;
+use crate::crud::{enum_str, now_rfc3339, null_string, opt_time_string, parse_rfc3339};
 
 /// A chrono-defaulted timestamp (UNIX epoch) stands in for Go's zero `time.Time`.
 fn is_unset_time(dt: &DateTime<Utc>) -> bool {
@@ -105,8 +105,8 @@ impl SQLiteStore {
         if is_unset_time(&thread.last_activity_at) {
             thread.last_activity_at = thread.updated_at;
         }
-        let document =
-            serde_json::to_string(&thread).map_err(|e| format!("marshal thread {}: {e}", thread.thread_id))?;
+        let document = serde_json::to_string(&thread)
+            .map_err(|e| format!("marshal thread {}: {e}", thread.thread_id))?;
 
         self.conn
             .execute(
@@ -146,7 +146,10 @@ impl SQLiteStore {
     }
 
     /// Go `UpsertThreadSessionSegment`.
-    pub fn upsert_thread_session_segment(&self, segment: &kura_threads::SessionSegment) -> Result<(), String> {
+    pub fn upsert_thread_session_segment(
+        &self,
+        segment: &kura_threads::SessionSegment,
+    ) -> Result<(), String> {
         let mut segment = segment.clone();
         let now = Utc::now();
         if is_unset_time(&segment.started_at) {
@@ -158,8 +161,12 @@ impl SQLiteStore {
         if segment.state.trim().is_empty() {
             segment.state = "active".to_string();
         }
-        let document = serde_json::to_string(&segment)
-            .map_err(|e| format!("marshal thread session segment {}: {e}", segment.session_segment_id))?;
+        let document = serde_json::to_string(&segment).map_err(|e| {
+            format!(
+                "marshal thread session segment {}: {e}",
+                segment.session_segment_id
+            )
+        })?;
 
         self.conn
             .execute(
@@ -195,17 +202,28 @@ impl SQLiteStore {
                     document,
                 ],
             )
-            .map_err(|e| format!("upsert thread session segment {}: {e}", segment.session_segment_id))?;
+            .map_err(|e| {
+                format!(
+                    "upsert thread session segment {}: {e}",
+                    segment.session_segment_id
+                )
+            })?;
         Ok(())
     }
 
     /// Go `GetThreadForTenant`.
-    pub fn get_thread_for_tenant(&self, tenant_id: &str, thread_id: &str) -> Result<Option<kura_threads::Thread>, String> {
+    pub fn get_thread_for_tenant(
+        &self,
+        tenant_id: &str,
+        thread_id: &str,
+    ) -> Result<Option<kura_threads::Thread>, String> {
         let mut stmt = self
             .conn
             .prepare("SELECT document_json FROM threads WHERE tenant_id = ?1 AND thread_id = ?2")
             .map_err(|e| format!("get thread {tenant_id}/{thread_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, thread_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, thread_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -246,7 +264,11 @@ impl SQLiteStore {
     }
 
     /// Go `SetThreadRetentionPolicy`.
-    pub fn set_thread_retention_policy(&self, tenant_id: &str, expires_at: DateTime<Utc>) -> Result<(), String> {
+    pub fn set_thread_retention_policy(
+        &self,
+        tenant_id: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 r#"INSERT INTO thread_retention_policies (tenant_id, retention_expires_at)
@@ -260,7 +282,11 @@ impl SQLiteStore {
 
     /// Go `ThreadRetentionExpiry` — 90 days from `now`, or the tenant override
     /// when it is later.
-    pub fn thread_retention_expiry(&self, tenant_id: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, String> {
+    pub fn thread_retention_expiry(
+        &self,
+        tenant_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<DateTime<Utc>, String> {
         let now = if is_unset_time(&now) { Utc::now() } else { now };
         let default_expiry = now + Duration::days(90);
         // Go returns the default expiry on any lookup error (missing row or otherwise).
@@ -284,17 +310,25 @@ impl SQLiteStore {
     /// Go `SaveThreadSourceLinkage` — when the linkage is current, first clears
     /// any existing current linkage for the same source, then upserts within a
     /// transaction.
-    pub fn save_thread_source_linkage(&self, linkage: &kura_threads::SourceLinkage) -> Result<(), String> {
+    pub fn save_thread_source_linkage(
+        &self,
+        linkage: &kura_threads::SourceLinkage,
+    ) -> Result<(), String> {
         let mut linkage = linkage.clone();
         if linkage.linked_at.is_none() || is_unset_time(&linkage.linked_at.unwrap_or_default()) {
             linkage.linked_at = Some(Utc::now());
         }
         let linked_at = linkage.linked_at.unwrap_or_default();
         if linkage.retention_expires_at.is_none() {
-            linkage.retention_expires_at = Some(self.thread_retention_expiry(&linkage.tenant_id, linked_at)?);
+            linkage.retention_expires_at =
+                Some(self.thread_retention_expiry(&linkage.tenant_id, linked_at)?);
         }
-        let document = serde_json::to_string(&linkage)
-            .map_err(|e| format!("marshal thread source linkage {}: {e}", linkage.source_linkage_id))?;
+        let document = serde_json::to_string(&linkage).map_err(|e| {
+            format!(
+                "marshal thread source linkage {}: {e}",
+                linkage.source_linkage_id
+            )
+        })?;
 
         let tx = self
             .conn
@@ -355,13 +389,22 @@ impl SQLiteStore {
                 document,
             ],
         )
-        .map_err(|e| format!("save thread source linkage {}: {e}", linkage.source_linkage_id))?;
-        tx.commit().map_err(|e| format!("commit thread source linkage: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "save thread source linkage {}: {e}",
+                linkage.source_linkage_id
+            )
+        })?;
+        tx.commit()
+            .map_err(|e| format!("commit thread source linkage: {e}"))?;
         Ok(())
     }
 
     /// Go `SaveThreadRuntimeProjection`.
-    pub fn save_thread_runtime_projection(&self, projection: &kura_threads::RuntimeProjection) -> Result<(), String> {
+    pub fn save_thread_runtime_projection(
+        &self,
+        projection: &kura_threads::RuntimeProjection,
+    ) -> Result<(), String> {
         let mut projection = projection.clone();
         let occurred_at = if is_unset_time(&projection.occurred_at) {
             let now = Utc::now();
@@ -374,8 +417,12 @@ impl SQLiteStore {
             projection.retention_expires_at =
                 Some(self.thread_retention_expiry(&projection.tenant_id, occurred_at)?);
         }
-        let document = serde_json::to_string(&projection)
-            .map_err(|e| format!("marshal thread runtime projection {}: {e}", projection.runtime_projection_id))?;
+        let document = serde_json::to_string(&projection).map_err(|e| {
+            format!(
+                "marshal thread runtime projection {}: {e}",
+                projection.runtime_projection_id
+            )
+        })?;
 
         self.conn
             .execute(
@@ -415,20 +462,29 @@ impl SQLiteStore {
                     document,
                 ],
             )
-            .map_err(|e| format!("save thread runtime projection {}: {e}", projection.runtime_projection_id))?;
+            .map_err(|e| {
+                format!(
+                    "save thread runtime projection {}: {e}",
+                    projection.runtime_projection_id
+                )
+            })?;
         Ok(())
     }
 
     /// Go `ListThreadsForTenant` — archived threads sort last, then recency,
     /// then id; fetches limit+1 rows to derive the next cursor.
-    pub fn list_threads_for_tenant(&self, query: &ThreadListQuery) -> Result<kura_threads::ThreadListResponse, String> {
+    pub fn list_threads_for_tenant(
+        &self,
+        query: &ThreadListQuery,
+    ) -> Result<kura_threads::ThreadListResponse, String> {
         let limit = if query.limit <= 0 { 20 } else { query.limit };
         let offset = match query.cursor.parse::<i64>() {
             Ok(parsed) if parsed > 0 => parsed,
             _ => 0,
         };
         let mut sql = String::from("SELECT document_json FROM threads WHERE tenant_id = ?1");
-        let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(query.tenant_id.clone())];
+        let mut args: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(query.tenant_id.clone())];
         if !query.state_filter.trim().is_empty() {
             sql.push_str(" AND lifecycle_state = ?");
             args.push(Box::new(query.state_filter.trim().to_string()));
@@ -494,7 +550,9 @@ impl SQLiteStore {
                 ORDER BY generation ASC, session_segment_id ASC"#,
             )
             .map_err(|e| format!("list thread session segments {tenant_id}/{thread_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, thread_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, thread_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_session_segment(row)?);
@@ -575,8 +633,12 @@ impl SQLiteStore {
             evidence.retention_expires_at =
                 Some(self.thread_retention_expiry(&evidence.tenant_id, updated_at)?);
         }
-        let document = serde_json::to_string(&evidence)
-            .map_err(|e| format!("marshal conversation shape evidence {}: {e}", evidence.conversation_shape_id))?;
+        let document = serde_json::to_string(&evidence).map_err(|e| {
+            format!(
+                "marshal conversation shape evidence {}: {e}",
+                evidence.conversation_shape_id
+            )
+        })?;
 
         self.conn
             .execute(
@@ -638,7 +700,9 @@ impl SQLiteStore {
                 LIMIT 1"#,
             )
             .map_err(|e| format!("get conversation shape {tenant_id}/{thread_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, thread_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, thread_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -661,8 +725,12 @@ impl SQLiteStore {
             decision.retention_expires_at =
                 Some(self.thread_retention_expiry(&decision.tenant_id, occurred_at)?);
         }
-        let document = serde_json::to_string(&decision)
-            .map_err(|e| format!("marshal participation decision {}: {e}", decision.participation_decision_id))?;
+        let document = serde_json::to_string(&decision).map_err(|e| {
+            format!(
+                "marshal participation decision {}: {e}",
+                decision.participation_decision_id
+            )
+        })?;
 
         let insert = self.conn.execute(
             r#"INSERT INTO thread_participation_decisions (
@@ -731,7 +799,13 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("get participation decision by source message: {e}"))?;
         let mut rows = stmt
-            .query(params![tenant_id, connector_id, account_id, conversation_id, message_id])
+            .query(params![
+                tenant_id,
+                connector_id,
+                account_id,
+                conversation_id,
+                message_id
+            ])
             .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
@@ -896,7 +970,9 @@ impl SQLiteStore {
                     "SELECT document_json FROM threads WHERE tenant_id = ?1 AND thread_id = ?2",
                 )
                 .map_err(|e| format!("get thread {tenant_id}/{thread_id}: {e}"))?;
-            let mut rows = stmt.query(params![tenant_id, thread_id]).map_err(|e| e.to_string())?;
+            let mut rows = stmt
+                .query(params![tenant_id, thread_id])
+                .map_err(|e| e.to_string())?;
             let Some(row) = rows.next().map_err(|e| e.to_string())? else {
                 return Ok(None);
             };
@@ -908,12 +984,16 @@ impl SQLiteStore {
         let (updated, mut action, segment) = match kind {
             kura_threads::LifecycleActionKind::Reset => {
                 if input.new_segment_id.trim().is_empty() {
-                    input.new_segment_id = format!("seg_{}_{}", thread_id, now.timestamp_nanos_opt().unwrap_or_default());
+                    input.new_segment_id = format!(
+                        "seg_{}_{}",
+                        thread_id,
+                        now.timestamp_nanos_opt().unwrap_or_default()
+                    );
                 }
                 let (next, lifecycle_action, mut new_segment) =
-                    kura_threads::reset_thread(&thread, &input)
-                        .map_err(|e| e.to_string())?;
-                new_segment.generation = next_thread_segment_generation_tx(&tx, tenant_id, thread_id)?;
+                    kura_threads::reset_thread(&thread, &input).map_err(|e| e.to_string())?;
+                new_segment.generation =
+                    next_thread_segment_generation_tx(&tx, tenant_id, thread_id)?;
                 (next, lifecycle_action, Some(new_segment))
             }
             kura_threads::LifecycleActionKind::Archive => {
@@ -947,8 +1027,12 @@ impl SQLiteStore {
                         ORDER BY updated_at DESC, conversation_shape_id DESC
                         LIMIT 1"#,
                     )
-                    .map_err(|e| format!("get reset conversation shape {tenant_id}/{thread_id}: {e}"))?;
-                let mut rows = stmt.query(params![tenant_id, thread_id]).map_err(|e| e.to_string())?;
+                    .map_err(|e| {
+                        format!("get reset conversation shape {tenant_id}/{thread_id}: {e}")
+                    })?;
+                let mut rows = stmt
+                    .query(params![tenant_id, thread_id])
+                    .map_err(|e| e.to_string())?;
                 match rows.next().map_err(|e| e.to_string())? {
                     Some(row) => scan_conversation_shape(row)?,
                     None => kura_threads::ConversationShapeEvidence {
@@ -977,8 +1061,13 @@ impl SQLiteStore {
             reset_event.retention_expires_at = Some(retention_expires_at);
             insert_thread_reset_event_tx(&tx, &reset_event)?;
         }
-        tx.commit().map_err(|e| format!("commit thread lifecycle action: {e}"))?;
-        Ok(Some(ThreadLifecycleMutationResult { thread: updated, action, segment }))
+        tx.commit()
+            .map_err(|e| format!("commit thread lifecycle action: {e}"))?;
+        Ok(Some(ThreadLifecycleMutationResult {
+            thread: updated,
+            action,
+            segment,
+        }))
     }
 
     /// Go `GetThreadDetailForTenant` — the full operator detail view for a
@@ -997,7 +1086,8 @@ impl SQLiteStore {
         let segments = self.list_thread_session_segments(tenant_id, thread_id)?;
         let actions = self.list_thread_lifecycle_actions(tenant_id, thread_id, now)?;
         let source_linkages = self.list_thread_source_linkages(tenant_id, thread_id, now)?;
-        let runtime_projections = self.list_thread_runtime_projections(tenant_id, thread_id, now)?;
+        let runtime_projections =
+            self.list_thread_runtime_projections(tenant_id, thread_id, now)?;
         let conversation_shape = self.get_conversation_shape_for_thread(tenant_id, thread_id)?;
         let participation_decisions =
             self.list_participation_decisions_for_thread(tenant_id, thread_id, 20)?;
@@ -1045,12 +1135,14 @@ impl SQLiteStore {
                 ORDER BY occurred_at DESC, lifecycle_event_id DESC"#,
             )
             .map_err(|e| format!("list thread lifecycle actions {tenant_id}/{thread_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, thread_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, thread_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
-            let mut action: kura_threads::LifecycleAction =
-                serde_json::from_str(&raw).map_err(|e| format!("decode thread lifecycle action: {e}"))?;
+            let mut action: kura_threads::LifecycleAction = serde_json::from_str(&raw)
+                .map_err(|e| format!("decode thread lifecycle action: {e}"))?;
             let expires_at = action.retention_expires_at.unwrap_or_else(|| {
                 self.thread_retention_expiry(tenant_id, action.completed_at)
                     .unwrap_or(action.completed_at + chrono::Duration::days(90))
@@ -1082,8 +1174,12 @@ fn upsert_thread_session_segment_tx(
     if segment.state.trim().is_empty() {
         segment.state = "active".to_string();
     }
-    let document = serde_json::to_string(&segment)
-        .map_err(|e| format!("marshal thread session segment {}: {e}", segment.session_segment_id))?;
+    let document = serde_json::to_string(&segment).map_err(|e| {
+        format!(
+            "marshal thread session segment {}: {e}",
+            segment.session_segment_id
+        )
+    })?;
     tx.execute(
         r#"INSERT INTO thread_session_segments (
             session_segment_id, thread_id, tenant_id, session_id, generation, state,
@@ -1117,7 +1213,12 @@ fn upsert_thread_session_segment_tx(
             document,
         ],
     )
-    .map_err(|e| format!("upsert thread session segment {}: {e}", segment.session_segment_id))?;
+    .map_err(|e| {
+        format!(
+            "upsert thread session segment {}: {e}",
+            segment.session_segment_id
+        )
+    })?;
     Ok(())
 }
 
@@ -1176,8 +1277,12 @@ fn insert_thread_lifecycle_action_tx(
     tx: &rusqlite::Transaction<'_>,
     action: &kura_threads::LifecycleAction,
 ) -> Result<(), String> {
-    let document = serde_json::to_string(action)
-        .map_err(|e| format!("marshal thread lifecycle action {}: {e}", action.lifecycle_action_id))?;
+    let document = serde_json::to_string(action).map_err(|e| {
+        format!(
+            "marshal thread lifecycle action {}: {e}",
+            action.lifecycle_action_id
+        )
+    })?;
     tx.execute(
         r#"INSERT INTO thread_lifecycle_events (
             lifecycle_event_id, thread_id, tenant_id, action, outcome, audit_event_id,
@@ -1195,7 +1300,12 @@ fn insert_thread_lifecycle_action_tx(
             document,
         ],
     )
-    .map_err(|e| format!("insert thread lifecycle action {}: {e}", action.lifecycle_action_id))?;
+    .map_err(|e| {
+        format!(
+            "insert thread lifecycle action {}: {e}",
+            action.lifecycle_action_id
+        )
+    })?;
     Ok(())
 }
 
@@ -1290,7 +1400,11 @@ fn thread_reopen_eligible_tx(
             r#"SELECT COUNT(*)
             FROM thread_session_segments
             WHERE tenant_id = ?1 AND thread_id = ?2 AND session_segment_id = ?3"#,
-            params![thread.tenant_id, thread.thread_id, thread.current_session_segment_id],
+            params![
+                thread.tenant_id,
+                thread.thread_id,
+                thread.current_session_segment_id
+            ],
             |row| row.get(0),
         )
         .map_err(|e| format!("check reopen session eligibility {}: {e}", thread.thread_id))?;

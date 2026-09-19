@@ -5,13 +5,15 @@
 //! gateway.rs) that normalizes MESSAGE_CREATE events into inbound messages.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
 use kura_connectors::{DiagnosticReasonCode, RedactionStatus};
 use kura_im::{ReplyProgressor, ReplySender};
-use kura_imtypes::{InboundMessage, OutboundReply, ReplyCapabilities, ReplyEdit, SentReply, ThinkingSignal};
+use kura_imtypes::{
+    InboundMessage, OutboundReply, ReplyCapabilities, ReplyEdit, SentReply, ThinkingSignal,
+};
 use kura_router::SessionKind;
 
 use crate::config::Config;
@@ -56,10 +58,7 @@ pub enum DiscordError {
     #[error("diagnostic reason code is required")]
     DiagnosticReasonRequired,
     #[error("{message}")]
-    Classified {
-        class: String,
-        message: String,
-    },
+    Classified { class: String, message: String },
     #[error("{0}")]
     Other(String),
 }
@@ -98,8 +97,7 @@ pub fn wrap_discord_error(prefix: &str, source: impl std::fmt::Display) -> Disco
 pub trait Transport: ReplySender + ReplyProgressor + Send + Sync {
     /// Go `Start(ctx, handle)`: opens the gateway and routes normalized
     /// inbound messages to `handle`.
-    fn start(&self, handle: Arc<dyn Fn(InboundMessage) + Send + Sync>)
-        -> Result<(), DiscordError>;
+    fn start(&self, handle: Arc<dyn Fn(InboundMessage) + Send + Sync>) -> Result<(), DiscordError>;
     /// Go `Close(ctx)`.
     fn close(&self) -> Result<(), DiscordError>;
     /// Go `transport.(DestinationValidator)` type assertion.
@@ -174,7 +172,9 @@ impl GatewayState {
     }
 
     pub(crate) fn channel(&self, id: &str) -> Option<&Channel> {
-        self.guilds.values().find_map(|guild| guild.channels.get(id))
+        self.guilds
+            .values()
+            .find_map(|guild| guild.channels.get(id))
     }
 
     /// Test/setup helper mirroring discordgo State.GuildAdd.
@@ -317,8 +317,12 @@ pub(crate) trait DiscordRestClient: Send + Sync {
         reply_to: &str,
     ) -> Result<String, DiscordError>;
     fn send_typing(&self, channel_id: &str) -> Result<(), DiscordError>;
-    fn edit_message(&self, channel_id: &str, message_id: &str, content: &str)
-        -> Result<(), DiscordError>;
+    fn edit_message(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        content: &str,
+    ) -> Result<(), DiscordError>;
     /// Downcast escape hatch for tests (Go's injectable package vars).
     #[allow(dead_code)]
     fn as_any(&self) -> &dyn std::any::Any;
@@ -351,41 +355,63 @@ impl DiscordRestClient for UreqRestClient {
             "content": content,
             "message_reference": { "message_id": reply_to, "channel_id": channel_id },
         });
-        let response = ureq::post(&url).set("Authorization", &self.authorization).send_json(body);
+        let response = ureq::post(&url)
+            .set("Authorization", &self.authorization)
+            .send_json(body);
         match response {
             Ok(resp) => match resp.into_json::<serde_json::Value>() {
                 Ok(value) => {
-                    let id = value.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                    let id = value
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
                     if id.is_empty() {
-                        Err(wrap_discord_error("send discord reply", "missing message id in response"))
+                        Err(wrap_discord_error(
+                            "send discord reply",
+                            "missing message id in response",
+                        ))
                     } else {
                         Ok(id)
                     }
                 }
-                Err(err) => Err(wrap_discord_error("send discord reply", format!("decode response: {err}"))),
+                Err(err) => Err(wrap_discord_error(
+                    "send discord reply",
+                    format!("decode response: {err}"),
+                )),
             },
             Err(ureq::Error::Status(code, resp)) => {
                 let body = resp.into_string().unwrap_or_default();
-                Err(wrap_discord_error("send discord reply", format!("HTTP {code}: {body}")))
+                Err(wrap_discord_error(
+                    "send discord reply",
+                    format!("HTTP {code}: {body}"),
+                ))
             }
-            Err(ureq::Error::Transport(err)) => {
-                Err(wrap_discord_error("send discord reply", format!("transport: {err}")))
-            }
+            Err(ureq::Error::Transport(err)) => Err(wrap_discord_error(
+                "send discord reply",
+                format!("transport: {err}"),
+            )),
         }
     }
 
     fn send_typing(&self, channel_id: &str) -> Result<(), DiscordError> {
         let url = format!("{}/channels/{channel_id}/typing", self.base_url);
-        let response = ureq::post(&url).set("Authorization", &self.authorization).call();
+        let response = ureq::post(&url)
+            .set("Authorization", &self.authorization)
+            .call();
         match response {
             Ok(_) => Ok(()),
             Err(ureq::Error::Status(code, resp)) => {
                 let body = resp.into_string().unwrap_or_default();
-                Err(wrap_discord_error("send discord typing", format!("HTTP {code}: {body}")))
+                Err(wrap_discord_error(
+                    "send discord typing",
+                    format!("HTTP {code}: {body}"),
+                ))
             }
-            Err(ureq::Error::Transport(err)) => {
-                Err(wrap_discord_error("send discord typing", format!("transport: {err}")))
-            }
+            Err(ureq::Error::Transport(err)) => Err(wrap_discord_error(
+                "send discord typing",
+                format!("transport: {err}"),
+            )),
         }
     }
 
@@ -395,18 +421,27 @@ impl DiscordRestClient for UreqRestClient {
         message_id: &str,
         content: &str,
     ) -> Result<(), DiscordError> {
-        let url = format!("{}/channels/{channel_id}/messages/{message_id}", self.base_url);
+        let url = format!(
+            "{}/channels/{channel_id}/messages/{message_id}",
+            self.base_url
+        );
         let body = serde_json::json!({ "content": content });
-        let response = ureq::patch(&url).set("Authorization", &self.authorization).send_json(body);
+        let response = ureq::patch(&url)
+            .set("Authorization", &self.authorization)
+            .send_json(body);
         match response {
             Ok(_) => Ok(()),
             Err(ureq::Error::Status(code, resp)) => {
                 let body = resp.into_string().unwrap_or_default();
-                Err(wrap_discord_error("edit discord reply", format!("HTTP {code}: {body}")))
+                Err(wrap_discord_error(
+                    "edit discord reply",
+                    format!("HTTP {code}: {body}"),
+                ))
             }
-            Err(ureq::Error::Transport(err)) => {
-                Err(wrap_discord_error("edit discord reply", format!("transport: {err}")))
-            }
+            Err(ureq::Error::Transport(err)) => Err(wrap_discord_error(
+                "edit discord reply",
+                format!("transport: {err}"),
+            )),
         }
     }
 
@@ -489,11 +524,14 @@ impl GatewayTransport {
 
     /// Go `SendReply` returning the classified error.
     pub fn send_reply_classified(&self, reply: OutboundReply) -> Result<SentReply, DiscordError> {
-        let message_id = self
-            .inner
-            .rest
-            .send_message(&reply.channel_id, &reply.content, &reply.reply_to_external_message_id)?;
-        Ok(SentReply { external_message_id: message_id })
+        let message_id = self.inner.rest.send_message(
+            &reply.channel_id,
+            &reply.content,
+            &reply.reply_to_external_message_id,
+        )?;
+        Ok(SentReply {
+            external_message_id: message_id,
+        })
     }
 
     /// Go `SendThinking` returning the classified error.
@@ -550,7 +588,11 @@ impl GatewayTransportInner {
         let (kind, thread_id, peer_id) = if direct {
             (SessionKind::Direct, String::new(), author.id.clone())
         } else {
-            (SessionKind::Group, message.channel_id.clone(), message.channel_id.clone())
+            (
+                SessionKind::Group,
+                message.channel_id.clone(),
+                message.channel_id.clone(),
+            )
         };
         Some(InboundMessage {
             connector_id: self.cfg.connector_id.clone(),
@@ -586,7 +628,8 @@ impl GatewayTransportInner {
 
 impl ReplySender for GatewayTransport {
     fn send_reply(&self, reply: OutboundReply) -> Result<SentReply, String> {
-        self.send_reply_classified(reply).map_err(|err| err.to_string())
+        self.send_reply_classified(reply)
+            .map_err(|err| err.to_string())
     }
 
     fn reply_progressor(&self) -> Option<&dyn ReplyProgressor> {
@@ -600,19 +643,18 @@ impl ReplyProgressor for GatewayTransport {
     }
 
     fn send_thinking(&self, signal: ThinkingSignal) -> Result<(), String> {
-        self.send_thinking_classified(signal).map_err(|err| err.to_string())
+        self.send_thinking_classified(signal)
+            .map_err(|err| err.to_string())
     }
 
     fn edit_reply(&self, edit: ReplyEdit) -> Result<(), String> {
-        self.edit_reply_classified(edit).map_err(|err| err.to_string())
+        self.edit_reply_classified(edit)
+            .map_err(|err| err.to_string())
     }
 }
 
 impl Transport for GatewayTransport {
-    fn start(
-        &self,
-        handle: Arc<dyn Fn(InboundMessage) + Send + Sync>,
-    ) -> Result<(), DiscordError> {
+    fn start(&self, handle: Arc<dyn Fn(InboundMessage) + Send + Sync>) -> Result<(), DiscordError> {
         crate::gateway::spawn_gateway(self.inner.clone(), handle)
     }
 
@@ -666,14 +708,17 @@ impl DestinationValidator for GatewayTransport {
                                     destination.validation_state =
                                         DestinationValidationState::MissingPermission;
                                     destination.reason_code = "permission_missing".to_string();
-                                    destination.provider_label = redacted_discord_label(&channel.id);
+                                    destination.provider_label =
+                                        redacted_discord_label(&channel.id);
                                     destination
                                         .safe_evidence
                                         .insert("missingPermissions".to_string(), missing);
                                 } else {
-                                    destination.validation_state = DestinationValidationState::Valid;
+                                    destination.validation_state =
+                                        DestinationValidationState::Valid;
                                     destination.reason_code = "healthy".to_string();
-                                    destination.provider_label = redacted_discord_label(&channel.id);
+                                    destination.provider_label =
+                                        redacted_discord_label(&channel.id);
                                     destination.safe_evidence.insert(
                                         "permissionCheck".to_string(),
                                         "send_read".to_string(),
@@ -737,7 +782,11 @@ pub fn mentioned_user(mentions: &[String], user_id: &str) -> bool {
 /// Go `stripBotMention`: removes <@id> and <@!id> forms and trims.
 #[must_use]
 pub fn strip_bot_mention(content: &str, user_id: &str) -> String {
-    content.replace(&format!("<@{user_id}>"), "").replace(&format!("<@!{user_id}>"), "").trim().to_string()
+    content
+        .replace(&format!("<@{user_id}>"), "")
+        .replace(&format!("<@!{user_id}>"), "")
+        .trim()
+        .to_string()
 }
 
 /// Go `redactDiscordRoute`: replaces route segments that look like Discord
@@ -798,7 +847,6 @@ pub fn missing_discord_channel_permissions(permissions: u64) -> String {
     missing.join(",")
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -823,7 +871,12 @@ mod tests {
     }
 
     fn gateway_transport(cfg: Config) -> GatewayTransport {
-        transport_with(cfg, GatewayState::default(), "bot_1", Arc::new(FakeRestClient::default()))
+        transport_with(
+            cfg,
+            GatewayState::default(),
+            "bot_1",
+            Arc::new(FakeRestClient::default()),
+        )
     }
 
     #[derive(Default)]
@@ -844,9 +897,11 @@ mod tests {
             if let Some(err) = &self.send_err {
                 return Err(wrap_discord_error("send discord reply", err));
             }
-            self.sent
-                .lock()
-                .push((channel_id.to_string(), content.to_string(), reply_to.to_string()));
+            self.sent.lock().push((
+                channel_id.to_string(),
+                content.to_string(),
+                reply_to.to_string(),
+            ));
             Ok("reply_1".to_string())
         }
 
@@ -861,9 +916,11 @@ mod tests {
             message_id: &str,
             content: &str,
         ) -> Result<(), DiscordError> {
-            self.edited
-                .lock()
-                .push((channel_id.to_string(), message_id.to_string(), content.to_string()));
+            self.edited.lock().push((
+                channel_id.to_string(),
+                message_id.to_string(),
+                content.to_string(),
+            ));
             Ok(())
         }
 
@@ -878,7 +935,10 @@ mod tests {
             channel_id: channel_id.to_string(),
             guild_id: String::new(),
             content: content.to_string(),
-            author: Some(GatewayUser { id: "user_1".to_string(), bot: false }),
+            author: Some(GatewayUser {
+                id: "user_1".to_string(),
+                bot: false,
+            }),
             mentions: Vec::new(),
         }
     }
@@ -886,7 +946,10 @@ mod tests {
     // Go TestGatewayTransportNormalizeDirectMessage
     #[test]
     fn normalize_direct_message() {
-        let transport = gateway_transport(Config { connector_id: "discord-main".to_string(), ..Config::default() });
+        let transport = gateway_transport(Config {
+            connector_id: "discord-main".to_string(),
+            ..Config::default()
+        });
         let inbound = transport
             .inner
             .normalize_message(&direct_message("msg_1", "dm_1", "hello from dm"))
@@ -903,16 +966,25 @@ mod tests {
     // Go TestGatewayTransportNormalizeGuildMentionStripsBotMention
     #[test]
     fn normalize_guild_mention_strips_bot_mention() {
-        let transport = gateway_transport(Config { connector_id: "discord-main".to_string(), ..Config::default() });
+        let transport = gateway_transport(Config {
+            connector_id: "discord-main".to_string(),
+            ..Config::default()
+        });
         let message = GatewayMessage {
             id: "msg_2".to_string(),
             channel_id: "channel_1".to_string(),
             guild_id: "guild_1".to_string(),
             content: "<@bot_1> hello guild".to_string(),
-            author: Some(GatewayUser { id: "user_1".to_string(), bot: false }),
+            author: Some(GatewayUser {
+                id: "user_1".to_string(),
+                bot: false,
+            }),
             mentions: vec!["bot_1".to_string()],
         };
-        let inbound = transport.inner.normalize_message(&message).expect("guild message normalized");
+        let inbound = transport
+            .inner
+            .normalize_message(&message)
+            .expect("guild message normalized");
         assert_eq!(inbound.kind, SessionKind::Group);
         assert!(!inbound.direct);
         assert!(inbound.mentioned);
@@ -927,13 +999,24 @@ mod tests {
 
     #[test]
     fn normalize_skips_bots_and_empty_content() {
-        let transport = gateway_transport(Config { connector_id: "discord-main".to_string(), ..Config::default() });
+        let transport = gateway_transport(Config {
+            connector_id: "discord-main".to_string(),
+            ..Config::default()
+        });
         let bot_message = GatewayMessage {
-            author: Some(GatewayUser { id: "bot_other".to_string(), bot: true }),
+            author: Some(GatewayUser {
+                id: "bot_other".to_string(),
+                bot: true,
+            }),
             ..direct_message("msg_x", "dm_1", "hello")
         };
         assert!(transport.inner.normalize_message(&bot_message).is_none());
-        assert!(transport.inner.normalize_message(&direct_message("msg_y", "dm_1", "   ")).is_none());
+        assert!(
+            transport
+                .inner
+                .normalize_message(&direct_message("msg_y", "dm_1", "   "))
+                .is_none()
+        );
         let mention_only = GatewayMessage {
             guild_id: "guild_1".to_string(),
             channel_id: "channel_1".to_string(),
@@ -949,7 +1032,10 @@ mod tests {
     fn send_reply_shapes_discord_request() {
         let rest = FakeRestClient::default();
         let transport = transport_with(
-            Config { connector_id: "discord-main".to_string(), ..Config::default() },
+            Config {
+                connector_id: "discord-main".to_string(),
+                ..Config::default()
+            },
             GatewayState::default(),
             "bot_1",
             Arc::new(rest),
@@ -965,15 +1051,28 @@ mod tests {
         assert_eq!(reply.external_message_id, "reply_1");
         let sent = transport.inner.rest_sent();
         assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0], ("channel_1".to_string(), "assistant reply".to_string(), "msg_1".to_string()));
+        assert_eq!(
+            sent[0],
+            (
+                "channel_1".to_string(),
+                "assistant reply".to_string(),
+                "msg_1".to_string()
+            )
+        );
     }
 
     // Go TestGatewayTransportWrapsAuthFailure
     #[test]
     fn wraps_auth_failure() {
-        let rest = FakeRestClient { send_err: Some("401 Unauthorized: invalid token".to_string()), ..FakeRestClient::default() };
+        let rest = FakeRestClient {
+            send_err: Some("401 Unauthorized: invalid token".to_string()),
+            ..FakeRestClient::default()
+        };
         let transport = transport_with(
-            Config { connector_id: "discord-main".to_string(), ..Config::default() },
+            Config {
+                connector_id: "discord-main".to_string(),
+                ..Config::default()
+            },
             GatewayState::default(),
             "bot_1",
             Arc::new(rest),
@@ -987,7 +1086,10 @@ mod tests {
             })
             .expect_err("expected auth failure");
         assert_eq!(err.error_class(), "auth_error");
-        assert_eq!(diagnostic_reason_for_error(&err), DiagnosticReasonCode::AuthMissing);
+        assert_eq!(
+            diagnostic_reason_for_error(&err),
+            DiagnosticReasonCode::AuthMissing
+        );
     }
 
     // Go TestGatewayTransportSendThinkingUsesChannelTyping
@@ -995,7 +1097,10 @@ mod tests {
     fn send_thinking_uses_channel_typing() {
         let rest = FakeRestClient::default();
         let transport = transport_with(
-            Config { connector_id: "discord-main".to_string(), ..Config::default() },
+            Config {
+                connector_id: "discord-main".to_string(),
+                ..Config::default()
+            },
             GatewayState::default(),
             "bot_1",
             Arc::new(rest),
@@ -1015,7 +1120,10 @@ mod tests {
     fn edit_reply_shapes_discord_request() {
         let rest = FakeRestClient::default();
         let transport = transport_with(
-            Config { connector_id: "discord-main".to_string(), ..Config::default() },
+            Config {
+                connector_id: "discord-main".to_string(),
+                ..Config::default()
+            },
             GatewayState::default(),
             "bot_1",
             Arc::new(rest),
@@ -1030,7 +1138,14 @@ mod tests {
             .expect("edit reply");
         let edited = transport.inner.rest_edited();
         assert_eq!(edited.len(), 1);
-        assert_eq!(edited[0], ("channel_1".to_string(), "reply_1".to_string(), "updated reply".to_string()));
+        assert_eq!(
+            edited[0],
+            (
+                "channel_1".to_string(),
+                "reply_1".to_string(),
+                "updated reply".to_string()
+            )
+        );
     }
 
     // Go TestGatewayTransportValidateDestinationsRequiresChannelPermissions
@@ -1044,7 +1159,10 @@ mod tests {
             PERMISSION_VIEW_CHANNEL | PERMISSION_SEND_MESSAGES | PERMISSION_READ_MESSAGE_HISTORY,
         );
         let valid = transport_with(
-            Config { connector_id: "discord-main".to_string(), ..Config::default() },
+            Config {
+                connector_id: "discord-main".to_string(),
+                ..Config::default()
+            },
             state,
             "bot_1",
             Arc::new(FakeRestClient::default()),
@@ -1059,12 +1177,23 @@ mod tests {
             }])
             .expect("validate valid channel");
         assert_eq!(validated.len(), 1);
-        assert_eq!(validated[0].validation_state, DestinationValidationState::Valid);
+        assert_eq!(
+            validated[0].validation_state,
+            DestinationValidationState::Valid
+        );
 
         let mut blocked_state = GatewayState::default();
-        add_guild_with_bot_channel_permissions(&mut blocked_state, "guild_1", "channel_1", PERMISSION_VIEW_CHANNEL);
+        add_guild_with_bot_channel_permissions(
+            &mut blocked_state,
+            "guild_1",
+            "channel_1",
+            PERMISSION_VIEW_CHANNEL,
+        );
         let blocked = transport_with(
-            Config { connector_id: "discord-main".to_string(), ..Config::default() },
+            Config {
+                connector_id: "discord-main".to_string(),
+                ..Config::default()
+            },
             blocked_state,
             "bot_1",
             Arc::new(FakeRestClient::default()),
@@ -1079,10 +1208,16 @@ mod tests {
             }])
             .expect("validate blocked channel");
         assert_eq!(degraded.len(), 1);
-        assert_eq!(degraded[0].validation_state, DestinationValidationState::MissingPermission);
+        assert_eq!(
+            degraded[0].validation_state,
+            DestinationValidationState::MissingPermission
+        );
         assert_eq!(degraded[0].reason_code, "permission_missing");
         assert_eq!(
-            degraded[0].safe_evidence.get("missingPermissions").map(String::as_str),
+            degraded[0]
+                .safe_evidence
+                .get("missingPermissions")
+                .map(String::as_str),
             Some("send_messages,read_message_history")
         );
     }
@@ -1092,7 +1227,10 @@ mod tests {
         let mut state = GatewayState::default();
         add_guild_with_bot_channel_permissions(&mut state, "guild_1", "channel_1", 0);
         let transport = transport_with(
-            Config { connector_id: "discord-main".to_string(), ..Config::default() },
+            Config {
+                connector_id: "discord-main".to_string(),
+                ..Config::default()
+            },
             state,
             "bot_1",
             Arc::new(FakeRestClient::default()),
@@ -1119,23 +1257,38 @@ mod tests {
                 },
             ])
             .expect("validate");
-        assert_eq!(validated[0].validation_state, DestinationValidationState::Valid);
+        assert_eq!(
+            validated[0].validation_state,
+            DestinationValidationState::Valid
+        );
         assert_eq!(validated[0].provider_label, "discord_resource_redacted");
-        assert_eq!(validated[1].validation_state, DestinationValidationState::NotFound);
+        assert_eq!(
+            validated[1].validation_state,
+            DestinationValidationState::NotFound
+        );
         assert_eq!(validated[1].reason_code, "not_found");
-        assert_eq!(validated[2].validation_state, DestinationValidationState::BotNotMember);
+        assert_eq!(
+            validated[2].validation_state,
+            DestinationValidationState::BotNotMember
+        );
         assert_eq!(validated[2].reason_code, "bot_not_member");
     }
 
     // Go TestGatewayTransportLifecycleObserverRecordsGatewayAndRateLimitEvidence
     #[test]
     fn lifecycle_observer_records_gateway_and_rate_limit_evidence() {
-        let transport = gateway_transport(Config { connector_id: "discord-main".to_string(), ..Config::default() });
-        let events: Arc<parking_lot::Mutex<Vec<TransportLifecycleEvent>>> = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let transport = gateway_transport(Config {
+            connector_id: "discord-main".to_string(),
+            ..Config::default()
+        });
+        let events: Arc<parking_lot::Mutex<Vec<TransportLifecycleEvent>>> =
+            Arc::new(parking_lot::Mutex::new(Vec::new()));
         let recorded = Arc::clone(&events);
-        transport.inner.lifecycle.lock().replace(Arc::new(move |event: TransportLifecycleEvent| {
-            recorded.lock().push(event);
-        }));
+        transport.inner.lifecycle.lock().replace(Arc::new(
+            move |event: TransportLifecycleEvent| {
+                recorded.lock().push(event);
+            },
+        ));
         transport.inner.emit_lifecycle(TransportLifecycleEvent {
             reason_code: Some(DiagnosticReasonCode::NetworkFailed),
             evidence: HashMap::from([("stage".to_string(), "gateway_disconnect".to_string())]),
@@ -1157,14 +1310,35 @@ mod tests {
         });
         let events = events.lock().clone();
         assert_eq!(events.len(), 3);
-        assert_eq!(events[0].reason_code, Some(DiagnosticReasonCode::NetworkFailed));
-        assert_eq!(events[0].evidence.get("stage").map(String::as_str), Some("gateway_disconnect"));
+        assert_eq!(
+            events[0].reason_code,
+            Some(DiagnosticReasonCode::NetworkFailed)
+        );
+        assert_eq!(
+            events[0].evidence.get("stage").map(String::as_str),
+            Some("gateway_disconnect")
+        );
         assert!(events[0].degraded);
-        assert_eq!(events[1].reason_code, Some(DiagnosticReasonCode::NetworkFailed));
-        assert_eq!(events[1].evidence.get("stage").map(String::as_str), Some("gateway_resumed"));
+        assert_eq!(
+            events[1].reason_code,
+            Some(DiagnosticReasonCode::NetworkFailed)
+        );
+        assert_eq!(
+            events[1].evidence.get("stage").map(String::as_str),
+            Some("gateway_resumed")
+        );
         assert!(!events[1].degraded);
-        assert_eq!(events[2].reason_code, Some(DiagnosticReasonCode::RateLimited));
-        assert!(!events[2].evidence.get("retryAfter").unwrap_or(&String::new()).is_empty());
+        assert_eq!(
+            events[2].reason_code,
+            Some(DiagnosticReasonCode::RateLimited)
+        );
+        assert!(
+            !events[2]
+                .evidence
+                .get("retryAfter")
+                .unwrap_or(&String::new())
+                .is_empty()
+        );
         assert!(events[2].degraded);
     }
 
@@ -1176,26 +1350,40 @@ mod tests {
             redact_discord_route("/channels/123456789012345678/messages/987654321098765432"),
             "/channels/redacted_id/messages/redacted_id"
         );
-        assert_eq!(redact_discord_route("/guilds/guild_name"), "/guilds/guild_name");
+        assert_eq!(
+            redact_discord_route("/guilds/guild_name"),
+            "/guilds/guild_name"
+        );
         assert!(looks_like_discord_id("123456789012345678"));
         assert!(!looks_like_discord_id("short"));
         assert!(!looks_like_discord_id("1234567890ab"));
-        assert_eq!(redacted_discord_label("123456789012345678"), "discord_resource_redacted");
+        assert_eq!(
+            redacted_discord_label("123456789012345678"),
+            "discord_resource_redacted"
+        );
         assert_eq!(redacted_discord_label("  "), "");
-        assert_eq!(missing_discord_channel_permissions(0), "view_channel,send_messages,read_message_history");
+        assert_eq!(
+            missing_discord_channel_permissions(0),
+            "view_channel,send_messages,read_message_history"
+        );
         assert_eq!(
             missing_discord_channel_permissions(PERMISSION_VIEW_CHANNEL),
             "send_messages,read_message_history"
         );
         assert_eq!(
             missing_discord_channel_permissions(
-                PERMISSION_VIEW_CHANNEL | PERMISSION_SEND_MESSAGES | PERMISSION_READ_MESSAGE_HISTORY
+                PERMISSION_VIEW_CHANNEL
+                    | PERMISSION_SEND_MESSAGES
+                    | PERMISSION_READ_MESSAGE_HISTORY
             ),
             ""
         );
         assert_eq!(strip_bot_mention("<@bot_1> hello", "bot_1"), "hello");
         assert_eq!(strip_bot_mention("<@!bot_1> hello", "bot_1"), "hello");
-        assert_eq!(strip_bot_mention("<@other> hello", "bot_1"), "<@other> hello");
+        assert_eq!(
+            strip_bot_mention("<@other> hello", "bot_1"),
+            "<@other> hello"
+        );
         assert!(mentioned_user(&["bot_1".to_string()], "bot_1"));
         assert!(!mentioned_user(&["bot_2".to_string()], "bot_1"));
         assert!(!mentioned_user(&["bot_1".to_string()], ""));
@@ -1211,12 +1399,23 @@ mod tests {
             id: guild_id.to_string(),
             owner_id: String::new(),
             roles: vec![
-                Role { id: guild_id.to_string(), permissions: 0, position: -1 },
-                Role { id: "role_bot".to_string(), permissions, position: 0 },
+                Role {
+                    id: guild_id.to_string(),
+                    permissions: 0,
+                    position: -1,
+                },
+                Role {
+                    id: "role_bot".to_string(),
+                    permissions,
+                    position: 0,
+                },
             ],
             members: HashMap::from([(
                 "bot_1".to_string(),
-                Member { user_id: "bot_1".to_string(), roles: vec!["role_bot".to_string()] },
+                Member {
+                    user_id: "bot_1".to_string(),
+                    roles: vec!["role_bot".to_string()],
+                },
             )]),
             channels: HashMap::from([(
                 channel_id.to_string(),

@@ -48,7 +48,11 @@ pub struct ProviderFault {
 impl ProviderFault {
     #[must_use]
     pub fn new(kind: FaultKind, code: impl Into<String>) -> Self {
-        ProviderFault { kind, code: code.into(), message: String::new() }
+        ProviderFault {
+            kind,
+            code: code.into(),
+            message: String::new(),
+        }
     }
 
     #[must_use]
@@ -125,7 +129,9 @@ pub fn http_status_fault(status: u16, write: bool) -> Option<ProviderFault> {
         }),
         s if s >= 500 => {
             if write {
-                Some(ambiguous_fault("provider returned a server error after a write was submitted"))
+                Some(ambiguous_fault(
+                    "provider returned a server error after a write was submitted",
+                ))
             } else {
                 Some(ProviderFault {
                     kind: FaultKind::Unavailable,
@@ -236,6 +242,8 @@ impl ScopedToken {
         if self.granted_scopes.is_empty() {
             return true;
         }
-        self.granted_scopes.iter().any(|s| s.trim().eq_ignore_ascii_case(want))
+        self.granted_scopes
+            .iter()
+            .any(|s| s.trim().eq_ignore_ascii_case(want))
     }
 }

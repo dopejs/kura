@@ -9,9 +9,8 @@ use sha2::{Digest, Sha256};
 
 use crate::types::{
     AvailabilityStatus, CatalogEntry, CatalogInstallInput, CatalogInstallSnapshot,
-    CatalogInstallSupport, CatalogPrerequisite, CatalogSecretRequirement,
-    CreateServerInput, Declaration, InstallMethod, OriginKind, TransportKind,
-    normalize_declaration,
+    CatalogInstallSupport, CatalogPrerequisite, CatalogSecretRequirement, CreateServerInput,
+    Declaration, InstallMethod, OriginKind, TransportKind, normalize_declaration,
 };
 use crate::{clean_strings, first_non_empty};
 
@@ -68,7 +67,10 @@ pub fn bundled_catalog_entries(cfg: &kura_config::Config) -> Vec<CatalogEntry> {
         declaration: filesystem_spec.declaration.clone(),
         transport_kind: TransportKind::Stdio,
         command: "npx".to_string(),
-        args: vec!["-y".to_string(), "@modelcontextprotocol/server-github".to_string()],
+        args: vec![
+            "-y".to_string(),
+            "@modelcontextprotocol/server-github".to_string(),
+        ],
         working_dir: data_dir.clone(),
         secret_refs: vec!["GITHUB_TOKEN".to_string()],
         auto_restart: true,
@@ -99,7 +101,10 @@ pub fn bundled_catalog_entries(cfg: &kura_config::Config) -> Vec<CatalogEntry> {
         }),
         transport_kind: TransportKind::Stdio,
         command: "npx".to_string(),
-        args: vec!["-y".to_string(), "@modelcontextprotocol/server-postgres".to_string()],
+        args: vec![
+            "-y".to_string(),
+            "@modelcontextprotocol/server-postgres".to_string(),
+        ],
         working_dir: data_dir.clone(),
         secret_refs: vec!["POSTGRES_DSN".to_string()],
         auto_restart: true,
@@ -130,7 +135,10 @@ pub fn bundled_catalog_entries(cfg: &kura_config::Config) -> Vec<CatalogEntry> {
         }),
         transport_kind: TransportKind::Stdio,
         command: "npx".to_string(),
-        args: vec!["-y".to_string(), "@modelcontextprotocol/server-slack".to_string()],
+        args: vec![
+            "-y".to_string(),
+            "@modelcontextprotocol/server-slack".to_string(),
+        ],
         working_dir: data_dir.clone(),
         secret_refs: vec!["SLACK_BOT_TOKEN".to_string()],
         auto_restart: true,
@@ -167,10 +175,15 @@ pub fn bundled_catalog_entries(cfg: &kura_config::Config) -> Vec<CatalogEntry> {
         CatalogEntry {
             id: "filesystem".to_string(),
             display_name: "Filesystem".to_string(),
-            description: "Local project filesystem access for the active test workspace.".to_string(),
+            description: "Local project filesystem access for the active test workspace."
+                .to_string(),
             transport_kind: TransportKind::Stdio,
             source_kind: "bundled".to_string(),
-            tags: vec!["local".to_string(), "filesystem".to_string(), "starter".to_string()],
+            tags: vec![
+                "local".to_string(),
+                "filesystem".to_string(),
+                "starter".to_string(),
+            ],
             immediate_use: false,
             prerequisites: vec![CatalogPrerequisite {
                 kind: "binary".to_string(),
@@ -192,7 +205,11 @@ pub fn bundled_catalog_entries(cfg: &kura_config::Config) -> Vec<CatalogEntry> {
             description: "Remote docs and library context over streamable-http.".to_string(),
             transport_kind: TransportKind::StreamableHTTP,
             source_kind: "bundled".to_string(),
-            tags: vec!["remote".to_string(), "docs".to_string(), "starter".to_string()],
+            tags: vec![
+                "remote".to_string(),
+                "docs".to_string(),
+                "starter".to_string(),
+            ],
             immediate_use: true,
             prerequisites: vec![CatalogPrerequisite {
                 kind: "endpoint".to_string(),
@@ -211,10 +228,16 @@ pub fn bundled_catalog_entries(cfg: &kura_config::Config) -> Vec<CatalogEntry> {
         CatalogEntry {
             id: "github".to_string(),
             display_name: "GitHub".to_string(),
-            description: "GitHub repository and issue access through a credential-backed MCP server.".to_string(),
+            description:
+                "GitHub repository and issue access through a credential-backed MCP server."
+                    .to_string(),
             transport_kind: TransportKind::Stdio,
             source_kind: "bundled".to_string(),
-            tags: vec!["credentials".to_string(), "git".to_string(), "remote".to_string()],
+            tags: vec![
+                "credentials".to_string(),
+                "git".to_string(),
+                "remote".to_string(),
+            ],
             immediate_use: false,
             prerequisites: vec![CatalogPrerequisite {
                 kind: "binary".to_string(),
@@ -238,7 +261,8 @@ pub fn bundled_catalog_entries(cfg: &kura_config::Config) -> Vec<CatalogEntry> {
         CatalogEntry {
             id: "postgres".to_string(),
             display_name: "Postgres".to_string(),
-            description: "Database inspection and query access for a configured Postgres instance.".to_string(),
+            description: "Database inspection and query access for a configured Postgres instance."
+                .to_string(),
             transport_kind: TransportKind::Stdio,
             source_kind: "bundled".to_string(),
             tags: vec!["database".to_string(), "credentials".to_string()],
@@ -265,10 +289,15 @@ pub fn bundled_catalog_entries(cfg: &kura_config::Config) -> Vec<CatalogEntry> {
         CatalogEntry {
             id: "slack".to_string(),
             display_name: "Slack".to_string(),
-            description: "Slack workspace access for channels, threads, and knowledge retrieval.".to_string(),
+            description: "Slack workspace access for channels, threads, and knowledge retrieval."
+                .to_string(),
             transport_kind: TransportKind::Stdio,
             source_kind: "bundled".to_string(),
-            tags: vec!["credentials".to_string(), "chat".to_string(), "remote".to_string()],
+            tags: vec![
+                "credentials".to_string(),
+                "chat".to_string(),
+                "remote".to_string(),
+            ],
             immediate_use: false,
             prerequisites: vec![CatalogPrerequisite {
                 kind: "binary".to_string(),
@@ -334,7 +363,11 @@ pub fn evaluate_catalog_availability(
             _ => {}
         }
     }
-    evaluate_catalog_install_spec_availability(cfg, &entry.default_install_spec, &entry.secret_requirements)
+    evaluate_catalog_install_spec_availability(
+        cfg,
+        &entry.default_install_spec,
+        &entry.secret_requirements,
+    )
 }
 
 /// Go `secretRefsFromRequirements`.
@@ -477,7 +510,9 @@ pub fn install_snapshot_from_create_spec(spec: &CreateServerInput) -> CatalogIns
 
 /// Go `catalogInstallInputFromSnapshot`.
 #[must_use]
-pub fn catalog_install_input_from_snapshot(snapshot: &CatalogInstallSnapshot) -> CatalogInstallInput {
+pub fn catalog_install_input_from_snapshot(
+    snapshot: &CatalogInstallSnapshot,
+) -> CatalogInstallInput {
     CatalogInstallInput {
         server_id: snapshot.server_id.trim().to_string(),
         display_name: snapshot.display_name.trim().to_string(),

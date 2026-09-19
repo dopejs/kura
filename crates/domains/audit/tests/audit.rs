@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use kura_audit::{AuditError, EVENT_CATEGORY, EVENT_NAME, Emitter};
 use kura_events::{Bus, Filter};
-use kura_identity::tenantctx;
 use kura_identity::TenantContext;
+use kura_identity::tenantctx;
 
 #[test]
 fn emit_requires_tenant_context() {
@@ -37,9 +37,10 @@ fn emit_publishes_denial_event() {
     assert_eq!(events[0].payload["resourceKind"], "run");
 }
 use kura_audit::{
-    build_billing_audit_event, build_credential_audit_event, build_integration_diagnostic_audit_event,
-    BILLING_AUDIT_EVENT_KIND, CREDENTIAL_EVENT_KIND, INTEGRATION_DIAGNOSTIC_AUDIT_EVENT_KIND,
-    BillingAuditInput, CredentialAuditInput, IntegrationDiagnosticAuditInput,
+    BILLING_AUDIT_EVENT_KIND, BillingAuditInput, CREDENTIAL_EVENT_KIND, CredentialAuditInput,
+    INTEGRATION_DIAGNOSTIC_AUDIT_EVENT_KIND, IntegrationDiagnosticAuditInput,
+    build_billing_audit_event, build_credential_audit_event,
+    build_integration_diagnostic_audit_event,
 };
 use kura_identity::AUDIT_OUTCOME_SUCCEEDED;
 
@@ -55,7 +56,10 @@ fn builders_produce_tenant_audit_events() {
     });
     assert_eq!(billing.event_kind, BILLING_AUDIT_EVENT_KIND);
     assert_eq!(billing.outcome, AUDIT_OUTCOME_SUCCEEDED);
-    assert_eq!(billing.document.as_ref().unwrap()["category"], "run_launches");
+    assert_eq!(
+        billing.document.as_ref().unwrap()["category"],
+        "run_launches"
+    );
     assert_eq!(billing.document.as_ref().unwrap()["amount"], 5);
 
     let credential = build_credential_audit_event(&CredentialAuditInput {
@@ -79,7 +83,10 @@ fn builders_produce_tenant_audit_events() {
         }
     });
     assert_eq!(credential.event_kind, CREDENTIAL_EVENT_KIND);
-    assert_eq!(credential.document.as_ref().unwrap()["resourceKind"], "tenant_secret");
+    assert_eq!(
+        credential.document.as_ref().unwrap()["resourceKind"],
+        "tenant_secret"
+    );
     assert_eq!(credential.document.as_ref().unwrap()["secretRefCount"], 1);
 
     let diag = build_integration_diagnostic_audit_event(&IntegrationDiagnosticAuditInput {
@@ -91,5 +98,8 @@ fn builders_produce_tenant_audit_events() {
         ..IntegrationDiagnosticAuditInput::default()
     });
     assert_eq!(diag.event_kind, INTEGRATION_DIAGNOSTIC_AUDIT_EVENT_KIND);
-    assert_eq!(diag.document.as_ref().unwrap()["redactionStatus"], "redacted");
+    assert_eq!(
+        diag.document.as_ref().unwrap()["redactionStatus"],
+        "redacted"
+    );
 }

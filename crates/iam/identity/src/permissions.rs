@@ -86,7 +86,10 @@ pub fn can(role: Role, lifecycle: LifecycleStatus, permission: Permission) -> bo
 
 /// Credentials may be inspected either via the explicit inspect permission or
 /// via any of the caller-supplied manage permissions.
-pub fn can_inspect_credentials(tenant_context: &TenantContext, manage_permissions: &[Permission]) -> bool {
+pub fn can_inspect_credentials(
+    tenant_context: &TenantContext,
+    manage_permissions: &[Permission],
+) -> bool {
     if tenant_context.principal_id.is_empty() || tenant_context.tenant_id.is_empty() {
         return false;
     }
@@ -105,10 +108,16 @@ pub fn can_resolve_live_validation_reconciliation(tenant_context: &TenantContext
     if matches!(tenant_context.role, Some(Role::Owner) | Some(Role::Admin)) {
         return true;
     }
-    has_permission(&tenant_context.permissions, Permission::LiveValidationReconcile)
+    has_permission(
+        &tenant_context.permissions,
+        Permission::LiveValidationReconcile,
+    )
 }
 
-pub fn evaluate_permission(tenant_context: &TenantContext, permission: Permission) -> PermissionEvaluation {
+pub fn evaluate_permission(
+    tenant_context: &TenantContext,
+    permission: Permission,
+) -> PermissionEvaluation {
     let mut evaluation = PermissionEvaluation {
         permission,
         allowed: false,
@@ -126,7 +135,10 @@ pub fn evaluate_permission(tenant_context: &TenantContext, permission: Permissio
     evaluation
 }
 
-pub fn require_permission(tenant_context: &TenantContext, permission: Permission) -> Result<(), IdentityError> {
+pub fn require_permission(
+    tenant_context: &TenantContext,
+    permission: Permission,
+) -> Result<(), IdentityError> {
     if !evaluate_permission(tenant_context, permission).allowed {
         return Err(IdentityError::PermissionDenied);
     }
@@ -137,7 +149,12 @@ pub fn require_permission(tenant_context: &TenantContext, permission: Permission
 mod tests {
     use super::*;
 
-    fn ctx(principal: &str, tenant: &str, role: Option<Role>, permissions: Vec<Permission>) -> TenantContext {
+    fn ctx(
+        principal: &str,
+        tenant: &str,
+        role: Option<Role>,
+        permissions: Vec<Permission>,
+    ) -> TenantContext {
         TenantContext {
             principal_id: principal.to_string(),
             tenant_id: tenant.to_string(),
@@ -220,7 +237,10 @@ mod tests {
             let got = permissions_for_role(role, LifecycleStatus::Active);
             assert_eq!(got.len(), want.len(), "role {role:?}: {got:?}");
             for permission in &want {
-                assert!(has_permission(&got, *permission), "role {role:?} missing {permission:?}");
+                assert!(
+                    has_permission(&got, *permission),
+                    "role {role:?} missing {permission:?}"
+                );
             }
         }
     }
@@ -246,9 +266,18 @@ mod tests {
     fn permission_evaluator_covers_sensitive_capabilities() {
         let role_permissions: [(Role, Vec<Permission>); 4] = [
             (Role::Owner, ALL_SENSITIVE_PERMISSIONS.to_vec()),
-            (Role::Admin, permissions_for_role(Role::Admin, LifecycleStatus::Active)),
-            (Role::Operator, permissions_for_role(Role::Operator, LifecycleStatus::Active)),
-            (Role::Viewer, permissions_for_role(Role::Viewer, LifecycleStatus::Active)),
+            (
+                Role::Admin,
+                permissions_for_role(Role::Admin, LifecycleStatus::Active),
+            ),
+            (
+                Role::Operator,
+                permissions_for_role(Role::Operator, LifecycleStatus::Active),
+            ),
+            (
+                Role::Viewer,
+                permissions_for_role(Role::Viewer, LifecycleStatus::Active),
+            ),
         ];
         let all: Vec<Permission> = ALL_SENSITIVE_PERMISSIONS
             .iter()
@@ -299,7 +328,12 @@ mod tests {
             ),
             (
                 "explicit permission",
-                ctx("prn_reconciler", "ten_1", Some(Role::Operator), vec![Permission::LiveValidationReconcile]),
+                ctx(
+                    "prn_reconciler",
+                    "ten_1",
+                    Some(Role::Operator),
+                    vec![Permission::LiveValidationReconcile],
+                ),
                 true,
             ),
             (
@@ -324,7 +358,11 @@ mod tests {
             ),
         ];
         for (name, context, want) in cases {
-            assert_eq!(can_resolve_live_validation_reconciliation(&context), want, "{name}");
+            assert_eq!(
+                can_resolve_live_validation_reconciliation(&context),
+                want,
+                "{name}"
+            );
         }
     }
 
@@ -378,14 +416,30 @@ mod tests {
         ] {
             assert!(!can(Role::Operator, LifecycleStatus::Active, permission));
         }
-        assert!(!can(Role::Viewer, LifecycleStatus::Active, Permission::EvaluationCampaignManage));
-        assert!(!can(Role::Viewer, LifecycleStatus::Active, Permission::EvaluationDiscoveryRun));
+        assert!(!can(
+            Role::Viewer,
+            LifecycleStatus::Active,
+            Permission::EvaluationCampaignManage
+        ));
+        assert!(!can(
+            Role::Viewer,
+            LifecycleStatus::Active,
+            Permission::EvaluationDiscoveryRun
+        ));
     }
 
     #[test]
     fn billing_evidence_export_is_canonical_and_separate_from_billing_view() {
-        assert!(can(Role::Owner, LifecycleStatus::Active, Permission::BillingEvidenceExport));
-        assert!(!can(Role::Admin, LifecycleStatus::Active, Permission::BillingEvidenceExport));
+        assert!(can(
+            Role::Owner,
+            LifecycleStatus::Active,
+            Permission::BillingEvidenceExport
+        ));
+        assert!(!can(
+            Role::Admin,
+            LifecycleStatus::Active,
+            Permission::BillingEvidenceExport
+        ));
 
         let view_only = TenantContext {
             principal_id: "prn_view".to_string(),
