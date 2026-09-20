@@ -36,4 +36,11 @@ describe("localized marketing site", () => {
       expect(html).toContain('dir="rtl"');
     }
   });
+
+  it("keeps Chinese hero headlines free of trailing punctuation", () => {
+    for (const lang of ["zh-Hans", "zh-Hant"]) {
+      const locale = SITE_LOCALES.find((candidate) => candidate.lang === lang);
+      expect(locale?.home.headlineTail, lang).toBe("");
+    }
+  });
 });

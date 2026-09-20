@@ -36,7 +36,7 @@ export const HOME_CONTENT: Readonly<Record<string, HomeContent>> = {
   "zh-Hans": {
     pageTitle: "Kura — 个人 Agent 操作系统",
     pageDescription: "可检查、可理解的个人 Agent 操作系统，统一管理运行时、记忆、上下文、工具与策略。",
-    headlineLead: "一个可以打开并读懂的", headlineEmphasis: "个人 Agent 操作系统", headlineTail: "。",
+    headlineLead: "一个可以打开并读懂的", headlineEmphasis: "个人 Agent 操作系统", headlineTail: "",
     lead: "一个掌管运行时、记忆、上下文与策略的 Rust 守护进程。基于插件架构，会话管理、检索乃至嵌入模型都可以替换。",
     installLabel: "安装 Kura",
     features: [
@@ -52,7 +52,7 @@ export const HOME_CONTENT: Readonly<Record<string, HomeContent>> = {
   "zh-Hant": {
     pageTitle: "Kura — 個人 Agent 作業系統",
     pageDescription: "可檢查、可理解的個人 Agent 作業系統，統一管理執行階段、記憶、上下文、工具與策略。",
-    headlineLead: "一個可以打開並讀懂的", headlineEmphasis: "個人 Agent 作業系統", headlineTail: "。",
+    headlineLead: "一個可以打開並讀懂的", headlineEmphasis: "個人 Agent 作業系統", headlineTail: "",
     lead: "一個掌管執行階段、記憶、上下文與策略的 Rust 守護程序。基於外掛架構，工作階段管理、檢索乃至嵌入模型都可以替換。",
     installLabel: "安裝 Kura",
     features: [
