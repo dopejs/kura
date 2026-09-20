@@ -37,3 +37,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
   CMD wget -qO- "http://127.0.0.1:19191/healthz" >/dev/null 2>&1 || exit 1
 
 ENTRYPOINT ["/usr/local/bin/kura"]
+# The CLI is a multi-command binary; without a subcommand it prints its help
+# and exits, which the CI healthz smoke caught. `daemon run` is the foreground
+# mode for supervised processes (services, containers).
+CMD ["daemon", "run"]

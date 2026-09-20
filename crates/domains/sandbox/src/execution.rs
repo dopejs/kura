@@ -107,7 +107,15 @@ impl CancellationToken {
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
         if let Some(child) = self.child.lock().unwrap().as_mut() {
+            let pid = child.id();
             let _ = child.kill();
+            // The child is spawned as its own process group (see the
+            // manager's spawn), so its descendants go with it. Killing only
+            // the direct child left `sh -c "sleep 5"` on dash — which does not
+            // exec its last command — with a live `sleep` holding the output
+            // pipes open, and the execution stayed non-terminal until that
+            // grandchild finished on its own.
+            kill_process_group(pid);
         }
     }
 
@@ -125,7 +133,9 @@ impl CancellationToken {
 
     pub(crate) fn kill_child(&self) {
         if let Some(child) = self.child.lock().unwrap().as_mut() {
+            let pid = child.id();
             let _ = child.kill();
+            kill_process_group(pid);
         }
     }
 }
@@ -610,6 +620,21 @@ pub fn status_for_cancel(timed_out: bool) -> ExecutionStatus {
 pub fn max_duration(value: Duration, fallback: Duration) -> Duration {
     if value.is_zero() { fallback } else { value }
 }
+
+/// Force-kills every process in the child's process group. Best-effort; a
+/// group that already exited is not an error.
+#[cfg(unix)]
+pub(crate) fn kill_process_group(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn kill_process_group(_pid: u32) {}
 
 /// Sends SIGINT to a child pid (Go os.Interrupt). Best-effort.
 #[cfg(unix)]

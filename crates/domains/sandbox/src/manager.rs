@@ -341,6 +341,13 @@ impl Manager {
         command.stdin(std::process::Stdio::piped());
         command.stdout(std::process::Stdio::piped());
         command.stderr(std::process::Stdio::piped());
+        // Own process group, so cancellation and timeouts can kill the whole
+        // tree rather than only the shell the command was launched through.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt as _;
+            command.process_group(0);
+        }
 
         let mut child = match command.spawn() {
             Ok(child) => child,
