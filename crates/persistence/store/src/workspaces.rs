@@ -6,10 +6,10 @@
 //! default per tenant.
 
 use chrono::Utc;
-use rusqlite::{params, Transaction};
+use rusqlite::{Transaction, params};
 
-use crate::crud::{now_rfc3339, null_string};
 use crate::SQLiteStore;
+use crate::crud::{now_rfc3339, null_string};
 
 fn new_store_id(prefix: &str) -> String {
     let hex = uuid::Uuid::new_v4().simple().to_string();
@@ -35,7 +35,10 @@ impl SQLiteStore {
     /// Go `EnsureDefaultWorkspace`: lazily and idempotently provisions one
     /// default personal workspace per tenant. Concurrent first-access converges
     /// on a single record via the partial unique index.
-    pub fn ensure_default_workspace(&self, tenant_id: &str) -> Result<kura_bindings::Workspace, String> {
+    pub fn ensure_default_workspace(
+        &self,
+        tenant_id: &str,
+    ) -> Result<kura_bindings::Workspace, String> {
         let tenant_id = tenant_id.trim().to_string();
         if tenant_id.is_empty() {
             return Err("tenant id is required".to_string());
@@ -63,7 +66,8 @@ impl SQLiteStore {
             .map_err(|e| format!("begin workspace insert: {e}"))?;
         match insert_workspace_tx(&tx, &ws) {
             Ok(()) => {
-                tx.commit().map_err(|e| format!("commit workspace insert: {e}"))?;
+                tx.commit()
+                    .map_err(|e| format!("commit workspace insert: {e}"))?;
                 Ok(ws)
             }
             Err(err) => {
@@ -76,7 +80,10 @@ impl SQLiteStore {
         }
     }
 
-    fn default_workspace(&self, tenant_id: &str) -> Result<Option<kura_bindings::Workspace>, String> {
+    fn default_workspace(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Option<kura_bindings::Workspace>, String> {
         let mut stmt = self
             .conn
             .prepare("SELECT document_json FROM workspaces WHERE tenant_id = ?1 AND is_default = 1")
@@ -139,7 +146,8 @@ impl SQLiteStore {
                 ..BindingAuditRow::default()
             },
         )?;
-        tx.commit().map_err(|e| format!("commit create workspace: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit create workspace: {e}"))?;
         Ok((ws, audit_id))
     }
 
@@ -158,13 +166,18 @@ impl SQLiteStore {
             || status == kura_bindings::WorkspaceStatus::DISABLED
             || status == kura_bindings::WorkspaceStatus::ACTIVE;
         if !is_known {
-            return Err(kura_bindings::invalid_binding_reason("workspace_status_invalid").to_string());
+            return Err(
+                kura_bindings::invalid_binding_reason("workspace_status_invalid").to_string(),
+            );
         }
         let mut ws = self
             .get_workspace(&actor.tenant_id, workspace_id)?
             .ok_or_else(|| "workspace not found".to_string())?;
         if ws.is_default && status != kura_bindings::WorkspaceStatus::ACTIVE {
-            return Err(kura_bindings::invalid_binding_reason("default_workspace_not_retirable").to_string());
+            return Err(
+                kura_bindings::invalid_binding_reason("default_workspace_not_retirable")
+                    .to_string(),
+            );
         }
         let now = Utc::now();
         let audit_id = new_store_id("audit_binding");
@@ -200,12 +213,17 @@ impl SQLiteStore {
                 ..BindingAuditRow::default()
             },
         )?;
-        tx.commit().map_err(|e| format!("commit update workspace status: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit update workspace status: {e}"))?;
         Ok((ws, audit_id))
     }
 
     /// Go `ListWorkspaces`: tenant workspaces, default first.
-    pub fn list_workspaces(&self, tenant_id: &str, limit: i64) -> Result<Vec<kura_bindings::Workspace>, String> {
+    pub fn list_workspaces(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+    ) -> Result<Vec<kura_bindings::Workspace>, String> {
         let limit = if limit <= 0 || limit > 200 { 50 } else { limit };
         let _ = self.ensure_default_workspace(tenant_id)?;
         let mut stmt = self
@@ -215,7 +233,9 @@ impl SQLiteStore {
                  ORDER BY is_default DESC, updated_at DESC, workspace_id DESC LIMIT ?2",
             )
             .map_err(|e| format!("list workspaces {tenant_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, limit]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, limit])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
@@ -225,10 +245,16 @@ impl SQLiteStore {
     }
 
     /// Go `GetWorkspace`: one workspace by id within the tenant.
-    pub fn get_workspace(&self, tenant_id: &str, workspace_id: &str) -> Result<Option<kura_bindings::Workspace>, String> {
+    pub fn get_workspace(
+        &self,
+        tenant_id: &str,
+        workspace_id: &str,
+    ) -> Result<Option<kura_bindings::Workspace>, String> {
         let mut stmt = self
             .conn
-            .prepare("SELECT document_json FROM workspaces WHERE tenant_id = ?1 AND workspace_id = ?2")
+            .prepare(
+                "SELECT document_json FROM workspaces WHERE tenant_id = ?1 AND workspace_id = ?2",
+            )
             .map_err(|e| format!("get workspace {workspace_id}: {e}"))?;
         let mut rows = stmt
             .query(params![tenant_id.trim(), workspace_id.trim()])
@@ -241,7 +267,11 @@ impl SQLiteStore {
     }
 
     /// Go `IsWorkspaceSelectable`: workspace exists and is active for the tenant.
-    pub fn is_workspace_selectable(&self, tenant_id: &str, workspace_id: &str) -> Result<bool, String> {
+    pub fn is_workspace_selectable(
+        &self,
+        tenant_id: &str,
+        workspace_id: &str,
+    ) -> Result<bool, String> {
         let workspace_id = workspace_id.trim();
         if workspace_id.is_empty() {
             return Ok(false);
@@ -272,7 +302,10 @@ pub(crate) struct BindingAuditRow {
 }
 
 /// Go `insertBindingAuditTx`.
-pub(crate) fn insert_binding_audit_tx(tx: &Transaction, row: &BindingAuditRow) -> Result<(), String> {
+pub(crate) fn insert_binding_audit_tx(
+    tx: &Transaction,
+    row: &BindingAuditRow,
+) -> Result<(), String> {
     let document = serde_json::json!({
         "auditEventId": row.audit_event_id,
         "tenantId": row.tenant_id,

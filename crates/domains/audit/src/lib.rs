@@ -9,10 +9,10 @@ use kura_events::{Bus, Event, Resource};
 mod builders;
 
 pub use builders::{
+    BILLING_AUDIT_EVENT_KIND, BillingAuditInput, CREDENTIAL_EVENT_KIND, CredentialAuditInput,
+    INTEGRATION_DIAGNOSTIC_AUDIT_EVENT_KIND, IntegrationDiagnosticAuditInput,
     build_billing_audit_event, build_credential_audit_event,
     build_integration_diagnostic_audit_event, default_billing_audit_retention_policy,
-    BILLING_AUDIT_EVENT_KIND, CREDENTIAL_EVENT_KIND, INTEGRATION_DIAGNOSTIC_AUDIT_EVENT_KIND,
-    BillingAuditInput, CredentialAuditInput, IntegrationDiagnosticAuditInput,
 };
 
 use kura_identity::tenantctx;
@@ -53,8 +53,14 @@ impl Emitter {
         }
 
         let mut payload = serde_json::Map::new();
-        payload.insert("actingTenantId".to_string(), serde_json::json!(tc.tenant_id));
-        payload.insert("principalId".to_string(), serde_json::json!(tc.principal_id));
+        payload.insert(
+            "actingTenantId".to_string(),
+            serde_json::json!(tc.tenant_id),
+        );
+        payload.insert(
+            "principalId".to_string(),
+            serde_json::json!(tc.principal_id),
+        );
         payload.insert("surface".to_string(), serde_json::json!(surface));
         payload.insert("resourceKind".to_string(), serde_json::json!(resource_kind));
 
@@ -62,7 +68,10 @@ impl Emitter {
             tenant_id: tc.tenant_id.clone(),
             category: EVENT_CATEGORY.to_string(),
             name: EVENT_NAME.to_string(),
-            resource: Resource { kind: "tenant".to_string(), id: tc.tenant_id },
+            resource: Resource {
+                kind: "tenant".to_string(),
+                id: tc.tenant_id,
+            },
             payload,
             ..Event::default()
         });

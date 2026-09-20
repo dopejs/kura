@@ -152,12 +152,18 @@ impl Manager {
 
     /// Full tenant quota dashboard with sections, overrides, restrictions,
     /// and the previous completed period.
-    pub async fn quota_dashboard(&self, tenant_id: &str, hosted: bool) -> Result<TenantQuotaDashboard> {
+    pub async fn quota_dashboard(
+        &self,
+        tenant_id: &str,
+        hosted: bool,
+    ) -> Result<TenantQuotaDashboard> {
         let plan = self.active_plan(tenant_id, hosted).await?;
         let now = self.clock_now();
         let repo = self.repo();
-        let mut restrictions_by_category: std::collections::HashMap<Category, AbuseRestrictionSummary> =
-            std::collections::HashMap::new();
+        let mut restrictions_by_category: std::collections::HashMap<
+            Category,
+            AbuseRestrictionSummary,
+        > = std::collections::HashMap::new();
         if let Some(repo) = repo.as_ref() {
             for record in repo.list_abuse_restrictions(tenant_id, now).await? {
                 restrictions_by_category.insert(record.affected_category.clone(), record.summary());
@@ -189,8 +195,13 @@ impl Manager {
                     .previous_quota_period(tenant_id, &definition.category, period.period_start)
                     .await?
                 {
-                    let previous_quota =
-                        project_quota(&plan, &definition, &previous_period, &previous_counter, None);
+                    let previous_quota = project_quota(
+                        &plan,
+                        &definition,
+                        &previous_period,
+                        &previous_counter,
+                        None,
+                    );
                     previous = Some(UsagePeriodSummary {
                         period_start: previous_quota.period_start,
                         period_end: previous_quota.period_end,
@@ -234,15 +245,16 @@ impl Manager {
             },
             sections: group_quota_status_items(items),
             generated_at: now,
-            permission: Some(Map::from_iter([(
-                "allowed".to_string(),
-                Value::from(true),
-            )])),
+            permission: Some(Map::from_iter([("allowed".to_string(), Value::from(true))])),
         })
     }
 }
 
-fn synthetic_period(tenant_id: &str, definition: &QuotaDefinition, now: DateTime<Utc>) -> QuotaPeriod {
+fn synthetic_period(
+    tenant_id: &str,
+    definition: &QuotaDefinition,
+    now: DateTime<Utc>,
+) -> QuotaPeriod {
     let (start, end) = period_for(&definition.period_kind, now);
     QuotaPeriod {
         quota_period_id: format!(
@@ -280,7 +292,8 @@ pub fn project_quota(
         plan.enforcement_mode.clone()
     };
     let effective_usage =
-        counter.committed_amount + counter.reserved_amount + counter.adjusted_amount - counter.carryover_amount;
+        counter.committed_amount + counter.reserved_amount + counter.adjusted_amount
+            - counter.carryover_amount;
     let mut remaining = limit - effective_usage;
     if mode == EnforcementMode::UNLIMITED {
         remaining = 0;
@@ -363,7 +376,9 @@ pub fn build_quota_status_item(
     } else {
         plan.enforcement_mode.clone()
     };
-    if let Some(restriction) = restriction.filter(|item| item.status == AbuseRestrictionStatus::ACTIVE) {
+    if let Some(restriction) =
+        restriction.filter(|item| item.status == AbuseRestrictionStatus::ACTIVE)
+    {
         item.status = QuotaStatus::from(QuotaStatus::RESTRICTED);
         item.restriction = Some(restriction.clone());
     } else if mode == EnforcementMode::UNLIMITED {
@@ -379,7 +394,8 @@ pub fn build_quota_status_item(
         item.near_limit = true;
         item.near_limit_reason = near_limit_reason_for_quota(&quota, typical_operation_amount);
     }
-    item.recovery_actions = recovery_actions_for_quota_status(&item.status, &item.near_limit_reason);
+    item.recovery_actions =
+        recovery_actions_for_quota_status(&item.status, &item.near_limit_reason);
     item
 }
 
@@ -421,14 +437,18 @@ pub fn is_quota_near_limit(quota: &EffectiveQuota, typical_operation_amount: i64
 /// Near-limit classification: >=80% of the limit consumed, or less than one
 /// typical operation remaining.
 #[must_use]
-pub fn near_limit_reason_for_quota(quota: &EffectiveQuota, typical_operation_amount: i64) -> NearLimitReason {
+pub fn near_limit_reason_for_quota(
+    quota: &EffectiveQuota,
+    typical_operation_amount: i64,
+) -> NearLimitReason {
     if quota.enforcement_mode != EnforcementMode::ENFORCED
         || quota.limit <= 0
         || quota.remaining_amount <= 0
     {
         return NearLimitReason::from(NearLimitReason::NONE);
     }
-    let used = quota.consumed_amount + quota.reserved_amount + quota.adjusted_amount - quota.carryover_applied;
+    let used = quota.consumed_amount + quota.reserved_amount + quota.adjusted_amount
+        - quota.carryover_applied;
     if used * 100 >= quota.limit * 80 {
         return NearLimitReason::from(NearLimitReason::PERCENT_THRESHOLD);
     }
@@ -477,7 +497,13 @@ pub fn recovery_actions_for_quota_status(
 pub fn group_quota_status_items(items: Vec<QuotaStatusItem>) -> Vec<QuotaSection> {
     let mut grouped: std::collections::HashMap<&'static str, QuotaSection> =
         std::collections::HashMap::new();
-    let order = ["launches", "runtime", "integrations", "storage", "evaluations"];
+    let order = [
+        "launches",
+        "runtime",
+        "integrations",
+        "storage",
+        "evaluations",
+    ];
     for item in items {
         let (key, label) = quota_section_for_category(&item.category);
         grouped
@@ -531,7 +557,11 @@ pub fn period_for(kind: &PeriodKind, now: DateTime<Utc>) -> (DateTime<Utc>, Date
             let date = now.date_naive();
             let start = utc_midnight(date.with_day(1).unwrap_or(date));
             let (year, month) = (start.year(), start.month());
-            let (next_year, next_month) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+            let (next_year, next_month) = if month == 12 {
+                (year + 1, 1)
+            } else {
+                (year, month + 1)
+            };
             let end = NaiveDate::from_ymd_opt(next_year, next_month, 1)
                 .map(utc_midnight)
                 .unwrap_or(start);
@@ -630,8 +660,17 @@ mod tests {
             limit: Some(10),
             ..Default::default()
         };
-        let quota = project_quota(&finite_plan(), &definition, &period, &counter, Some(&override_));
-        assert!(quota.over_limit, "expected over-limit finite projection: {quota:?}");
+        let quota = project_quota(
+            &finite_plan(),
+            &definition,
+            &period,
+            &counter,
+            Some(&override_),
+        );
+        assert!(
+            quota.over_limit,
+            "expected over-limit finite projection: {quota:?}"
+        );
         assert_eq!(quota.remaining_amount, -1);
         assert!(!quota.denial_reason_code.is_empty());
 
@@ -666,7 +705,13 @@ mod tests {
             limit: Some(10),
             ..Default::default()
         };
-        let quota = project_quota(&finite_plan(), &definition, &period, &counter, Some(&override_));
+        let quota = project_quota(
+            &finite_plan(),
+            &definition,
+            &period,
+            &counter,
+            Some(&override_),
+        );
         assert_eq!(quota.carryover_applied, 3);
         assert_eq!(quota.remaining_amount, 7);
     }
@@ -696,7 +741,11 @@ mod tests {
             Some(&override_),
             None,
         );
-        assert_eq!(item.status, QuotaStatus::NEAR_LIMIT, "expected percent near-limit: {item:?}");
+        assert_eq!(
+            item.status,
+            QuotaStatus::NEAR_LIMIT,
+            "expected percent near-limit: {item:?}"
+        );
         assert!(item.near_limit);
         assert_eq!(item.near_limit_reason, NearLimitReason::PERCENT_THRESHOLD);
         assert_eq!(item.typical_operation_amount, 1);
@@ -819,7 +868,9 @@ mod tests {
             &NearLimitReason::from(NearLimitReason::NONE),
         );
         assert!(
-            actions.iter().any(|action| *action == RecoveryAction::REQUEST_OVERRIDE),
+            actions
+                .iter()
+                .any(|action| *action == RecoveryAction::REQUEST_OVERRIDE),
             "expected request_override in {actions:?}"
         );
     }

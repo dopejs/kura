@@ -7,6 +7,7 @@ This module defines the execution substrate above the daemon core: skills, memor
 - [32-harness-architecture.md](/Users/John/Code/agent-os/docs/harness/harness-architecture.md)
 - [sandbox-execution-plane.md](/Users/John/Code/agent-os/docs/harness/sandbox-execution-plane.md)
 - [31-skill-registry-and-prompt-support.md](/Users/John/Code/agent-os/docs/harness/skill-registry-and-prompt-support.md)
+- [agent-deepening-program.md](agent-deepening-program.md) — planning record for the Roadmap 78 second slice wave and OpenClaw follow-ups
 
 ## Suggested Reading Order
 

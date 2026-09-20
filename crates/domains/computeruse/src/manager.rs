@@ -6,32 +6,71 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::{
-    first_non_empty, Action, ActionKind, ActionRequestResult, ActionStatus, Artifact,
-    ArtifactCaptureRequest, CreateActionInput, CreateSessionInput, Driver,
-    FailureClass, MatchResult, MemoryDriver, PageSummary, PageTarget, RiskLevel, Session,
-    SessionStatus, TargetMatchContext,
+    Action, ActionKind, ActionRequestResult, ActionStatus, Artifact, ArtifactCaptureRequest,
+    CreateActionInput, CreateSessionInput, Driver, FailureClass, MatchResult, MemoryDriver,
+    PageSummary, PageTarget, RiskLevel, Session, SessionStatus, TargetMatchContext,
+    first_non_empty,
 };
 
 pub const ERR_SESSION_NOT_FOUND: &str = "computer-use session not found";
 pub const ERR_ACTION_NOT_FOUND: &str = "computer-use action not found";
-pub const ERR_UNSUPPORTED_MODE: &str = "computer-use request is outside the browser-first phase 26 scope";
+pub const ERR_UNSUPPORTED_MODE: &str =
+    "computer-use request is outside the browser-first phase 26 scope";
 
 pub trait Store: Send + Sync {
     fn upsert_computer_use_session(&self, session: &Session) -> Result<(), String>;
-    fn list_computer_use_sessions(&self, environment: &str, run_id: &str) -> Result<Vec<Session>, String>;
-    fn get_computer_use_session(&self, environment: &str, run_id: &str, session_id: &str) -> Result<Option<Session>, String>;
+    fn list_computer_use_sessions(
+        &self,
+        environment: &str,
+        run_id: &str,
+    ) -> Result<Vec<Session>, String>;
+    fn get_computer_use_session(
+        &self,
+        environment: &str,
+        run_id: &str,
+        session_id: &str,
+    ) -> Result<Option<Session>, String>;
     fn upsert_computer_use_action(&self, action: &Action) -> Result<(), String>;
-    fn list_computer_use_actions(&self, environment: &str, run_id: &str, session_id: &str) -> Result<Vec<Action>, String>;
-    fn get_computer_use_action(&self, environment: &str, run_id: &str, session_id: &str, action_id: &str) -> Result<Option<Action>, String>;
-    fn find_pending_computer_use_action_by_approval(&self, environment: &str, approval_id: &str) -> Result<Option<Action>, String>;
+    fn list_computer_use_actions(
+        &self,
+        environment: &str,
+        run_id: &str,
+        session_id: &str,
+    ) -> Result<Vec<Action>, String>;
+    fn get_computer_use_action(
+        &self,
+        environment: &str,
+        run_id: &str,
+        session_id: &str,
+        action_id: &str,
+    ) -> Result<Option<Action>, String>;
+    fn find_pending_computer_use_action_by_approval(
+        &self,
+        environment: &str,
+        approval_id: &str,
+    ) -> Result<Option<Action>, String>;
     fn upsert_computer_use_artifact(&self, artifact: &Artifact) -> Result<(), String>;
-    fn list_computer_use_artifacts_for_action(&self, environment: &str, run_id: &str, action_id: &str) -> Result<Vec<Artifact>, String>;
-    fn get_computer_use_artifact(&self, environment: &str, artifact_id: &str) -> Result<Option<Artifact>, String>;
-    fn mark_in_flight_computer_use_interrupted(&self, environment: &str, now: DateTime<Utc>) -> Result<(Vec<Session>, Vec<Action>), String>;
+    fn list_computer_use_artifacts_for_action(
+        &self,
+        environment: &str,
+        run_id: &str,
+        action_id: &str,
+    ) -> Result<Vec<Artifact>, String>;
+    fn get_computer_use_artifact(
+        &self,
+        environment: &str,
+        artifact_id: &str,
+    ) -> Result<Option<Artifact>, String>;
+    fn mark_in_flight_computer_use_interrupted(
+        &self,
+        environment: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(Vec<Session>, Vec<Action>), String>;
 }
 
 pub trait ArtifactRecorder: Send + Sync {
-    fn save_computer_use_artifact(&self, input: ArtifactCaptureRequest) -> Result<Artifact, String>;
+    fn save_computer_use_artifact(&self, input: ArtifactCaptureRequest)
+    -> Result<Artifact, String>;
     fn read_computer_use_artifact_content(&self, storage_key: &str) -> Result<Vec<u8>, String>;
 }
 
@@ -66,9 +105,15 @@ impl Manager {
         }
     }
 
-    pub fn acquire_session(&self, run_id: &str, input: CreateSessionInput) -> Result<(Session, bool), String> {
+    pub fn acquire_session(
+        &self,
+        run_id: &str,
+        input: CreateSessionInput,
+    ) -> Result<(Session, bool), String> {
         if !input.workflow_id.trim().is_empty() {
-            let sessions = self.store.list_computer_use_sessions(&self.environment, run_id)?;
+            let sessions = self
+                .store
+                .list_computer_use_sessions(&self.environment, run_id)?;
             for session in sessions {
                 if session.workflow_id != input.workflow_id.trim() {
                     continue;
@@ -86,14 +131,24 @@ impl Manager {
         Ok((session, false))
     }
 
-    pub fn create_session(&self, run_id: &str, input: &CreateSessionInput) -> Result<Session, String> {
-        let runtime = self.runtime.as_ref().ok_or("runtime manager is not configured")?;
+    pub fn create_session(
+        &self,
+        run_id: &str,
+        input: &CreateSessionInput,
+    ) -> Result<Session, String> {
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or("runtime manager is not configured")?;
         if runtime.get_run(run_id).is_none() {
             return Err(kura_runtime::RuntimeError::RunNotFound.to_string());
         }
         let driver_kind = first_non_empty(&[&input.driver_kind, "browser"]);
         if driver_kind != "browser" {
-            return Err(format!("{ERR_UNSUPPORTED_MODE}: phase 26 is browser-first and does not support driver kind {:?}", input.driver_kind));
+            return Err(format!(
+                "{ERR_UNSUPPORTED_MODE}: phase 26 is browser-first and does not support driver kind {:?}",
+                input.driver_kind
+            ));
         }
         let now = Utc::now();
         let session = Session {
@@ -114,12 +169,16 @@ impl Manager {
     }
 
     pub fn list_sessions(&self, run_id: &str) -> Result<Vec<Session>, String> {
-        let sessions = self.store.list_computer_use_sessions(&self.environment, run_id)?;
+        let sessions = self
+            .store
+            .list_computer_use_sessions(&self.environment, run_id)?;
         sessions.iter().map(|s| self.enrich_session(s)).collect()
     }
 
     pub fn get_session(&self, run_id: &str, session_id: &str) -> Result<Option<Session>, String> {
-        let session = self.store.get_computer_use_session(&self.environment, run_id, session_id)?;
+        let session = self
+            .store
+            .get_computer_use_session(&self.environment, run_id, session_id)?;
         match session {
             Some(s) => Ok(Some(self.enrich_session(&s)?)),
             None => Ok(None),
@@ -127,8 +186,12 @@ impl Manager {
     }
 
     pub fn close_session(&self, run_id: &str, session_id: &str) -> Result<Session, String> {
-        let session = self.store.get_computer_use_session(&self.environment, run_id, session_id)?;
-        let Some(session) = session else { return Err(ERR_SESSION_NOT_FOUND.to_string()) };
+        let session = self
+            .store
+            .get_computer_use_session(&self.environment, run_id, session_id)?;
+        let Some(session) = session else {
+            return Err(ERR_SESSION_NOT_FOUND.to_string());
+        };
         let closed = self.driver.close_session(session)?;
         self.store.upsert_computer_use_session(&closed)?;
         self.enrich_session(&closed)
@@ -140,9 +203,20 @@ impl Manager {
         session_id: &str,
         requested_by: &str,
         input: CreateActionInput,
-    ) -> Result<(ActionRequestResult, Option<kura_policy::Approval>, Option<kura_policy::Decision>), String> {
-        let session = self.store.get_computer_use_session(&self.environment, run_id, session_id)?;
-        let Some(session) = session else { return Err(ERR_SESSION_NOT_FOUND.to_string()) };
+    ) -> Result<
+        (
+            ActionRequestResult,
+            Option<kura_policy::Approval>,
+            Option<kura_policy::Decision>,
+        ),
+        String,
+    > {
+        let session = self
+            .store
+            .get_computer_use_session(&self.environment, run_id, session_id)?;
+        let Some(session) = session else {
+            return Err(ERR_SESSION_NOT_FOUND.to_string());
+        };
         validate_create_action_input(&input)?;
         let (step, tool_call) = self.create_runtime_tracking(&session, &input)?;
         let page_target = first_non_empty(&[&input.page_target, PageTarget::ActivePage.as_str()]);
@@ -190,12 +264,18 @@ impl Manager {
                     .map_err(|e| e.to_string())?;
                 action.approval_id = approval.approval_id.clone();
                 action.status = ActionStatus::WaitingApproval;
-                let runtime = self.runtime.as_ref().ok_or("runtime manager is not configured")?;
+                let runtime = self
+                    .runtime
+                    .as_ref()
+                    .ok_or("runtime manager is not configured")?;
                 runtime
                     .update_step_status_and_reconcile_run(
                         &step.run_id,
                         &step.step_id,
-                        kura_runtime::UpdateStepStatusInput { status: kura_runtime::StepStatus::Blocked, output: None },
+                        kura_runtime::UpdateStepStatusInput {
+                            status: kura_runtime::StepStatus::Blocked,
+                            output: None,
+                        },
                     )
                     .map_err(|e| e.to_string())?;
                 self.store.upsert_computer_use_action(&action)?;
@@ -205,11 +285,27 @@ impl Manager {
                 session.updated_at = Utc::now();
                 self.store.upsert_computer_use_session(&session)?;
                 let enriched = self.enrich_action(&action)?;
-                return Ok((ActionRequestResult { action: enriched, pending: true, approved: false }, Some(approval), Some(decision)));
+                return Ok((
+                    ActionRequestResult {
+                        action: enriched,
+                        pending: true,
+                        approved: false,
+                    },
+                    Some(approval),
+                    Some(decision),
+                ));
             }
         }
         let enriched = self.execute_action(&session, action)?;
-        Ok((ActionRequestResult { action: enriched, pending: false, approved: true }, None, None))
+        Ok((
+            ActionRequestResult {
+                action: enriched,
+                pending: false,
+                approved: true,
+            },
+            None,
+            None,
+        ))
     }
 
     pub fn resume_pending_action(&self, approval_id: &str) -> Result<(Action, bool), String> {
@@ -217,13 +313,26 @@ impl Manager {
             return Ok((Action::default(), false));
         }
         let policy = self.policy.as_ref();
-        let Some(policy) = policy else { return Ok((Action::default(), false)) };
-        let Some(approval) = policy.get_approval(approval_id.trim()) else { return Ok((Action::default(), false)) };
-        let Some(action) = self.store.find_pending_computer_use_action_by_approval(&self.environment, approval_id)? else {
+        let Some(policy) = policy else {
             return Ok((Action::default(), false));
         };
-        let session = self.store.get_computer_use_session(&self.environment, &action.run_id, &action.computer_use_session_id)?;
-        let Some(session) = session else { return Ok((Action::default(), false)) };
+        let Some(approval) = policy.get_approval(approval_id.trim()) else {
+            return Ok((Action::default(), false));
+        };
+        let Some(action) = self
+            .store
+            .find_pending_computer_use_action_by_approval(&self.environment, approval_id)?
+        else {
+            return Ok((Action::default(), false));
+        };
+        let session = self.store.get_computer_use_session(
+            &self.environment,
+            &action.run_id,
+            &action.computer_use_session_id,
+        )?;
+        let Some(session) = session else {
+            return Ok((Action::default(), false));
+        };
         match approval.status {
             kura_policy::ApprovalStatus::Rejected => {
                 let now = Utc::now();
@@ -233,20 +342,32 @@ impl Manager {
                 action.failure_reason = "approval was rejected".to_string();
                 action.updated_at = now;
                 action.completed_at = Some(now);
-                let runtime = self.runtime.as_ref().ok_or("runtime manager is not configured")?;
+                let runtime = self
+                    .runtime
+                    .as_ref()
+                    .ok_or("runtime manager is not configured")?;
                 runtime
-                    .deny_tool_call(&action.run_id, &action.step_id, &action.tool_call_id, kura_runtime::DenyToolCallInput {
-                        output: Some(serde_json::json!({"approvalId": approval_id})),
-                        error: "approval was rejected".to_string(),
-                        failure_class: FailureClass::PolicyDenied.as_str().to_string(),
-                        ..Default::default()
-                    })
+                    .deny_tool_call(
+                        &action.run_id,
+                        &action.step_id,
+                        &action.tool_call_id,
+                        kura_runtime::DenyToolCallInput {
+                            output: Some(serde_json::json!({"approvalId": approval_id})),
+                            error: "approval was rejected".to_string(),
+                            failure_class: FailureClass::PolicyDenied.as_str().to_string(),
+                            ..Default::default()
+                        },
+                    )
                     .map_err(|e| e.to_string())?;
                 runtime
-                    .update_step_status_and_reconcile_run(&action.run_id, &action.step_id, kura_runtime::UpdateStepStatusInput {
-                        status: kura_runtime::StepStatus::Blocked,
-                        output: Some(serde_json::json!({"approvalId": approval_id})),
-                    })
+                    .update_step_status_and_reconcile_run(
+                        &action.run_id,
+                        &action.step_id,
+                        kura_runtime::UpdateStepStatusInput {
+                            status: kura_runtime::StepStatus::Blocked,
+                            output: Some(serde_json::json!({"approvalId": approval_id})),
+                        },
+                    )
                     .map_err(|e| e.to_string())?;
                 let mut session = session;
                 session.status = SessionStatus::Active;
@@ -265,31 +386,70 @@ impl Manager {
     }
 
     pub fn get_artifact(&self, artifact_id: &str) -> Result<Option<Artifact>, String> {
-        self.store.get_computer_use_artifact(&self.environment, artifact_id)
+        self.store
+            .get_computer_use_artifact(&self.environment, artifact_id)
     }
 
-    pub fn read_artifact_content(&self, artifact_id: &str) -> Result<(Artifact, Vec<u8>, bool), String> {
+    pub fn read_artifact_content(
+        &self,
+        artifact_id: &str,
+    ) -> Result<(Artifact, Vec<u8>, bool), String> {
         let artifact = self.get_artifact(artifact_id)?;
-        let Some(artifact) = artifact else { return Ok((Artifact::default(), Vec::new(), false)) };
-        let Some(recorder) = self.artifacts.as_ref() else { return Ok((artifact, Vec::new(), true)) };
+        let Some(artifact) = artifact else {
+            return Ok((Artifact::default(), Vec::new(), false));
+        };
+        let Some(recorder) = self.artifacts.as_ref() else {
+            return Ok((artifact, Vec::new(), true));
+        };
         let content = recorder.read_computer_use_artifact_content(&artifact.storage_key)?;
         Ok((artifact, content, true))
     }
 
     fn execute_action(&self, session: &Session, mut action: Action) -> Result<Action, String> {
         let now = Utc::now();
-        let history = self.store.list_computer_use_actions(&self.environment, &action.run_id, &action.computer_use_session_id)?;
+        let history = self.store.list_computer_use_actions(
+            &self.environment,
+            &action.run_id,
+            &action.computer_use_session_id,
+        )?;
         let mut session = session.clone();
         session.actions = history;
         if let Some(runtime) = self.runtime.as_ref() {
             if let Some(step) = runtime.get_step(&action.run_id, &action.step_id) {
                 match step.status {
                     kura_runtime::StepStatus::Blocked => {
-                        runtime.update_step_status_and_reconcile_run(&action.run_id, &action.step_id, kura_runtime::UpdateStepStatusInput { status: kura_runtime::StepStatus::Planning, output: None }).map_err(|e| e.to_string())?;
-                        runtime.update_step_status_and_reconcile_run(&action.run_id, &action.step_id, kura_runtime::UpdateStepStatusInput { status: kura_runtime::StepStatus::ExecutingTool, output: None }).map_err(|e| e.to_string())?;
+                        runtime
+                            .update_step_status_and_reconcile_run(
+                                &action.run_id,
+                                &action.step_id,
+                                kura_runtime::UpdateStepStatusInput {
+                                    status: kura_runtime::StepStatus::Planning,
+                                    output: None,
+                                },
+                            )
+                            .map_err(|e| e.to_string())?;
+                        runtime
+                            .update_step_status_and_reconcile_run(
+                                &action.run_id,
+                                &action.step_id,
+                                kura_runtime::UpdateStepStatusInput {
+                                    status: kura_runtime::StepStatus::ExecutingTool,
+                                    output: None,
+                                },
+                            )
+                            .map_err(|e| e.to_string())?;
                     }
                     kura_runtime::StepStatus::Planning => {
-                        runtime.update_step_status_and_reconcile_run(&action.run_id, &action.step_id, kura_runtime::UpdateStepStatusInput { status: kura_runtime::StepStatus::ExecutingTool, output: None }).map_err(|e| e.to_string())?;
+                        runtime
+                            .update_step_status_and_reconcile_run(
+                                &action.run_id,
+                                &action.step_id,
+                                kura_runtime::UpdateStepStatusInput {
+                                    status: kura_runtime::StepStatus::ExecutingTool,
+                                    output: None,
+                                },
+                            )
+                            .map_err(|e| e.to_string())?;
                     }
                     _ => {}
                 }
@@ -299,7 +459,11 @@ impl Manager {
             if let Some(ctx) = action.target_match_context.as_mut() {
                 ctx.evaluated_at = Some(now);
                 ctx.match_result = Some(MatchResult::Matched);
-                ctx.observed_page_url = first_page_field(session.current_page.as_ref(), session.current_page.as_ref(), "url");
+                ctx.observed_page_url = first_page_field(
+                    session.current_page.as_ref(),
+                    session.current_page.as_ref(),
+                    "url",
+                );
             }
         }
         if let Some(captures) = evaluate_target_match(&session, &mut action) {
@@ -339,9 +503,19 @@ impl Manager {
             return self.enrich_action(&action);
         }
         if let Some(runtime) = self.runtime.as_ref() {
-            runtime.mark_tool_call_running(&action.run_id, &action.step_id, &action.tool_call_id, "", serde_json::Map::new()).map_err(|e| e.to_string())?;
+            runtime
+                .mark_tool_call_running(
+                    &action.run_id,
+                    &action.step_id,
+                    &action.tool_call_id,
+                    "",
+                    serde_json::Map::new(),
+                )
+                .map_err(|e| e.to_string())?;
         }
-        let (running_session, executed_action, captures) = self.driver.execute_action(session.clone(), action.clone())?;
+        let (running_session, executed_action, captures) = self
+            .driver
+            .execute_action(session.clone(), action.clone())?;
         let mut action = executed_action;
         let session = running_session;
         self.store.upsert_computer_use_action(&action)?;
@@ -391,8 +565,15 @@ impl Manager {
         self.enrich_action(&action)
     }
 
-    fn create_runtime_tracking(&self, session: &Session, input: &CreateActionInput) -> Result<(kura_runtime::Step, kura_runtime::ToolCall), String> {
-        let runtime = self.runtime.as_ref().ok_or("runtime manager is not configured")?;
+    fn create_runtime_tracking(
+        &self,
+        session: &Session,
+        input: &CreateActionInput,
+    ) -> Result<(kura_runtime::Step, kura_runtime::ToolCall), String> {
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or("runtime manager is not configured")?;
         let step = runtime
             .create_step(&session.run_id, kura_runtime::CreateStepInput {
                 title: format!("Computer-use {}", input.action_kind.as_str()),
@@ -403,8 +584,26 @@ impl Manager {
                 ..Default::default()
             })
             .map_err(|e| e.to_string())?;
-        runtime.update_step_status_and_reconcile_run(&session.run_id, &step.step_id, kura_runtime::UpdateStepStatusInput { status: kura_runtime::StepStatus::Planning, output: None }).map_err(|e| e.to_string())?;
-        runtime.update_step_status_and_reconcile_run(&session.run_id, &step.step_id, kura_runtime::UpdateStepStatusInput { status: kura_runtime::StepStatus::ExecutingTool, output: None }).map_err(|e| e.to_string())?;
+        runtime
+            .update_step_status_and_reconcile_run(
+                &session.run_id,
+                &step.step_id,
+                kura_runtime::UpdateStepStatusInput {
+                    status: kura_runtime::StepStatus::Planning,
+                    output: None,
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        runtime
+            .update_step_status_and_reconcile_run(
+                &session.run_id,
+                &step.step_id,
+                kura_runtime::UpdateStepStatusInput {
+                    status: kura_runtime::StepStatus::ExecutingTool,
+                    output: None,
+                },
+            )
+            .map_err(|e| e.to_string())?;
         let tool_call = runtime
             .create_tool_call(&session.run_id, &step.step_id, kura_runtime::CreateToolCallInput {
                 workflow_id: session.workflow_id.clone(),
@@ -421,14 +620,25 @@ impl Manager {
     }
 
     fn enrich_session(&self, session: &Session) -> Result<Session, String> {
-        let actions = self.store.list_computer_use_actions(&self.environment, &session.run_id, &session.computer_use_session_id)?;
+        let actions = self.store.list_computer_use_actions(
+            &self.environment,
+            &session.run_id,
+            &session.computer_use_session_id,
+        )?;
         let mut session = session.clone();
-        session.actions = actions.iter().map(|a| self.enrich_action(a)).collect::<Result<Vec<_>, _>>()?;
+        session.actions = actions
+            .iter()
+            .map(|a| self.enrich_action(a))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(session)
     }
 
     fn enrich_action(&self, action: &Action) -> Result<Action, String> {
-        let artifacts = self.store.list_computer_use_artifacts_for_action(&self.environment, &action.run_id, &action.computer_use_action_id)?;
+        let artifacts = self.store.list_computer_use_artifacts_for_action(
+            &self.environment,
+            &action.run_id,
+            &action.computer_use_action_id,
+        )?;
         let mut action = action.clone();
         action.artifacts = artifacts;
         Ok(action)
@@ -437,13 +647,21 @@ impl Manager {
 
 fn classify_risk(session: &Session, input: &CreateActionInput) -> RiskLevel {
     match input.action_kind {
-        ActionKind::Click | ActionKind::Input | ActionKind::Select | ActionKind::Download => RiskLevel::High,
+        ActionKind::Click | ActionKind::Input | ActionKind::Select | ActionKind::Download => {
+            RiskLevel::High
+        }
         ActionKind::Navigate => {
             if session.trusted_page_scope.is_none() || input.url.trim().is_empty() {
                 return RiskLevel::Low;
             }
             let origin = origin_from_url(&input.url);
-            if !origin.is_empty() && Some(origin.as_str()) != session.trusted_page_scope.as_ref().map(|s| s.origin.as_str()) {
+            if !origin.is_empty()
+                && Some(origin.as_str())
+                    != session
+                        .trusted_page_scope
+                        .as_ref()
+                        .map(|s| s.origin.as_str())
+            {
                 return RiskLevel::High;
             }
             RiskLevel::Low
@@ -454,25 +672,45 @@ fn classify_risk(session: &Session, input: &CreateActionInput) -> RiskLevel {
 
 fn validate_create_action_input(input: &CreateActionInput) -> Result<(), String> {
     if !is_supported_action_kind(input.action_kind) {
-        return Err(format!("{ERR_UNSUPPORTED_MODE}: unsupported action kind {:?}", input.action_kind.as_str()));
+        return Err(format!(
+            "{ERR_UNSUPPORTED_MODE}: unsupported action kind {:?}",
+            input.action_kind.as_str()
+        ));
     }
     match first_non_empty(&[&input.page_target, PageTarget::ActivePage.as_str()]).as_str() {
         "active_page" => Ok(()),
-        "new_tab" | "new_window" => Err(format!("{ERR_UNSUPPORTED_MODE}: phase 26 supports only a single active page and rejects {:?} requests", input.page_target)),
-        _ => Err(format!("{ERR_UNSUPPORTED_MODE}: unsupported page target {:?}", input.page_target)),
+        "new_tab" | "new_window" => Err(format!(
+            "{ERR_UNSUPPORTED_MODE}: phase 26 supports only a single active page and rejects {:?} requests",
+            input.page_target
+        )),
+        _ => Err(format!(
+            "{ERR_UNSUPPORTED_MODE}: unsupported page target {:?}",
+            input.page_target
+        )),
     }
 }
 
 fn is_supported_action_kind(kind: ActionKind) -> bool {
     matches!(
         kind,
-        ActionKind::Navigate | ActionKind::Back | ActionKind::Forward | ActionKind::Wait
-            | ActionKind::Screenshot | ActionKind::Snapshot | ActionKind::Click | ActionKind::Input
-            | ActionKind::Select | ActionKind::Download | ActionKind::CloseSession
+        ActionKind::Navigate
+            | ActionKind::Back
+            | ActionKind::Forward
+            | ActionKind::Wait
+            | ActionKind::Screenshot
+            | ActionKind::Snapshot
+            | ActionKind::Click
+            | ActionKind::Input
+            | ActionKind::Select
+            | ActionKind::Download
+            | ActionKind::CloseSession
     )
 }
 
-fn evaluate_target_match(session: &Session, action: &mut Action) -> Option<Vec<ArtifactCaptureRequest>> {
+fn evaluate_target_match(
+    session: &Session,
+    action: &mut Action,
+) -> Option<Vec<ArtifactCaptureRequest>> {
     if action.target_match_context.is_none() {
         return None;
     }
@@ -489,7 +727,11 @@ fn evaluate_target_match(session: &Session, action: &mut Action) -> Option<Vec<A
     if let Some(ctx) = action.target_match_context.as_mut() {
         ctx.match_result = Some(MatchResult::Mismatched);
     }
-    Some(vec![crate::build_page_evidence_capture(session, action, ActionKind::Snapshot)])
+    Some(vec![crate::build_page_evidence_capture(
+        session,
+        action,
+        ActionKind::Snapshot,
+    )])
 }
 
 fn is_quota_artifact_capture_error(err: &str) -> bool {
@@ -534,18 +776,36 @@ fn mismatched(target: Option<&TargetMatchContext>) -> bool {
     let expected_selector = target.expected_selector.trim().to_lowercase();
     let expected_text = target.expected_text.trim().to_lowercase();
     let expected_url = target.expected_page_url.trim().to_lowercase();
-    expected_selector.contains("missing") || expected_text.contains("missing") || expected_url.contains("missing")
+    expected_selector.contains("missing")
+        || expected_text.contains("missing")
+        || expected_url.contains("missing")
 }
 
-fn first_page_field(after: Option<&PageSummary>, before: Option<&PageSummary>, field: &str) -> String {
+fn first_page_field(
+    after: Option<&PageSummary>,
+    before: Option<&PageSummary>,
+    field: &str,
+) -> String {
     match field {
         "url" => {
-            if let Some(a) = after { if !a.url.is_empty() { return a.url.clone(); } }
-            if let Some(b) = before { return b.url.clone(); }
+            if let Some(a) = after {
+                if !a.url.is_empty() {
+                    return a.url.clone();
+                }
+            }
+            if let Some(b) = before {
+                return b.url.clone();
+            }
         }
         "title" => {
-            if let Some(a) = after { if !a.title.is_empty() { return a.title.clone(); } }
-            if let Some(b) = before { return b.title.clone(); }
+            if let Some(a) = after {
+                if !a.title.is_empty() {
+                    return a.title.clone();
+                }
+            }
+            if let Some(b) = before {
+                return b.title.clone();
+            }
         }
         _ => {}
     }

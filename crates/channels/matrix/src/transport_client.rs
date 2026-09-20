@@ -10,15 +10,15 @@ use std::time::Duration;
 use chrono::Utc;
 use kura_connectors::RedactionStatus;
 use kura_imtypes::{OutboundReply, ReplyCapabilities, SentReply};
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 use crate::routes::normalize_route_policy;
 use crate::smoke::SmokeTransport;
 use crate::types::{
     AuthorizationState, ConversationType, HomeserverBinding, HomeserverCapabilityState,
-    InboundEvent, MessageKind, RoutePolicy, RoutePolicyState, RoomSelectionState,
+    InboundEvent, MessageKind, RoomSelectionState, RoutePolicy, RoutePolicyState,
 };
 
 /// Go `AccessTokenProvider`.
@@ -180,9 +180,10 @@ impl ClientTransport {
         binding.validated_at = Utc::now();
         binding.redaction_status = RedactionStatus::Redacted;
         if binding.safe_evidence.is_empty() {
-            binding
-                .safe_evidence
-                .insert("provider".to_string(), "matrix_client_server_api".to_string());
+            binding.safe_evidence.insert(
+                "provider".to_string(),
+                "matrix_client_server_api".to_string(),
+            );
         }
         *self.bot_user_id.lock() = binding.bot_user_id.clone();
         (binding, Ok(()))
@@ -226,8 +227,10 @@ impl ClientTransport {
                 Ok(response) => response,
                 Err(err) => {
                     policy.selected_rooms[i].validation_state = RoutePolicyState::Blocked;
-                    policy.selected_rooms[i].room_selection_state = RoomSelectionState::MissingMembership;
-                    policy.selected_rooms[i].reason_code = "matrix_room_permission_missing".to_string();
+                    policy.selected_rooms[i].room_selection_state =
+                        RoomSelectionState::MissingMembership;
+                    policy.selected_rooms[i].reason_code =
+                        "matrix_room_permission_missing".to_string();
                     policy.validation_state = RoutePolicyState::Blocked;
                     policy.reason_code = policy.selected_rooms[i].reason_code.clone();
                     return (policy, Err(err.to_string()));
@@ -235,7 +238,8 @@ impl ClientTransport {
             };
             if response.membership != "join" {
                 policy.selected_rooms[i].validation_state = RoutePolicyState::Blocked;
-                policy.selected_rooms[i].room_selection_state = RoomSelectionState::MissingMembership;
+                policy.selected_rooms[i].room_selection_state =
+                    RoomSelectionState::MissingMembership;
                 policy.selected_rooms[i].reason_code = "matrix_room_membership_missing".to_string();
                 policy.validation_state = RoutePolicyState::Blocked;
                 policy.reason_code = policy.selected_rooms[i].reason_code.clone();
@@ -248,9 +252,10 @@ impl ClientTransport {
         policy.validated_at = Utc::now();
         policy.redaction_status = RedactionStatus::Redacted;
         if policy.safe_evidence.is_empty() {
-            policy
-                .safe_evidence
-                .insert("provider".to_string(), "matrix_client_server_api".to_string());
+            policy.safe_evidence.insert(
+                "provider".to_string(),
+                "matrix_client_server_api".to_string(),
+            );
         }
         (policy, Ok(()))
     }
@@ -277,14 +282,21 @@ impl ClientTransport {
     }
 
     /// Go `syncOnce`: one long-polled sync request.
-    fn sync_once(&self, token: &str, since: &str, timeout: Duration) -> Result<MatrixSyncResponse, String> {
+    fn sync_once(
+        &self,
+        token: &str,
+        since: &str,
+        timeout: Duration,
+    ) -> Result<MatrixSyncResponse, String> {
         let mut query = format!("timeout={}", timeout.as_millis());
         if !since.trim().is_empty() {
-            let encoded: String = url::form_urlencoded::byte_serialize(since.trim().as_bytes()).collect();
+            let encoded: String =
+                url::form_urlencoded::byte_serialize(since.trim().as_bytes()).collect();
             query = format!("since={encoded}&{query}");
         }
         let path = format!("/_matrix/client/v3/sync?{query}");
-        self.call("GET", &path, token, None).map_err(|e| e.to_string())
+        self.call("GET", &path, token, None)
+            .map_err(|e| e.to_string())
     }
 
     /// Go `call`: one HTTP request with a Bearer token, JSON payload, and
@@ -307,8 +319,9 @@ impl ClientTransport {
         }
         let response = match payload {
             Some(payload) => {
-                let bytes = serde_json::to_vec(payload)
-                    .map_err(|e| ClientError::Message(format!("request body encode failed: {e}")))?;
+                let bytes = serde_json::to_vec(payload).map_err(|e| {
+                    ClientError::Message(format!("request body encode failed: {e}"))
+                })?;
                 request.send_bytes(&bytes)
             }
             None => request.call(),
@@ -332,7 +345,8 @@ impl ClientTransport {
             }
         };
         if (200..300).contains(&status) {
-            let out = serde_json::from_str::<O>(&raw).map_err(|e| ClientError::Json(e.to_string()))?;
+            let out =
+                serde_json::from_str::<O>(&raw).map_err(|e| ClientError::Json(e.to_string()))?;
             return Ok(out);
         }
         #[derive(Deserialize, Default)]
@@ -426,8 +440,9 @@ impl crate::transport::Transport for ClientTransport {
             path_escape(&room_id),
             path_escape(&transaction_id)
         );
-        let response: SendResponse =
-            self.call("PUT", &path, &token, Some(&payload)).map_err(|e| e.to_string())?;
+        let response: SendResponse = self
+            .call("PUT", &path, &token, Some(&payload))
+            .map_err(|e| e.to_string())?;
         if response.event_id.trim().is_empty() {
             return Err(ClientApiError {
                 status_code: 0,
@@ -613,18 +628,37 @@ pub fn matrix_validation_states_for_error(
 ) -> (AuthorizationState, HomeserverCapabilityState) {
     if let ClientError::Api(api) = err {
         match api.status_code {
-            401 | 403 => return (AuthorizationState::Revoked, HomeserverCapabilityState::Unknown),
-            429 => return (AuthorizationState::Valid, HomeserverCapabilityState::RateLimited),
+            401 | 403 => {
+                return (
+                    AuthorizationState::Revoked,
+                    HomeserverCapabilityState::Unknown,
+                );
+            }
+            429 => {
+                return (
+                    AuthorizationState::Valid,
+                    HomeserverCapabilityState::RateLimited,
+                );
+            }
             _ => {}
         }
         if api.status_code >= 500 {
-            return (AuthorizationState::ProviderUnavailable, HomeserverCapabilityState::Unknown);
+            return (
+                AuthorizationState::ProviderUnavailable,
+                HomeserverCapabilityState::Unknown,
+            );
         }
         if api.err_code == "network_failed" {
-            return (AuthorizationState::NetworkFailed, HomeserverCapabilityState::Unknown);
+            return (
+                AuthorizationState::NetworkFailed,
+                HomeserverCapabilityState::Unknown,
+            );
         }
     }
-    (AuthorizationState::Unknown, HomeserverCapabilityState::Unknown)
+    (
+        AuthorizationState::Unknown,
+        HomeserverCapabilityState::Unknown,
+    )
 }
 
 /// Go `url.PathEscape` for path segments (Go 1.24 semantics): escapes every
@@ -636,9 +670,19 @@ pub fn path_escape(segment: &str) -> String {
     let mut out = String::with_capacity(segment.len());
     for byte in segment.as_bytes() {
         match *byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
-            | b'-' | b'_' | b'.' | b'~'
-            | b'$' | b'&' | b'+' | b':' | b'@' | b'=' => {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'~'
+            | b'$'
+            | b'&'
+            | b'+'
+            | b':'
+            | b'@'
+            | b'=' => {
                 out.push(*byte as char);
             }
             _ => {

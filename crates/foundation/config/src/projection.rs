@@ -320,7 +320,11 @@ impl DiscordConnectorConfig {
     pub fn project_hosted_readiness(&self, tenant_id: &str) -> DiscordHostedReadinessProjection {
         let mode = {
             let trimmed = self.delivery_mode.trim();
-            if trimmed.is_empty() { "gateway" } else { trimmed }
+            if trimmed.is_empty() {
+                "gateway"
+            } else {
+                trimmed
+            }
         };
         let mut projection = DiscordHostedReadinessProjection {
             tenant_id: tenant_id.trim().to_string(),

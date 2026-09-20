@@ -40,7 +40,9 @@ pub fn resolve_path(home_dir: &str, value: &str) -> String {
     match trimmed {
         "" => String::new(),
         "~" => home_dir.to_string(),
-        _ if trimmed.starts_with("~/") => filepath_join(&[home_dir, trimmed.trim_start_matches("~/")]),
+        _ if trimmed.starts_with("~/") => {
+            filepath_join(&[home_dir, trimmed.trim_start_matches("~/")])
+        }
         _ => trimmed.to_string(),
     }
 }
@@ -93,7 +95,9 @@ fn look_path(name: &str) -> bool {
     if candidate.components().count() > 1 || candidate.is_absolute() {
         return is_executable_file(candidate);
     }
-    let Ok(path_var) = std::env::var("PATH") else { return false };
+    let Ok(path_var) = std::env::var("PATH") else {
+        return false;
+    };
     std::env::split_paths(&path_var).any(|dir| is_executable_file(&dir.join(name)))
 }
 
@@ -144,8 +148,7 @@ pub fn decode_jwt_payload(token: &str) -> Option<serde_json::Map<String, serde_j
 /// `base64.RawURLEncoding.DecodeString` behavior for JWT claims segments.
 #[must_use]
 fn base64_url_decode_no_pad(input: &str) -> Option<Vec<u8>> {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut values = Vec::with_capacity(input.len());
     for byte in input.bytes() {
         let index = ALPHABET.iter().position(|candidate| *candidate == byte)? as u32;

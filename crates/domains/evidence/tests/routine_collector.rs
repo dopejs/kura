@@ -4,7 +4,9 @@
 
 use std::sync::Arc;
 
-use kura_evidence::{Bundle, Collector, Manager, RedactionStatus, RoutineCollector, Scope, ScopeKind};
+use kura_evidence::{
+    Bundle, Collector, Manager, RedactionStatus, RoutineCollector, Scope, ScopeKind,
+};
 use kura_routine::{CreateInput, Definition, Schedule, Scheduler, Trigger, TriggerKind, Workflow};
 
 fn run_scope(ref_value: &str) -> Scope {
@@ -32,7 +34,9 @@ struct FakeScheduler {
 
 impl Scheduler for FakeScheduler {
     fn create(&self, _input: &CreateInput) -> Result<Schedule, String> {
-        let n = self.next_schedule_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let n = self
+            .next_schedule_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(Schedule {
             schedule_id: format!("sched_{n}"),
             ..Schedule::default()
@@ -53,7 +57,10 @@ impl Scheduler for FakeScheduler {
 }
 
 fn routine_manager() -> Arc<kura_routine::Manager> {
-    let manager = Arc::new(kura_routine::Manager::new("test", Box::<FakeScheduler>::default()));
+    let manager = Arc::new(kura_routine::Manager::new(
+        "test",
+        Box::<FakeScheduler>::default(),
+    ));
     let def = Definition {
         name: "Weekly digest".to_string(),
         trigger: Trigger {
@@ -61,7 +68,10 @@ fn routine_manager() -> Arc<kura_routine::Manager> {
             cron_expr: "0 9 * * 1".to_string(),
             ..Trigger::default()
         },
-        workflow: Workflow { entrypoint: String::new(), goal: "Send the weekly digest".to_string() },
+        workflow: Workflow {
+            entrypoint: String::new(),
+            goal: "Send the weekly digest".to_string(),
+        },
         ..Definition::default()
     };
     manager.create(def).expect("create routine");
@@ -82,19 +92,27 @@ fn routine_collector_builds_routine_section() {
     assert_eq!(section.kind, "routine");
     assert_eq!(
         section.resource_refs,
-        vec![routine.routine_id.clone(), routine.current_schedule_id.clone()]
+        vec![
+            routine.routine_id.clone(),
+            routine.current_schedule_id.clone()
+        ]
     );
     assert_eq!(section.summary["name"], "Weekly digest");
     assert_eq!(section.summary["state"], "active");
     assert_eq!(section.summary["currentVersion"], "1");
-    assert_eq!(section.links, vec![format!("/v1/routines/{}", routine.routine_id)]);
+    assert_eq!(
+        section.links,
+        vec![format!("/v1/routines/{}", routine.routine_id)]
+    );
 }
 
 #[test]
 fn routine_collector_returns_empty_for_unknown_routine() {
     let routines = routine_manager();
     let collector = RoutineCollector::new(Some(routines));
-    let sections = collector.collect("tenant-a", &run_scope("routine_nope")).expect("collect");
+    let sections = collector
+        .collect("tenant-a", &run_scope("routine_nope"))
+        .expect("collect");
     assert!(sections.is_empty());
 }
 
@@ -119,7 +137,9 @@ fn routine_collector_ignores_non_routine_scopes() {
 #[test]
 fn routine_collector_without_manager_returns_empty() {
     let collector = RoutineCollector::new(None);
-    let sections = collector.collect("tenant-a", &run_scope("routine_1")).expect("collect");
+    let sections = collector
+        .collect("tenant-a", &run_scope("routine_1"))
+        .expect("collect");
     assert!(sections.is_empty());
 }
 

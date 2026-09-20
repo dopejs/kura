@@ -13,7 +13,9 @@ pub enum ThreadsError {
     LifecycleMutationConflict,
     #[error("thread source or session is not eligible for reopen")]
     LifecycleReopenNotEligible,
-    #[error("source continuation key requires tenant, connector, source account, and source conversation")]
+    #[error(
+        "source continuation key requires tenant, connector, source account, and source conversation"
+    )]
     InvalidSourceContinuationKey,
     #[error("invalid conversation shape")]
     InvalidConversationShape,

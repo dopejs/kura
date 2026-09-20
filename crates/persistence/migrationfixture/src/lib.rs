@@ -45,39 +45,39 @@ use rusqlite::Connection;
 use kura_store::SQLiteStore;
 
 pub use r37_credentials::{
-    seed_r37_local_credential_files, seed_r37_local_credential_state, R37CredentialFixture,
-    R37_FAKE_SECRET_TENANT_A,
+    R37_FAKE_SECRET_TENANT_A, R37CredentialFixture, seed_r37_local_credential_files,
+    seed_r37_local_credential_state,
 };
 pub use r39_production_ops::{
-    build_r39_production_ops_fixture, build_r39_production_ops_sqlite_fixture,
-    copy_r39_production_ops_sqlite_fixture, validate_r39_production_ops_sqlite_restore,
-    R39ProductionOpsFixture, R39TenantState,
+    R39ProductionOpsFixture, R39TenantState, build_r39_production_ops_fixture,
+    build_r39_production_ops_sqlite_fixture, copy_r39_production_ops_sqlite_fixture,
+    validate_r39_production_ops_sqlite_restore,
 };
 pub use r41_evaluation_product::{
-    build_r41_evaluation_product_fixture, count_r41_evaluation_product_rows,
-    seed_r41_evaluation_product_rows, R41EvaluationProductFixture,
+    R41EvaluationProductFixture, build_r41_evaluation_product_fixture,
+    count_r41_evaluation_product_rows, seed_r41_evaluation_product_rows,
 };
 pub use r42_integration_diagnostics::{
-    build_r42_integration_diagnostic_fixture, count_r42_integration_diagnostic_rows,
-    seed_r42_integration_diagnostic_rows, R42IntegrationDiagnosticFixture,
+    R42IntegrationDiagnosticFixture, build_r42_integration_diagnostic_fixture,
+    count_r42_integration_diagnostic_rows, seed_r42_integration_diagnostic_rows,
 };
 pub use r48_connector_conformance::{
-    build_r48_connector_conformance_fixture, count_r48_connector_conformance_rows,
-    seed_r48_connector_conformance_rows, R48ConnectorConformanceFixture,
+    R48ConnectorConformanceFixture, build_r48_connector_conformance_fixture,
+    count_r48_connector_conformance_rows, seed_r48_connector_conformance_rows,
 };
 pub use r49_discord_hardening::{
-    build_r49_discord_hardening_fixture, count_r49_discord_hardening_rows,
-    seed_r49_discord_hardening_rows, R49DiscordHardeningFixture,
+    R49DiscordHardeningFixture, build_r49_discord_hardening_fixture,
+    count_r49_discord_hardening_rows, seed_r49_discord_hardening_rows,
 };
 pub use r50_telegram_channel_connector::{
-    build_r50_telegram_channel_connector_fixture, count_r50_telegram_channel_connector_rows,
-    seed_r50_telegram_channel_connector_rows, R50TelegramChannelConnectorFixture,
+    R50TelegramChannelConnectorFixture, build_r50_telegram_channel_connector_fixture,
+    count_r50_telegram_channel_connector_rows, seed_r50_telegram_channel_connector_rows,
 };
 pub use r51_slack_channel_connector::{
-    build_r51_slack_channel_connector_fixture, count_r51_slack_channel_connector_rows,
-    seed_r51_slack_channel_connector_rows, R51SlackChannelConnectorFixture,
+    R51SlackChannelConnectorFixture, build_r51_slack_channel_connector_fixture,
+    count_r51_slack_channel_connector_rows, seed_r51_slack_channel_connector_rows,
 };
-pub use seeds::{count_seeded_rows, seed_pre_tenant_v21, SeedRowCounts};
+pub use seeds::{SeedRowCounts, count_seeded_rows, seed_pre_tenant_v21};
 
 /// The head schema version BEFORE any Roadmap 35 tenant migration applied.
 /// v22+ added the tenant_id columns; v21 is the last "pre-tenant" head.
@@ -203,7 +203,9 @@ impl FixtureBuilder {
         apply_head_migrations(&store)?;
 
         let r37 = if self.seed_r37 {
-            Some(r37_credentials::seed_r37_local_credential_state(&store, data_dir)?)
+            Some(r37_credentials::seed_r37_local_credential_state(
+                &store, data_dir,
+            )?)
         } else {
             None
         };

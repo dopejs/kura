@@ -171,7 +171,13 @@ pub fn reset_thread(
     updated.current_session_segment_id = segment_id.clone();
     updated.updated_at = now;
     updated.last_activity_at = now;
-    let mut action = lifecycle_action(thread, input, LifecycleActionKind::Reset, LifecycleState::Reset, now);
+    let mut action = lifecycle_action(
+        thread,
+        input,
+        LifecycleActionKind::Reset,
+        LifecycleState::Reset,
+        now,
+    );
     action.resulting_session_segment_id = segment_id.clone();
     let segment = SessionSegment {
         session_segment_id: segment_id,
@@ -203,7 +209,13 @@ pub fn archive_thread(
     updated.lifecycle_state = LifecycleState::Archived;
     updated.updated_at = now;
     updated.last_activity_at = now;
-    let action = lifecycle_action(thread, input, LifecycleActionKind::Archive, LifecycleState::Archived, now);
+    let action = lifecycle_action(
+        thread,
+        input,
+        LifecycleActionKind::Archive,
+        LifecycleState::Archived,
+        now,
+    );
     Ok((updated, action))
 }
 
@@ -221,7 +233,13 @@ pub fn reopen_thread(
     updated.lifecycle_state = LifecycleState::Reopened;
     updated.updated_at = now;
     updated.last_activity_at = now;
-    let action = lifecycle_action(thread, input, LifecycleActionKind::Reopen, LifecycleState::Reopened, now);
+    let action = lifecycle_action(
+        thread,
+        input,
+        LifecycleActionKind::Reopen,
+        LifecycleState::Reopened,
+        now,
+    );
     Ok((updated, action))
 }
 

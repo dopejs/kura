@@ -4,10 +4,10 @@
 //! Ported from `daemon/internal/store/store.go`.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
-use crate::crud::{now_rfc3339, null_string, opt_time_string, parse_opt_rfc3339, parse_rfc3339};
 use crate::SQLiteStore;
+use crate::crud::{now_rfc3339, null_string, opt_time_string, parse_opt_rfc3339, parse_rfc3339};
 
 /// A sandbox execution ledger row. `document` is the JSON-serialized execution document.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -85,6 +85,25 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("upsert sandbox execution {}: {e}", record.execution_id))?;
         Ok(())
+    }
+
+    /// Execution ids owned by `tenant_id`. Pre-backfill rows (NULL tenant)
+    /// are excluded, matching the `kura-tenancy` read convention; the by-id
+    /// guard still admits them.
+    pub fn list_sandbox_execution_ids_for_tenant(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT execution_id FROM sandbox_executions WHERE tenant_id = ?1 ORDER BY execution_id")
+            .map_err(|e| format!("list sandbox execution ids for tenant: {e}"))?;
+        let mut rows = stmt.query(params![tenant_id]).map_err(|e| e.to_string())?;
+        let mut items = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            items.push(row.get::<_, String>(0).map_err(|e| e.to_string())?);
+        }
+        Ok(items)
     }
 
     pub fn list_sandbox_executions(&self) -> Result<Vec<SandboxExecutionRecord>, String> {

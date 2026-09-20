@@ -15,6 +15,7 @@ mod projection;
 mod types;
 
 pub use error::ConfigError;
+pub use file::{FileConfigValidation, INLINE_SECRET_PATHS, validate_file_config_json};
 pub use load::{
     DEFAULT_CONFIG_FILE_NAME, config_file_path, load, managed_provider_home_dir, resolve_dir,
 };
@@ -23,9 +24,8 @@ pub use projection::{
     SlackHostedReadinessProjection, TelegramHostedReadinessProjection,
 };
 pub use types::{
-    AccountProtocol, AccountProviderConfig,
-    Config, ConnectorConfig, DiscordConnectorConfig, Environment, LlmConfig,
-    ManagedCliProviderConfig, MatrixConnectorConfig, ModelRole, ModelRoleBinding,
-    ModelRoutingConfig, OpenAiCompatibleProviderConfig, SamplingConfig, SlackConnectorConfig,
-    TelegramConnectorConfig,
+    AccountProtocol, AccountProviderConfig, Config, ConnectorConfig, DiscordConnectorConfig,
+    Environment, LlmConfig, ManagedCliProviderConfig, MatrixConnectorConfig, ModelRole,
+    ModelRoleBinding, ModelRoutingConfig, OpenAiCompatibleProviderConfig, SamplingConfig,
+    SlackConnectorConfig, StoreConfig, TelegramConnectorConfig,
 };

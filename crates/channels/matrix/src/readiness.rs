@@ -21,7 +21,8 @@ pub fn normalize_homeserver_binding(
     mut binding: HomeserverBinding,
 ) -> HomeserverBinding {
     binding.tenant_id = coalesce_string(&[binding.tenant_id.clone(), tenant_id.to_string()]);
-    binding.connector_id = coalesce_string(&[binding.connector_id.clone(), connector_id.to_string()]);
+    binding.connector_id =
+        coalesce_string(&[binding.connector_id.clone(), connector_id.to_string()]);
     if binding.homeserver_binding_id.is_empty() && !binding.connector_id.is_empty() {
         binding.homeserver_binding_id = format!("matrix_homeserver_{}", binding.connector_id);
     }

@@ -5,7 +5,7 @@ import { loadSiteContent } from "../content.mjs";
 describe("site content", () => {
   it("generates the canonical home and documentation routes", async () => {
     const content = await loadSiteContent();
-    expect(content.pages).toHaveLength(12);
+    expect(content.pages).toHaveLength(13);
     expect(content.pages.map((page) => page.route)).toContain("/docs/architecture");
     expect(content.pages.every((page) => page.href === "/" || page.href.endsWith("/"))).toBe(true);
   });

@@ -83,8 +83,8 @@ mod fixtures;
 
 pub use admin::ResolveReservationInput;
 pub use catalog::{
-    CatalogEntry, CatalogExport, PERIOD_ANCHOR_UTC, REASON_QUOTA_STATE_UNAVAILABLE,
-    definition_for, export_catalog, initial_catalog, initial_definitions, required_categories,
+    CatalogEntry, CatalogExport, PERIOD_ANCHOR_UTC, REASON_QUOTA_STATE_UNAVAILABLE, definition_for,
+    export_catalog, initial_catalog, initial_definitions, required_categories,
 };
 pub use denial::{
     DenialPayload, build_evidence_export, classify_denial, new_quota_exhausted_denial,
@@ -102,9 +102,9 @@ pub use operation_key::{
 };
 pub use preflight::{LIVE_VALIDATION_PREFLIGHT_ENTRY_POINT, reserve_live_validation_preflight};
 pub use projection::{
-    EffectiveQuota, UsageSummary, build_quota_status_item, category_defined_typical_operation_amount,
-    group_quota_status_items, is_quota_near_limit, near_limit_reason_for_quota, period_for,
-    project_quota, recovery_actions_for_quota_status,
+    EffectiveQuota, UsageSummary, build_quota_status_item,
+    category_defined_typical_operation_amount, group_quota_status_items, is_quota_near_limit,
+    near_limit_reason_for_quota, period_for, project_quota, recovery_actions_for_quota_status,
 };
 pub use recovery::RecoveryDecision;
 pub use types::*;

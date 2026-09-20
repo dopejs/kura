@@ -207,8 +207,7 @@ mod tests {
             serde_json::to_string(&DeliveryDirection::Outbound).expect("serialize"),
             "\"outbound\""
         );
-        let parsed: DeliveryDirection =
-            serde_json::from_str("\"outbound\"").expect("deserialize");
+        let parsed: DeliveryDirection = serde_json::from_str("\"outbound\"").expect("deserialize");
         assert_eq!(parsed, DeliveryDirection::Outbound);
     }
 
@@ -382,29 +381,26 @@ mod tests {
             external_message_id: "reply_1".to_string(),
             content: "edited".to_string(),
         };
-        let parsed: ReplyEdit = serde_json::from_str(
-            &serde_json::to_string(&edit).expect("serialize"),
-        )
-        .expect("deserialize");
+        let parsed: ReplyEdit =
+            serde_json::from_str(&serde_json::to_string(&edit).expect("serialize"))
+                .expect("deserialize");
         assert_eq!(parsed, edit);
 
         let signal = ThinkingSignal {
             connector_id: "slack-main".to_string(),
             channel_id: "C123".to_string(),
         };
-        let parsed: ThinkingSignal = serde_json::from_str(
-            &serde_json::to_string(&signal).expect("serialize"),
-        )
-        .expect("deserialize");
+        let parsed: ThinkingSignal =
+            serde_json::from_str(&serde_json::to_string(&signal).expect("serialize"))
+                .expect("deserialize");
         assert_eq!(parsed, signal);
 
         let sent = SentReply {
             external_message_id: "1699999999.000100".to_string(),
         };
-        let parsed: SentReply = serde_json::from_str(
-            &serde_json::to_string(&sent).expect("serialize"),
-        )
-        .expect("deserialize");
+        let parsed: SentReply =
+            serde_json::from_str(&serde_json::to_string(&sent).expect("serialize"))
+                .expect("deserialize");
         assert_eq!(parsed, sent);
     }
 

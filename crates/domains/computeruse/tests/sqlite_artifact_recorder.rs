@@ -14,22 +14,26 @@ use kura_store::{ComputerUseStoreHandle, SQLiteStore};
 
 fn seed_run(handle: &ComputerUseStoreHandle, run_id: &str) {
     let conn = rusqlite::Connection::open(handle.0.lock().db_path()).expect("open connection");
-    conn
-        .execute(
-            "INSERT INTO runs (run_id, session_id, entrypoint, status, goal, created_at, updated_at)
+    conn.execute(
+        "INSERT INTO runs (run_id, session_id, entrypoint, status, goal, created_at, updated_at)
              VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?5)",
-            rusqlite::params![
-                run_id,
-                "browse",
-                "completed",
-                "browse the web",
-                chrono::Utc::now().to_rfc3339(),
-            ],
-        )
-        .expect("seed run row");
+        rusqlite::params![
+            run_id,
+            "browse",
+            "completed",
+            "browse the web",
+            chrono::Utc::now().to_rfc3339(),
+        ],
+    )
+    .expect("seed run row");
 }
 
-fn seed_session_and_action(handle: &ComputerUseStoreHandle, run_id: &str, session_id: &str, action_id: &str) {
+fn seed_session_and_action(
+    handle: &ComputerUseStoreHandle,
+    run_id: &str,
+    session_id: &str,
+    action_id: &str,
+) {
     let now = chrono::Utc::now();
     handle
         .upsert_computer_use_session(&Session {
@@ -60,12 +64,20 @@ fn seed_session_and_action(handle: &ComputerUseStoreHandle, run_id: &str, sessio
 }
 
 fn temp_dir(name: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("kura_computeruse_artifacts_{name}_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "kura_computeruse_artifacts_{name}_{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     dir.to_string_lossy().to_string()
 }
 
-fn capture(session_id: &str, action_id: &str, kind: ArtifactKind, content: &[u8]) -> ArtifactCaptureRequest {
+fn capture(
+    session_id: &str,
+    action_id: &str,
+    kind: ArtifactKind,
+    content: &[u8],
+) -> ArtifactCaptureRequest {
     ArtifactCaptureRequest {
         run_id: "r1".to_string(),
         computer_use_session_id: session_id.to_string(),
@@ -81,13 +93,24 @@ fn capture(session_id: &str, action_id: &str, kind: ArtifactKind, content: &[u8]
 #[test]
 fn recorder_persists_record_and_content() {
     let dir = temp_dir("persist");
-    let store = Arc::new(ComputerUseStoreHandle::new(SQLiteStore::new(&dir).expect("open store")));
+    let store = Arc::new(ComputerUseStoreHandle::new(
+        SQLiteStore::new(&dir).expect("open store"),
+    ));
     seed_run(&store, "r1");
     seed_session_and_action(&store, "r1", "s1", "a1");
-    let recorder = SqliteArtifactRecorder::new(store.clone() as Arc<dyn kura_computeruse::Store>, &dir, "test");
+    let recorder = SqliteArtifactRecorder::new(
+        store.clone() as Arc<dyn kura_computeruse::Store>,
+        &dir,
+        "test",
+    );
 
     let artifact = recorder
-        .save_computer_use_artifact(capture("s1", "a1", ArtifactKind::Screenshot, b"screenshot bytes"))
+        .save_computer_use_artifact(capture(
+            "s1",
+            "a1",
+            ArtifactKind::Screenshot,
+            b"screenshot bytes",
+        ))
         .expect("save artifact");
 
     assert!(artifact.artifact_id.starts_with("cuart_"));
@@ -116,11 +139,17 @@ fn recorder_persists_record_and_content() {
 #[test]
 fn recorder_artifact_ids_are_deterministic() {
     let dir = temp_dir("deterministic");
-    let store = Arc::new(ComputerUseStoreHandle::new(SQLiteStore::new(&dir).expect("open store")));
+    let store = Arc::new(ComputerUseStoreHandle::new(
+        SQLiteStore::new(&dir).expect("open store"),
+    ));
     seed_run(&store, "r1");
     seed_session_and_action(&store, "r1", "s1", "a1");
     seed_session_and_action(&store, "r1", "s2", "a2");
-    let recorder = SqliteArtifactRecorder::new(store.clone() as Arc<dyn kura_computeruse::Store>, &dir, "test");
+    let recorder = SqliteArtifactRecorder::new(
+        store.clone() as Arc<dyn kura_computeruse::Store>,
+        &dir,
+        "test",
+    );
 
     let a = recorder
         .save_computer_use_artifact(capture("s1", "a1", ArtifactKind::PageSnapshot, b"same"))
@@ -128,7 +157,10 @@ fn recorder_artifact_ids_are_deterministic() {
     let b = recorder
         .save_computer_use_artifact(capture("s2", "a2", ArtifactKind::PageSnapshot, b"same"))
         .expect("save b");
-    assert_eq!(a.artifact_id, b.artifact_id, "content-addressed artifact ids must match");
+    assert_eq!(
+        a.artifact_id, b.artifact_id,
+        "content-addressed artifact ids must match"
+    );
 
     // Same content addresses one artifact row; the second save upserts it and
     // points it at the latest action.
@@ -138,7 +170,11 @@ fn recorder_artifact_ids_are_deterministic() {
     assert_eq!(listed.len(), 1, "same content addresses one artifact row");
     assert_eq!(listed[0].computer_use_action_id, "a2");
     assert_eq!(
-        store.get_computer_use_artifact("test", &a.artifact_id).expect("get artifact").expect("present").artifact_id,
+        store
+            .get_computer_use_artifact("test", &a.artifact_id)
+            .expect("get artifact")
+            .expect("present")
+            .artifact_id,
         a.artifact_id
     );
 }
@@ -146,7 +182,9 @@ fn recorder_artifact_ids_are_deterministic() {
 #[test]
 fn recorder_reads_missing_content_as_error() {
     let dir = temp_dir("missing");
-    let store = Arc::new(ComputerUseStoreHandle::new(SQLiteStore::new(&dir).expect("open store")));
+    let store = Arc::new(ComputerUseStoreHandle::new(
+        SQLiteStore::new(&dir).expect("open store"),
+    ));
     let recorder = SqliteArtifactRecorder::new(store, &dir, "test");
     let err = recorder
         .read_computer_use_artifact_content("computer-use/s1/cuart_nope")
@@ -157,7 +195,9 @@ fn recorder_reads_missing_content_as_error() {
 #[test]
 fn recorder_without_data_dir_returns_empty_content() {
     let dir = temp_dir("nodir");
-    let store = Arc::new(ComputerUseStoreHandle::new(SQLiteStore::new(&dir).expect("open store")));
+    let store = Arc::new(ComputerUseStoreHandle::new(
+        SQLiteStore::new(&dir).expect("open store"),
+    ));
     let recorder = SqliteArtifactRecorder::new(store, "", "test");
     assert_eq!(
         recorder
@@ -171,7 +211,10 @@ fn recorder_without_data_dir_returns_empty_content() {
 fn manager_records_artifacts_through_the_seam() {
     let runtime = Arc::new(kura_runtime::Manager::new());
     let run = runtime
-        .create_run(CreateRunInput { entrypoint: "browse".to_string(), ..CreateRunInput::default() })
+        .create_run(CreateRunInput {
+            entrypoint: "browse".to_string(),
+            ..CreateRunInput::default()
+        })
         .unwrap();
     assert_eq!(run.status, RunStatus::Queued);
 
@@ -187,7 +230,13 @@ fn manager_records_artifacts_through_the_seam() {
         artifacts: Some(Arc::new(recorder)),
     });
     let session = manager
-        .create_session(&run.run_id, &CreateSessionInput { initial_url: "https://example.com".to_string(), ..CreateSessionInput::default() })
+        .create_session(
+            &run.run_id,
+            &CreateSessionInput {
+                initial_url: "https://example.com".to_string(),
+                ..CreateSessionInput::default()
+            },
+        )
         .expect("create session");
 
     let (result, _approval, _decision) = manager
@@ -195,12 +244,19 @@ fn manager_records_artifacts_through_the_seam() {
             &run.run_id,
             &session.computer_use_session_id,
             "tester",
-            CreateActionInput { action_kind: ActionKind::Snapshot, ..CreateActionInput::default() },
+            CreateActionInput {
+                action_kind: ActionKind::Snapshot,
+                ..CreateActionInput::default()
+            },
         )
         .expect("create action");
 
     assert_eq!(result.action.status, ActionStatus::Completed);
-    assert_eq!(result.action.artifacts.len(), 1, "snapshot capture must be recorded");
+    assert_eq!(
+        result.action.artifacts.len(),
+        1,
+        "snapshot capture must be recorded"
+    );
     assert_eq!(result.action.artifacts[0].kind, ArtifactKind::PageSnapshot);
     assert_eq!(result.action.artifacts[0].status, ArtifactStatus::Available);
     assert_eq!(result.action.artifacts[0].environment_scope, "test");
@@ -215,40 +271,113 @@ struct MemStore {
 }
 
 impl kura_computeruse::Store for MemStore {
-    fn upsert_computer_use_session(&self, session: &kura_computeruse::Session) -> Result<(), String> {
-        self.sessions.lock().unwrap().insert(session.computer_use_session_id.clone(), session.clone());
+    fn upsert_computer_use_session(
+        &self,
+        session: &kura_computeruse::Session,
+    ) -> Result<(), String> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(session.computer_use_session_id.clone(), session.clone());
         Ok(())
     }
-    fn list_computer_use_sessions(&self, _env: &str, run_id: &str) -> Result<Vec<kura_computeruse::Session>, String> {
-        Ok(self.sessions.lock().unwrap().values().filter(|s| s.run_id == run_id).cloned().collect())
+    fn list_computer_use_sessions(
+        &self,
+        _env: &str,
+        run_id: &str,
+    ) -> Result<Vec<kura_computeruse::Session>, String> {
+        Ok(self
+            .sessions
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|s| s.run_id == run_id)
+            .cloned()
+            .collect())
     }
-    fn get_computer_use_session(&self, _env: &str, _run_id: &str, session_id: &str) -> Result<Option<kura_computeruse::Session>, String> {
+    fn get_computer_use_session(
+        &self,
+        _env: &str,
+        _run_id: &str,
+        session_id: &str,
+    ) -> Result<Option<kura_computeruse::Session>, String> {
         Ok(self.sessions.lock().unwrap().get(session_id).cloned())
     }
     fn upsert_computer_use_action(&self, action: &Action) -> Result<(), String> {
-        self.actions.lock().unwrap().insert(action.computer_use_action_id.clone(), action.clone());
+        self.actions
+            .lock()
+            .unwrap()
+            .insert(action.computer_use_action_id.clone(), action.clone());
         Ok(())
     }
-    fn list_computer_use_actions(&self, _env: &str, _run_id: &str, session_id: &str) -> Result<Vec<Action>, String> {
-        Ok(self.actions.lock().unwrap().values().filter(|a| a.computer_use_session_id == session_id).cloned().collect())
+    fn list_computer_use_actions(
+        &self,
+        _env: &str,
+        _run_id: &str,
+        session_id: &str,
+    ) -> Result<Vec<Action>, String> {
+        Ok(self
+            .actions
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|a| a.computer_use_session_id == session_id)
+            .cloned()
+            .collect())
     }
-    fn get_computer_use_action(&self, _env: &str, _run_id: &str, _session_id: &str, action_id: &str) -> Result<Option<Action>, String> {
+    fn get_computer_use_action(
+        &self,
+        _env: &str,
+        _run_id: &str,
+        _session_id: &str,
+        action_id: &str,
+    ) -> Result<Option<Action>, String> {
         Ok(self.actions.lock().unwrap().get(action_id).cloned())
     }
-    fn find_pending_computer_use_action_by_approval(&self, _env: &str, _approval_id: &str) -> Result<Option<Action>, String> {
+    fn find_pending_computer_use_action_by_approval(
+        &self,
+        _env: &str,
+        _approval_id: &str,
+    ) -> Result<Option<Action>, String> {
         Ok(None)
     }
-    fn upsert_computer_use_artifact(&self, artifact: &kura_computeruse::Artifact) -> Result<(), String> {
-        self.artifacts.lock().unwrap().insert(artifact.artifact_id.clone(), artifact.clone());
+    fn upsert_computer_use_artifact(
+        &self,
+        artifact: &kura_computeruse::Artifact,
+    ) -> Result<(), String> {
+        self.artifacts
+            .lock()
+            .unwrap()
+            .insert(artifact.artifact_id.clone(), artifact.clone());
         Ok(())
     }
-    fn list_computer_use_artifacts_for_action(&self, _env: &str, _run_id: &str, action_id: &str) -> Result<Vec<kura_computeruse::Artifact>, String> {
-        Ok(self.artifacts.lock().unwrap().values().filter(|a| a.computer_use_action_id == action_id).cloned().collect())
+    fn list_computer_use_artifacts_for_action(
+        &self,
+        _env: &str,
+        _run_id: &str,
+        action_id: &str,
+    ) -> Result<Vec<kura_computeruse::Artifact>, String> {
+        Ok(self
+            .artifacts
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|a| a.computer_use_action_id == action_id)
+            .cloned()
+            .collect())
     }
-    fn get_computer_use_artifact(&self, _env: &str, artifact_id: &str) -> Result<Option<kura_computeruse::Artifact>, String> {
+    fn get_computer_use_artifact(
+        &self,
+        _env: &str,
+        artifact_id: &str,
+    ) -> Result<Option<kura_computeruse::Artifact>, String> {
         Ok(self.artifacts.lock().unwrap().get(artifact_id).cloned())
     }
-    fn mark_in_flight_computer_use_interrupted(&self, _env: &str, _now: chrono::DateTime<chrono::Utc>) -> Result<(Vec<kura_computeruse::Session>, Vec<Action>), String> {
+    fn mark_in_flight_computer_use_interrupted(
+        &self,
+        _env: &str,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(Vec<kura_computeruse::Session>, Vec<Action>), String> {
         Ok((Vec::new(), Vec::new()))
     }
 }

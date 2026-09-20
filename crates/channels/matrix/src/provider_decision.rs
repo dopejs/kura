@@ -45,7 +45,11 @@ pub enum ProviderDecisionError {
 /// Go `Phase52ProviderDecision`.
 #[must_use]
 pub fn phase52_provider_decision(owner: &str, when: DateTime<Utc>) -> ProviderDecision {
-    let when = if is_unset_time(&when) { Utc::now() } else { when };
+    let when = if is_unset_time(&when) {
+        Utc::now()
+    } else {
+        when
+    };
     ProviderDecision {
         selected_provider: CONNECTOR_KIND.to_string(),
         rejected_provider: "whatsapp".to_string(),
@@ -66,7 +70,9 @@ pub fn phase52_provider_decision(owner: &str, when: DateTime<Utc>) -> ProviderDe
 }
 
 /// Go `ValidateProviderDecision`.
-pub fn validate_provider_decision(decision: &ProviderDecision) -> Result<(), ProviderDecisionError> {
+pub fn validate_provider_decision(
+    decision: &ProviderDecision,
+) -> Result<(), ProviderDecisionError> {
     if decision.decision_owner.trim().is_empty() {
         return Err(ProviderDecisionError::DecisionOwnerRequired);
     }

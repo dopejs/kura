@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/memory-overview.schema.json",
+  "title": "MemoryOverview",
+  "description": "Tenant-level inventory of the memory plane: what is remembered, what was forgotten, and how much of it the derived retrieval index covers.",
+  "type": "object",
+  "required": ["tenantId", "counts", "derivedEmbeddings", "recentlyRemembered", "recentlyForgotten"],
+  "additionalProperties": false,
+  "properties": {
+    "tenantId": { "type": "string" },
+    "counts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/layerCount" }
+    },
+    "derivedEmbeddings": {
+      "type": "integer",
+      "description": "Vectors held in the retrieval index for this tenant's assets. Far below the Ready total means the index is not being written.",
+      "minimum": 0
+    },
+    "recentlyRemembered": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/changeEntry" }
+    },
+    "recentlyForgotten": {
+      "type": "array",
+      "description": "Assets that left recall: revoked, expired, or superseded.",
+      "items": { "$ref": "#/$defs/changeEntry" }
+    }
+  },
+  "$defs": {
+    "layerCount": {
+      "type": "object",
+      "required": ["layer", "status", "count"],
+      "additionalProperties": false,
+      "properties": {
+        "layer": { "type": "string" },
+        "status": { "type": "string" },
+        "count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "changeEntry": {
+      "type": "object",
+      "description": "An inventory entry. Content is deliberately absent: the asset routes serve content with their visibility rules applied.",
+      "required": ["assetId", "layer", "status", "title", "updatedAt"],
+      "additionalProperties": false,
+      "properties": {
+        "assetId": { "type": "string" },
+        "layer": { "type": "string" },
+        "status": { "type": "string" },
+        "title": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

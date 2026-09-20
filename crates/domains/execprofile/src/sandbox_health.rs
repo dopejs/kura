@@ -56,12 +56,14 @@ impl HealthChecker for SandboxHealthChecker {
             }
             return match capability.availability_status {
                 BackendAvailabilityStatus::Available => (HealthStatus::Ready, String::new()),
-                BackendAvailabilityStatus::Degraded => {
-                    (HealthStatus::Degraded, capability.availability_reason.clone())
-                }
-                BackendAvailabilityStatus::Unavailable => {
-                    (HealthStatus::Unavailable, capability.availability_reason.clone())
-                }
+                BackendAvailabilityStatus::Degraded => (
+                    HealthStatus::Degraded,
+                    capability.availability_reason.clone(),
+                ),
+                BackendAvailabilityStatus::Unavailable => (
+                    HealthStatus::Unavailable,
+                    capability.availability_reason.clone(),
+                ),
             };
         }
         // Unknown backend kind: don't falsely mark unavailable (the always-on

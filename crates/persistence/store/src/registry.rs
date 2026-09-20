@@ -2,13 +2,13 @@
 //! LLM dispatches, provider records, and policy approvals/decisions. Ported from
 //! `daemon/internal/store/store.go` tenantless write paths.
 
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
+use crate::SQLiteStore;
 use crate::crud::{
     enum_str, now_rfc3339, null_string, opt_time_string, parse_enum, parse_opt_rfc3339,
     parse_rfc3339,
 };
-use crate::SQLiteStore;
 
 fn scan_session(row: &Row) -> Result<kura_router::Session, String> {
     let session_id: String = row.get(0).map_err(|e| e.to_string())?;
@@ -98,8 +98,8 @@ fn scan_llm_dispatch(row: &Row) -> Result<kura_llm::Dispatch, String> {
     let tool_calls_raw: Option<String> = row.get(19).map_err(|e| e.to_string())?;
 
     let status: kura_llm::DispatchStatus = parse_enum(&status)?;
-    let messages: Vec<kura_llm::Message> =
-        crate::crud::decode_json_field(&messages_raw).map_err(|e| format!("decode llm dispatch messages: {e}"))?;
+    let messages: Vec<kura_llm::Message> = crate::crud::decode_json_field(&messages_raw)
+        .map_err(|e| format!("decode llm dispatch messages: {e}"))?;
     // Null for every dispatch written before these columns existed, and for
     // any plain chat request since.
     let tools: Vec<kura_llm::ToolSpec> = match tools_raw {
@@ -112,8 +112,8 @@ fn scan_llm_dispatch(row: &Row) -> Result<kura_llm::Dispatch, String> {
             .map_err(|e| format!("decode llm dispatch tool calls: {e}"))?,
         _ => Vec::new(),
     };
-    let usage: kura_llm::Usage =
-        crate::crud::decode_json_field(&usage_raw).map_err(|e| format!("decode llm dispatch usage: {e}"))?;
+    let usage: kura_llm::Usage = crate::crud::decode_json_field(&usage_raw)
+        .map_err(|e| format!("decode llm dispatch usage: {e}"))?;
     let partial = status == kura_llm::DispatchStatus::PartialFailed;
 
     Ok(kura_llm::Dispatch {
@@ -200,7 +200,10 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn upsert_capability(&self, capability: &kura_capabilities::Capability) -> Result<(), String> {
+    pub fn upsert_capability(
+        &self,
+        capability: &kura_capabilities::Capability,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 r#"INSERT INTO capabilities (
@@ -261,10 +264,10 @@ impl SQLiteStore {
     }
 
     pub fn upsert_llm_dispatch(&self, dispatch: &kura_llm::Dispatch) -> Result<(), String> {
-        let messages_json =
-            serde_json::to_string(&dispatch.messages).map_err(|e| format!("marshal llm dispatch messages: {e}"))?;
-        let usage_json =
-            serde_json::to_string(&dispatch.usage).map_err(|e| format!("marshal llm dispatch usage: {e}"))?;
+        let messages_json = serde_json::to_string(&dispatch.messages)
+            .map_err(|e| format!("marshal llm dispatch messages: {e}"))?;
+        let usage_json = serde_json::to_string(&dispatch.usage)
+            .map_err(|e| format!("marshal llm dispatch usage: {e}"))?;
 
         self.conn
             .execute(
@@ -340,7 +343,10 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    pub fn get_llm_dispatch(&self, dispatch_id: &str) -> Result<Option<kura_llm::Dispatch>, String> {
+    pub fn get_llm_dispatch(
+        &self,
+        dispatch_id: &str,
+    ) -> Result<Option<kura_llm::Dispatch>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -351,7 +357,9 @@ impl SQLiteStore {
                 WHERE dispatch_id = ?1"#,
             )
             .map_err(|e| e.to_string())?;
-        let mut rows = stmt.query(params![dispatch_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![dispatch_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };

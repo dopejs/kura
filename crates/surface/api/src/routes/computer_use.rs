@@ -50,7 +50,7 @@ use kura_runtime as runtime;
 
 use crate::error::ApiError;
 use crate::middleware::{
-    environment_scope_from_config, guard_resource_for_tenant, AuthenticatedToken, TenantContext,
+    AuthenticatedToken, TenantContext, environment_scope_from_config, guard_resource_for_tenant,
 };
 use crate::response::Json;
 use crate::state::AppState;
@@ -768,9 +768,9 @@ mod tests {
     use std::collections::HashMap as StdHashMap;
     use std::sync::{Arc, Mutex as StdMutex};
 
-    use axum::body::{to_bytes, Body};
-    use axum::http::header::CONTENT_TYPE;
+    use axum::body::{Body, to_bytes};
     use axum::http::Request;
+    use axum::http::header::CONTENT_TYPE;
     use kura_computeruse::{
         Action, Artifact, ArtifactCaptureRequest, ArtifactRecorder, ArtifactStatus, Dependencies,
         Store,
@@ -951,6 +951,7 @@ mod tests {
     fn test_config() -> kura_config::Config {
         kura_config::Config {
             project_root: String::new(),
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-computer-use".to_string(),
@@ -975,6 +976,7 @@ mod tests {
                     ..Default::default()
                 },
             },
+            egress: Default::default(),
         }
     }
 
@@ -1295,10 +1297,12 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(json["error"]
-            .as_str()
-            .unwrap_or("")
-            .contains("computer-use manager is not configured"));
+        assert!(
+            json["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("computer-use manager is not configured")
+        );
     }
 
     /// Unknown run -> 404 (Go runtime.ErrRunNotFound), unknown session -> 404.

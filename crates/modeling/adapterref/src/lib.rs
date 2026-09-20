@@ -10,8 +10,8 @@ use std::io::{BufReader, Read, Write};
 use std::time::Duration;
 
 use kura_adapterrpc::{
-    read_request, write_message, Client, CodecError, FailureKind, Request, Response, Status,
-    CONTRACT_VERSION,
+    CONTRACT_VERSION, Client, CodecError, FailureKind, Request, Response, Status, read_request,
+    write_message,
 };
 
 /// Seeds a deterministic failure for testing/conformance.
@@ -76,7 +76,12 @@ impl Options {
 }
 
 /// Operations that return a JSON array; all other operations return a JSON object.
-const ARRAY_OPS: [&str; 4] = ["ListEvents", "ListThreads", "ListDrafts", "ResolveAttachments"];
+const ARRAY_OPS: [&str; 4] = [
+    "ListEvents",
+    "ListThreads",
+    "ListDrafts",
+    "ResolveAttachments",
+];
 
 /// Runs the stdio loop with default (no-failure) options.
 pub fn serve(input: impl Read, output: impl Write) -> Result<(), CodecError> {
@@ -178,8 +183,10 @@ pub fn new_pipe_client() -> Client {
 /// [`new_pipe_client`] with seeded failure/version options.
 #[must_use]
 pub fn new_pipe_client_with_options(opts: Options) -> Client {
-    let (adapter_reader, daemon_writer) = std::os::unix::net::UnixStream::pair().expect("unix pair");
-    let (daemon_reader, adapter_writer) = std::os::unix::net::UnixStream::pair().expect("unix pair");
+    let (adapter_reader, daemon_writer) =
+        std::os::unix::net::UnixStream::pair().expect("unix pair");
+    let (daemon_reader, adapter_writer) =
+        std::os::unix::net::UnixStream::pair().expect("unix pair");
     std::thread::spawn(move || {
         let _ = serve_with_options(adapter_reader, adapter_writer, opts);
     });

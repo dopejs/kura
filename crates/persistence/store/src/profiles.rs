@@ -9,10 +9,10 @@
 //! columns the schema keeps for scoping, exactly like the Go port.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Transaction};
+use rusqlite::{Transaction, params};
 
-use crate::crud::{enum_str, now_rfc3339, null_string, opt_time_string};
 use crate::SQLiteStore;
+use crate::crud::{enum_str, now_rfc3339, null_string, opt_time_string};
 
 fn new_store_id(prefix: &str) -> String {
     let hex = uuid::Uuid::new_v4().simple().to_string();
@@ -31,7 +31,10 @@ fn default_reason(value: &str, fallback: &str) -> String {
 
 /// Go `nullableProfileTime`: nil/zero time maps to SQL NULL.
 fn nullable_profile_time(value: &Option<DateTime<Utc>>) -> Option<String> {
-    value.as_ref().filter(|t| t.timestamp() != 0 || t.timestamp_subsec_nanos() != 0).map(now_rfc3339)
+    value
+        .as_ref()
+        .filter(|t| t.timestamp() != 0 || t.timestamp_subsec_nanos() != 0)
+        .map(now_rfc3339)
 }
 
 /// A chrono-defaulted timestamp (Unix epoch) stands in for Go's zero time.
@@ -60,13 +63,17 @@ fn scan_audit_document(raw: &str) -> Result<kura_profiles::AuditEvent, String> {
 }
 
 fn scan_projection_document(raw: &str) -> Result<kura_profiles::RuntimeProjection, String> {
-    serde_json::from_str(raw).map_err(|e| format!("decode runtime profile projection document: {e}"))
+    serde_json::from_str(raw)
+        .map_err(|e| format!("decode runtime profile projection document: {e}"))
 }
 
 impl SQLiteStore {
     // --- tx helpers (free functions mirroring Go's insertAgentProfileTx &c.) ---
 
-    pub fn ensure_default_agent_profile(&self, tenant_id: &str) -> Result<kura_profiles::AgentProfile, String> {
+    pub fn ensure_default_agent_profile(
+        &self,
+        tenant_id: &str,
+    ) -> Result<kura_profiles::AgentProfile, String> {
         let items = self.list_agent_profiles(tenant_id, 1)?;
         if let Some(first) = items.items.into_iter().next() {
             return Ok(first);
@@ -107,7 +114,11 @@ impl SQLiteStore {
         Ok(result.profile)
     }
 
-    pub fn list_agent_profiles(&self, tenant_id: &str, limit: i64) -> Result<kura_profiles::ListResponse, String> {
+    pub fn list_agent_profiles(
+        &self,
+        tenant_id: &str,
+        limit: i64,
+    ) -> Result<kura_profiles::ListResponse, String> {
         let limit = if limit <= 0 || limit > 200 { 50 } else { limit };
         let mut stmt = self
             .conn
@@ -126,7 +137,9 @@ impl SQLiteStore {
                 LIMIT ?2"#,
             )
             .map_err(|e| format!("list agent profiles {tenant_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, limit]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, limit])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
@@ -266,7 +279,8 @@ impl SQLiteStore {
                 redaction_status: kura_profiles::RedactionStatus::REDACTED,
             },
         )?;
-        tx.commit().map_err(|e| format!("commit create agent profile: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit create agent profile: {e}"))?;
         Ok(kura_profiles::MutationResult {
             profile,
             version,
@@ -352,7 +366,8 @@ impl SQLiteStore {
                 redaction_status: kura_profiles::RedactionStatus::REDACTED,
             },
         )?;
-        tx.commit().map_err(|e| format!("commit update agent profile: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit update agent profile: {e}"))?;
         Ok(kura_profiles::MutationResult {
             profile: current,
             version,
@@ -419,7 +434,8 @@ impl SQLiteStore {
                 redaction_status: kura_profiles::RedactionStatus::REDACTED,
             },
         )?;
-        tx.commit().map_err(|e| format!("commit activate agent profile: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit activate agent profile: {e}"))?;
         Ok(selection)
     }
 
@@ -438,7 +454,9 @@ impl SQLiteStore {
                  ORDER BY version_number DESC LIMIT ?3",
             )
             .map_err(|e| format!("list agent profile versions {tenant_id}/{profile_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, profile_id, limit]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, profile_id, limit])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
@@ -460,16 +478,26 @@ impl SQLiteStore {
             return Err(kura_profiles::ProfilesError::ProfileNotActivatable.to_string());
         }
         let source = self
-            .get_agent_profile_version(&actor.tenant_id, profile_id, &input.source_profile_version_id)?
+            .get_agent_profile_version(
+                &actor.tenant_id,
+                profile_id,
+                &input.source_profile_version_id,
+            )?
             .ok_or_else(|| "agent profile not found".to_string())?;
         let mut current = self
             .get_agent_profile(&actor.tenant_id, profile_id)?
             .ok_or_else(|| "agent profile not found".to_string())?;
-        if kura_profiles::rollback_eligibility_for(&current, &source) != kura_profiles::RollbackEligibility::ELIGIBLE {
+        if kura_profiles::rollback_eligibility_for(&current, &source)
+            != kura_profiles::RollbackEligibility::ELIGIBLE
+        {
             return Err(kura_profiles::ProfilesError::ProfileNotActivatable.to_string());
         }
         let was_tenant_default = self.is_tenant_default_profile(&actor.tenant_id, profile_id)?;
-        let source_overlays = self.list_agent_profile_overlays_for_version(&actor.tenant_id, profile_id, &source.profile_version_id)?;
+        let source_overlays = self.list_agent_profile_overlays_for_version(
+            &actor.tenant_id,
+            profile_id,
+            &source.profile_version_id,
+        )?;
         let overlay_inputs: Vec<kura_profiles::OverlayReferenceInput> = source_overlays
             .iter()
             .map(|overlay| kura_profiles::OverlayReferenceInput {
@@ -525,7 +553,14 @@ impl SQLiteStore {
             .map_err(|e| format!("begin rollback agent profile: {e}"))?;
         update_agent_profile_tx(&tx, &current)?;
         insert_agent_profile_version_tx(&tx, &version)?;
-        replace_overlay_references_tx(&tx, &actor.tenant_id, profile_id, &version_id, &overlay_inputs, now)?;
+        replace_overlay_references_tx(
+            &tx,
+            &actor.tenant_id,
+            profile_id,
+            &version_id,
+            &overlay_inputs,
+            now,
+        )?;
         let mut selection = kura_profiles::ActiveSelection::default();
         if was_tenant_default {
             selection = upsert_active_selection_tx(
@@ -555,7 +590,8 @@ impl SQLiteStore {
                 redaction_status: kura_profiles::RedactionStatus::REDACTED,
             },
         )?;
-        tx.commit().map_err(|e| format!("commit rollback agent profile: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit rollback agent profile: {e}"))?;
         Ok(kura_profiles::MutationResult {
             profile: current,
             version,
@@ -660,7 +696,8 @@ impl SQLiteStore {
                 redaction_status: kura_profiles::RedactionStatus::REDACTED,
             },
         )?;
-        tx.commit().map_err(|e| format!("commit retire agent profile: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit retire agent profile: {e}"))?;
         Ok(kura_profiles::MutationResult {
             profile,
             version,
@@ -779,7 +816,9 @@ impl SQLiteStore {
             .conn
             .prepare(&query)
             .map_err(|e| format!("list runtime profile projections: {e}"))?;
-        let mut rows = stmt.query(rusqlite::params_from_iter(args.iter())).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(rusqlite::params_from_iter(args.iter()))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
@@ -790,12 +829,20 @@ impl SQLiteStore {
 
     // --- helpers ---
 
-    pub fn get_agent_profile(&self, tenant_id: &str, profile_id: &str) -> Result<Option<kura_profiles::AgentProfile>, String> {
+    pub fn get_agent_profile(
+        &self,
+        tenant_id: &str,
+        profile_id: &str,
+    ) -> Result<Option<kura_profiles::AgentProfile>, String> {
         let mut stmt = self
             .conn
-            .prepare("SELECT document_json FROM agent_profiles WHERE tenant_id = ?1 AND profile_id = ?2")
+            .prepare(
+                "SELECT document_json FROM agent_profiles WHERE tenant_id = ?1 AND profile_id = ?2",
+            )
             .map_err(|e| format!("get agent profile {profile_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, profile_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, profile_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -805,7 +852,10 @@ impl SQLiteStore {
 
     /// Go `ListProviderModels`-backed validation: a non-empty provider
     /// preference must resolve to an available model.
-    pub fn validate_profile_mutation_against_store(&self, input: &kura_profiles::MutationInput) -> Result<(), String> {
+    pub fn validate_profile_mutation_against_store(
+        &self,
+        input: &kura_profiles::MutationInput,
+    ) -> Result<(), String> {
         let provider_id = input.default_provider_preference.provider_id.trim();
         if provider_id.is_empty() {
             return Ok(());
@@ -833,17 +883,31 @@ impl SQLiteStore {
                 continue;
             }
             if !model.available {
-                return Err(kura_profiles::invalid_profile_reason("provider_model_unavailable").to_string());
+                return Err(
+                    kura_profiles::invalid_profile_reason("provider_model_unavailable").to_string(),
+                );
             }
-            if !input.default_provider_preference.reasoning_level.trim().is_empty()
-                && !model.reasoning_levels.iter().any(|r| r.trim() == input.default_provider_preference.reasoning_level.trim())
+            if !input
+                .default_provider_preference
+                .reasoning_level
+                .trim()
+                .is_empty()
+                && !model
+                    .reasoning_levels
+                    .iter()
+                    .any(|r| r.trim() == input.default_provider_preference.reasoning_level.trim())
             {
-                return Err(kura_profiles::invalid_profile_reason("reasoning_level_unsupported_for_model").to_string());
+                return Err(kura_profiles::invalid_profile_reason(
+                    "reasoning_level_unsupported_for_model",
+                )
+                .to_string());
             }
             return Ok(());
         }
         if !provider_known {
-            return Err(kura_profiles::invalid_profile_reason("provider_not_available").to_string());
+            return Err(
+                kura_profiles::invalid_profile_reason("provider_not_available").to_string(),
+            );
         }
         if model_id.is_empty() && (available_default || available_any) {
             return Ok(());
@@ -851,7 +915,11 @@ impl SQLiteStore {
         Err(kura_profiles::invalid_profile_reason("provider_model_not_available").to_string())
     }
 
-    pub fn is_tenant_default_profile(&self, tenant_id: &str, profile_id: &str) -> Result<bool, String> {
+    pub fn is_tenant_default_profile(
+        &self,
+        tenant_id: &str,
+        profile_id: &str,
+    ) -> Result<bool, String> {
         let count: i64 = self
             .conn
             .query_row(
@@ -864,7 +932,11 @@ impl SQLiteStore {
         Ok(count > 0)
     }
 
-    pub fn next_agent_profile_version(&self, tenant_id: &str, profile_id: &str) -> Result<i64, String> {
+    pub fn next_agent_profile_version(
+        &self,
+        tenant_id: &str,
+        profile_id: &str,
+    ) -> Result<i64, String> {
         let max: Option<i64> = self
             .conn
             .query_row(
@@ -889,7 +961,9 @@ impl SQLiteStore {
                  WHERE tenant_id = ?1 AND profile_id = ?2 AND profile_version_id = ?3",
             )
             .map_err(|e| format!("get agent profile version {version_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, profile_id, version_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, profile_id, version_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -914,7 +988,9 @@ impl SQLiteStore {
                 ORDER BY o.created_at ASC"#,
             )
             .map_err(|e| format!("list agent profile overlays: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, profile_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, profile_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
@@ -937,7 +1013,9 @@ impl SQLiteStore {
                  ORDER BY created_at ASC",
             )
             .map_err(|e| format!("list agent profile overlays for version: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, profile_id, version_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, profile_id, version_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
@@ -960,7 +1038,9 @@ impl SQLiteStore {
                  ORDER BY occurred_at DESC LIMIT ?3",
             )
             .map_err(|e| format!("list agent profile audit events: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, profile_id, limit]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, profile_id, limit])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let raw: String = row.get(0).map_err(|e| e.to_string())?;
@@ -979,7 +1059,9 @@ impl SQLiteStore {
             .conn
             .prepare("SELECT status FROM agent_profiles WHERE tenant_id = ?1 AND profile_id = ?2")
             .map_err(|e| format!("check profile selectable: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id.trim(), profile_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id.trim(), profile_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(false);
         };
@@ -988,8 +1070,12 @@ impl SQLiteStore {
     }
 }
 
-fn insert_agent_profile_tx(tx: &Transaction, profile: &kura_profiles::AgentProfile) -> Result<(), String> {
-    let document_json = serde_json::to_string(profile).map_err(|e| format!("marshal agent profile: {e}"))?;
+fn insert_agent_profile_tx(
+    tx: &Transaction,
+    profile: &kura_profiles::AgentProfile,
+) -> Result<(), String> {
+    let document_json =
+        serde_json::to_string(profile).map_err(|e| format!("marshal agent profile: {e}"))?;
     tx.execute(
         r#"INSERT INTO agent_profiles (
             profile_id, tenant_id, display_name, status, active_version_id, created_at,
@@ -1016,7 +1102,11 @@ fn insert_agent_profile_tx(tx: &Transaction, profile: &kura_profiles::AgentProfi
     Ok(())
 }
 
-fn ensure_default_agent_profile_tx(tx: &Transaction, tenant_id: &str, now: DateTime<Utc>) -> Result<kura_profiles::AgentProfile, String> {
+fn ensure_default_agent_profile_tx(
+    tx: &Transaction,
+    tenant_id: &str,
+    now: DateTime<Utc>,
+) -> Result<kura_profiles::AgentProfile, String> {
     let mut stmt = tx
         .prepare(
             "SELECT document_json FROM agent_profiles
@@ -1091,8 +1181,12 @@ fn ensure_default_agent_profile_tx(tx: &Transaction, tenant_id: &str, now: DateT
     Ok(profile)
 }
 
-fn update_agent_profile_tx(tx: &Transaction, profile: &kura_profiles::AgentProfile) -> Result<(), String> {
-    let document_json = serde_json::to_string(profile).map_err(|e| format!("marshal agent profile: {e}"))?;
+fn update_agent_profile_tx(
+    tx: &Transaction,
+    profile: &kura_profiles::AgentProfile,
+) -> Result<(), String> {
+    let document_json =
+        serde_json::to_string(profile).map_err(|e| format!("marshal agent profile: {e}"))?;
     tx.execute(
         r#"UPDATE agent_profiles SET
             display_name = ?1, status = ?2, active_version_id = ?3, updated_at = ?4,
@@ -1117,8 +1211,12 @@ fn update_agent_profile_tx(tx: &Transaction, profile: &kura_profiles::AgentProfi
     Ok(())
 }
 
-fn insert_agent_profile_version_tx(tx: &Transaction, version: &kura_profiles::ProfileVersion) -> Result<(), String> {
-    let document_json = serde_json::to_string(version).map_err(|e| format!("marshal agent profile version: {e}"))?;
+fn insert_agent_profile_version_tx(
+    tx: &Transaction,
+    version: &kura_profiles::ProfileVersion,
+) -> Result<(), String> {
+    let document_json = serde_json::to_string(version)
+        .map_err(|e| format!("marshal agent profile version: {e}"))?;
     tx.execute(
         r#"INSERT INTO agent_profile_versions (
             profile_version_id, profile_id, tenant_id, version_number, source_version_id,
@@ -1141,7 +1239,12 @@ fn insert_agent_profile_version_tx(tx: &Transaction, version: &kura_profiles::Pr
             document_json,
         ],
     )
-    .map_err(|e| format!("insert agent profile version {}: {e}", version.profile_version_id))?;
+    .map_err(|e| {
+        format!(
+            "insert agent profile version {}: {e}",
+            version.profile_version_id
+        )
+    })?;
     Ok(())
 }
 
@@ -1166,8 +1269,8 @@ fn upsert_active_selection_tx(
         audit_event_id: audit_id.to_string(),
         redaction_status: kura_profiles::RedactionStatus::REDACTED,
     };
-    let document_json = serde_json::to_string(&selection)
-        .map_err(|e| format!("marshal active selection: {e}"))?;
+    let document_json =
+        serde_json::to_string(&selection).map_err(|e| format!("marshal active selection: {e}"))?;
     tx.execute(
         r#"INSERT INTO agent_profile_active_selections (
             selection_id, tenant_id, profile_id, profile_version_id, selection_scope,
@@ -1249,8 +1352,12 @@ fn replace_overlay_references_tx(
     Ok(())
 }
 
-fn insert_profile_audit_tx(tx: &Transaction, audit: &kura_profiles::AuditEvent) -> Result<(), String> {
-    let document_json = serde_json::to_string(audit).map_err(|e| format!("marshal profile audit event: {e}"))?;
+fn insert_profile_audit_tx(
+    tx: &Transaction,
+    audit: &kura_profiles::AuditEvent,
+) -> Result<(), String> {
+    let document_json =
+        serde_json::to_string(audit).map_err(|e| format!("marshal profile audit event: {e}"))?;
     tx.execute(
         r#"INSERT INTO agent_profile_audit_events (
             audit_event_id, tenant_id, profile_id, profile_version_id, actor_principal_id,

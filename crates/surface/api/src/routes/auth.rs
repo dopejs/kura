@@ -56,15 +56,15 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use kura_identity::auth::{self, AccessToken, Pairing};
 use kura_identity::{
-    can_inspect_credentials, evaluate_permission, has_permission, permissions_for_role,
     AuditEventFilter, InvitationFilter, LifecycleStatus, MembershipFilter, Permission,
-    PrincipalFilter, Role, Tenant, TenantAuditEvent, TokenTenantGrant,
+    PrincipalFilter, Role, Tenant, TenantAuditEvent, TokenTenantGrant, can_inspect_credentials,
+    evaluate_permission, has_permission, permissions_for_role,
 };
 use kura_secrets::SecretsError;
 
@@ -80,7 +80,10 @@ use crate::types::{AuthMeResponse, ListResponse, TenantDetailResponse, TenantLis
 pub fn open_router() -> Router<AppState> {
     Router::new()
         .route("/v1/auth/pairings/start", post(auth_pairing_start))
-        .route("/v1/auth/pairings/{pairing_id}/complete", post(auth_pairing_complete))
+        .route(
+            "/v1/auth/pairings/{pairing_id}/complete",
+            post(auth_pairing_complete),
+        )
 }
 
 /// Route family router. Only the methods the Go handlers accept are
@@ -91,13 +94,22 @@ pub fn open_router() -> Router<AppState> {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/auth/me", get(auth_me))
-        .route("/v1/auth/tokens", get(auth_tokens_list).post(auth_token_create))
+        .route(
+            "/v1/auth/tokens",
+            get(auth_tokens_list).post(auth_token_create),
+        )
         .route("/v1/auth/tokens/{token_id}/rotate", post(auth_token_rotate))
         .route("/v1/auth/tokens/{token_id}/revoke", post(auth_token_revoke))
-        .route("/v1/auth/tokens/{token_id}/tenant-grants", patch(auth_token_grant_update))
+        .route(
+            "/v1/auth/tokens/{token_id}/tenant-grants",
+            patch(auth_token_grant_update),
+        )
         .route("/v1/tenants", get(tenants_list).post(tenant_create))
         .route("/v1/tenants/{tenant_id}", get(tenant_detail))
-        .route("/v1/tenants/{tenant_id}/memberships", get(tenant_memberships_list))
+        .route(
+            "/v1/tenants/{tenant_id}/memberships",
+            get(tenant_memberships_list),
+        )
         .route(
             "/v1/tenants/{tenant_id}/memberships/{membership_id}",
             patch(tenant_membership_update).delete(tenant_membership_remove),
@@ -106,20 +118,38 @@ pub fn router() -> Router<AppState> {
             "/v1/tenants/{tenant_id}/invitations",
             get(tenant_invitations_list).post(tenant_invitation_create),
         )
-        .route("/v1/tenants/{tenant_id}/permissions", get(tenant_permissions))
+        .route(
+            "/v1/tenants/{tenant_id}/permissions",
+            get(tenant_permissions),
+        )
         .route("/v1/tenant-invitations", get(tenant_invitations_self_list))
-        .route("/v1/tenant-invitations/{invitation_id}/accept", post(tenant_invitation_accept))
-        .route("/v1/tenant-invitations/{invitation_id}/reject", post(tenant_invitation_reject))
+        .route(
+            "/v1/tenant-invitations/{invitation_id}/accept",
+            post(tenant_invitation_accept),
+        )
+        .route(
+            "/v1/tenant-invitations/{invitation_id}/reject",
+            post(tenant_invitation_reject),
+        )
         .route("/v1/principals", get(principals_list))
         .route("/v1/principals/{principal_id}", patch(principal_update))
         .route("/v1/tenant-audit-events", get(tenant_audit_events_list))
-        .route("/v1/tenant-secrets", get(tenant_secrets_list).post(tenant_secret_create))
+        .route(
+            "/v1/tenant-secrets",
+            get(tenant_secrets_list).post(tenant_secret_create),
+        )
         .route(
             "/v1/tenant-secrets/{secret_ref}",
             get(tenant_secret_get).patch(tenant_secret_patch),
         )
-        .route("/v1/tenant-secrets/{secret_ref}/rotate", post(tenant_secret_rotate))
-        .route("/v1/tenant-secrets/{secret_ref}/disable", post(tenant_secret_disable))
+        .route(
+            "/v1/tenant-secrets/{secret_ref}/rotate",
+            post(tenant_secret_rotate),
+        )
+        .route(
+            "/v1/tenant-secrets/{secret_ref}/disable",
+            post(tenant_secret_disable),
+        )
 }
 // ---------------------------------------------------------------------------
 // Handler error type (stable denial bodies, port of writeTenantDenial /
@@ -133,7 +163,9 @@ enum AuthApiError {
     TenantDenial,
     /// 403 credential denial (Go writeCredentialDenial):
     /// {"error": "credential_access_denied", "reasonCode": <reason>}.
-    CredentialDenial { reason_code: &'static str },
+    CredentialDenial {
+        reason_code: &'static str,
+    },
 }
 
 impl From<ApiError> for AuthApiError {
@@ -518,7 +550,14 @@ fn project_tenant_audit_event(mut event: TenantAuditEvent) -> TenantAuditEvent {
     let Some(document) = event.document.as_mut() else {
         return event;
     };
-    for key in ["value", "secretValue", "rawSecret", "accessToken", "refreshToken", "apiKey"] {
+    for key in [
+        "value",
+        "secretValue",
+        "rawSecret",
+        "accessToken",
+        "refreshToken",
+        "apiKey",
+    ] {
         if document.contains_key(key) {
             document.insert(
                 key.to_string(),
@@ -556,7 +595,10 @@ fn publish_pairing_event(
     payload.insert("mode".to_string(), serde_json::json!(pairing.mode));
     payload.insert("status".to_string(), serde_json::json!(pairing.status));
     if name == "auth.pairing_started" {
-        payload.insert("expiresAt".to_string(), serde_json::json!(pairing.expires_at));
+        payload.insert(
+            "expiresAt".to_string(),
+            serde_json::json!(pairing.expires_at),
+        );
         payload.insert("label".to_string(), serde_json::json!(pairing.label));
     }
     for (key, value) in extra {
@@ -609,7 +651,7 @@ fn require_hosted_credential_read(
 ) -> Result<&kura_identity::TenantContext, AuthApiError> {
     let tc = tenant
         .as_ref()
-        .map(|extension| &extension.0 .0)
+        .map(|extension| &extension.0.0)
         .ok_or_else(credential_missing_tenant)?;
     if tc.tenant_id.is_empty() {
         return Err(credential_missing_tenant());
@@ -627,7 +669,7 @@ fn require_hosted_credential_permission(
 ) -> Result<&kura_identity::TenantContext, AuthApiError> {
     let tc = tenant
         .as_ref()
-        .map(|extension| &extension.0 .0)
+        .map(|extension| &extension.0.0)
         .ok_or_else(credential_missing_tenant)?;
     if tc.tenant_id.is_empty() {
         return Err(credential_missing_tenant());
@@ -676,9 +718,15 @@ fn record_credential_audit(state: &AppState, input: CredentialAuditInput) -> Res
         "resourceKind".to_string(),
         serde_json::json!(wire_enum(&input.resource_kind)),
     );
-    document.insert("action".to_string(), serde_json::json!(wire_enum(&input.action)));
+    document.insert(
+        "action".to_string(),
+        serde_json::json!(wire_enum(&input.action)),
+    );
     if !input.resource_id.is_empty() {
-        document.insert("resourceId".to_string(), serde_json::json!(input.resource_id));
+        document.insert(
+            "resourceId".to_string(),
+            serde_json::json!(input.resource_id),
+        );
     }
     if !input.secret_ref.is_empty() {
         document.insert("secretRef".to_string(), serde_json::json!(input.secret_ref));
@@ -757,7 +805,9 @@ async fn auth_pairing_complete(
     let (pairing, token, token_secret) = match manager.complete_pairing(&pairing_id, input) {
         Ok(result) => result,
         Err(auth::AuthError::PairingNotFound) => {
-            return Err(AuthApiError::Api(ApiError::NotFound("not found".to_string())));
+            return Err(AuthApiError::Api(ApiError::NotFound(
+                "not found".to_string(),
+            )));
         }
         Err(err) => return Err(AuthApiError::Api(ApiError::BadRequest(err.to_string()))),
     };
@@ -825,17 +875,19 @@ async fn auth_me(
     tenant: Option<Extension<TenantContext>>,
 ) -> Result<Response, AuthApiError> {
     let token = token.ok_or_else(|| {
-        AuthApiError::Api(ApiError::Unauthorized(auth::AuthError::AuthRequired.to_string()))
+        AuthApiError::Api(ApiError::Unauthorized(
+            auth::AuthError::AuthRequired.to_string(),
+        ))
     })?;
     state
         .store
         .lock()
-        .upsert_access_token(&token.0 .0)
+        .upsert_access_token(&token.0.0)
         .map_err(ApiError::from_store)?;
     let Some(tenant_context) = tenant else {
-        return Ok(Json(token.0 .0).into_response());
+        return Ok(Json(token.0.0).into_response());
     };
-    let response = build_auth_me_response(&state, &token.0 .0, &tenant_context.0 .0)?;
+    let response = build_auth_me_response(&state, &token.0.0, &tenant_context.0.0)?;
     Ok((StatusCode::OK, Json(response)).into_response())
 }
 
@@ -849,8 +901,8 @@ async fn auth_tokens_list(
 ) -> Result<Response, AuthApiError> {
     let tc = tenant_context(&tenant)?;
     let tokens = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_access_tokens()
         .map_err(ApiError::from_store)?;
     let mut principal_id = params.principal_id.trim().to_string();
@@ -952,8 +1004,8 @@ async fn auth_token_rotate(
     let request: RotateTokenRequest = decode_json_body(&body)?;
     let expires_at = parse_optional_time(&request.expires_at)?;
     let old_grants = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_token_tenant_grants(&token_id)
         .map_err(ApiError::from_store)?;
     let (allowed_tenant_ids, default_tenant_id) = active_grant_set(&old_grants);
@@ -977,10 +1029,13 @@ async fn auth_token_rotate(
     )?;
     let manager = auth_manager(&state)?;
     let (old_token, new_token, secret) = manager
-        .rotate_token(token_id.as_str(), auth::RotateTokenInput {
-            expires_at,
-            reason: request.reason.clone(),
-        })
+        .rotate_token(
+            token_id.as_str(),
+            auth::RotateTokenInput {
+                expires_at,
+                reason: request.reason.clone(),
+            },
+        )
         .map_err(|err| AuthApiError::Api(ApiError::BadRequest(err.to_string())))?;
     state
         .store
@@ -1102,11 +1157,13 @@ async fn tenants_list(
 ) -> Result<Response, AuthApiError> {
     let tc = tenant_context(&tenant)?;
     let token = token.ok_or_else(|| {
-        AuthApiError::Api(ApiError::Unauthorized(auth::AuthError::AuthRequired.to_string()))
+        AuthApiError::Api(ApiError::Unauthorized(
+            auth::AuthError::AuthRequired.to_string(),
+        ))
     })?;
     let store = state.store.lock();
     let allowed =
-        allowed_tenants_for_token(&store, &token.0 .0, &tc.0).map_err(ApiError::from_store)?;
+        allowed_tenants_for_token(&store, &token.0.0, &tc.0).map_err(ApiError::from_store)?;
     Ok((StatusCode::OK, Json(TenantListResponse { items: allowed })).into_response())
 }
 
@@ -1180,8 +1237,8 @@ async fn tenant_memberships_list(
     }
     require_permission(&state, &tc.0, Permission::TenantManage)?;
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_memberships(&MembershipFilter {
             tenant_id,
             limit: 500,
@@ -1210,7 +1267,11 @@ async fn tenant_membership_update(
     let membership = identity
         .update_membership_role(&tc.0, &tenant_id, &membership_id, request.role)
         .map_err(|err| AuthApiError::Api(ApiError::BadRequest(err.to_string())))?;
-    Ok((StatusCode::OK, Json(serde_json::json!({ "membership": membership }))).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "membership": membership })),
+    )
+        .into_response())
 }
 
 /// DELETE /v1/tenants/{tenant_id}/memberships/{membership_id} - Go
@@ -1230,7 +1291,11 @@ async fn tenant_membership_remove(
     let membership = identity
         .remove_membership(&tc.0, &tenant_id, &membership_id)
         .map_err(|err| AuthApiError::Api(ApiError::BadRequest(err.to_string())))?;
-    Ok((StatusCode::OK, Json(serde_json::json!({ "membership": membership }))).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "membership": membership })),
+    )
+        .into_response())
 }
 
 /// GET /v1/tenants/{tenant_id}/invitations - Go
@@ -1246,8 +1311,8 @@ async fn tenant_invitations_list(
         return Err(AuthApiError::TenantDenial);
     }
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_tenant_invitations(&InvitationFilter {
             tenant_id,
             limit: 500,
@@ -1327,8 +1392,8 @@ async fn tenant_invitations_self_list(
 ) -> Result<Response, AuthApiError> {
     let tc = tenant_context(&tenant)?;
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_tenant_invitations(&InvitationFilter {
             principal_id: tc.0.principal_id.clone(),
             limit: 500,
@@ -1351,7 +1416,11 @@ async fn tenant_invitation_accept(
     let membership = identity
         .accept_invitation(&tc.0.principal_id, &invitation_id)
         .map_err(|err| AuthApiError::Api(ApiError::BadRequest(err.to_string())))?;
-    Ok((StatusCode::OK, Json(serde_json::json!({ "membership": membership }))).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "membership": membership })),
+    )
+        .into_response())
 }
 
 /// POST /v1/tenant-invitations/{invitation_id}/reject - Go
@@ -1365,9 +1434,17 @@ async fn tenant_invitation_reject(
     let tc = tenant_context(&tenant)?;
     let identity = identity_manager(&state)?;
     let invitation = identity
-        .decide_invitation(&tc.0.principal_id, &invitation_id, LifecycleStatus::Rejected)
+        .decide_invitation(
+            &tc.0.principal_id,
+            &invitation_id,
+            LifecycleStatus::Rejected,
+        )
         .map_err(|err| AuthApiError::Api(ApiError::BadRequest(err.to_string())))?;
-    Ok((StatusCode::OK, Json(serde_json::json!({ "invitation": invitation }))).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "invitation": invitation })),
+    )
+        .into_response())
 }
 
 // ---------------------------------------------------------------------------
@@ -1396,8 +1473,8 @@ async fn principals_list(
         }
     };
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_principals(&filter)
         .map_err(ApiError::from_store)?;
     let items = if manage {
@@ -1424,13 +1501,19 @@ async fn principal_update(
     require_permission(&state, &tc.0, Permission::TenantManage)?;
     let request: PrincipalUpdateRequest = decode_json_body(&body)?;
     let store = state.store.lock();
-    let Some(mut principal) = store.get_principal(&principal_id).map_err(ApiError::from_store)?
+    let Some(mut principal) = store
+        .get_principal(&principal_id)
+        .map_err(ApiError::from_store)?
     else {
-        return Err(AuthApiError::Api(ApiError::NotFound("not found".to_string())));
+        return Err(AuthApiError::Api(ApiError::NotFound(
+            "not found".to_string(),
+        )));
     };
     principal.status = request.status.unwrap_or(LifecycleStatus::Active);
     principal.updated_at = tc.0.resolved_at;
-    store.upsert_principal(&principal).map_err(ApiError::from_store)?;
+    store
+        .upsert_principal(&principal)
+        .map_err(ApiError::from_store)?;
     let event = TenantAuditEvent {
         event_kind: "tenant.principal_lifecycle_updated".to_string(),
         tenant_id: tc.0.tenant_id.clone(),
@@ -1441,9 +1524,15 @@ async fn principal_update(
         created_at: Utc::now(),
         ..TenantAuditEvent::default()
     };
-    store.append_tenant_audit_event(&event).map_err(ApiError::from_store)?;
+    store
+        .append_tenant_audit_event(&event)
+        .map_err(ApiError::from_store)?;
     drop(store);
-    Ok((StatusCode::OK, Json(serde_json::json!({ "principal": principal }))).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "principal": principal })),
+    )
+        .into_response())
 }
 
 // ---------------------------------------------------------------------------
@@ -1469,15 +1558,18 @@ async fn tenant_audit_events_list(
         return Err(AuthApiError::TenantDenial);
     }
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_tenant_audit_events(&AuditEventFilter {
             tenant_id,
             limit: 500,
             ..AuditEventFilter::default()
         })
         .map_err(ApiError::from_store)?;
-    let items = items.into_iter().map(project_tenant_audit_event).collect::<Vec<_>>();
+    let items = items
+        .into_iter()
+        .map(project_tenant_audit_event)
+        .collect::<Vec<_>>();
     Ok((StatusCode::OK, Json(ListResponse { items })).into_response())
 }
 // ---------------------------------------------------------------------------
@@ -1493,7 +1585,10 @@ async fn tenant_secrets_list(
 ) -> Result<Response, AuthApiError> {
     let manager = secrets_manager(&state)?;
     let tc = require_hosted_credential_read(&tenant)?;
-    let items = manager.list(&tc.tenant_id).await.map_err(map_secret_error)?;
+    let items = manager
+        .list(&tc.tenant_id)
+        .await
+        .map_err(map_secret_error)?;
     Ok((StatusCode::OK, Json(ListResponse { items })).into_response())
 }
 
@@ -1530,7 +1625,11 @@ async fn tenant_secret_create(
             secret_version_id: String::new(),
         },
     )?;
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "secret": secret }))).into_response())
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "secret": secret })),
+    )
+        .into_response())
 }
 
 /// GET /v1/tenant-secrets/{secret_ref} - Go handleTenantSecretRoutes GET
@@ -1543,8 +1642,15 @@ async fn tenant_secret_get(
 ) -> Result<Response, AuthApiError> {
     let manager = secrets_manager(&state)?;
     let tc = require_hosted_credential_read(&tenant)?;
-    let secret = manager.get(&tc.tenant_id, &secret_ref).await.map_err(map_secret_error)?;
-    Ok((StatusCode::OK, Json(serde_json::json!({ "secret": secret }))).into_response())
+    let secret = manager
+        .get(&tc.tenant_id, &secret_ref)
+        .await
+        .map_err(map_secret_error)?;
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "secret": secret })),
+    )
+        .into_response())
 }
 
 /// PATCH /v1/tenant-secrets/{secret_ref} - Go handleTenantSecretRoutes PATCH
@@ -1579,7 +1685,11 @@ async fn tenant_secret_patch(
             secret_version_id: String::new(),
         },
     )?;
-    Ok((StatusCode::OK, Json(serde_json::json!({ "secret": secret }))).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "secret": secret })),
+    )
+        .into_response())
 }
 
 /// POST /v1/tenant-secrets/{secret_ref}/rotate - Go handleTenantSecretRoutes
@@ -1613,7 +1723,11 @@ async fn tenant_secret_rotate(
             secret_version_id: secret.active_version_id.clone(),
         },
     )?;
-    Ok((StatusCode::OK, Json(serde_json::json!({ "secret": secret }))).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "secret": secret })),
+    )
+        .into_response())
 }
 
 /// POST /v1/tenant-secrets/{secret_ref}/disable - Go handleTenantSecretRoutes
@@ -1647,7 +1761,11 @@ async fn tenant_secret_disable(
             secret_version_id: String::new(),
         },
     )?;
-    Ok((StatusCode::OK, Json(serde_json::json!({ "secret": secret }))).into_response())
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "secret": secret })),
+    )
+        .into_response())
 }
 #[cfg(test)]
 mod tests {
@@ -1695,25 +1813,37 @@ mod tests {
             &self,
             principal_id: &str,
         ) -> Result<Option<kura_identity::Principal>, kura_identity::IdentityError> {
-            self.store.lock().get_principal(principal_id).map_err(identity_store_err)
+            self.store
+                .lock()
+                .get_principal(principal_id)
+                .map_err(identity_store_err)
         }
         fn get_tenant(
             &self,
             tenant_id: &str,
         ) -> Result<Option<kura_identity::Tenant>, kura_identity::IdentityError> {
-            self.store.lock().get_tenant(tenant_id).map_err(identity_store_err)
+            self.store
+                .lock()
+                .get_tenant(tenant_id)
+                .map_err(identity_store_err)
         }
         fn list_memberships(
             &self,
             filter: &kura_identity::MembershipFilter,
         ) -> Result<Vec<kura_identity::Membership>, kura_identity::IdentityError> {
-            self.store.lock().list_memberships(filter).map_err(identity_store_err)
+            self.store
+                .lock()
+                .list_memberships(filter)
+                .map_err(identity_store_err)
         }
         fn list_token_tenant_grants(
             &self,
             token_id: &str,
         ) -> Result<Vec<kura_identity::TokenTenantGrant>, kura_identity::IdentityError> {
-            self.store.lock().list_token_tenant_grants(token_id).map_err(identity_store_err)
+            self.store
+                .lock()
+                .list_token_tenant_grants(token_id)
+                .map_err(identity_store_err)
         }
     }
 
@@ -1734,54 +1864,81 @@ mod tests {
             &self,
             tenant: &kura_identity::Tenant,
         ) -> Result<(), kura_identity::IdentityError> {
-            self.store.lock().upsert_tenant(tenant).map_err(identity_store_err)
+            self.store
+                .lock()
+                .upsert_tenant(tenant)
+                .map_err(identity_store_err)
         }
         fn upsert_principal(
             &self,
             principal: &kura_identity::Principal,
         ) -> Result<(), kura_identity::IdentityError> {
-            self.store.lock().upsert_principal(principal).map_err(identity_store_err)
+            self.store
+                .lock()
+                .upsert_principal(principal)
+                .map_err(identity_store_err)
         }
         fn upsert_membership(
             &self,
             membership: &kura_identity::Membership,
         ) -> Result<(), kura_identity::IdentityError> {
-            self.store.lock().upsert_membership(membership).map_err(identity_store_err)
+            self.store
+                .lock()
+                .upsert_membership(membership)
+                .map_err(identity_store_err)
         }
         fn upsert_tenant_invitation(
             &self,
             invitation: &kura_identity::TenantInvitation,
         ) -> Result<(), kura_identity::IdentityError> {
-            self.store.lock().upsert_tenant_invitation(invitation).map_err(identity_store_err)
+            self.store
+                .lock()
+                .upsert_tenant_invitation(invitation)
+                .map_err(identity_store_err)
         }
         fn upsert_token_tenant_grant(
             &self,
             grant: &kura_identity::TokenTenantGrant,
         ) -> Result<(), kura_identity::IdentityError> {
-            self.store.lock().upsert_token_tenant_grant(grant).map_err(identity_store_err)
+            self.store
+                .lock()
+                .upsert_token_tenant_grant(grant)
+                .map_err(identity_store_err)
         }
         fn list_tenants(
             &self,
             filter: &kura_identity::TenantFilter,
         ) -> Result<Vec<kura_identity::Tenant>, kura_identity::IdentityError> {
-            self.store.lock().list_tenants(filter).map_err(identity_store_err)
+            self.store
+                .lock()
+                .list_tenants(filter)
+                .map_err(identity_store_err)
         }
         fn list_principals(
             &self,
             filter: &kura_identity::PrincipalFilter,
         ) -> Result<Vec<kura_identity::Principal>, kura_identity::IdentityError> {
-            self.store.lock().list_principals(filter).map_err(identity_store_err)
+            self.store
+                .lock()
+                .list_principals(filter)
+                .map_err(identity_store_err)
         }
         fn list_tenant_invitations(
             &self,
             filter: &kura_identity::InvitationFilter,
         ) -> Result<Vec<kura_identity::TenantInvitation>, kura_identity::IdentityError> {
-            self.store.lock().list_tenant_invitations(filter).map_err(identity_store_err)
+            self.store
+                .lock()
+                .list_tenant_invitations(filter)
+                .map_err(identity_store_err)
         }
         fn list_token_authorities(
             &self,
         ) -> Result<Vec<kura_identity::TokenAuthority>, kura_identity::IdentityError> {
-            self.store.lock().list_token_authorities().map_err(identity_store_err)
+            self.store
+                .lock()
+                .list_token_authorities()
+                .map_err(identity_store_err)
         }
     }
 
@@ -1808,15 +1965,14 @@ mod tests {
             version: kura_secrets::SecretVersion,
         ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<()>> {
             Box::pin(async move {
-                self.secrets
-                    .lock()
-                    .insert((secret.tenant_id.clone(), secret.secret_ref.clone()), secret);
-                self.versions
-                    .lock()
-                    .insert(
-                        (version.tenant_id.clone(), version.secret_version_id.clone()),
-                        version,
-                    );
+                self.secrets.lock().insert(
+                    (secret.tenant_id.clone(), secret.secret_ref.clone()),
+                    secret,
+                );
+                self.versions.lock().insert(
+                    (version.tenant_id.clone(), version.secret_version_id.clone()),
+                    version,
+                );
                 Ok(())
             })
         }
@@ -1825,9 +1981,10 @@ mod tests {
             secret: kura_secrets::TenantSecret,
         ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<()>> {
             Box::pin(async move {
-                self.secrets
-                    .lock()
-                    .insert((secret.tenant_id.clone(), secret.secret_ref.clone()), secret);
+                self.secrets.lock().insert(
+                    (secret.tenant_id.clone(), secret.secret_ref.clone()),
+                    secret,
+                );
                 Ok(())
             })
         }
@@ -1848,10 +2005,9 @@ mod tests {
                     + 1;
                 version.version_number = next;
                 if !previous_version_id.is_empty() {
-                    if let Some(previous) = versions.get_mut(&(
-                        secret.tenant_id.clone(),
-                        previous_version_id.to_string(),
-                    )) {
+                    if let Some(previous) = versions
+                        .get_mut(&(secret.tenant_id.clone(), previous_version_id.to_string()))
+                    {
                         previous.status = SecretVersionStatus::Superseded;
                         previous.superseded_at = Some(secret.updated_at);
                     }
@@ -1861,9 +2017,10 @@ mod tests {
                     version,
                 );
                 drop(versions);
-                self.secrets
-                    .lock()
-                    .insert((secret.tenant_id.clone(), secret.secret_ref.clone()), secret);
+                self.secrets.lock().insert(
+                    (secret.tenant_id.clone(), secret.secret_ref.clone()),
+                    secret,
+                );
                 Ok(())
             })
         }
@@ -1872,9 +2029,10 @@ mod tests {
             secret: kura_secrets::TenantSecret,
         ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<()>> {
             Box::pin(async move {
-                self.secrets
-                    .lock()
-                    .insert((secret.tenant_id.clone(), secret.secret_ref.clone()), secret);
+                self.secrets.lock().insert(
+                    (secret.tenant_id.clone(), secret.secret_ref.clone()),
+                    secret,
+                );
                 Ok(())
             })
         }
@@ -1882,7 +2040,8 @@ mod tests {
             &'a self,
             tenant_id: &'a str,
             secret_ref: &'a str,
-        ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<Option<kura_secrets::TenantSecret>>> {
+        ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<Option<kura_secrets::TenantSecret>>>
+        {
             Box::pin(async move {
                 Ok(self
                     .secrets
@@ -1895,7 +2054,8 @@ mod tests {
             &'a self,
             tenant_id: &'a str,
             secret_version_id: &'a str,
-        ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<Option<kura_secrets::SecretVersion>>> {
+        ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<Option<kura_secrets::SecretVersion>>>
+        {
             Box::pin(async move {
                 Ok(self
                     .versions
@@ -1907,7 +2067,8 @@ mod tests {
         fn list_secrets<'a>(
             &'a self,
             tenant_id: &'a str,
-        ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<Vec<kura_secrets::TenantSecret>>> {
+        ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<Vec<kura_secrets::TenantSecret>>>
+        {
             Box::pin(async move {
                 Ok(self
                     .secrets
@@ -1920,8 +2081,6 @@ mod tests {
         }
     }
 
-
-
     // -----------------------------------------------------------------------
     // Harness (port of newTenantAuthHarness)
     // -----------------------------------------------------------------------
@@ -1929,6 +2088,7 @@ mod tests {
     fn test_config() -> kura_config::Config {
         kura_config::Config {
             project_root: String::new(),
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-test".to_string(),
@@ -1953,6 +2113,7 @@ mod tests {
                     ..Default::default()
                 },
             },
+            egress: Default::default(),
         }
     }
 
@@ -2020,9 +2181,15 @@ mod tests {
 
         {
             let store = store.lock();
-            store.upsert_principal(&principal).expect("upsert principal");
-            store.upsert_tenant(&default_tenant).expect("upsert default tenant");
-            store.upsert_tenant(&other_tenant).expect("upsert other tenant");
+            store
+                .upsert_principal(&principal)
+                .expect("upsert principal");
+            store
+                .upsert_tenant(&default_tenant)
+                .expect("upsert default tenant");
+            store
+                .upsert_tenant(&other_tenant)
+                .expect("upsert other tenant");
             store
                 .upsert_membership(&kura_identity::Membership {
                     membership_id: "mem_api_owner".to_string(),
@@ -2108,12 +2275,12 @@ mod tests {
             // stores S in several fields, so Arc<Manager<Concrete>> cannot
             // unsize to Arc<Manager<dyn Store>>; the manager is constructed
             // directly over the erased store (same as app wiring).
-            let erased: Arc<dyn kura_identity::Store + Send + Sync> =
-                Arc::new(TestIdentityStore { store: store.clone() });
+            let erased: Arc<dyn kura_identity::Store + Send + Sync> = Arc::new(TestIdentityStore {
+                store: store.clone(),
+            });
             let manager = kura_identity::Manager::new(erased);
-            let identity: Arc<
-                kura_identity::Manager<dyn kura_identity::Store + Send + Sync>,
-            > = Arc::new(manager);
+            let identity: Arc<kura_identity::Manager<dyn kura_identity::Store + Send + Sync>> =
+                Arc::new(manager);
             state.identity = Some(identity);
         }
 
@@ -2149,7 +2316,10 @@ mod tests {
                 disabled_at: None,
                 removed_at: None,
             };
-            self.store.lock().upsert_principal(&principal).expect("upsert principal");
+            self.store
+                .lock()
+                .upsert_principal(&principal)
+                .expect("upsert principal");
             let (pairing, code) = self
                 .auth_manager
                 .start_pairing(kura_identity::auth::StartPairingInput {
@@ -2222,7 +2392,10 @@ mod tests {
                 accepted_at: None,
                 removed_at: None,
             };
-            self.store.lock().upsert_membership(&membership).expect("upsert membership");
+            self.store
+                .lock()
+                .upsert_membership(&membership)
+                .expect("upsert membership");
         }
 
         /// Go tenantAuthHarness.setTokenStatus.
@@ -2234,7 +2407,10 @@ mod tests {
                 let mut token = token;
                 token.status = status;
                 self.auth_manager.update_token(token.clone());
-                self.store.lock().upsert_access_token(&token).expect("upsert token");
+                self.store
+                    .lock()
+                    .upsert_access_token(&token)
+                    .expect("upsert token");
                 return;
             }
             panic!("token for principal {principal_id} not found");
@@ -2261,7 +2437,10 @@ mod tests {
         use axum::middleware::from_fn_with_state;
         let protected_routes = Router::new()
             .route("/v1/auth/me", get(auth_me))
-            .route("/v1/auth/tokens", get(auth_tokens_list).post(auth_token_create))
+            .route(
+                "/v1/auth/tokens",
+                get(auth_tokens_list).post(auth_token_create),
+            )
             .route("/v1/auth/tokens/{token_id}/rotate", post(auth_token_rotate))
             .route("/v1/auth/tokens/{token_id}/revoke", post(auth_token_revoke))
             .route(
@@ -2270,7 +2449,10 @@ mod tests {
             )
             .route("/v1/tenants", get(tenants_list).post(tenant_create))
             .route("/v1/tenants/{tenant_id}", get(tenant_detail))
-            .route("/v1/tenants/{tenant_id}/memberships", get(tenant_memberships_list))
+            .route(
+                "/v1/tenants/{tenant_id}/memberships",
+                get(tenant_memberships_list),
+            )
             .route(
                 "/v1/tenants/{tenant_id}/memberships/{membership_id}",
                 patch(tenant_membership_update).delete(tenant_membership_remove),
@@ -2279,7 +2461,10 @@ mod tests {
                 "/v1/tenants/{tenant_id}/invitations",
                 get(tenant_invitations_list).post(tenant_invitation_create),
             )
-            .route("/v1/tenants/{tenant_id}/permissions", get(tenant_permissions))
+            .route(
+                "/v1/tenants/{tenant_id}/permissions",
+                get(tenant_permissions),
+            )
             .route("/v1/tenant-invitations", get(tenant_invitations_self_list))
             .route(
                 "/v1/tenant-invitations/{invitation_id}/accept",
@@ -2292,7 +2477,10 @@ mod tests {
             .route("/v1/principals", get(principals_list))
             .route("/v1/principals/{principal_id}", patch(principal_update))
             .route("/v1/tenant-audit-events", get(tenant_audit_events_list))
-            .route_layer(from_fn_with_state(state.clone(), crate::middleware::protected));
+            .route_layer(from_fn_with_state(
+                state.clone(),
+                crate::middleware::protected,
+            ));
         let unprotected = Router::new()
             .route("/v1/auth/pairings/start", post(auth_pairing_start))
             .route(
@@ -2342,12 +2530,12 @@ mod tests {
     ) -> (StatusCode, serde_json::Value) {
         let response = app.clone().oneshot(req).await.expect("oneshot");
         let status = response.status();
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
         (status, json)
     }
-
-
 
     // -----------------------------------------------------------------------
     // Ported Go handler tests
@@ -2372,21 +2560,39 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "body: {json}");
-        let pairing_id = json["pairing"]["pairingId"].as_str().expect("pairing id").to_string();
-        let pairing_code = json["pairingCode"].as_str().expect("pairing code").to_string();
+        let pairing_id = json["pairing"]["pairingId"]
+            .as_str()
+            .expect("pairing id")
+            .to_string();
+        let pairing_code = json["pairingCode"]
+            .as_str()
+            .expect("pairing code")
+            .to_string();
         assert!(!pairing_id.is_empty() && !pairing_code.is_empty());
 
         let complete_uri = format!("/v1/auth/pairings/{pairing_id}/complete");
         let complete_body = format!(r#"{{"code":"{pairing_code}"}}"#);
         let (status, json) = send(&app, request("POST", &complete_uri, Some(&complete_body))).await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
-        let access_token = json["accessToken"].as_str().expect("access token").to_string();
-        let token_id = json["token"]["tokenId"].as_str().expect("token id").to_string();
+        let access_token = json["accessToken"]
+            .as_str()
+            .expect("access token")
+            .to_string();
+        let token_id = json["token"]["tokenId"]
+            .as_str()
+            .expect("token id")
+            .to_string();
         assert!(!access_token.is_empty());
 
         let (status, json) = send(
             &app,
-            request_with("GET", "/v1/auth/me", None, Some(&format!("Bearer {access_token}")), None),
+            request_with(
+                "GET",
+                "/v1/auth/me",
+                None,
+                Some(&format!("Bearer {access_token}")),
+                None,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
@@ -2394,7 +2600,10 @@ mod tests {
 
         let pairings = h.store.lock().list_pairings().expect("list pairings");
         assert_eq!(pairings.len(), 1);
-        assert_eq!(pairings[0].status, kura_identity::auth::PairingStatus::Completed);
+        assert_eq!(
+            pairings[0].status,
+            kura_identity::auth::PairingStatus::Completed
+        );
         let tokens = h.store.lock().list_access_tokens().expect("list tokens");
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].token_id, token_id);
@@ -2406,10 +2615,16 @@ mod tests {
         let h = harness(true, true);
         let app = protected_app(h.state.clone());
 
-        let (status, json) =
-            send(&app, request_with("GET", "/v1/auth/me", None, Some(&h.auth_header), None)).await;
+        let (status, json) = send(
+            &app,
+            request_with("GET", "/v1/auth/me", None, Some(&h.auth_header), None),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
-        assert_eq!(json["token"]["tokenId"], serde_json::json!(h.token.token_id));
+        assert_eq!(
+            json["token"]["tokenId"],
+            serde_json::json!(h.token.token_id)
+        );
         assert_eq!(
             json["principal"]["principalId"],
             serde_json::json!(h.principal.principal_id)
@@ -2428,10 +2643,16 @@ mod tests {
         );
         let allowed = json["allowedTenants"].as_array().expect("allowed tenants");
         assert_eq!(allowed.len(), 1);
-        assert_eq!(allowed[0]["tenantId"], serde_json::json!(h.default_tenant.tenant_id));
+        assert_eq!(
+            allowed[0]["tenantId"],
+            serde_json::json!(h.default_tenant.tenant_id)
+        );
         let grants = json["tokenGrants"].as_array().expect("token grants");
         assert_eq!(grants.len(), 1);
-        assert_eq!(grants[0]["tenantId"], serde_json::json!(h.default_tenant.tenant_id));
+        assert_eq!(
+            grants[0]["tenantId"],
+            serde_json::json!(h.default_tenant.tenant_id)
+        );
         let permissions = json["permissions"].as_array().expect("permissions");
         assert!(permissions.contains(&serde_json::json!("tenant.manage")));
     }
@@ -2455,7 +2676,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
-        assert_eq!(json["tenant"]["tenantId"], serde_json::json!(h.default_tenant.tenant_id));
+        assert_eq!(
+            json["tenant"]["tenantId"],
+            serde_json::json!(h.default_tenant.tenant_id)
+        );
         assert_eq!(
             json["tenantContext"]["tenantSource"],
             serde_json::json!("explicit_header")
@@ -2507,7 +2731,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "body: {json}");
-        let org_tenant_id = json["tenant"]["tenantId"].as_str().expect("tenant id").to_string();
+        let org_tenant_id = json["tenant"]["tenantId"]
+            .as_str()
+            .expect("tenant id")
+            .to_string();
 
         let issue_body = format!(
             r#"{{"label":"automation","defaultTenantId":"{}","allowedTenantIds":["{}"]}}"#,
@@ -2515,14 +2742,29 @@ mod tests {
         );
         let (status, json) = send(
             &app,
-            request_with("POST", "/v1/auth/tokens", Some(&issue_body), Some(&h.auth_header), None),
+            request_with(
+                "POST",
+                "/v1/auth/tokens",
+                Some(&issue_body),
+                Some(&h.auth_header),
+                None,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "body: {json}");
-        let issued_secret = json["accessToken"].as_str().expect("access token").to_string();
-        let issued_token_id = json["token"]["tokenId"].as_str().expect("token id").to_string();
+        let issued_secret = json["accessToken"]
+            .as_str()
+            .expect("access token")
+            .to_string();
+        let issued_token_id = json["token"]["tokenId"]
+            .as_str()
+            .expect("token id")
+            .to_string();
         assert_eq!(json["grants"].as_array().map(Vec::len), Some(1));
-        assert_eq!(json["grants"][0]["tenantId"], serde_json::json!(h.default_tenant.tenant_id));
+        assert_eq!(
+            json["grants"][0]["tenantId"],
+            serde_json::json!(h.default_tenant.tenant_id)
+        );
 
         let (status, _) = send(
             &app,
@@ -2567,13 +2809,25 @@ mod tests {
             json["newToken"]["rotatedFromTokenId"],
             serde_json::json!(issued_token_id)
         );
-        let rotated_secret = json["accessToken"].as_str().expect("rotated secret").to_string();
-        let rotated_token_id = json["newToken"]["tokenId"].as_str().expect("new token id").to_string();
+        let rotated_secret = json["accessToken"]
+            .as_str()
+            .expect("rotated secret")
+            .to_string();
+        let rotated_token_id = json["newToken"]["tokenId"]
+            .as_str()
+            .expect("new token id")
+            .to_string();
         assert!(!rotated_secret.is_empty());
 
         let (status, _) = send(
             &app,
-            request_with("GET", "/v1/auth/me", None, Some(&format!("Bearer {issued_secret}")), None),
+            request_with(
+                "GET",
+                "/v1/auth/me",
+                None,
+                Some(&format!("Bearer {issued_secret}")),
+                None,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -2612,8 +2866,11 @@ mod tests {
         let h = harness(true, true);
         let app = protected_app(h.state.clone());
         let uri = format!("/v1/tenants/{}/permissions", h.default_tenant.tenant_id);
-        let (status, json) =
-            send(&app, request_with("GET", &uri, None, Some(&h.auth_header), None)).await;
+        let (status, json) = send(
+            &app,
+            request_with("GET", &uri, None, Some(&h.auth_header), None),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
         let items = json["items"].as_array().expect("items");
         assert!(!items.is_empty());
@@ -2646,8 +2903,14 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "body: {json}");
-        let org_id = json["tenant"]["tenantId"].as_str().expect("tenant id").to_string();
-        assert_eq!(json["tenant"]["tenantKind"], serde_json::json!("organization"));
+        let org_id = json["tenant"]["tenantId"]
+            .as_str()
+            .expect("tenant id")
+            .to_string();
+        assert_eq!(
+            json["tenant"]["tenantKind"],
+            serde_json::json!("organization")
+        );
 
         let invite_body = format!(
             r#"{{"invitedPrincipalId":"{}","role":"operator"}}"#,
@@ -2666,7 +2929,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "body: {json}");
-        let invitation_id = json["invitation"]["invitationId"].as_str().expect("invitation id").to_string();
+        let invitation_id = json["invitation"]["invitationId"]
+            .as_str()
+            .expect("invitation id")
+            .to_string();
 
         let accept_uri = format!("/v1/tenant-invitations/{invitation_id}/accept");
         let (status, json) = send(
@@ -2675,7 +2941,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
-        let membership_id = json["membership"]["membershipId"].as_str().expect("membership id").to_string();
+        let membership_id = json["membership"]["membershipId"]
+            .as_str()
+            .expect("membership id")
+            .to_string();
         assert_eq!(json["membership"]["role"], serde_json::json!("operator"));
 
         let membership_uri = format!("/v1/tenants/{org_id}/memberships/{membership_id}");
@@ -2694,7 +2963,13 @@ mod tests {
 
         let (status, json) = send(
             &app,
-            request_with("DELETE", &membership_uri, None, Some(&h.auth_header), Some(&org_id)),
+            request_with(
+                "DELETE",
+                &membership_uri,
+                None,
+                Some(&h.auth_header),
+                Some(&org_id),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
@@ -2721,8 +2996,6 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
     }
-
-
 
     #[tokio::test]
     async fn tenant_audit_events_expose_tenant_scoped_billing_evidence() {
@@ -2759,8 +3032,10 @@ mod tests {
                 .expect("append other audit");
         }
 
-        let visible_uri =
-            format!("/v1/tenant-audit-events?tenantId={}", h.default_tenant.tenant_id);
+        let visible_uri = format!(
+            "/v1/tenant-audit-events?tenantId={}",
+            h.default_tenant.tenant_id
+        );
         let (status, json) = send(
             &app,
             request_with(
@@ -2810,7 +3085,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "body: {json}");
-        let org_id = json["tenant"]["tenantId"].as_str().expect("tenant id").to_string();
+        let org_id = json["tenant"]["tenantId"]
+            .as_str()
+            .expect("tenant id")
+            .to_string();
 
         h.store
             .lock()
@@ -2857,7 +3135,10 @@ mod tests {
         assert_eq!(audits[0].target_principal_id, member_principal.principal_id);
         assert_eq!(audits[0].tenant_id, org_id);
         let document = audits[0].document.as_ref().expect("audit document");
-        assert_eq!(document["membershipId"], serde_json::json!("mem_role_member"));
+        assert_eq!(
+            document["membershipId"],
+            serde_json::json!("mem_role_member")
+        );
         assert_eq!(document["oldRole"], serde_json::json!("operator"));
         assert_eq!(document["newRole"], serde_json::json!("admin"));
     }
@@ -2880,8 +3161,14 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "body: {json}");
-        let org_id = json["tenant"]["tenantId"].as_str().expect("tenant id").to_string();
-        let membership_id = json["membership"]["membershipId"].as_str().expect("membership id").to_string();
+        let org_id = json["tenant"]["tenantId"]
+            .as_str()
+            .expect("tenant id")
+            .to_string();
+        let membership_id = json["membership"]["membershipId"]
+            .as_str()
+            .expect("membership id")
+            .to_string();
 
         let uri = format!("/v1/tenants/{org_id}/memberships/{membership_id}");
         let (status, json) = send(
@@ -2927,18 +3214,35 @@ mod tests {
         let h = harness(true, true);
         let app = protected_app(h.state.clone());
         let (viewer_header, viewer) = h.issue_principal_token("prn_viewer_api", "Viewer API");
-        let (operator_header, _operator) = h.issue_principal_token("prn_operator_api", "Operator API");
+        let (operator_header, _operator) =
+            h.issue_principal_token("prn_operator_api", "Operator API");
         let (admin_header, _admin) = h.issue_principal_token("prn_admin_api", "Admin API");
-        let (disabled_header, disabled) = h.issue_principal_token("prn_disabled_api", "Disabled API");
+        let (disabled_header, disabled) =
+            h.issue_principal_token("prn_disabled_api", "Disabled API");
         let (removed_header, _removed) = h.issue_principal_token("prn_removed_api", "Removed API");
         let (revoked_header, _revoked) = h.issue_principal_token("prn_revoked_api", "Revoked API");
 
-        h.set_default_membership_role("prn_operator_api", kura_identity::Role::Operator, LifecycleStatus::Active);
-        h.set_default_membership_role("prn_admin_api", kura_identity::Role::Admin, LifecycleStatus::Active);
-        h.set_default_membership_role("prn_removed_api", kura_identity::Role::Owner, LifecycleStatus::Removed);
+        h.set_default_membership_role(
+            "prn_operator_api",
+            kura_identity::Role::Operator,
+            LifecycleStatus::Active,
+        );
+        h.set_default_membership_role(
+            "prn_admin_api",
+            kura_identity::Role::Admin,
+            LifecycleStatus::Active,
+        );
+        h.set_default_membership_role(
+            "prn_removed_api",
+            kura_identity::Role::Owner,
+            LifecycleStatus::Removed,
+        );
         let mut disabled = disabled;
         disabled.status = LifecycleStatus::Disabled;
-        h.store.lock().upsert_principal(&disabled).expect("upsert disabled principal");
+        h.store
+            .lock()
+            .upsert_principal(&disabled)
+            .expect("upsert disabled principal");
         h.set_token_status("prn_revoked_api", kura_identity::auth::TokenStatus::Revoked);
 
         for (name, header, want) in [
@@ -2969,7 +3273,10 @@ mod tests {
                 ..kura_identity::AuditEventFilter::default()
             })
             .expect("list audits");
-        assert!(!audits.is_empty(), "expected viewer permission denial audit");
+        assert!(
+            !audits.is_empty(),
+            "expected viewer permission denial audit"
+        );
         assert!(
             audits[0].reason_code.contains("tenant.manage"),
             "reason: {}",
@@ -3031,13 +3338,14 @@ mod tests {
                 .expect("upsert grant");
         }
 
-        let (status, json) =
-            send(&app, request_with("GET", "/v1/tenants", None, Some(&h.auth_header), None)).await;
+        let (status, json) = send(
+            &app,
+            request_with("GET", "/v1/tenants", None, Some(&h.auth_header), None),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
         assert_eq!(json["items"].as_array().map(Vec::len), Some(221));
     }
-
-
 
     // -----------------------------------------------------------------------
     // Tenant-secret tests (port of the r37 hosted-credentials handler tests;
@@ -3110,7 +3418,11 @@ mod tests {
         req = with_tenant_extension(req, admin.clone());
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::CREATED, "body: {json}");
-        assert!(!json.to_string().contains("R37_FAKE_SECRET_TENANT_A_DO_NOT_LEAK"));
+        assert!(
+            !json
+                .to_string()
+                .contains("R37_FAKE_SECRET_TENANT_A_DO_NOT_LEAK")
+        );
 
         let mut req = request("GET", "/v1/tenant-secrets", None);
         req = with_tenant_extension(req, admin.clone());
@@ -3165,14 +3477,21 @@ mod tests {
         req = with_tenant_extension(req, operator);
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
-        assert!(!json.to_string().contains("R37_FAKE_SECRET_TENANT_A_DO_NOT_LEAK"));
+        assert!(
+            !json
+                .to_string()
+                .contains("R37_FAKE_SECRET_TENANT_A_DO_NOT_LEAK")
+        );
 
         let viewer = r37_viewer_context("ten_r37_a");
         let mut req = request("GET", "/v1/tenant-secrets/inspect-key", None);
         req = with_tenant_extension(req, viewer);
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "body: {json}");
-        assert!(json.to_string().contains("credential_denied:missing_permission"));
+        assert!(
+            json.to_string()
+                .contains("credential_denied:missing_permission")
+        );
     }
 
     #[tokio::test]
@@ -3223,7 +3542,11 @@ mod tests {
         let app = plain_app(state.clone());
         let (status, json) = send(
             &app,
-            request("POST", "/v1/auth/pairings/start", Some(r#"{"mode":"local","label":"x"}"#)),
+            request(
+                "POST",
+                "/v1/auth/pairings/start",
+                Some(r#"{"mode":"local","label":"x"}"#),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {json}");
@@ -3235,4 +3558,3 @@ mod tests {
         assert_eq!(json["message"], "tenant secret manager is not configured");
     }
 }
-

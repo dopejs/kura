@@ -6,8 +6,8 @@ mod adapter_runtime;
 mod supervisor;
 
 pub use adapter_runtime::{
-    start_adapter_runtime, AdapterHealthEvent, AdapterRuntime, Readiness, RuntimeError,
-    KIND_INTEGRATION_ADAPTER,
+    AdapterHealthEvent, AdapterRuntime, KIND_INTEGRATION_ADAPTER, Readiness, RuntimeError,
+    start_adapter_runtime,
 };
 pub use supervisor::{
     Capability, RegisterInput, ReportFailureInput, ReportHealthInput, Status, Supervisor,

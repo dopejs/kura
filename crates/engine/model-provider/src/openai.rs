@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use async_stream::try_stream;
-use kura_protocol::ResponseItem;
-use kura_protocol::Role;
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
+use kura_protocol::ResponseItem;
+use kura_protocol::Role;
 use serde_json::Value;
 use serde_json::json;
 
@@ -434,8 +434,11 @@ impl GenerationProvider for OpenAiCompatibleImageClient {
             let entries = parsed
                 .get("data")
                 .and_then(Value::as_array)
-                .ok_or_else(|| ProviderError::Malformed("image response has no data array".into()))?;
-            let assets: Vec<GeneratedAsset> = entries.iter().filter_map(parse_image_entry).collect();
+                .ok_or_else(|| {
+                    ProviderError::Malformed("image response has no data array".into())
+                })?;
+            let assets: Vec<GeneratedAsset> =
+                entries.iter().filter_map(parse_image_entry).collect();
             if assets.is_empty() {
                 // A success status with nothing usable is a provider bug; do
                 // not report it as a completed generation.
@@ -537,8 +540,16 @@ mod tests {
                 ("authorization".to_string(), "Bearer attacker".to_string()),
             ]));
 
-        assert_eq!(client.headers.get("X-Studio-Team").map(String::as_str), Some("engine"));
-        assert!(!client.headers.keys().any(|k| k.eq_ignore_ascii_case("authorization")));
+        assert_eq!(
+            client.headers.get("X-Studio-Team").map(String::as_str),
+            Some("engine")
+        );
+        assert!(
+            !client
+                .headers
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case("authorization"))
+        );
     }
 
     use super::*;
@@ -551,7 +562,8 @@ mod tests {
             input: vec![
                 ResponseItem::Message {
                     role: Role::User,
-                    content: "hi".into(),                },
+                    content: "hi".into(),
+                },
                 ResponseItem::FunctionCall {
                     call_id: "call_1".into(),
                     name: "shell".into(),
@@ -693,8 +705,16 @@ mod tests {
 
         let headers = seen.lock().expect("lock").clone();
         assert_eq!(headers.len(), 2, "both requests were served");
-        assert!(headers[0].ends_with("Bearer first-token"), "got {}", headers[0]);
-        assert!(headers[1].ends_with("Bearer second-token"), "got {}", headers[1]);
+        assert!(
+            headers[0].ends_with("Bearer first-token"),
+            "got {}",
+            headers[0]
+        );
+        assert!(
+            headers[1].ends_with("Bearer second-token"),
+            "got {}",
+            headers[1]
+        );
     }
 
     #[tokio::test]

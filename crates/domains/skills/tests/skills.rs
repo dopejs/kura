@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use kura_skills::{
-    Registry, Skill, SkillsError, SkillAvailabilityStatus, Source,
+    Registry, Skill, SkillAvailabilityStatus, SkillsError, Source,
     resolve_executable_skill_secrets, resolve_executable_skill_secrets_for_tenant,
 };
 
@@ -74,7 +74,10 @@ fn write_valid_executable_skill(data_root: &Path, skill_id: &str, opts: &Executa
         lines.push(format!("execution.args: {}", opts.args.join(",")));
     }
     if !opts.secret_refs.is_empty() {
-        lines.push(format!("execution.secret_refs: {}", opts.secret_refs.join(",")));
+        lines.push(format!(
+            "execution.secret_refs: {}",
+            opts.secret_refs.join(",")
+        ));
     }
     if opts.timeout_ms > 0 {
         lines.push(format!("execution.timeout_ms: {}", opts.timeout_ms));
@@ -99,7 +102,10 @@ fn write_invalid_executable_skill(data_root: &Path, skill_id: &str, invalid_line
     );
     let skill_dir = data_root.join("skills").join(skill_id);
     write_skill_fixture(&skill_dir, &content);
-    write_file(&skill_dir.join("scripts").join("run.sh"), "#!/bin/sh\nprintf nope");
+    write_file(
+        &skill_dir.join("scripts").join("run.sh"),
+        "#!/bin/sh\nprintf nope",
+    );
 }
 
 /// Registry whose home root is an empty temp dir (data dir carries the
@@ -120,14 +126,25 @@ fn loads_data_dir_and_home_skills_with_data_dir_precedence() {
     let data_root = tempfile::tempdir().unwrap();
 
     write_skill_fixture(
-        &home_root.path().join(".agents").join("skills").join("shared-skill"),
+        &home_root
+            .path()
+            .join(".agents")
+            .join("skills")
+            .join("shared-skill"),
         "---\nname: shared-skill\ndescription: \"home description\"\n---\nhome body",
     );
     write_skill_fixture(
-        &home_root.path().join(".agents").join("skills").join("home-only"),
+        &home_root
+            .path()
+            .join(".agents")
+            .join("skills")
+            .join("home-only"),
         "---\nname: home-only\ndescription: \"home only\"\n---\nhome only body",
     );
-    write_file(&home_root.path().join(".agents").join("AGENTS.md"), "home overlay");
+    write_file(
+        &home_root.path().join(".agents").join("AGENTS.md"),
+        "home overlay",
+    );
 
     write_skill_fixture(
         &data_root.path().join("skills").join("shared-skill"),
@@ -177,14 +194,17 @@ fn new_resolves_home_root_and_agents_skills_dir() {
     let home = tempfile::tempdir().unwrap();
     let data_root = tempfile::tempdir().unwrap();
     write_skill_fixture(
-        &home.path().join(".agents").join("skills").join("home-skill"),
+        &home
+            .path()
+            .join(".agents")
+            .join("skills")
+            .join("home-skill"),
         "---\nname: home-skill\n---\nhome body",
     );
 
     let previous_home = std::env::var_os("HOME");
     unsafe { std::env::set_var("HOME", home.path()) };
-    let registry =
-        Registry::new(data_root.path().to_str().unwrap()).expect("registry from HOME");
+    let registry = Registry::new(data_root.path().to_str().unwrap()).expect("registry from HOME");
     match previous_home {
         Some(previous) => unsafe { std::env::set_var("HOME", previous) },
         None => unsafe { std::env::remove_var("HOME") },
@@ -221,11 +241,21 @@ fn loads_bundled_files() {
         "---\nname: bundle-skill\ndescription: \"has files\"\n---\nbundle body",
     );
     write_file(
-        &data_root.path().join("skills").join("bundle-skill").join("references").join("guide.md"),
+        &data_root
+            .path()
+            .join("skills")
+            .join("bundle-skill")
+            .join("references")
+            .join("guide.md"),
         "guide",
     );
     write_file(
-        &data_root.path().join("skills").join("bundle-skill").join("scripts").join("run.sh"),
+        &data_root
+            .path()
+            .join("skills")
+            .join("bundle-skill")
+            .join("scripts")
+            .join("run.sh"),
         "#!/bin/sh",
     );
 
@@ -291,9 +321,19 @@ fn parses_executable_manifest_and_defaults_approval_to_ask() {
 
     let registry = registry_for(data_root.path());
     let skill = registry.get("exec-skill").expect("exec-skill");
-    let manifest = skill.execution_manifest.as_ref().expect("executable manifest");
-    assert_eq!(manifest.approval_mode, kura_sandbox::ApprovalMode::Ask, "default ask");
-    assert_eq!(skill.availability_status, SkillAvailabilityStatus::Available);
+    let manifest = skill
+        .execution_manifest
+        .as_ref()
+        .expect("executable manifest");
+    assert_eq!(
+        manifest.approval_mode,
+        kura_sandbox::ApprovalMode::Ask,
+        "default ask"
+    );
+    assert_eq!(
+        skill.availability_status,
+        SkillAvailabilityStatus::Available
+    );
     assert_eq!(manifest.timeout_ms, 500);
     assert_eq!(manifest.args, vec!["alpha".to_string(), "beta".to_string()]);
     assert_eq!(manifest.secret_refs, vec!["EXEC_SKILL_TOKEN".to_string()]);
@@ -330,7 +370,10 @@ fn marks_executable_skill_unavailable_when_secret_ref_missing_for_environment() 
     }
 
     let skill = registry.get("secret-skill").expect("secret-skill");
-    assert_eq!(skill.availability_status, SkillAvailabilityStatus::Unavailable);
+    assert_eq!(
+        skill.availability_status,
+        SkillAvailabilityStatus::Unavailable
+    );
     assert!(
         skill.availability_reason.contains("MISSING_SKILL_SECRET"),
         "reason {}",
@@ -359,10 +402,17 @@ fn reads_executable_skill_secrets_from_data_dir() {
 
     let registry = registry_for(data_root.path());
     let skill = registry.get("secret-skill").expect("secret-skill");
-    assert_eq!(skill.availability_status, SkillAvailabilityStatus::Available);
+    assert_eq!(
+        skill.availability_status,
+        SkillAvailabilityStatus::Available
+    );
     let values = resolve_executable_skill_secrets(
         data_root.path().to_str().unwrap(),
-        &skill.execution_manifest.as_ref().expect("manifest").secret_refs,
+        &skill
+            .execution_manifest
+            .as_ref()
+            .expect("manifest")
+            .secret_refs,
     )
     .expect("resolve secrets");
     assert_eq!(
@@ -401,7 +451,10 @@ fn marks_invalid_executable_fixture_unavailable() {
 
     let registry = registry_for(data_root.path());
     let skill = registry.get("invalid-skill").expect("invalid-skill");
-    assert_eq!(skill.availability_status, SkillAvailabilityStatus::Unavailable);
+    assert_eq!(
+        skill.availability_status,
+        SkillAvailabilityStatus::Unavailable
+    );
     assert!(skill.execution_manifest.is_some(), "manifest retained");
     assert!(
         skill.availability_reason.contains("network_mode"),
@@ -426,7 +479,10 @@ fn projects_explicit_docker_requirement_for_executable_skill() {
 
     let registry = registry_for(data_root.path());
     let skill = registry.get("docker-skill").expect("docker-skill");
-    assert_eq!(skill.availability_status, SkillAvailabilityStatus::Available);
+    assert_eq!(
+        skill.availability_status,
+        SkillAvailabilityStatus::Available
+    );
     let manifest = skill.execution_manifest.as_ref().expect("manifest");
     assert_eq!(manifest.profile_id, "docker_default");
     assert_eq!(manifest.backend_kind, kura_sandbox::BackendKind::Docker);
@@ -492,10 +548,10 @@ impl kura_secrets::Store for FakeSecretStore {
         version: kura_secrets::SecretVersion,
     ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<()>> {
         Box::pin(async move {
-            self.secrets.lock().unwrap().insert(
-                Self::key(&secret.tenant_id, &secret.secret_ref),
-                secret,
-            );
+            self.secrets
+                .lock()
+                .unwrap()
+                .insert(Self::key(&secret.tenant_id, &secret.secret_ref), secret);
             self.versions
                 .lock()
                 .unwrap()
@@ -572,9 +628,15 @@ impl kura_secrets::Store for FakeSecretStore {
         &'a self,
         _tenant_id: &'a str,
         secret_version_id: &'a str,
-    ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<Option<kura_secrets::SecretVersion>>> {
+    ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<Option<kura_secrets::SecretVersion>>>
+    {
         Box::pin(async move {
-            Ok(self.versions.lock().unwrap().get(secret_version_id).cloned())
+            Ok(self
+                .versions
+                .lock()
+                .unwrap()
+                .get(secret_version_id)
+                .cloned())
         })
     }
 
@@ -599,9 +661,8 @@ impl kura_secrets::Store for FakeSecretStore {
 async fn resolves_executable_skill_secrets_for_tenant_uses_active_tenant() {
     let backend_dir = tempfile::tempdir().unwrap();
     let store = Arc::new(FakeSecretStore::default());
-    let backend = Arc::new(
-        kura_secrets::LocalBackend::new(backend_dir.path()).expect("local backend"),
-    );
+    let backend =
+        Arc::new(kura_secrets::LocalBackend::new(backend_dir.path()).expect("local backend"));
     let manager = kura_secrets::Manager::new(store.clone(), backend);
 
     manager
@@ -656,8 +717,9 @@ async fn resolves_executable_skill_secrets_for_tenant_uses_active_tenant() {
 
     // Empty refs resolve without any context or manager.
     let empty: Vec<String> = Vec::new();
-    let values =
-        resolve_executable_skill_secrets_for_tenant(None, &empty).await.expect("empty refs");
+    let values = resolve_executable_skill_secrets_for_tenant(None, &empty)
+        .await
+        .expect("empty refs");
     assert!(values.is_empty());
 }
 
@@ -708,7 +770,10 @@ fn skill_json_round_trip_preserves_camel_case_wire_shape() {
     assert!(json.contains("\"backendKind\":\"subprocess\""), "{json}");
     assert!(json.contains("\"approvalMode\":\"ask\""), "{json}");
     assert!(json.contains("\"networkMode\":\"deny\""), "{json}");
-    assert!(json.contains("\"availabilityStatus\":\"available\""), "{json}");
+    assert!(
+        json.contains("\"availabilityStatus\":\"available\""),
+        "{json}"
+    );
     assert!(json.contains("\"source\":\"data_dir\""), "{json}");
 
     let decoded: Skill = serde_json::from_str(&json).expect("deserialize skill");
@@ -726,10 +791,16 @@ fn non_executable_skill_round_trip() {
     let registry = registry_for(data_root.path());
     let skill = registry.get("plain-skill").expect("plain-skill");
     assert!(skill.execution_manifest.is_none());
-    assert_eq!(skill.availability_status, SkillAvailabilityStatus::NotExecutable);
+    assert_eq!(
+        skill.availability_status,
+        SkillAvailabilityStatus::NotExecutable
+    );
 
     let json = serde_json::to_string(&skill).expect("serialize");
-    assert!(json.contains("\"availabilityStatus\":\"not_executable\""), "{json}");
+    assert!(
+        json.contains("\"availabilityStatus\":\"not_executable\""),
+        "{json}"
+    );
     assert!(!json.contains("executionManifest"), "{json}");
 
     let decoded: Skill = serde_json::from_str(&json).expect("deserialize");

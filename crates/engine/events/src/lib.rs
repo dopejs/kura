@@ -179,7 +179,9 @@ fn matches(filter: &Filter, event: &Event) -> bool {
     if !filter.schedule_id.is_empty() && filter.schedule_id != event.scope.schedule_id {
         return false;
     }
-    if !filter.schedule_attempt_id.is_empty() && filter.schedule_attempt_id != event.scope.schedule_attempt_id {
+    if !filter.schedule_attempt_id.is_empty()
+        && filter.schedule_attempt_id != event.scope.schedule_attempt_id
+    {
         return false;
     }
     if !filter.resource_kind.is_empty() && filter.resource_kind != event.resource.kind {
@@ -230,7 +232,9 @@ pub struct Bus {
 impl Bus {
     #[must_use]
     pub fn new() -> Self {
-        Bus { state: Arc::new(RwLock::new(BusState::default())) }
+        Bus {
+            state: Arc::new(RwLock::new(BusState::default())),
+        }
     }
 
     /// Publishes an event to the history and all matching subscribers. Returns the event with
@@ -273,7 +277,12 @@ impl Bus {
     #[must_use]
     pub fn list(&self, filter: &Filter) -> Vec<Event> {
         let state = self.state.read();
-        state.history.iter().filter(|e| matches(filter, e)).cloned().collect()
+        state
+            .history
+            .iter()
+            .filter(|e| matches(filter, e))
+            .cloned()
+            .collect()
     }
 
     /// Subscribes to live events matching the filter. Returns a receiver and an unsubscribe
@@ -283,13 +292,25 @@ impl Bus {
         if state.closed {
             let (sender, receiver) = mpsc::sync_channel(16);
             drop(sender);
-            return (receiver, Unsubscribe { state: Arc::clone(&self.state), id: -1 });
+            return (
+                receiver,
+                Unsubscribe {
+                    state: Arc::clone(&self.state),
+                    id: -1,
+                },
+            );
         }
         let id = state.next_id;
         state.next_id += 1;
         let (sender, receiver) = mpsc::sync_channel(16);
         state.subscribers.insert(id, Subscriber { filter, sender });
-        (receiver, Unsubscribe { state: Arc::clone(&self.state), id })
+        (
+            receiver,
+            Unsubscribe {
+                state: Arc::clone(&self.state),
+                id,
+            },
+        )
     }
 
     /// Closes the bus, dropping all subscribers and closing their channels.

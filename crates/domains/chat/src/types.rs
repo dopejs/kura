@@ -202,7 +202,18 @@ pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 16;
 /// an MCP server, or stops one, and the next turn should see that without the
 /// daemon restarting.
 pub trait ToolSource: Send + Sync {
-    fn registry(&self) -> Arc<kura_core::ToolRegistry>;
+    /// The tools this turn may call. `turn` names who is asking, because what
+    /// a tenant may recall or which provider profile answers depends on it.
+    fn registry(&self, turn: &ToolTurn) -> Arc<kura_core::ToolRegistry>;
+}
+
+/// Who a turn's tools are resolved for.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ToolTurn {
+    pub tenant_id: String,
+    pub thread_id: String,
+    pub agent_profile_id: String,
+    pub scope: Scope,
 }
 
 impl Service {

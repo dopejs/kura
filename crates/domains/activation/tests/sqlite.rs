@@ -9,17 +9,14 @@ use std::sync::Arc;
 use chrono::DateTime;
 use chrono::TimeZone;
 use chrono::Utc;
-use kura_activation::default_test_chat_first_action;
-use kura_activation::reason_code_from_error;
 use kura_activation::ActivateInput;
 use kura_activation::AuditSink;
-use kura_activation::IdentityRepository;
-use kura_activation::StateStore;
 use kura_activation::BillingProjector;
 use kura_activation::BillingProjectorAdapter;
 use kura_activation::ChatRunner;
 use kura_activation::ChatRunnerAdapter;
 use kura_activation::GetInput;
+use kura_activation::IdentityRepository;
 use kura_activation::QuotaBaseline;
 use kura_activation::QuotaBaselineStatus;
 use kura_activation::ReadinessItem;
@@ -28,15 +25,18 @@ use kura_activation::ReadinessStatus;
 use kura_activation::ReasonCode;
 use kura_activation::RemediationOwner;
 use kura_activation::RunTestChatInput;
-use kura_activation::Service;
-use kura_activation::SqliteActivationStore;
-use kura_activation::State;
-use kura_activation::Status;
-use kura_activation::TestChatInput;
-use kura_activation::TestChatStatus;
 use kura_activation::STEP_QUOTA_BASELINE_READY;
 use kura_activation::STEP_TENANT_RESOLVED;
 use kura_activation::STEP_TEST_CHAT;
+use kura_activation::Service;
+use kura_activation::SqliteActivationStore;
+use kura_activation::State;
+use kura_activation::StateStore;
+use kura_activation::Status;
+use kura_activation::TestChatInput;
+use kura_activation::TestChatStatus;
+use kura_activation::default_test_chat_first_action;
+use kura_activation::reason_code_from_error;
 use kura_billing::BillingError;
 use kura_identity::AuditEventFilter;
 use kura_identity::LifecycleStatus;
@@ -61,7 +61,9 @@ fn temp_dir(name: &str) -> String {
 }
 
 fn test_now() -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2026, 5, 6, 10, 0, 0).single().unwrap_or_else(Utc::now)
+    Utc.with_ymd_and_hms(2026, 5, 6, 10, 0, 0)
+        .single()
+        .unwrap_or_else(Utc::now)
 }
 
 fn open_store(name: &str) -> SqliteActivationStore {
@@ -69,7 +71,12 @@ fn open_store(name: &str) -> SqliteActivationStore {
         .expect("open sqlite activation store")
 }
 
-fn sample_state(activation_id: &str, principal_id: &str, tenant_id: &str, now: DateTime<Utc>) -> State {
+fn sample_state(
+    activation_id: &str,
+    principal_id: &str,
+    tenant_id: &str,
+    now: DateTime<Utc>,
+) -> State {
     State {
         activation_id: activation_id.to_string(),
         principal_id: principal_id.to_string(),
@@ -77,7 +84,10 @@ fn sample_state(activation_id: &str, principal_id: &str, tenant_id: &str, now: D
         environment_scope: "test".to_string(),
         status: Status::ACTIVE.into(),
         current_step_id: STEP_TEST_CHAT.to_string(),
-        completed_step_ids: vec![STEP_TENANT_RESOLVED.to_string(), STEP_QUOTA_BASELINE_READY.to_string()],
+        completed_step_ids: vec![
+            STEP_TENANT_RESOLVED.to_string(),
+            STEP_QUOTA_BASELINE_READY.to_string(),
+        ],
         blocking_reason_codes: Vec::new(),
         readiness_items: vec![ReadinessItem {
             item_id: "tenant-access".to_string(),
@@ -155,7 +165,10 @@ async fn state_store_round_trips_activation_state() {
     let store = open_store("state_roundtrip");
     let state = sample_state("act_prn_1_ten_personal", "prn_1", "ten_personal", now);
 
-    store.upsert_activation_state(state.clone()).await.expect("upsert");
+    store
+        .upsert_activation_state(state.clone())
+        .await
+        .expect("upsert");
 
     let by_id = store
         .get_activation_state("act_prn_1_ten_personal")
@@ -199,7 +212,10 @@ async fn state_store_preserves_optional_columns() {
         serde_json::json!("signup"),
     )]));
 
-    store.upsert_activation_state(state.clone()).await.expect("upsert");
+    store
+        .upsert_activation_state(state.clone())
+        .await
+        .expect("upsert");
     let got = store
         .get_activation_state_for_principal_tenant("prn_opt", "ten_opt")
         .await
@@ -216,8 +232,14 @@ async fn state_store_replaces_row_by_principal_tenant() {
     let mut replacement = sample_state("act_prn_1_ten_personal_2", "prn_1", "ten_personal", now);
     replacement.status = Status::FIRST_ACTION_COMPLETED.into();
 
-    store.upsert_activation_state(original).await.expect("upsert original");
-    store.upsert_activation_state(replacement).await.expect("upsert replacement");
+    store
+        .upsert_activation_state(original)
+        .await
+        .expect("upsert original");
+    store
+        .upsert_activation_state(replacement)
+        .await
+        .expect("upsert replacement");
 
     assert!(
         store
@@ -280,13 +302,30 @@ async fn identity_repository_round_trips_over_sqlite() {
     let store = open_store("identity_roundtrip");
 
     let principal = active_principal("prn_1", now);
-    store.upsert_principal(principal.clone()).await.expect("upsert principal");
-    let got = store.get_principal("prn_1").await.expect("get principal").expect("principal present");
+    store
+        .upsert_principal(principal.clone())
+        .await
+        .expect("upsert principal");
+    let got = store
+        .get_principal("prn_1")
+        .await
+        .expect("get principal")
+        .expect("principal present");
     assert_eq!(got.principal_id, principal.principal_id);
     assert_eq!(got.status, principal.status);
-    assert!(store.get_principal("prn_missing").await.expect("get missing").is_none());
+    assert!(
+        store
+            .get_principal("prn_missing")
+            .await
+            .expect("get missing")
+            .is_none()
+    );
     let listed = store
-        .list_principals(&PrincipalFilter { tenant_id: String::new(), status: Some(LifecycleStatus::Active), limit: 0 })
+        .list_principals(&PrincipalFilter {
+            tenant_id: String::new(),
+            status: Some(LifecycleStatus::Active),
+            limit: 0,
+        })
         .await
         .expect("list principals");
     assert_eq!(listed.len(), 1);
@@ -306,13 +345,27 @@ async fn identity_repository_round_trips_over_sqlite() {
         default_for_current_token: false,
         default_for_current_principal: false,
     };
-    store.upsert_tenant(tenant.clone()).await.expect("upsert tenant");
-    let got_tenant = store.get_tenant("ten_personal").await.expect("get tenant").expect("tenant present");
+    store
+        .upsert_tenant(tenant.clone())
+        .await
+        .expect("upsert tenant");
+    let got_tenant = store
+        .get_tenant("ten_personal")
+        .await
+        .expect("get tenant")
+        .expect("tenant present");
     assert_eq!(got_tenant.tenant_id, tenant.tenant_id);
     assert_eq!(got_tenant.tenant_kind, tenant.tenant_kind);
-    assert_eq!(got_tenant.default_owner_principal_id, tenant.default_owner_principal_id);
+    assert_eq!(
+        got_tenant.default_owner_principal_id,
+        tenant.default_owner_principal_id
+    );
     let tenants = store
-        .list_tenants(&TenantFilter { tenant_kind: Some(TenantKind::Personal), status: Some(LifecycleStatus::Active), limit: 0 })
+        .list_tenants(&TenantFilter {
+            tenant_kind: Some(TenantKind::Personal),
+            status: Some(LifecycleStatus::Active),
+            limit: 0,
+        })
         .await
         .expect("list tenants");
     assert_eq!(tenants.len(), 1);
@@ -329,9 +382,17 @@ async fn identity_repository_round_trips_over_sqlite() {
         accepted_at: Some(now),
         removed_at: None,
     };
-    store.upsert_membership(membership.clone()).await.expect("upsert membership");
+    store
+        .upsert_membership(membership.clone())
+        .await
+        .expect("upsert membership");
     let memberships = store
-        .list_memberships(&MembershipFilter { tenant_id: "ten_personal".to_string(), status: None, role: None, limit: 0 })
+        .list_memberships(&MembershipFilter {
+            tenant_id: "ten_personal".to_string(),
+            status: None,
+            role: None,
+            limit: 0,
+        })
         .await
         .expect("list memberships");
     assert_eq!(memberships.len(), 1);
@@ -350,8 +411,14 @@ async fn identity_repository_round_trips_over_sqlite() {
         revoked_at: None,
         granted_by_principal_id: "prn_1".to_string(),
     };
-    store.upsert_token_tenant_grant(grant.clone()).await.expect("upsert grant");
-    let grants = store.list_token_tenant_grants("tok_1").await.expect("list grants");
+    store
+        .upsert_token_tenant_grant(grant.clone())
+        .await
+        .expect("upsert grant");
+    let grants = store
+        .list_token_tenant_grants("tok_1")
+        .await
+        .expect("list grants");
     assert_eq!(grants.len(), 1);
     assert_eq!(grants[0].grant_id, grant.grant_id);
     assert_eq!(grants[0].tenant_id, grant.tenant_id);
@@ -379,7 +446,10 @@ async fn audit_sink_appends_tenant_audit_event() {
         .append_tenant_audit_event(event)
         .await
         .expect("append audit event");
-    assert!(!saved.audit_event_id.is_empty(), "store must assign an audit event id");
+    assert!(
+        !saved.audit_event_id.is_empty(),
+        "store must assign an audit event id"
+    );
 
     let events = store
         .store_handle()
@@ -409,12 +479,21 @@ async fn billing_projector_adapter_projects_usage() {
     let adapter = BillingProjectorAdapter::new(billing.clone());
 
     // Non-hosted tenants fall back to the development plan.
-    let summary = adapter.usage_summary("ten_dev", false).await.expect("development usage summary");
+    let summary = adapter
+        .usage_summary("ten_dev", false)
+        .await
+        .expect("development usage summary");
     assert!(!summary.plan_key.is_empty());
-    assert!(!summary.quotas.is_empty(), "development plan projects catalog quotas");
+    assert!(
+        !summary.quotas.is_empty(),
+        "development plan projects catalog quotas"
+    );
 
     // Hosted tenants fail closed without a billing repository.
-    let err = adapter.usage_summary("ten_hosted", true).await.expect_err("hosted usage must fail closed");
+    let err = adapter
+        .usage_summary("ten_hosted", true)
+        .await
+        .expect_err("hosted usage must fail closed");
     assert!(matches!(err, BillingError::QuotaStateUnavailable));
 }
 
@@ -441,7 +520,9 @@ async fn chat_runner_adapter_requires_configured_service() {
 #[test]
 fn chat_runner_adapter_runs_echo_test_chat() {
     let dispatcher = Arc::new(kura_llm::Dispatcher::new());
-    let chat = Arc::new(kura_chat::Service::new_service(dispatcher, None, None, None, None));
+    let chat = Arc::new(kura_chat::Service::new_service(
+        dispatcher, None, None, None, None,
+    ));
     let adapter = ChatRunnerAdapter::new(Some(chat));
 
     let result = futures::executor::block_on(adapter.run_activation_test_chat(TestChatInput {
@@ -497,12 +578,20 @@ async fn service_with_sqlite_persists_activation_and_audit() {
         .expect("personal tenant persisted");
     assert_eq!(tenant.default_owner_principal_id, "prn_hosted");
     let memberships = store
-        .list_memberships(&MembershipFilter { tenant_id: state.tenant_id.clone(), status: None, role: None, limit: 0 })
+        .list_memberships(&MembershipFilter {
+            tenant_id: state.tenant_id.clone(),
+            status: None,
+            role: None,
+            limit: 0,
+        })
         .await
         .expect("list memberships");
     assert_eq!(memberships.len(), 1);
     assert_eq!(memberships[0].role, Role::Owner);
-    let grants = store.list_token_tenant_grants("tok_hosted").await.expect("list grants");
+    let grants = store
+        .list_token_tenant_grants("tok_hosted")
+        .await
+        .expect("list grants");
     assert_eq!(grants.len(), 1);
 
     // Audit transitions were appended through the SQLite AuditSink.
@@ -518,7 +607,10 @@ async fn service_with_sqlite_persists_activation_and_audit() {
             limit: 0,
         })
         .expect("list audit events");
-    let kinds: Vec<&str> = events.iter().map(|event| event.event_kind.as_str()).collect();
+    let kinds: Vec<&str> = events
+        .iter()
+        .map(|event| event.event_kind.as_str())
+        .collect();
     assert!(kinds.contains(&"tenant.activation_started"), "{kinds:?}");
     assert!(kinds.contains(&"tenant.activation_completed"), "{kinds:?}");
 
@@ -564,7 +656,9 @@ fn service_with_sqlite_runs_activation_test_chat() {
     // so this flow must not run inside a Tokio runtime (matches chat/tests).
     futures::executor::block_on(async {
         let dispatcher = Arc::new(kura_llm::Dispatcher::new());
-        let chat = Arc::new(kura_chat::Service::new_service(dispatcher, None, None, None, None));
+        let chat = Arc::new(kura_chat::Service::new_service(
+            dispatcher, None, None, None, None,
+        ));
         let store = Arc::new(open_store("service_chat"));
         let svc = Service::with_sqlite(
             store.clone(),
@@ -604,7 +698,10 @@ fn service_with_sqlite_runs_activation_test_chat() {
             .expect("store")
             .expect("persisted completion");
         assert_eq!(persisted.status, Status::FIRST_ACTION_COMPLETED);
-        assert_eq!(persisted.test_chat.as_ref().expect("test chat").dispatch_id, metadata.dispatch_id);
+        assert_eq!(
+            persisted.test_chat.as_ref().expect("test chat").dispatch_id,
+            metadata.dispatch_id
+        );
     });
 }
 
@@ -662,5 +759,8 @@ async fn service_with_sqlite_denies_revoked_membership() {
         })
         .await
         .expect_err("revoked membership must be denied");
-    assert_eq!(reason_code_from_error(&err), ReasonCode::TENANT_ACCESS_REVOKED);
+    assert_eq!(
+        reason_code_from_error(&err),
+        ReasonCode::TENANT_ACCESS_REVOKED
+    );
 }

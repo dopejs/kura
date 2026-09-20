@@ -8,11 +8,11 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 use serde::{Deserialize, Serialize};
 
-use crate::crud::{now_rfc3339, null_string, opt_time_string};
 use crate::SQLiteStore;
+use crate::crud::{now_rfc3339, null_string, opt_time_string};
 
 /// Go `TelegramHostedSetupRecord` (stored in `telegram_hosted_setups`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,9 +68,17 @@ pub struct TelegramAllowmentRecord {
     pub tenant_id: String,
     pub connector_id: String,
     pub allowment_id: String,
-    #[serde(rename = "telegramScopeType", default, skip_serializing_if = "String::is_empty")]
+    #[serde(
+        rename = "telegramScopeType",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
     pub scope_type: String,
-    #[serde(rename = "telegramScopeId", default, skip_serializing_if = "String::is_empty")]
+    #[serde(
+        rename = "telegramScopeId",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
     pub scope_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub provider_label: String,
@@ -113,11 +121,23 @@ pub struct TelegramUpdateEvidenceRecord {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub tenant_id: String,
     pub connector_id: String,
-    #[serde(rename = "telegramChatId", default, skip_serializing_if = "String::is_empty")]
+    #[serde(
+        rename = "telegramChatId",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
     pub chat_id: String,
-    #[serde(rename = "telegramMessageId", default, skip_serializing_if = "String::is_empty")]
+    #[serde(
+        rename = "telegramMessageId",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
     pub message_id: String,
-    #[serde(rename = "telegramUpdateId", default, skip_serializing_if = "String::is_empty")]
+    #[serde(
+        rename = "telegramUpdateId",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
     pub update_id: String,
     pub route_outcome: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -237,7 +257,9 @@ fn normalize_smoke(mut record: TelegramSmokeEvidenceRecord) -> TelegramSmokeEvid
 }
 
 /// Go `normalizeTelegramUpdateEvidenceRecord`.
-fn normalize_update_evidence(mut record: TelegramUpdateEvidenceRecord) -> TelegramUpdateEvidenceRecord {
+fn normalize_update_evidence(
+    mut record: TelegramUpdateEvidenceRecord,
+) -> TelegramUpdateEvidenceRecord {
     let now = Utc::now();
     record.route_outcome = coalesce(&record.route_outcome, "accepted");
     record.redaction_status = coalesce(&record.redaction_status, "redacted");
@@ -252,7 +274,10 @@ fn normalize_update_evidence(mut record: TelegramUpdateEvidenceRecord) -> Telegr
 
 impl SQLiteStore {
     /// Go `SaveTelegramHostedSetup`.
-    pub fn save_telegram_hosted_setup(&self, record: &TelegramHostedSetupRecord) -> Result<(), String> {
+    pub fn save_telegram_hosted_setup(
+        &self,
+        record: &TelegramHostedSetupRecord,
+    ) -> Result<(), String> {
         let record = normalize_hosted_setup(record.clone());
         let document = serde_json::to_string(&record)
             .map_err(|e| format!("marshal telegram hosted setup: {e}"))?;
@@ -398,7 +423,10 @@ impl SQLiteStore {
     }
 
     /// Go `SaveTelegramSmokeEvidence`.
-    pub fn save_telegram_smoke_evidence(&self, record: &TelegramSmokeEvidenceRecord) -> Result<(), String> {
+    pub fn save_telegram_smoke_evidence(
+        &self,
+        record: &TelegramSmokeEvidenceRecord,
+    ) -> Result<(), String> {
         let record = normalize_smoke(record.clone());
         let document = serde_json::to_string(&record)
             .map_err(|e| format!("marshal telegram smoke evidence: {e}"))?;
@@ -437,7 +465,12 @@ impl SQLiteStore {
                     document,
                 ],
             )
-            .map_err(|e| format!("save telegram smoke evidence {}: {e}", record.smoke_evidence_id))?;
+            .map_err(|e| {
+                format!(
+                    "save telegram smoke evidence {}: {e}",
+                    record.smoke_evidence_id
+                )
+            })?;
         Ok(())
     }
 
@@ -459,7 +492,11 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("latest telegram smoke evidence {connector_id}: {e}"))?;
         let mut rows = stmt
-            .query(params![tenant_id.trim(), connector_id.trim(), now_rfc3339(&now)])
+            .query(params![
+                tenant_id.trim(),
+                connector_id.trim(),
+                now_rfc3339(&now)
+            ])
             .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
@@ -468,7 +505,10 @@ impl SQLiteStore {
     }
 
     /// Go `SaveTelegramUpdateEvidence`.
-    pub fn save_telegram_update_evidence(&self, record: &TelegramUpdateEvidenceRecord) -> Result<(), String> {
+    pub fn save_telegram_update_evidence(
+        &self,
+        record: &TelegramUpdateEvidenceRecord,
+    ) -> Result<(), String> {
         let record = normalize_update_evidence(record.clone());
         let document = serde_json::to_string(&record)
             .map_err(|e| format!("marshal telegram update evidence: {e}"))?;
@@ -500,10 +540,12 @@ impl SQLiteStore {
                     document,
                 ],
             )
-            .map_err(|e| format!(
-                "save telegram update evidence {}/{}/{}: {e}",
-                record.chat_id, record.message_id, record.update_id
-            ))?;
+            .map_err(|e| {
+                format!(
+                    "save telegram update evidence {}/{}/{}: {e}",
+                    record.chat_id, record.message_id, record.update_id
+                )
+            })?;
         Ok(())
     }
 
@@ -515,7 +557,11 @@ impl SQLiteStore {
         now: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<TelegramUpdateEvidenceRecord>, String> {
-        let limit = if limit <= 0 || limit > 100 { 100 } else { limit };
+        let limit = if limit <= 0 || limit > 100 {
+            100
+        } else {
+            limit
+        };
         let mut stmt = self
             .conn
             .prepare(
@@ -527,7 +573,12 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("list telegram update evidence: {e}"))?;
         let mut rows = stmt
-            .query(params![tenant_id.trim(), connector_id.trim(), now_rfc3339(&now), limit])
+            .query(params![
+                tenant_id.trim(),
+                connector_id.trim(),
+                now_rfc3339(&now),
+                limit
+            ])
             .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {

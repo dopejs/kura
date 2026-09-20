@@ -12,5 +12,8 @@ use kura_contracts::Validator;
 #[test]
 fn test_matrix_connector_schemas_accept_canonical_fixtures() {
     let validator = Validator::new(schema_root_dir());
-    validate_fixtures(&validator, &[common::data::matrix_connector_contract_fixtures()].concat());
+    validate_fixtures(
+        &validator,
+        &[common::data::matrix_connector_contract_fixtures()].concat(),
+    );
 }

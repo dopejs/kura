@@ -12,14 +12,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
-use kura_mcp::catalog::{
-    fingerprint_create_server_spec, requires_offline_verified_local_command,
-};
+use kura_core::Tool as _;
+use kura_mcp::catalog::{fingerprint_create_server_spec, requires_offline_verified_local_command};
 use kura_mcp::manager::{
     redact_string, sanitize_websocket_endpoint_for_projection, validate_websocket_endpoint,
 };
 use kura_mcp::transport::read_framed_message;
-use kura_core::Tool as _;
 use kura_mcp::types::*;
 use kura_mcp::{
     McpError, Session, SessionPipes, Transport, is_terminal_status, live_validation_matrix_rows,
@@ -30,6 +28,7 @@ use serde_json::{Map, Value};
 fn test_cfg(data_dir: &str) -> kura_config::Config {
     kura_config::Config {
         project_root: String::new(),
+        store: Default::default(),
         environment: kura_config::Environment::Test,
         bind_addr: "127.0.0.1:19192".to_string(),
         data_dir: data_dir.to_string(),
@@ -37,6 +36,7 @@ fn test_cfg(data_dir: &str) -> kura_config::Config {
         version: "dev".to_string(),
         llm: Default::default(),
         connectors: Default::default(),
+        egress: Default::default(),
     }
 }
 
@@ -284,7 +284,9 @@ fn exposure_rule_serde_round_trip() {
 #[test]
 fn manager_registers_updates_and_lists_servers() {
     let manager = kura_mcp::Manager::new(test_cfg("~/.kura-test"), None, None, None, None, None);
-    let (resource, created) = manager.create_server(streamable_server_input("srv-1")).unwrap();
+    let (resource, created) = manager
+        .create_server(streamable_server_input("srv-1"))
+        .unwrap();
     assert!(created);
     assert_eq!(resource.server.server_id, "srv-1");
     assert_eq!(resource.server.source, Source::Api);
@@ -402,7 +404,9 @@ fn manager_start_discovers_tools_and_supports_stop() {
         None,
         Some(Arc::new(FakeTransport { session })),
     );
-    manager.create_server(streamable_server_input("srv-1")).unwrap();
+    manager
+        .create_server(streamable_server_input("srv-1"))
+        .unwrap();
 
     let response = manager.start("srv-1", "operator").unwrap();
     assert_eq!(response.action, LifecycleAction::Start);
@@ -598,7 +602,9 @@ fn manager_update_exposure_and_authorize_tool() {
         Some(Arc::new(policy)),
         Some(Arc::new(FakeTransport { session })),
     );
-    manager.create_server(streamable_server_input("srv-1")).unwrap();
+    manager
+        .create_server(streamable_server_input("srv-1"))
+        .unwrap();
     manager.start("srv-1", "operator").unwrap();
 
     // no rule => blocked
@@ -702,11 +708,18 @@ fn bundled_catalog_entries_are_sorted_and_context7_installs() {
     let entries = manager.list_catalog();
     assert_eq!(entries.len(), 5);
     let ids: Vec<&str> = entries.iter().map(|entry| entry.id.as_str()).collect();
-    assert_eq!(ids, vec!["context7", "filesystem", "github", "postgres", "slack"]);
+    assert_eq!(
+        ids,
+        vec!["context7", "filesystem", "github", "postgres", "slack"]
+    );
     assert_eq!(entries[0].transport_kind, TransportKind::StreamableHTTP);
 
     let result = manager
-        .install_catalog_entry("context7", &CatalogInstallInput::default(), InstallMethod::Api)
+        .install_catalog_entry(
+            "context7",
+            &CatalogInstallInput::default(),
+            InstallMethod::Api,
+        )
         .unwrap();
     assert_eq!(result.status, "installed");
     assert_eq!(result.server.as_ref().unwrap().server.server_id, "context7");
@@ -721,7 +734,10 @@ fn bundled_catalog_entries_are_sorted_and_context7_installs() {
     // revalidate: healthy classification (streamable-http endpoint configured, no secrets)
     let revalidated = manager.revalidate_catalog_server("context7").unwrap();
     assert_eq!(revalidated.status, AvailabilityStatus::Ready);
-    assert_eq!(revalidated.classification, RevalidationClassification::Healthy);
+    assert_eq!(
+        revalidated.classification,
+        RevalidationClassification::Healthy
+    );
 
     // uninstall removes the server
     let uninstalled = manager.uninstall_catalog_server("context7").unwrap();
@@ -730,7 +746,9 @@ fn bundled_catalog_entries_are_sorted_and_context7_installs() {
     assert!(manager.get_server("context7").is_none());
 
     // lifecycle action on a manual server is blocked
-    manager.create_server(streamable_server_input("manual-1")).unwrap();
+    manager
+        .create_server(streamable_server_input("manual-1"))
+        .unwrap();
     let blocked = manager.refresh_catalog_server("manual-1").unwrap();
     assert_eq!(blocked.status, CatalogActionStatus::Blocked);
     assert_eq!(blocked.failure_class, "not_catalog_managed");
@@ -739,12 +757,22 @@ fn bundled_catalog_entries_are_sorted_and_context7_installs() {
 #[test]
 fn catalog_install_blocks_manual_server_id_collision() {
     let manager = kura_mcp::Manager::new(test_cfg("~/.kura-test"), None, None, None, None, None);
-    manager.create_server(streamable_server_input("context7")).unwrap();
+    manager
+        .create_server(streamable_server_input("context7"))
+        .unwrap();
     let result = manager
-        .install_catalog_entry("context7", &CatalogInstallInput::default(), InstallMethod::Api)
+        .install_catalog_entry(
+            "context7",
+            &CatalogInstallInput::default(),
+            InstallMethod::Api,
+        )
         .unwrap();
     assert_eq!(result.status, "blocked");
-    assert!(result.availability_reason.contains("already owned by a manual MCP server"));
+    assert!(
+        result
+            .availability_reason
+            .contains("already owned by a manual MCP server")
+    );
 }
 
 #[test]
@@ -752,7 +780,10 @@ fn requires_offline_verified_local_command_matches_bundled_stdio_default() {
     let spec = CreateServerInput {
         transport_kind: TransportKind::Stdio,
         command: "npx".to_string(),
-        args: vec!["-y".to_string(), "@modelcontextprotocol/server-filesystem".to_string()],
+        args: vec![
+            "-y".to_string(),
+            "@modelcontextprotocol/server-filesystem".to_string(),
+        ],
         declaration: Some(Declaration {
             network_mode: kura_sandbox::NetworkMode::Deny,
             ..Declaration::default()
@@ -777,7 +808,10 @@ fn requires_offline_verified_local_command_matches_bundled_stdio_default() {
 fn fingerprint_create_server_spec_is_stable() {
     let spec = CreateServerInput {
         command: "npx".to_string(),
-        args: vec!["-y".to_string(), "@modelcontextprotocol/server-filesystem".to_string()],
+        args: vec![
+            "-y".to_string(),
+            "@modelcontextprotocol/server-filesystem".to_string(),
+        ],
         declaration: Some(Declaration {
             network_mode: kura_sandbox::NetworkMode::Deny,
             ..Declaration::default()
@@ -809,7 +843,9 @@ fn temp_data_dir(name: &str) -> std::path::PathBuf {
 #[test]
 fn manager_persists_and_restores_servers_from_store() {
     let dir = temp_data_dir("restore");
-    let store = Arc::new(Mutex::new(kura_store::SQLiteStore::new(dir.to_str().unwrap()).unwrap()));
+    let store = Arc::new(Mutex::new(
+        kura_store::SQLiteStore::new(dir.to_str().unwrap()).unwrap(),
+    ));
     let manager = kura_mcp::Manager::new(
         test_cfg(dir.to_str().unwrap()),
         Some(Arc::clone(&store)),
@@ -855,7 +891,9 @@ fn manager_persists_and_restores_servers_from_store() {
 #[test]
 fn manager_restore_marks_tools_stale_and_reloads_exposure() {
     let dir = temp_data_dir("restore-tools");
-    let store = Arc::new(Mutex::new(kura_store::SQLiteStore::new(dir.to_str().unwrap()).unwrap()));
+    let store = Arc::new(Mutex::new(
+        kura_store::SQLiteStore::new(dir.to_str().unwrap()).unwrap(),
+    ));
 
     let session = FakeSession::new("session-1", vec![fake_tool("lookup")]);
     let manager = kura_mcp::Manager::new(
@@ -866,7 +904,9 @@ fn manager_restore_marks_tools_stale_and_reloads_exposure() {
         None,
         Some(Arc::new(FakeTransport { session })),
     );
-    manager.create_server(streamable_server_input("srv-1")).unwrap();
+    manager
+        .create_server(streamable_server_input("srv-1"))
+        .unwrap();
     let response = manager.start("srv-1", "operator").unwrap();
     assert_eq!(response.server.state.status, LifecycleStatus::Healthy);
     let _ = manager
@@ -908,13 +948,21 @@ fn manager_restore_marks_tools_stale_and_reloads_exposure() {
 #[test]
 fn read_framed_message_decodes_content_length() {
     let payload = b"{\"hello\":\"world\"}";
-    let framed = format!("Content-Length: {}\r\n\r\n{}", payload.len(), String::from_utf8_lossy(payload));
+    let framed = format!(
+        "Content-Length: {}\r\n\r\n{}",
+        payload.len(),
+        String::from_utf8_lossy(payload)
+    );
     let mut cursor = std::io::Cursor::new(framed.into_bytes());
     let decoded = read_framed_message(&mut cursor).unwrap();
     assert_eq!(decoded, payload);
 
     // lowercase header is accepted too
-    let framed = format!("content-length: {}\r\n\r\n{}", payload.len(), String::from_utf8_lossy(payload));
+    let framed = format!(
+        "content-length: {}\r\n\r\n{}",
+        payload.len(),
+        String::from_utf8_lossy(payload)
+    );
     let mut cursor = std::io::Cursor::new(framed.into_bytes());
     let decoded = read_framed_message(&mut cursor).unwrap();
     assert_eq!(decoded, payload);
@@ -945,7 +993,9 @@ fn websocket_endpoint_validation() {
     assert!(validate_websocket_endpoint("ws://example.com/mcp?token=abc").is_err());
 
     assert_eq!(
-        sanitize_websocket_endpoint_for_projection("wss://user:pass@example.com/mcp?token=abc#frag"),
+        sanitize_websocket_endpoint_for_projection(
+            "wss://user:pass@example.com/mcp?token=abc#frag"
+        ),
         "wss://example.com/mcp"
     );
 }
@@ -991,7 +1041,14 @@ fn secret_resolution_falls_back_to_mcp_secrets_file() {
         serde_json::json!({ "TOKEN": "  topsecret  " }).to_string(),
     )
     .unwrap();
-    let manager = kura_mcp::Manager::new(test_cfg(dir.to_str().unwrap()), None, None, None, None, None);
+    let manager = kura_mcp::Manager::new(
+        test_cfg(dir.to_str().unwrap()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
     let (resolved, _) = manager
         .create_server(CreateServerInput {
             server_id: "srv-1".to_string(),
@@ -1041,7 +1098,9 @@ fn started_server_with(tool: Tool) -> Arc<kura_mcp::Manager> {
         Some(Arc::new(kura_policy::Engine::new())),
         Some(Arc::new(FakeTransport { session })),
     ));
-    manager.create_server(streamable_server_input("srv-1")).unwrap();
+    manager
+        .create_server(streamable_server_input("srv-1"))
+        .unwrap();
     manager.start("srv-1", "operator").unwrap();
     manager
 }
@@ -1122,7 +1181,10 @@ async fn an_allowed_tool_runs() {
     allow(&manager, "lookup", ExposureMode::Allow);
     let tools = kura_mcp::tools_for_surface(&manager, "chat");
 
-    let output = tools[0].call(&invocation("srv-1__lookup", "{}")).await.unwrap();
+    let output = tools[0]
+        .call(&invocation("srv-1__lookup", "{}"))
+        .await
+        .unwrap();
 
     assert!(output.success, "{}", output.content);
 }
@@ -1142,13 +1204,18 @@ fn started_server_with_policy(tool: Tool) -> (Arc<kura_mcp::Manager>, Arc<kura_p
         Some(Arc::clone(&policy)),
         Some(Arc::new(FakeTransport { session })),
     ));
-    manager.create_server(streamable_server_input("srv-1")).unwrap();
+    manager
+        .create_server(streamable_server_input("srv-1"))
+        .unwrap();
     manager.start("srv-1", "operator").unwrap();
     (manager, policy)
 }
 
 /// Answer the one approval waiting, once one appears.
-fn answer_pending(policy: Arc<kura_policy::Engine>, resolution: &str) -> std::thread::JoinHandle<()> {
+fn answer_pending(
+    policy: Arc<kura_policy::Engine>,
+    resolution: &str,
+) -> std::thread::JoinHandle<()> {
     let resolution = resolution.to_string();
     std::thread::spawn(move || {
         for _ in 0..200 {
@@ -1178,7 +1245,10 @@ async fn a_tool_runs_once_a_person_approves_it() {
     let tools = kura_mcp::tools_for_surface(&manager, "chat");
     let answering = answer_pending(policy, "approved");
 
-    let output = tools[0].call(&invocation("srv-1__advance", "{}")).await.unwrap();
+    let output = tools[0]
+        .call(&invocation("srv-1__advance", "{}"))
+        .await
+        .unwrap();
     answering.join().unwrap();
 
     assert!(output.success, "{}", output.content);
@@ -1197,7 +1267,10 @@ async fn a_refused_approval_stops_the_tool_at_once() {
     let answering = answer_pending(policy, "rejected");
 
     let started = std::time::Instant::now();
-    let output = tool.call(&invocation("srv-1__advance", "{}")).await.unwrap();
+    let output = tool
+        .call(&invocation("srv-1__advance", "{}"))
+        .await
+        .unwrap();
     answering.join().unwrap();
 
     assert!(!output.success, "a refused tool ran anyway");
@@ -1238,10 +1311,16 @@ async fn a_rule_revoked_while_waiting_stops_the_tool() {
         }
     });
 
-    let output = tool.call(&invocation("srv-1__advance", "{}")).await.unwrap();
+    let output = tool
+        .call(&invocation("srv-1__advance", "{}"))
+        .await
+        .unwrap();
     revoking.join().unwrap();
 
-    assert!(!output.success, "an approval outlived the rule that allowed asking");
+    assert!(
+        !output.success,
+        "an approval outlived the rule that allowed asking"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1258,7 +1337,11 @@ async fn asking_raises_an_approval_a_person_can_find() {
         let manager = Arc::clone(&manager);
         async move {
             let tool = approving_tool(&manager, Duration::from_millis(500));
-            tool.call(&invocation("srv-1__advance", r#"{"target_stage":"PROTOTYPING"}"#)).await
+            tool.call(&invocation(
+                "srv-1__advance",
+                r#"{"target_stage":"PROTOTYPING"}"#,
+            ))
+            .await
         }
     });
     let mut found = None;
@@ -1283,8 +1366,16 @@ async fn asking_raises_an_approval_a_person_can_find() {
         "the arguments must reach the person deciding: {}",
         approval.reason
     );
-    assert!(approval.resource_id.contains("advance"), "{}", approval.resource_id);
-    assert!(approval.resource_id.contains("chat"), "{}", approval.resource_id);
+    assert!(
+        approval.resource_id.contains("advance"),
+        "{}",
+        approval.resource_id
+    );
+    assert!(
+        approval.resource_id.contains("chat"),
+        "{}",
+        approval.resource_id
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1297,7 +1388,10 @@ async fn a_tool_nobody_approves_is_not_run() {
     allow(&manager, "advance", ExposureMode::ApprovalRequired);
     let tool = approving_tool(&manager, Duration::from_millis(150));
 
-    let output = tool.call(&invocation("srv-1__advance", "{}")).await.unwrap();
+    let output = tool
+        .call(&invocation("srv-1__advance", "{}"))
+        .await
+        .unwrap();
 
     assert!(!output.success);
     assert!(output.content.contains("approve"), "{}", output.content);
@@ -1310,7 +1404,10 @@ async fn a_tool_with_no_exposure_rule_is_refused() {
     let manager = started_server_with(fake_tool("lookup"));
     let tools = kura_mcp::tools_for_surface(&manager, "chat");
 
-    let output = tools[0].call(&invocation("srv-1__lookup", "{}")).await.unwrap();
+    let output = tools[0]
+        .call(&invocation("srv-1__lookup", "{}"))
+        .await
+        .unwrap();
 
     assert!(!output.success, "an unexposed tool ran");
 }
@@ -1334,9 +1431,15 @@ async fn a_rule_for_another_surface_does_not_allow_this_one() {
         .unwrap();
 
     let tools = kura_mcp::tools_for_surface(&manager, "chat");
-    let output = tools[0].call(&invocation("srv-1__lookup", "{}")).await.unwrap();
+    let output = tools[0]
+        .call(&invocation("srv-1__lookup", "{}"))
+        .await
+        .unwrap();
 
-    assert!(!output.success, "a rule for another surface allowed this one");
+    assert!(
+        !output.success,
+        "a rule for another surface allowed this one"
+    );
 }
 
 #[tokio::test]
@@ -1347,7 +1450,10 @@ async fn malformed_arguments_are_reported_to_the_model_not_raised() {
     allow(&manager, "lookup", ExposureMode::Allow);
     let tools = kura_mcp::tools_for_surface(&manager, "chat");
 
-    let output = tools[0].call(&invocation("srv-1__lookup", "not json")).await.unwrap();
+    let output = tools[0]
+        .call(&invocation("srv-1__lookup", "not json"))
+        .await
+        .unwrap();
 
     assert!(!output.success);
     assert!(output.content.contains("valid JSON"), "{}", output.content);
@@ -1393,7 +1499,9 @@ fn a_server_created_without_a_tenant_stays_visible_to_everyone() {
     // Single-tenant deployments send no tenant at all, and their servers must
     // not become invisible now that the field is recorded.
     let manager = kura_mcp::Manager::new(test_cfg("~/.kura-test"), None, None, None, None, None);
-    manager.create_server(streamable_server_input("srv-1")).unwrap();
+    manager
+        .create_server(streamable_server_input("srv-1"))
+        .unwrap();
 
     assert!(manager.get_server_for_tenant("srv-1", "tenant-1").is_none());
     assert!(manager.get_server("srv-1").is_some());

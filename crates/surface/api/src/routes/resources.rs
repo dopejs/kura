@@ -43,7 +43,7 @@ use std::collections::HashMap;
 
 use kura_connectors as connectors;
 use kura_events as events;
-use kura_identity::{has_permission, Permission};
+use kura_identity::{Permission, has_permission};
 use kura_profiles as profiles;
 use kura_threads as threads;
 
@@ -170,7 +170,10 @@ async fn list_threads(
     tenant: Option<Extension<TenantContext>>,
     Query(query): Query<ThreadListQuery>,
 ) -> Result<Json<kura_threads::ThreadListResponse>, ApiError> {
-    let tc = require_thread_permission(tenant.as_ref().map(|e| &e.0), Permission::CredentialsInspect)?;
+    let tc = require_thread_permission(
+        tenant.as_ref().map(|e| &e.0),
+        Permission::CredentialsInspect,
+    )?;
     // Go parseThreadLifecycleLimit: unparseable/zero limits default to 20 (the
     // store applies that default).
     let limit = query
@@ -186,8 +189,8 @@ async fn list_threads(
         source_filter: query.source_kind.unwrap_or_default(),
     };
     let response = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_threads_for_tenant(&store_query)
         .map_err(ApiError::from_store)?;
     Ok(Json(response))
@@ -202,10 +205,13 @@ async fn thread_detail(
     tenant: Option<Extension<TenantContext>>,
     Path(thread_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let tc = require_thread_permission(tenant.as_ref().map(|e| &e.0), Permission::CredentialsInspect)?;
+    let tc = require_thread_permission(
+        tenant.as_ref().map(|e| &e.0),
+        Permission::CredentialsInspect,
+    )?;
     let mut response = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_thread_detail_for_tenant(&tc.tenant_id, &thread_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("not found".to_string()))?;
@@ -227,7 +233,14 @@ async fn thread_reset(
     Path(thread_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<ThreadLifecycleActionResponse>, ApiError> {
-    thread_lifecycle_action(state, tenant, thread_id, kura_threads::LifecycleActionKind::Reset, body).await
+    thread_lifecycle_action(
+        state,
+        tenant,
+        thread_id,
+        kura_threads::LifecycleActionKind::Reset,
+        body,
+    )
+    .await
 }
 
 /// POST /v1/threads/{thread_id}/archive — archive lifecycle mutation.
@@ -237,7 +250,14 @@ async fn thread_archive(
     Path(thread_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<ThreadLifecycleActionResponse>, ApiError> {
-    thread_lifecycle_action(state, tenant, thread_id, kura_threads::LifecycleActionKind::Archive, body).await
+    thread_lifecycle_action(
+        state,
+        tenant,
+        thread_id,
+        kura_threads::LifecycleActionKind::Archive,
+        body,
+    )
+    .await
 }
 
 /// POST /v1/threads/{thread_id}/reopen — reopen lifecycle mutation.
@@ -247,7 +267,14 @@ async fn thread_reopen(
     Path(thread_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<ThreadLifecycleActionResponse>, ApiError> {
-    thread_lifecycle_action(state, tenant, thread_id, kura_threads::LifecycleActionKind::Reopen, body).await
+    thread_lifecycle_action(
+        state,
+        tenant,
+        thread_id,
+        kura_threads::LifecycleActionKind::Reopen,
+        body,
+    )
+    .await
 }
 
 /// Shared body of the three lifecycle mutations (Go
@@ -261,7 +288,8 @@ async fn thread_lifecycle_action(
     kind: kura_threads::LifecycleActionKind,
     body: Bytes,
 ) -> Result<Json<ThreadLifecycleActionResponse>, ApiError> {
-    let tc = require_thread_permission(tenant.as_ref().map(|e| &e.0), Permission::ConnectorsManage)?;
+    let tc =
+        require_thread_permission(tenant.as_ref().map(|e| &e.0), Permission::ConnectorsManage)?;
     // Go decodeJSONBody: empty body -> 400 "request body is required".
     let input: ThreadLifecycleActionRequest = decode_json_body(&body)?;
     let now = Utc::now();
@@ -296,18 +324,26 @@ async fn thread_lifecycle_action(
     let Some(result) = result else {
         return Err(ApiError::NotFound("not found".to_string()));
     };
-    publish_thread_event(&state, &tc.tenant_id, events::thread_lifecycle_event(result.action.clone()))?;
+    publish_thread_event(
+        &state,
+        &tc.tenant_id,
+        events::thread_lifecycle_event(result.action.clone()),
+    )?;
     if kind == kura_threads::LifecycleActionKind::Reset {
         // Go: ListResetEventsForThread(limit 1) -> ThreadScopedResetEvidenceEvent.
         let reset = state
-            .store
-            .lock()
+            .store_pool
+            .read()
             .list_reset_events_for_thread(&tc.tenant_id, &thread_id, 1)
             .map_err(ApiError::from_store)?
             .into_iter()
             .next();
         if let Some(reset) = reset {
-            publish_thread_event(&state, &tc.tenant_id, events::thread_scoped_reset_evidence_event(reset))?;
+            publish_thread_event(
+                &state,
+                &tc.tenant_id,
+                events::thread_scoped_reset_evidence_event(reset),
+            )?;
         }
     }
     Ok(Json(ThreadLifecycleActionResponse {
@@ -334,7 +370,8 @@ async fn thread_handoff_create(
     Path(thread_id): Path<String>,
     body: Bytes,
 ) -> Result<(StatusCode, AxumJson<threads::HandoffLink>), ApiError> {
-    let tc = require_thread_permission(tenant.as_ref().map(|e| &e.0), Permission::ConnectorsManage)?;
+    let tc =
+        require_thread_permission(tenant.as_ref().map(|e| &e.0), Permission::ConnectorsManage)?;
     let input: ThreadHandoffRequest = decode_json_body(&body)?;
     let now = Utc::now();
     let link = create_thread_handoff(&state, tc, &thread_id, &input, now)?;
@@ -378,10 +415,13 @@ async fn thread_continuity_preview_detail(
     tenant: Option<Extension<TenantContext>>,
     Path((thread_id, preview_id)): Path<(String, String)>,
 ) -> Result<Json<threads::ContinuityPreviewDetail>, ApiError> {
-    let tc = require_thread_permission(tenant.as_ref().map(|e| &e.0), Permission::CredentialsInspect)?;
+    let tc = require_thread_permission(
+        tenant.as_ref().map(|e| &e.0),
+        Permission::CredentialsInspect,
+    )?;
     let detail = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_continuity_preview_detail(&tc.tenant_id, &thread_id, &preview_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("not found".to_string()))?;
@@ -401,14 +441,14 @@ fn create_thread_handoff(
     now: DateTime<Utc>,
 ) -> Result<threads::HandoffLink, ApiError> {
     let source_thread = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_thread_for_tenant(&tc.tenant_id, source_thread_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("thread not found".to_string()))?;
     let source_shape = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_conversation_shape_for_thread(&tc.tenant_id, source_thread_id)
         .map_err(ApiError::from_store)?;
     let Some(source_shape) = source_shape else {
@@ -455,7 +495,8 @@ fn create_thread_handoff(
         link: link.clone(),
         has_mutation_permission: true,
         source_eligible,
-        destination_eligible: destination_shape.shape_evidence_status == threads::ShapeEvidenceStatus::Proven,
+        destination_eligible: destination_shape.shape_evidence_status
+            == threads::ShapeEvidenceStatus::Proven,
         source_permission_allowed,
         destination_permission_allowed,
     })
@@ -466,8 +507,8 @@ fn create_thread_handoff(
         .save_handoff_link(link.clone())
         .map_err(ApiError::from_store)?;
     let turns = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_continuity_turns(&kura_store::thread_continuity::ContinuityLookupQuery {
             tenant_id: tc.tenant_id.clone(),
             thread_id: source_thread.thread_id.clone(),
@@ -510,8 +551,8 @@ fn ensure_handoff_destination_thread(
             );
             let segment_id = format!("seg_{thread_id}");
             let retention = state
-                .store
-                .lock()
+                .store_pool
+                .read()
                 .thread_retention_expiry(&tc.tenant_id, now)
                 .map_err(ApiError::from_store)?;
             let thread = threads::Thread {
@@ -527,7 +568,11 @@ fn ensure_handoff_destination_thread(
                 retention_expires_at: Some(retention),
                 redaction_status: threads::RedactionStatus::Redacted,
             };
-            state.store.lock().upsert_thread(&thread).map_err(ApiError::from_store)?;
+            state
+                .store
+                .lock()
+                .upsert_thread(&thread)
+                .map_err(ApiError::from_store)?;
             state
                 .store
                 .lock()
@@ -545,19 +590,20 @@ fn ensure_handoff_destination_thread(
                     partial_evidence: false,
                 })
                 .map_err(ApiError::from_store)?;
-            let shape = threads::resolve_conversation_shape(&threads::ConversationShapeResolutionInput {
-                tenant_id: tc.tenant_id.clone(),
-                thread_id: thread_id.clone(),
-                session_segment_id: segment_id.clone(),
-                source_kind: threads::SourceKind::Shell,
-                connector_id: String::new(),
-                connector_kind: String::new(),
-                source_account_id: String::new(),
-                source_conversation_id: String::new(),
-                source_conversation_summary: "Web handoff destination".to_string(),
-                claimed_shape: Some(threads::ConversationShape::Web),
-                now: Some(now),
-            });
+            let shape =
+                threads::resolve_conversation_shape(&threads::ConversationShapeResolutionInput {
+                    tenant_id: tc.tenant_id.clone(),
+                    thread_id: thread_id.clone(),
+                    session_segment_id: segment_id.clone(),
+                    source_kind: threads::SourceKind::Shell,
+                    connector_id: String::new(),
+                    connector_kind: String::new(),
+                    source_account_id: String::new(),
+                    source_conversation_id: String::new(),
+                    source_conversation_summary: "Web handoff destination".to_string(),
+                    claimed_shape: Some(threads::ConversationShape::Web),
+                    now: Some(now),
+                });
             state
                 .store
                 .lock()
@@ -566,29 +612,34 @@ fn ensure_handoff_destination_thread(
             Ok((thread, shape, true))
         }
         "channel" => {
-            let shape_value = threads::normalize_conversation_shape(&destination.conversation_shape)
-                .map_err(|_| handoff_error(threads::ThreadsError::HandoffNotEligible))?;
+            let shape_value =
+                threads::normalize_conversation_shape(&destination.conversation_shape)
+                    .map_err(|_| handoff_error(threads::ThreadsError::HandoffNotEligible))?;
             if shape_value != threads::ConversationShape::Group
                 && shape_value != threads::ConversationShape::Room
                 && shape_value != threads::ConversationShape::DirectMessage
             {
                 return Err(handoff_error(threads::ThreadsError::HandoffNotEligible));
             }
-            let (destination_eligible, destination_permission_allowed) = validate_channel_handoff_endpoint(
-                state,
-                tc,
-                &destination.connector_id,
-                &destination.source_conversation_id,
-                connectors::HANDOFF_SURFACE_DESTINATION_SUPPORT,
-            )?;
+            let (destination_eligible, destination_permission_allowed) =
+                validate_channel_handoff_endpoint(
+                    state,
+                    tc,
+                    &destination.connector_id,
+                    &destination.source_conversation_id,
+                    connectors::HANDOFF_SURFACE_DESTINATION_SUPPORT,
+                )?;
             if !destination_permission_allowed {
-                return Err(handoff_error(threads::ThreadsError::HandoffPermissionDenied));
+                return Err(handoff_error(
+                    threads::ThreadsError::HandoffPermissionDenied,
+                ));
             }
             if !destination_eligible {
                 return Err(handoff_error(threads::ThreadsError::HandoffNotEligible));
             }
-            let destination_connector = find_connector_for_tenant(state, &tc.tenant_id, &destination.connector_id)?
-                .ok_or_else(|| handoff_error(threads::ThreadsError::HandoffNotEligible))?;
+            let destination_connector =
+                find_connector_for_tenant(state, &tc.tenant_id, &destination.connector_id)?
+                    .ok_or_else(|| handoff_error(threads::ThreadsError::HandoffNotEligible))?;
             let key = threads::normalize_source_continuation_key(&threads::SourceContinuationKey {
                 tenant_id: tc.tenant_id.clone(),
                 connector_id: destination.connector_id.clone(),
@@ -597,8 +648,8 @@ fn ensure_handoff_destination_thread(
             })
             .map_err(|_| handoff_error(threads::ThreadsError::HandoffNotEligible))?;
             let current = state
-                .store
-                .lock()
+                .store_pool
+                .read()
                 .get_current_thread_for_source(&key)
                 .map_err(ApiError::from_store)?;
             let current = match current {
@@ -610,8 +661,8 @@ fn ensure_handoff_destination_thread(
                     );
                     let segment_id = format!("seg_{thread_id}");
                     let retention = state
-                        .store
-                        .lock()
+                        .store_pool
+                        .read()
                         .thread_retention_expiry(&tc.tenant_id, now)
                         .map_err(ApiError::from_store)?;
                     let thread = threads::Thread {
@@ -630,7 +681,11 @@ fn ensure_handoff_destination_thread(
                         retention_expires_at: Some(retention),
                         redaction_status: threads::RedactionStatus::Redacted,
                     };
-                    state.store.lock().upsert_thread(&thread).map_err(ApiError::from_store)?;
+                    state
+                        .store
+                        .lock()
+                        .upsert_thread(&thread)
+                        .map_err(ApiError::from_store)?;
                     state
                         .store
                         .lock()
@@ -651,19 +706,20 @@ fn ensure_handoff_destination_thread(
                     thread
                 }
             };
-            let shape = threads::resolve_conversation_shape(&threads::ConversationShapeResolutionInput {
-                tenant_id: tc.tenant_id.clone(),
-                thread_id: current.thread_id.clone(),
-                session_segment_id: current.current_session_segment_id.clone(),
-                source_kind: threads::SourceKind::Channel,
-                connector_id: destination.connector_id.clone(),
-                connector_kind: destination_connector.kind.clone(),
-                source_account_id: destination.source_account_id.clone(),
-                source_conversation_id: destination.source_conversation_id.clone(),
-                source_conversation_summary: current.source_summary.clone(),
-                claimed_shape: Some(shape_value),
-                now: Some(now),
-            });
+            let shape =
+                threads::resolve_conversation_shape(&threads::ConversationShapeResolutionInput {
+                    tenant_id: tc.tenant_id.clone(),
+                    thread_id: current.thread_id.clone(),
+                    session_segment_id: current.current_session_segment_id.clone(),
+                    source_kind: threads::SourceKind::Channel,
+                    connector_id: destination.connector_id.clone(),
+                    connector_kind: destination_connector.kind.clone(),
+                    source_account_id: destination.source_account_id.clone(),
+                    source_conversation_id: destination.source_conversation_id.clone(),
+                    source_conversation_summary: current.source_summary.clone(),
+                    claimed_shape: Some(shape_value),
+                    now: Some(now),
+                });
             state
                 .store
                 .lock()
@@ -720,8 +776,8 @@ fn validate_channel_handoff_endpoint(
         return Ok((false, true));
     }
     let policy = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_channel_route_policy(&tc.tenant_id, connector_id)
         .map_err(ApiError::from_store)?;
     match policy {
@@ -759,7 +815,11 @@ fn find_connector_for_tenant(
     tenant_id: &str,
     connector_id: &str,
 ) -> Result<Option<kura_connectors::Connector>, ApiError> {
-    let items = state.store.lock().list_connectors().map_err(ApiError::from_store)?;
+    let items = state
+        .store_pool
+        .read()
+        .list_connectors()
+        .map_err(ApiError::from_store)?;
     for item in items {
         if item.connector_id.trim() != connector_id.trim() {
             continue;
@@ -818,8 +878,8 @@ async fn list_profiles(
     )?;
     let limit = parse_limit(params.get("limit"));
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_agent_profiles(&tc.tenant_id, limit)
         .map_err(ApiError::from_store)?;
     Ok(Json(items))
@@ -848,7 +908,13 @@ async fn create_profile(
     let result = match created {
         Ok(result) => result,
         Err(message) => {
-            publish_profile_denied_event(&state, tc, "", "agent_profile.validation_failed", &message)?;
+            publish_profile_denied_event(
+                &state,
+                tc,
+                "",
+                "agent_profile.validation_failed",
+                &message,
+            )?;
             return Err(map_profile_error(message));
         }
     };
@@ -878,8 +944,8 @@ async fn get_profile(
         &profile_id,
     )?;
     let detail = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_agent_profile_detail(&tc.tenant_id, &profile_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("profile not found".to_string()))?;
@@ -909,7 +975,13 @@ async fn update_profile(
     let result = match updated {
         Ok(result) => result,
         Err(message) => {
-            publish_profile_denied_event(&state, tc, &profile_id, "agent_profile.validation_failed", &message)?;
+            publish_profile_denied_event(
+                &state,
+                tc,
+                &profile_id,
+                "agent_profile.validation_failed",
+                &message,
+            )?;
             return Err(map_profile_error(message));
         }
     };
@@ -994,8 +1066,8 @@ async fn list_profile_versions(
     )?;
     let limit = parse_limit(params.get("limit"));
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_agent_profile_versions(&tc.tenant_id, &profile_id, limit)
         .map_err(ApiError::from_store)?;
     Ok(Json(crate::types::ListResponse { items }))
@@ -1218,7 +1290,11 @@ fn is_audit_failed_closed(message: &str) -> bool {
 /// Go publishEvent (legacy store-append path then bus publish). The thread
 /// event builders carry the tenant id; the environment scope comes from the
 /// daemon config.
-fn publish_thread_event(state: &AppState, _tenant_id: &str, event: events::Event) -> Result<(), ApiError> {
+pub fn publish_thread_event(
+    state: &AppState,
+    _tenant_id: &str,
+    event: events::Event,
+) -> Result<(), ApiError> {
     let mut event = event;
     if event.environment_scope.is_empty() {
         event.environment_scope = crate::middleware::environment_scope_from_config(&state.config);
@@ -1430,8 +1506,8 @@ fn record_active_profile_projection_for_target(
         return Ok(None);
     }
     let Some((profile, selection)) = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .active_agent_profile_selection(&tc.tenant_id)
         .map_err(ApiError::from_store)?
     else {
@@ -1478,8 +1554,8 @@ fn write_thread_detail_with_binding_projection(
         .unwrap_or_default();
     if has_permission(&tc.permissions, Permission::BindingsInspect) {
         let evidence = state
-            .store
-            .lock()
+            .store_pool
+            .read()
             .latest_runtime_binding_evidence(&tc.tenant_id, "thread", thread_id)
             .map_err(ApiError::from_store)?;
         if let Some(evidence) = evidence {
@@ -1498,7 +1574,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use axum::http::header::CONTENT_TYPE;
     use chrono::{Duration, TimeZone};
@@ -1511,6 +1587,7 @@ mod tests {
     fn test_config() -> kura_config::Config {
         kura_config::Config {
             project_root: String::new(),
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-resources".to_string(),
@@ -1518,11 +1595,24 @@ mod tests {
             version: "0.1.0".to_string(),
             llm: kura_config::LlmConfig::default(),
             connectors: kura_config::ConnectorConfig {
-                discord: kura_config::DiscordConnectorConfig { enabled: false, ..Default::default() },
-                telegram: kura_config::TelegramConnectorConfig { enabled: false, ..Default::default() },
-                slack: kura_config::SlackConnectorConfig { enabled: false, ..Default::default() },
-                matrix: kura_config::MatrixConnectorConfig { enabled: false, ..Default::default() },
+                discord: kura_config::DiscordConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                telegram: kura_config::TelegramConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                slack: kura_config::SlackConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                matrix: kura_config::MatrixConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
             },
+            egress: Default::default(),
         }
     }
 
@@ -1541,13 +1631,15 @@ mod tests {
             .uri(uri)
             .header(CONTENT_TYPE, "application/json");
         let req = match body {
-            Some(payload) => builder.body(Body::from(payload.to_string())).expect("request"),
+            Some(payload) => builder
+                .body(Body::from(payload.to_string()))
+                .expect("request"),
             None => builder.body(Body::empty()).expect("request"),
         };
         req
     }
 
-    /// Builds a request with a resolved tenant context extension (the 
+    /// Builds a request with a resolved tenant context extension (the
     /// protected() middleware installs this once auth is wired; tests inject it
     /// directly, matching reminders.rs).
     fn tenant_request(
@@ -1558,19 +1650,22 @@ mod tests {
         permissions: Vec<Permission>,
     ) -> Request<Body> {
         let mut req = request(method, uri, body);
-        req.extensions_mut().insert(TenantContext(kura_identity::TenantContext {
-            tenant_id: tenant_id.to_string(),
-            principal_id: format!("prn_{tenant_id}"),
-            permissions,
-            ..Default::default()
-        }));
+        req.extensions_mut()
+            .insert(TenantContext(kura_identity::TenantContext {
+                tenant_id: tenant_id.to_string(),
+                principal_id: format!("prn_{tenant_id}"),
+                permissions,
+                ..Default::default()
+            }));
         req
     }
 
     async fn send(app: &axum::Router, req: Request<Body>) -> (StatusCode, serde_json::Value) {
         let response = app.clone().oneshot(req).await.expect("oneshot");
         let status = response.status();
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         // axum's default 404 (route miss) has an empty body; ApiError responses
         // carry the {code,message,error} envelope.
         let json = if bytes.is_empty() {
@@ -1582,7 +1677,11 @@ mod tests {
     }
 
     fn seed_thread(state: &AppState, thread: &threads::Thread) {
-        state.store.lock().upsert_thread(thread).expect("upsert thread");
+        state
+            .store
+            .lock()
+            .upsert_thread(thread)
+            .expect("upsert thread");
     }
 
     fn thread(
@@ -1616,9 +1715,42 @@ mod tests {
         // Base the fixture on the real clock (minus a small offset) so the
         // 90-day retention expiries the store derives are still in the future.
         let now = chrono::Utc::now() - Duration::minutes(5);
-        seed_thread(&state, &thread("thr_active", "ten_threads", threads::LifecycleState::Active, threads::SourceKind::Channel, "Slack Main / #support", now + Duration::minutes(1), now));
-        seed_thread(&state, &thread("thr_archived", "ten_threads", threads::LifecycleState::Archived, threads::SourceKind::Workflow, "Workflow", now + Duration::minutes(2), now));
-        seed_thread(&state, &thread("thr_other", "ten_other", threads::LifecycleState::Active, threads::SourceKind::Channel, "Other", now + Duration::minutes(3), now));
+        seed_thread(
+            &state,
+            &thread(
+                "thr_active",
+                "ten_threads",
+                threads::LifecycleState::Active,
+                threads::SourceKind::Channel,
+                "Slack Main / #support",
+                now + Duration::minutes(1),
+                now,
+            ),
+        );
+        seed_thread(
+            &state,
+            &thread(
+                "thr_archived",
+                "ten_threads",
+                threads::LifecycleState::Archived,
+                threads::SourceKind::Workflow,
+                "Workflow",
+                now + Duration::minutes(2),
+                now,
+            ),
+        );
+        seed_thread(
+            &state,
+            &thread(
+                "thr_other",
+                "ten_other",
+                threads::LifecycleState::Active,
+                threads::SourceKind::Channel,
+                "Other",
+                now + Duration::minutes(3),
+                now,
+            ),
+        );
         {
             let store = state.store.lock();
             store
@@ -1656,20 +1788,23 @@ mod tests {
                     redaction_status: threads::RedactionStatus::Redacted,
                 })
                 .expect("save runtime projection");
-            let shape = threads::resolve_conversation_shape(&threads::ConversationShapeResolutionInput {
-                tenant_id: "ten_threads".to_string(),
-                thread_id: "thr_active".to_string(),
-                session_segment_id: "seg_thr_active".to_string(),
-                source_kind: threads::SourceKind::Channel,
-                connector_id: "slack-main".to_string(),
-                connector_kind: "slack".to_string(),
-                source_account_id: "workspace_redacted".to_string(),
-                source_conversation_id: "channel_redacted".to_string(),
-                source_conversation_summary: "Slack Main / #support".to_string(),
-                claimed_shape: Some(threads::ConversationShape::Room),
-                now: Some(now),
-            });
-            store.save_conversation_shape_evidence(&shape).expect("save shape");
+            let shape =
+                threads::resolve_conversation_shape(&threads::ConversationShapeResolutionInput {
+                    tenant_id: "ten_threads".to_string(),
+                    thread_id: "thr_active".to_string(),
+                    session_segment_id: "seg_thr_active".to_string(),
+                    source_kind: threads::SourceKind::Channel,
+                    connector_id: "slack-main".to_string(),
+                    connector_kind: "slack".to_string(),
+                    source_account_id: "workspace_redacted".to_string(),
+                    source_conversation_id: "channel_redacted".to_string(),
+                    source_conversation_summary: "Slack Main / #support".to_string(),
+                    claimed_shape: Some(threads::ConversationShape::Room),
+                    now: Some(now),
+                });
+            store
+                .save_conversation_shape_evidence(&shape)
+                .expect("save shape");
             store
                 .save_participation_decision(&threads::ParticipationDecision {
                     participation_decision_id: String::new(),
@@ -1698,7 +1833,13 @@ mod tests {
         let app = crate::routes::router(state.clone());
 
         // First page: limit 1 -> active thread (archived sorts last).
-        let req = tenant_request("GET", "/v1/threads?limit=1", None, "ten_threads", vec![Permission::CredentialsInspect]);
+        let req = tenant_request(
+            "GET",
+            "/v1/threads?limit=1",
+            None,
+            "ten_threads",
+            vec![Permission::CredentialsInspect],
+        );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::OK, "list body: {json}");
         assert_eq!(json["tenantId"], "ten_threads");
@@ -1708,33 +1849,65 @@ mod tests {
 
         // Second page via cursor.
         let cursor = json["page"]["nextCursor"].as_str().unwrap();
-        let req = tenant_request("GET", &format!("/v1/threads?limit=1&cursor={cursor}"), None, "ten_threads", vec![Permission::CredentialsInspect]);
+        let req = tenant_request(
+            "GET",
+            &format!("/v1/threads?limit=1&cursor={cursor}"),
+            None,
+            "ten_threads",
+            vec![Permission::CredentialsInspect],
+        );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::OK, "next page body: {json}");
         assert_eq!(json["items"][0]["threadId"], "thr_archived");
 
         // State + source-kind filters.
-        let req = tenant_request("GET", "/v1/threads?state=archived&sourceKind=workflow", None, "ten_threads", vec![Permission::CredentialsInspect]);
+        let req = tenant_request(
+            "GET",
+            "/v1/threads?state=archived&sourceKind=workflow",
+            None,
+            "ten_threads",
+            vec![Permission::CredentialsInspect],
+        );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::OK, "filtered body: {json}");
         assert_eq!(json["items"].as_array().map(|v| v.len()), Some(1));
         assert_eq!(json["items"][0]["threadId"], "thr_archived");
 
         // Detail with the full operator trace.
-        let req = tenant_request("GET", "/v1/threads/thr_active", None, "ten_threads", vec![Permission::CredentialsInspect]);
+        let req = tenant_request(
+            "GET",
+            "/v1/threads/thr_active",
+            None,
+            "ten_threads",
+            vec![Permission::CredentialsInspect],
+        );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::OK, "detail body: {json}");
         assert_eq!(json["thread"]["threadId"], "thr_active");
         assert_eq!(json["thread"]["tenantId"], "ten_threads");
         assert_eq!(json["sourceLinkages"].as_array().map(|v| v.len()), Some(1));
         assert_eq!(json["sourceLinkages"][0]["routingOutcome"], "accepted");
-        assert_eq!(json["runtimeProjections"].as_array().map(|v| v.len()), Some(1));
+        assert_eq!(
+            json["runtimeProjections"].as_array().map(|v| v.len()),
+            Some(1)
+        );
         assert_eq!(json["runtimeProjections"][0]["resourceKind"], "run");
         assert_eq!(json["conversationShape"]["shape"], "room");
-        assert_eq!(json["participationDecisions"].as_array().map(|v| v.len()), Some(1));
-        assert_eq!(json["participationDecisions"][0]["reasonCode"], "missing_qualifying_mention");
+        assert_eq!(
+            json["participationDecisions"].as_array().map(|v| v.len()),
+            Some(1)
+        );
+        assert_eq!(
+            json["participationDecisions"][0]["reasonCode"],
+            "missing_qualifying_mention"
+        );
         let raw = serde_json::to_string(&json).expect("marshal detail");
-        for forbidden in ["semanticSummary", "recalledMemory", "contextPacking", "autonomousPruning"] {
+        for forbidden in [
+            "semanticSummary",
+            "recalledMemory",
+            "contextPacking",
+            "autonomousPruning",
+        ] {
             assert!(!raw.contains(forbidden), "detail leaked {forbidden}: {raw}");
         }
 
@@ -1749,14 +1922,26 @@ mod tests {
         assert_eq!(status, StatusCode::FORBIDDEN);
 
         // A tenant with no threads gets an empty page (not an error).
-        let req = tenant_request("GET", "/v1/threads", None, "ten_empty", vec![Permission::CredentialsInspect]);
+        let req = tenant_request(
+            "GET",
+            "/v1/threads",
+            None,
+            "ten_empty",
+            vec![Permission::CredentialsInspect],
+        );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::OK, "empty body: {json}");
         assert_eq!(json["tenantId"], "ten_empty");
         assert_eq!(json["items"].as_array().map(|v| v.len()), Some(0));
 
         // Missing thread -> 404.
-        let req = tenant_request("GET", "/v1/threads/thr_missing", None, "ten_threads", vec![Permission::CredentialsInspect]);
+        let req = tenant_request(
+            "GET",
+            "/v1/threads/thr_missing",
+            None,
+            "ten_threads",
+            vec![Permission::CredentialsInspect],
+        );
         let (status, _) = send(&app, req).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
@@ -1766,7 +1951,18 @@ mod tests {
     async fn thread_lifecycle_mutations_require_manage_permission_and_persist_audit() {
         let state = test_state();
         let now = chrono::Utc.with_ymd_and_hms(2026, 5, 11, 10, 0, 0).unwrap();
-        seed_thread(&state, &thread("thr_mutate", "ten_threads", threads::LifecycleState::Active, threads::SourceKind::Channel, "Slack", now, now));
+        seed_thread(
+            &state,
+            &thread(
+                "thr_mutate",
+                "ten_threads",
+                threads::LifecycleState::Active,
+                threads::SourceKind::Channel,
+                "Slack",
+                now,
+                now,
+            ),
+        );
         {
             let store = state.store.lock();
             store
@@ -1802,30 +1998,45 @@ mod tests {
                     redaction_status: threads::RedactionStatus::Redacted,
                 })
                 .expect("save source linkage");
-            let shape = threads::resolve_conversation_shape(&threads::ConversationShapeResolutionInput {
-                tenant_id: "ten_threads".to_string(),
-                thread_id: "thr_mutate".to_string(),
-                session_segment_id: "seg_thr_mutate".to_string(),
-                source_kind: threads::SourceKind::Channel,
-                connector_id: "slack-main".to_string(),
-                connector_kind: "slack".to_string(),
-                source_account_id: "acct_redacted".to_string(),
-                source_conversation_id: "conv_redacted".to_string(),
-                source_conversation_summary: "Slack / #support".to_string(),
-                claimed_shape: Some(threads::ConversationShape::Room),
-                now: Some(now),
-            });
-            store.save_conversation_shape_evidence(&shape).expect("save shape");
+            let shape =
+                threads::resolve_conversation_shape(&threads::ConversationShapeResolutionInput {
+                    tenant_id: "ten_threads".to_string(),
+                    thread_id: "thr_mutate".to_string(),
+                    session_segment_id: "seg_thr_mutate".to_string(),
+                    source_kind: threads::SourceKind::Channel,
+                    connector_id: "slack-main".to_string(),
+                    connector_kind: "slack".to_string(),
+                    source_account_id: "acct_redacted".to_string(),
+                    source_conversation_id: "conv_redacted".to_string(),
+                    source_conversation_summary: "Slack / #support".to_string(),
+                    claimed_shape: Some(threads::ConversationShape::Room),
+                    now: Some(now),
+                });
+            store
+                .save_conversation_shape_evidence(&shape)
+                .expect("save shape");
         }
         let app = crate::routes::router(state.clone());
 
         // Inspect-only callers cannot mutate.
-        let req = tenant_request("POST", "/v1/threads/thr_mutate/archive", Some("{}"), "ten_threads", vec![Permission::CredentialsInspect]);
+        let req = tenant_request(
+            "POST",
+            "/v1/threads/thr_mutate/archive",
+            Some("{}"),
+            "ten_threads",
+            vec![Permission::CredentialsInspect],
+        );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "denied archive body: {json}");
 
         // Archive with connectors.manage.
-        let req = tenant_request("POST", "/v1/threads/thr_mutate/archive", Some(r#"{"reasonCode":"operator_archive"}"#), "ten_threads", vec![Permission::ConnectorsManage]);
+        let req = tenant_request(
+            "POST",
+            "/v1/threads/thr_mutate/archive",
+            Some(r#"{"reasonCode":"operator_archive"}"#),
+            "ten_threads",
+            vec![Permission::ConnectorsManage],
+        );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::OK, "archive body: {json}");
         assert_eq!(json["lifecycleState"], "archived");
@@ -1833,13 +2044,25 @@ mod tests {
         assert_ne!(json["auditEventId"], "");
 
         // Reopen an archived thread.
-        let req = tenant_request("POST", "/v1/threads/thr_mutate/reopen", Some("{}"), "ten_threads", vec![Permission::ConnectorsManage]);
+        let req = tenant_request(
+            "POST",
+            "/v1/threads/thr_mutate/reopen",
+            Some("{}"),
+            "ten_threads",
+            vec![Permission::ConnectorsManage],
+        );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::OK, "reopen body: {json}");
         assert_eq!(json["lifecycleState"], "reopened");
 
         // Reset publishes the scoped reset evidence event.
-        let req = tenant_request("POST", "/v1/threads/thr_mutate/reset", Some("{}"), "ten_threads", vec![Permission::ConnectorsManage]);
+        let req = tenant_request(
+            "POST",
+            "/v1/threads/thr_mutate/reset",
+            Some("{}"),
+            "ten_threads",
+            vec![Permission::ConnectorsManage],
+        );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::OK, "reset body: {json}");
         assert_eq!(json["lifecycleState"], "reset");
@@ -1852,11 +2075,17 @@ mod tests {
             .get_thread_detail_for_tenant("ten_threads", "thr_mutate")
             .expect("detail")
             .expect("found");
-        assert_eq!(detail.thread.lifecycle_state, threads::LifecycleState::Reset);
+        assert_eq!(
+            detail.thread.lifecycle_state,
+            threads::LifecycleState::Reset
+        );
         assert_eq!(detail.session_segments.len(), 2);
         assert_eq!(detail.lifecycle_actions.len(), 3);
         assert_eq!(detail.reset_events.len(), 1);
-        assert_eq!(detail.reset_events[0].conversation_shape, threads::ConversationShape::Room);
+        assert_eq!(
+            detail.reset_events[0].conversation_shape,
+            threads::ConversationShape::Room
+        );
         assert_eq!(detail.reset_events[0].permission_gate, "connectors.manage");
 
         let thread_events = state.event_bus.list(&kura_events::Filter {
@@ -1867,7 +2096,11 @@ mod tests {
             thread_events
                 .iter()
                 .any(|event| event.name == kura_events::THREAD_RESET_SCOPED_NAME
-                    && event.payload.get("conversationShape").and_then(|v| v.as_str()) == Some("room")),
+                    && event
+                        .payload
+                        .get("conversationShape")
+                        .and_then(|v| v.as_str())
+                        == Some("room")),
             "expected thread.reset_scoped event with room shape, got {thread_events:?}"
         );
     }
@@ -1876,8 +2109,30 @@ mod tests {
     async fn thread_lifecycle_validation_404_and_conflict() {
         let state = test_state();
         let now = chrono::Utc.with_ymd_and_hms(2026, 5, 11, 10, 0, 0).unwrap();
-        seed_thread(&state, &thread("thr_validate", "ten_threads", threads::LifecycleState::Active, threads::SourceKind::Channel, "Slack", now, now));
-        seed_thread(&state, &thread("thr_other", "ten_other", threads::LifecycleState::Active, threads::SourceKind::Channel, "Other", now, now));
+        seed_thread(
+            &state,
+            &thread(
+                "thr_validate",
+                "ten_threads",
+                threads::LifecycleState::Active,
+                threads::SourceKind::Channel,
+                "Slack",
+                now,
+                now,
+            ),
+        );
+        seed_thread(
+            &state,
+            &thread(
+                "thr_other",
+                "ten_other",
+                threads::LifecycleState::Active,
+                threads::SourceKind::Channel,
+                "Other",
+                now,
+                now,
+            ),
+        );
         {
             let store = state.store.lock();
             store
@@ -1899,37 +2154,79 @@ mod tests {
         let app = crate::routes::router(state.clone());
 
         // Empty body -> 400 "request body is required".
-        let req = tenant_request("POST", "/v1/threads/thr_validate/archive", None, "ten_threads", vec![Permission::ConnectorsManage]);
+        let req = tenant_request(
+            "POST",
+            "/v1/threads/thr_validate/archive",
+            None,
+            "ten_threads",
+            vec![Permission::ConnectorsManage],
+        );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "empty body: {json}");
         assert_eq!(json["message"], "request body is required");
 
         // Malformed body -> 400.
-        let req = tenant_request("POST", "/v1/threads/thr_validate/archive", Some("{not json"), "ten_threads", vec![Permission::ConnectorsManage]);
+        let req = tenant_request(
+            "POST",
+            "/v1/threads/thr_validate/archive",
+            Some("{not json"),
+            "ten_threads",
+            vec![Permission::ConnectorsManage],
+        );
         let (status, _) = send(&app, req).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
 
         // Unknown action segment -> 404 (axum route miss).
-        let req = tenant_request("POST", "/v1/threads/thr_validate/frobnicate", Some("{}"), "ten_threads", vec![Permission::ConnectorsManage]);
+        let req = tenant_request(
+            "POST",
+            "/v1/threads/thr_validate/frobnicate",
+            Some("{}"),
+            "ten_threads",
+            vec![Permission::ConnectorsManage],
+        );
         let (status, _) = send(&app, req).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
 
         // Missing thread -> 404.
-        let req = tenant_request("POST", "/v1/threads/thr_missing/archive", Some("{}"), "ten_threads", vec![Permission::ConnectorsManage]);
+        let req = tenant_request(
+            "POST",
+            "/v1/threads/thr_missing/archive",
+            Some("{}"),
+            "ten_threads",
+            vec![Permission::ConnectorsManage],
+        );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "missing body: {json}");
 
         // Cross-tenant mutation is scoped: ten_threads cannot touch ten_other's
         // thread (404, never leaked as 403/200).
-        let req = tenant_request("POST", "/v1/threads/thr_other/archive", Some("{}"), "ten_threads", vec![Permission::ConnectorsManage]);
+        let req = tenant_request(
+            "POST",
+            "/v1/threads/thr_other/archive",
+            Some("{}"),
+            "ten_threads",
+            vec![Permission::ConnectorsManage],
+        );
         let (status, _) = send(&app, req).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
 
         // Archiving an archived thread -> 409 lifecycle transition not allowed.
-        let req = tenant_request("POST", "/v1/threads/thr_validate/archive", Some("{}"), "ten_threads", vec![Permission::ConnectorsManage]);
+        let req = tenant_request(
+            "POST",
+            "/v1/threads/thr_validate/archive",
+            Some("{}"),
+            "ten_threads",
+            vec![Permission::ConnectorsManage],
+        );
         let (status, _) = send(&app, req).await;
         assert_eq!(status, StatusCode::OK);
-        let req = tenant_request("POST", "/v1/threads/thr_validate/archive", Some("{}"), "ten_threads", vec![Permission::ConnectorsManage]);
+        let req = tenant_request(
+            "POST",
+            "/v1/threads/thr_validate/archive",
+            Some("{}"),
+            "ten_threads",
+            vec![Permission::ConnectorsManage],
+        );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::CONFLICT, "conflict body: {json}");
         assert_eq!(json["message"], "lifecycle transition is not allowed");
@@ -1973,20 +2270,23 @@ mod tests {
                     partial_evidence: false,
                 })
                 .expect("upsert source segment");
-            let shape = threads::resolve_conversation_shape(&threads::ConversationShapeResolutionInput {
-                tenant_id: source.tenant_id.clone(),
-                thread_id: source.thread_id.clone(),
-                session_segment_id: source.current_session_segment_id.clone(),
-                source_kind: threads::SourceKind::Channel,
-                connector_id: "slack-main".to_string(),
-                connector_kind: "slack".to_string(),
-                source_account_id: "workspace_redacted".to_string(),
-                source_conversation_id: "channel_redacted".to_string(),
-                source_conversation_summary: source.source_summary.clone(),
-                claimed_shape: Some(threads::ConversationShape::Room),
-                now: Some(now),
-            });
-            store.save_conversation_shape_evidence(&shape).expect("save source shape");
+            let shape =
+                threads::resolve_conversation_shape(&threads::ConversationShapeResolutionInput {
+                    tenant_id: source.tenant_id.clone(),
+                    thread_id: source.thread_id.clone(),
+                    session_segment_id: source.current_session_segment_id.clone(),
+                    source_kind: threads::SourceKind::Channel,
+                    connector_id: "slack-main".to_string(),
+                    connector_kind: "slack".to_string(),
+                    source_account_id: "workspace_redacted".to_string(),
+                    source_conversation_id: "channel_redacted".to_string(),
+                    source_conversation_summary: source.source_summary.clone(),
+                    claimed_shape: Some(threads::ConversationShape::Room),
+                    now: Some(now),
+                });
+            store
+                .save_conversation_shape_evidence(&shape)
+                .expect("save source shape");
             store
                 .save_continuity_turn(&threads::ContinuityTurn {
                     continuity_turn_id: "turn_source_1".to_string(),
@@ -2053,7 +2353,10 @@ mod tests {
                     },
                     &profiles::MutationInput {
                         display_name: "Handoff Agent".to_string(),
-                        persona: profiles::Persona { safe_summary: "handoff profile".to_string(), ..Default::default() },
+                        persona: profiles::Persona {
+                            safe_summary: "handoff profile".to_string(),
+                            ..Default::default()
+                        },
                         activate: true,
                         ..Default::default()
                     },
@@ -2072,7 +2375,10 @@ mod tests {
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::CREATED, "handoff body: {json}");
         assert_eq!(json["sourceThreadId"], "thr_handoff_source");
-        let destination = json["destinationThreadId"].as_str().expect("destination").to_string();
+        let destination = json["destinationThreadId"]
+            .as_str()
+            .expect("destination")
+            .to_string();
         assert!(!destination.is_empty() && destination != "thr_handoff_source");
         assert_eq!(json["destinationConversationShape"], "web");
         let profile_id = {
@@ -2084,7 +2390,10 @@ mod tests {
                 .0
                 .profile_id
         };
-        assert_eq!(json["activeProfileProjection"]["profileId"], profile_id.as_str());
+        assert_eq!(
+            json["activeProfileProjection"]["profileId"],
+            profile_id.as_str()
+        );
 
         // The continuity source reference was persisted with the Referenced decision.
         let link_id = json["handoffLinkId"].as_str().expect("link id").to_string();
@@ -2095,16 +2404,23 @@ mod tests {
                 .expect("list refs")
         };
         assert_eq!(refs.len(), 1);
-        assert_eq!(refs[0].decision, threads::HandoffSourceReferenceDecision::Referenced);
+        assert_eq!(
+            refs[0].decision,
+            threads::HandoffSourceReferenceDecision::Referenced
+        );
         assert_eq!(refs[0].continuity_turn_id, "turn_source_1");
 
         // thread.handoff_linked was published.
-        let events = state
-            .event_bus
-            .list(&kura_events::Filter { category: "thread".to_string(), ..Default::default() });
+        let events = state.event_bus.list(&kura_events::Filter {
+            category: "thread".to_string(),
+            ..Default::default()
+        });
         assert!(
-            events.iter().any(|event| event.name == kura_events::THREAD_HANDOFF_LINKED_NAME
-                && event.payload.get("sourceThreadId").and_then(|v| v.as_str()) == Some("thr_handoff_source")),
+            events.iter().any(
+                |event| event.name == kura_events::THREAD_HANDOFF_LINKED_NAME
+                    && event.payload.get("sourceThreadId").and_then(|v| v.as_str())
+                        == Some("thr_handoff_source")
+            ),
             "expected handoff linked event: {events:?}"
         );
     }
@@ -2245,21 +2561,45 @@ mod tests {
 
         let (status, json) = send(
             &app,
-            tenant_request("POST", "/v1/profiles", Some(r#"{"displayName":"Support","persona":{"tone":"direct"},"activate":true}"#), "ten_threads", admin.clone()),
+            tenant_request(
+                "POST",
+                "/v1/profiles",
+                Some(r#"{"displayName":"Support","persona":{"tone":"direct"},"activate":true}"#),
+                "ten_threads",
+                admin.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "create body: {json}");
-        let profile_id = json["profile"]["profileId"].as_str().expect("profile id").to_string();
+        let profile_id = json["profile"]["profileId"]
+            .as_str()
+            .expect("profile id")
+            .to_string();
 
         // List works for the viewer.
-        let (status, json) = send(&app, tenant_request("GET", "/v1/profiles", None, "ten_threads", viewer.clone())).await;
+        let (status, json) = send(
+            &app,
+            tenant_request("GET", "/v1/profiles", None, "ten_threads", viewer.clone()),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "list body: {json}");
-        assert!(json["items"].as_array().map(|v| !v.is_empty()).unwrap_or(false));
+        assert!(
+            json["items"]
+                .as_array()
+                .map(|v| !v.is_empty())
+                .unwrap_or(false)
+        );
 
         // Update denied without profiles.manage.
         let (status, json) = send(
             &app,
-            tenant_request("PATCH", &format!("/v1/profiles/{profile_id}"), Some(r#"{"displayName":"Denied"}"#), "ten_threads", viewer.clone()),
+            tenant_request(
+                "PATCH",
+                &format!("/v1/profiles/{profile_id}"),
+                Some(r#"{"displayName":"Denied"}"#),
+                "ten_threads",
+                viewer.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "denied update: {json}");
@@ -2285,24 +2625,37 @@ mod tests {
         // Archive succeeds for the admin.
         let (status, json) = send(
             &app,
-            tenant_request("POST", &format!("/v1/profiles/{profile_id}/archive"), Some(r#"{"reasonCode":"test_archive"}"#), "ten_threads", admin.clone()),
+            tenant_request(
+                "POST",
+                &format!("/v1/profiles/{profile_id}/archive"),
+                Some(r#"{"reasonCode":"test_archive"}"#),
+                "ten_threads",
+                admin.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "archive body: {json}");
         assert_eq!(json["profile"]["status"], "archived");
 
         // Durable profile events: denied update + validation failure.
-        let events = state
-            .event_bus
-            .list(&kura_events::Filter { category: "agent_profile".to_string(), ..Default::default() });
+        let events = state.event_bus.list(&kura_events::Filter {
+            category: "agent_profile".to_string(),
+            ..Default::default()
+        });
         assert!(
-            events.iter().any(|event| event.name == "agent_profile.update_denied"
-                && event.payload.get("reasonCode").and_then(|v| v.as_str()) == Some("permission_denied")),
+            events
+                .iter()
+                .any(|event| event.name == "agent_profile.update_denied"
+                    && event.payload.get("reasonCode").and_then(|v| v.as_str())
+                        == Some("permission_denied")),
             "expected update_denied event: {events:?}"
         );
         assert!(
-            events.iter().any(|event| event.name == "agent_profile.validation_failed"
-                && event.payload.get("reasonCode").and_then(|v| v.as_str()) == Some("provider_preference_malformed")),
+            events
+                .iter()
+                .any(|event| event.name == "agent_profile.validation_failed"
+                    && event.payload.get("reasonCode").and_then(|v| v.as_str())
+                        == Some("provider_preference_malformed")),
             "expected validation_failed event: {events:?}"
         );
     }
@@ -2326,8 +2679,14 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "create: {json}");
-        let profile_id = json["profile"]["profileId"].as_str().expect("profile id").to_string();
-        let first_version_id = json["version"]["profileVersionId"].as_str().expect("version id").to_string();
+        let profile_id = json["profile"]["profileId"]
+            .as_str()
+            .expect("profile id")
+            .to_string();
+        let first_version_id = json["version"]["profileVersionId"]
+            .as_str()
+            .expect("version id")
+            .to_string();
 
         // Update creates a second version.
         let (status, json) = send(
@@ -2346,7 +2705,13 @@ mod tests {
         // Versions list shows both.
         let (status, json) = send(
             &app,
-            tenant_request("GET", &format!("/v1/profiles/{profile_id}/versions"), None, "ten_threads", admin.clone()),
+            tenant_request(
+                "GET",
+                &format!("/v1/profiles/{profile_id}/versions"),
+                None,
+                "ten_threads",
+                admin.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "versions: {json}");
@@ -2358,19 +2723,30 @@ mod tests {
             tenant_request(
                 "POST",
                 &format!("/v1/profiles/{profile_id}/rollback"),
-                Some(&format!(r#"{{"sourceProfileVersionId":"{first_version_id}"}}"#)),
+                Some(&format!(
+                    r#"{{"sourceProfileVersionId":"{first_version_id}"}}"#
+                )),
                 "ten_threads",
                 admin.clone(),
             ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "rollback: {json}");
-        assert_eq!(json["version"]["sourceVersionId"], first_version_id.as_str());
+        assert_eq!(
+            json["version"]["sourceVersionId"],
+            first_version_id.as_str()
+        );
 
         // Disable the profile.
         let (status, json) = send(
             &app,
-            tenant_request("POST", &format!("/v1/profiles/{profile_id}/disable"), Some("{}"), "ten_threads", admin.clone()),
+            tenant_request(
+                "POST",
+                &format!("/v1/profiles/{profile_id}/disable"),
+                Some("{}"),
+                "ten_threads",
+                admin.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "disable: {json}");
@@ -2382,7 +2758,18 @@ mod tests {
     async fn thread_detail_binding_projection_gated_by_permission() {
         let state = test_state();
         let now = chrono::Utc::now() - Duration::minutes(5);
-        seed_thread(&state, &thread("thr_binding", "ten_threads", threads::LifecycleState::Active, threads::SourceKind::Channel, "Slack / #support", now, now));
+        seed_thread(
+            &state,
+            &thread(
+                "thr_binding",
+                "ten_threads",
+                threads::LifecycleState::Active,
+                threads::SourceKind::Channel,
+                "Slack / #support",
+                now,
+                now,
+            ),
+        );
         {
             let store = state.store.lock();
             store
@@ -2404,11 +2791,20 @@ mod tests {
         // Without bindings.inspect there is no projection field.
         let (status, json) = send(
             &app,
-            tenant_request("GET", "/v1/threads/thr_binding", None, "ten_threads", vec![Permission::CredentialsInspect]),
+            tenant_request(
+                "GET",
+                "/v1/threads/thr_binding",
+                None,
+                "ten_threads",
+                vec![Permission::CredentialsInspect],
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "detail body: {json}");
-        assert!(json.get("bindingProjection").is_none(), "leaked projection: {json}");
+        assert!(
+            json.get("bindingProjection").is_none(),
+            "leaked projection: {json}"
+        );
 
         // With bindings.inspect the additive projection is attached.
         let (status, json) = send(

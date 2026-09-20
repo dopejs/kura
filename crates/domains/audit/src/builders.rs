@@ -4,15 +4,19 @@
 //! The evaluation-product and live-validation builders follow once their domain types land.
 
 use chrono::{DateTime, Utc};
-use kura_identity::TenantAuditEvent;
 use kura_identity::AUDIT_OUTCOME_SUCCEEDED;
+use kura_identity::TenantAuditEvent;
 
 pub const BILLING_AUDIT_EVENT_KIND: &str = "billing.audit_recorded";
 pub const CREDENTIAL_EVENT_KIND: &str = "credential.audit_recorded";
 pub const INTEGRATION_DIAGNOSTIC_AUDIT_EVENT_KIND: &str = "integration_diagnostic.audit_recorded";
 
 fn string_or_default(value: &str, fallback: &str) -> String {
-    if value.is_empty() { fallback.to_string() } else { value.to_string() }
+    if value.is_empty() {
+        fallback.to_string()
+    } else {
+        value.to_string()
+    }
 }
 
 fn enum_str<T: serde::Serialize>(value: &T) -> String {
@@ -54,18 +58,33 @@ pub fn build_billing_audit_event(input: &BillingAuditInput) -> TenantAuditEvent 
     let created_at = now_if_zero(input.created_at);
     let outcome = string_or_default(&input.outcome, AUDIT_OUTCOME_SUCCEEDED);
     let mut document = doc();
-    document.insert("action".to_string(), serde_json::json!(string_or_default(&input.action, "billing.usage_event")));
+    document.insert(
+        "action".to_string(),
+        serde_json::json!(string_or_default(&input.action, "billing.usage_event")),
+    );
     if !input.category.is_empty() {
-        document.insert("category".to_string(), serde_json::json!(input.category.as_str()));
+        document.insert(
+            "category".to_string(),
+            serde_json::json!(input.category.as_str()),
+        );
     }
     if !input.operation_key.is_empty() {
-        document.insert("operationKey".to_string(), serde_json::json!(input.operation_key));
+        document.insert(
+            "operationKey".to_string(),
+            serde_json::json!(input.operation_key),
+        );
     }
     if !input.reservation_id.is_empty() {
-        document.insert("reservationId".to_string(), serde_json::json!(input.reservation_id));
+        document.insert(
+            "reservationId".to_string(),
+            serde_json::json!(input.reservation_id),
+        );
     }
     if !input.adjustment_id.is_empty() {
-        document.insert("adjustmentId".to_string(), serde_json::json!(input.adjustment_id));
+        document.insert(
+            "adjustmentId".to_string(),
+            serde_json::json!(input.adjustment_id),
+        );
     }
     if !input.reason.is_empty() {
         document.insert("reason".to_string(), serde_json::json!(input.reason));
@@ -74,7 +93,10 @@ pub fn build_billing_audit_event(input: &BillingAuditInput) -> TenantAuditEvent 
         document.insert("amount".to_string(), serde_json::json!(input.amount));
     }
     if input.remaining_amount != 0 {
-        document.insert("remainingAmount".to_string(), serde_json::json!(input.remaining_amount));
+        document.insert(
+            "remainingAmount".to_string(),
+            serde_json::json!(input.remaining_amount),
+        );
     }
     TenantAuditEvent {
         event_kind: BILLING_AUDIT_EVENT_KIND.to_string(),
@@ -88,7 +110,9 @@ pub fn build_billing_audit_event(input: &BillingAuditInput) -> TenantAuditEvent 
     }
 }
 
-pub fn default_billing_audit_retention_policy(tenant_id: &str) -> kura_billing::AuditRetentionPolicy {
+pub fn default_billing_audit_retention_policy(
+    tenant_id: &str,
+) -> kura_billing::AuditRetentionPolicy {
     kura_billing::AuditRetentionPolicy {
         tenant_id: tenant_id.to_string(),
         retention_mode: "indefinite".to_string(),
@@ -115,20 +139,38 @@ pub fn build_credential_audit_event(input: &CredentialAuditInput) -> TenantAudit
     let created_at = now_if_zero(input.created_at);
     let outcome = string_or_default(&input.outcome, AUDIT_OUTCOME_SUCCEEDED);
     let mut document = doc();
-    document.insert("resourceKind".to_string(), serde_json::json!(enum_str(&input.resource_kind)));
-    document.insert("action".to_string(), serde_json::json!(enum_str(&input.action)));
+    document.insert(
+        "resourceKind".to_string(),
+        serde_json::json!(enum_str(&input.resource_kind)),
+    );
+    document.insert(
+        "action".to_string(),
+        serde_json::json!(enum_str(&input.action)),
+    );
     if !input.resource_id.is_empty() {
-        document.insert("resourceId".to_string(), serde_json::json!(input.resource_id));
+        document.insert(
+            "resourceId".to_string(),
+            serde_json::json!(input.resource_id),
+        );
     }
     if !input.secret_ref.is_empty() {
         document.insert("secretRef".to_string(), serde_json::json!(input.secret_ref));
     }
     if !input.secret_version_id.is_empty() {
-        document.insert("secretVersionId".to_string(), serde_json::json!(input.secret_version_id));
+        document.insert(
+            "secretVersionId".to_string(),
+            serde_json::json!(input.secret_version_id),
+        );
     }
     if !input.secret_refs.is_empty() {
-        document.insert("secretRefs".to_string(), serde_json::json!(kura_secrets::redact_secret_refs(&input.secret_refs)));
-        document.insert("secretRefCount".to_string(), serde_json::json!(input.secret_refs.len()));
+        document.insert(
+            "secretRefs".to_string(),
+            serde_json::json!(kura_secrets::redact_secret_refs(&input.secret_refs)),
+        );
+        document.insert(
+            "secretRefCount".to_string(),
+            serde_json::json!(input.secret_refs.len()),
+        );
     }
     TenantAuditEvent {
         event_kind: CREDENTIAL_EVENT_KIND.to_string(),
@@ -157,25 +199,39 @@ pub struct IntegrationDiagnosticAuditInput {
     pub created_at: DateTime<Utc>,
 }
 
-pub fn build_integration_diagnostic_audit_event(input: &IntegrationDiagnosticAuditInput) -> TenantAuditEvent {
+pub fn build_integration_diagnostic_audit_event(
+    input: &IntegrationDiagnosticAuditInput,
+) -> TenantAuditEvent {
     let created_at = now_if_zero(input.created_at);
     let outcome = string_or_default(&input.outcome, AUDIT_OUTCOME_SUCCEEDED);
     let mut document = doc();
     document.insert("action".to_string(), serde_json::json!(input.action));
     if !input.target_kind.is_empty() {
-        document.insert("targetKind".to_string(), serde_json::json!(input.target_kind));
+        document.insert(
+            "targetKind".to_string(),
+            serde_json::json!(input.target_kind),
+        );
     }
     if !input.target_id.is_empty() {
         document.insert("targetId".to_string(), serde_json::json!(input.target_id));
     }
     if !input.diagnostic_run_id.is_empty() {
-        document.insert("diagnosticRunId".to_string(), serde_json::json!(input.diagnostic_run_id));
+        document.insert(
+            "diagnosticRunId".to_string(),
+            serde_json::json!(input.diagnostic_run_id),
+        );
     }
     if !input.smoke_report_id.is_empty() {
-        document.insert("smokeReportId".to_string(), serde_json::json!(input.smoke_report_id));
+        document.insert(
+            "smokeReportId".to_string(),
+            serde_json::json!(input.smoke_report_id),
+        );
     }
     if !input.redaction_status.as_str().is_empty() {
-        document.insert("redactionStatus".to_string(), serde_json::json!(input.redaction_status.as_str()));
+        document.insert(
+            "redactionStatus".to_string(),
+            serde_json::json!(input.redaction_status.as_str()),
+        );
     }
     TenantAuditEvent {
         event_kind: INTEGRATION_DIAGNOSTIC_AUDIT_EVENT_KIND.to_string(),

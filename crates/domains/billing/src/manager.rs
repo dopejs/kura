@@ -4,17 +4,16 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use chrono::DateTime;
-use chrono::Utc;
 use crate::catalog::definition_for;
+use crate::denial::DenialPayload;
 use crate::denial::new_quota_exhausted_denial;
 use crate::denial::new_quota_state_unavailable_denial;
-use crate::denial::DenialPayload;
 use crate::error::BillingError;
 use crate::error::Result;
 use crate::lifecycle::ResolveInput;
 use crate::projection::EffectiveQuota;
 use crate::projection::project_quota;
+use crate::types::AbuseRestrictionRecord;
 use crate::types::Category;
 use crate::types::EnforcementMode;
 use crate::types::ManualAdjustment;
@@ -29,7 +28,8 @@ use crate::types::UsageCounter;
 use crate::types::UsageEvent;
 use crate::types::UsageEventKind;
 use crate::types::UsageReservation;
-use crate::types::AbuseRestrictionRecord;
+use chrono::DateTime;
+use chrono::Utc;
 
 /// Object-safe boxed future used by the repository trait.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -77,7 +77,11 @@ pub trait Repository: Send + Sync {
 
     // -- Optional projection capabilities -------------------------------
 
-    fn list_quota_denials(&self, tenant_id: &str, limit: usize) -> BoxFuture<'_, Result<Vec<QuotaDenial>>> {
+    fn list_quota_denials(
+        &self,
+        tenant_id: &str,
+        limit: usize,
+    ) -> BoxFuture<'_, Result<Vec<QuotaDenial>>> {
         let _ = (tenant_id, limit);
         Box::pin(async { Ok(Vec::new()) })
     }
@@ -161,7 +165,11 @@ pub trait Repository: Send + Sync {
     // transaction overrides these; returning `Ok(None)` falls back to the
     // manager's step-by-step logic.
 
-    fn reserve_usage(&self, input: ReserveInput, now: DateTime<Utc>) -> BoxFuture<'_, Result<Option<ReserveResult>>> {
+    fn reserve_usage(
+        &self,
+        input: ReserveInput,
+        now: DateTime<Utc>,
+    ) -> BoxFuture<'_, Result<Option<ReserveResult>>> {
         let _ = (input, now);
         Box::pin(async { Ok(None) })
     }
@@ -242,7 +250,8 @@ impl Manager {
     pub async fn reserve(&self, input: ReserveInput) -> Result<ReserveResult> {
         let Some(repo) = self.repo() else {
             if input.hosted {
-                let denial = new_quota_state_unavailable_denial(&input.tenant_id, &input.operation_key);
+                let denial =
+                    new_quota_state_unavailable_denial(&input.tenant_id, &input.operation_key);
                 return Ok(ReserveResult {
                     allowed: false,
                     denial: Some(denial),
@@ -307,7 +316,8 @@ impl Manager {
             .await?
         {
             if existing.status == ReservationStatus::OPERATOR_ACTION_NEEDED {
-                let denial = new_quota_state_unavailable_denial(&input.tenant_id, &input.operation_key);
+                let denial =
+                    new_quota_state_unavailable_denial(&input.tenant_id, &input.operation_key);
                 return Ok(ReserveResult {
                     allowed: false,
                     reservation: Some(existing),
@@ -667,13 +677,26 @@ mod tests {
             let definition = definition_for(&Category::from(Category::RUN_LAUNCHES)).unwrap();
             let period = repo.open_period_sync(TEN_FINITE, &definition, now);
             let counter = repo
-                .counter(TEN_FINITE, &Category::from(Category::RUN_LAUNCHES), &period.quota_period_id)
+                .counter(
+                    TEN_FINITE,
+                    &Category::from(Category::RUN_LAUNCHES),
+                    &period.quota_period_id,
+                )
                 .expect("counter");
-            assert_eq!(counter.reserved_amount, 0, "{status}: reserved changed on replay");
+            assert_eq!(
+                counter.reserved_amount, 0,
+                "{status}: reserved changed on replay"
+            );
             if status == ReservationStatus::COMMITTED {
-                assert_eq!(counter.committed_amount, 1, "{status}: commit double-counted");
+                assert_eq!(
+                    counter.committed_amount, 1,
+                    "{status}: commit double-counted"
+                );
             } else {
-                assert_eq!(counter.committed_amount, 0, "{status}: non-commit lifecycle committed usage");
+                assert_eq!(
+                    counter.committed_amount, 0,
+                    "{status}: non-commit lifecycle committed usage"
+                );
             }
         }
     }
@@ -737,25 +760,36 @@ mod tests {
             ..Default::default()
         };
         let first = manager.reserve(input.clone()).await.unwrap();
-        assert!(matches!(first.failure, Some(BillingError::QuotaDenied)), "{first:?}");
+        assert!(
+            matches!(first.failure, Some(BillingError::QuotaDenied)),
+            "{first:?}"
+        );
         assert_eq!(
             first.reservation.as_ref().unwrap().status,
             ReservationStatus::DENIED
         );
         let second = manager.reserve(input).await.unwrap();
-        assert!(matches!(second.failure, Some(BillingError::QuotaDenied)), "{second:?}");
+        assert!(
+            matches!(second.failure, Some(BillingError::QuotaDenied)),
+            "{second:?}"
+        );
         assert_eq!(
             second.reservation.as_ref().unwrap().reservation_id,
             first.reservation.as_ref().unwrap().reservation_id
         );
-        assert_eq!(repo.denial_count(), 1, "expected one recorded denial after replay");
+        assert_eq!(
+            repo.denial_count(),
+            1,
+            "expected one recorded denial after replay"
+        );
     }
 
     #[tokio::test]
     async fn reserve_all_rolls_back_partial_reservations_on_denied_category() {
         let now = fixed_now();
         let (repo, manager) = manager_and_repo();
-        let tool_definition = definition_for(&Category::from(Category::RUNTIME_TOOL_CALLS)).unwrap();
+        let tool_definition =
+            definition_for(&Category::from(Category::RUNTIME_TOOL_CALLS)).unwrap();
         let tool_period = repo.open_period_sync(TEN_FINITE, &tool_definition, now);
         repo.save_counter(UsageCounter {
             usage_counter_id: "counter_tool_exhausted".to_string(),
@@ -784,7 +818,9 @@ mod tests {
                     tenant_id: TEN_FINITE.to_string(),
                     category: Category::from(Category::RUNTIME_TOOL_CALLS),
                     amount: 1,
-                    operation_key: tool_call_operation_key(TEN_FINITE, RUN_ID, STEP_ID, "tool_1", ""),
+                    operation_key: tool_call_operation_key(
+                        TEN_FINITE, RUN_ID, STEP_ID, "tool_1", "",
+                    ),
                     reservation_point: "tool call creation".to_string(),
                     guarded_entry_point: "tool call".to_string(),
                     hosted: true,
@@ -810,9 +846,16 @@ mod tests {
                 &integration_period.quota_period_id,
             )
             .expect("counter");
-        assert_eq!(counter.reserved_amount, 0, "expected integration reservation rollback");
+        assert_eq!(
+            counter.reserved_amount, 0,
+            "expected integration reservation rollback"
+        );
         let reservation = repo
-            .reservation(TEN_FINITE, &Category::from(Category::INTEGRATION_OPERATIONS), &integration_key)
+            .reservation(
+                TEN_FINITE,
+                &Category::from(Category::INTEGRATION_OPERATIONS),
+                &integration_key,
+            )
             .expect("reservation");
         assert_eq!(
             reservation.status,
@@ -882,7 +925,11 @@ mod tests {
                         tenant_id: TEN_FINITE.to_string(),
                         category: Category::from(Category::RUN_LAUNCHES),
                         amount: 1,
-                        operation_key: run_operation_key(TEN_FINITE, "", &format!("run_last_{suffix}")),
+                        operation_key: run_operation_key(
+                            TEN_FINITE,
+                            "",
+                            &format!("run_last_{suffix}"),
+                        ),
                         hosted: true,
                         ..Default::default()
                     })
@@ -894,7 +941,9 @@ mod tests {
         for handle in handles {
             match handle.await.unwrap() {
                 Ok(result) if result.allowed => allowed += 1,
-                Ok(result) if matches!(result.failure, Some(BillingError::QuotaDenied)) => denied += 1,
+                Ok(result) if matches!(result.failure, Some(BillingError::QuotaDenied)) => {
+                    denied += 1
+                }
                 other => panic!("unexpected reserve outcome: {other:?}"),
             }
         }

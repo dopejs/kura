@@ -12,12 +12,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::{
-    classify_provider_evidence, diagnostic_defaults, diagnostic_freshness,
-    diagnostic_id, diagnostic_remediation_hint, diagnostic_retention_expiry, AuthState,
-    BackendKind, DiagnosticReasonCode, DiagnosticResult, DiagnosticRun, DiagnosticRunStatus,
-    FreshnessState, HealthState, IntegrationError, ProbeKind, ProbeResult,
-    ProviderDiagnosticEvidence, ReadinessStatus, RedactionStatus, Resource,
-    DIAGNOSTIC_STALE_AFTER,
+    AuthState, BackendKind, DIAGNOSTIC_STALE_AFTER, DiagnosticReasonCode, DiagnosticResult,
+    DiagnosticRun, DiagnosticRunStatus, FreshnessState, HealthState, IntegrationError, ProbeKind,
+    ProbeResult, ProviderDiagnosticEvidence, ReadinessStatus, RedactionStatus, Resource,
+    classify_provider_evidence, diagnostic_defaults, diagnostic_freshness, diagnostic_id,
+    diagnostic_remediation_hint, diagnostic_retention_expiry,
 };
 
 pub const FEISHU_LARK_PROVIDER_KIND: &str = "feishu_lark";
@@ -86,7 +85,9 @@ fn readiness_reason(resource: &Resource) -> DiagnosticReasonCode {
         ReadinessStatus::Degraded => {
             let reason = format!(
                 "{} {} {}",
-                resource.readiness_reason, resource.required_operator_action, resource.disabled_reason
+                resource.readiness_reason,
+                resource.required_operator_action,
+                resource.disabled_reason
             )
             .to_lowercase();
             if reason.contains("scope") {
@@ -221,12 +222,21 @@ pub fn new_diagnostic_retention_record(
     target_id: &str,
     created_at: DateTime<Utc>,
 ) -> DiagnosticRetentionRecord {
-    let created_at = if created_at == DateTime::<Utc>::default() { Utc::now() } else { created_at };
+    let created_at = if created_at == DateTime::<Utc>::default() {
+        Utc::now()
+    } else {
+        created_at
+    };
     let expires_at = diagnostic_retention_expiry(created_at);
     DiagnosticRetentionRecord {
         retention_record_id: diagnostic_id(
             "diag_retention",
-            &[tenant_id, target_kind, target_id, &created_at.to_rfc3339_opts(SecondsFormat::Nanos, true)],
+            &[
+                tenant_id,
+                target_kind,
+                target_id,
+                &created_at.to_rfc3339_opts(SecondsFormat::Nanos, true),
+            ],
         ),
         tenant_id: tenant_id.to_string(),
         target_kind: target_kind.to_string(),
@@ -280,7 +290,13 @@ impl DiagnosticManager {
         let ts = now.to_rfc3339_opts(SecondsFormat::Nanos, true);
         let result_id = diagnostic_id(
             "diag_result",
-            &[&input.resource.tenant_id, &input.resource.integration_id, &capability, &input.run_id, &ts],
+            &[
+                &input.resource.tenant_id,
+                &input.resource.integration_id,
+                &capability,
+                &input.run_id,
+                &ts,
+            ],
         );
         DiagnosticResult {
             diagnostic_result_id: result_id,
@@ -322,7 +338,15 @@ impl DiagnosticManager {
         let client_key = input.client_key.trim().to_string();
         let run_id = if client_key.is_empty() {
             let ts = now.to_rfc3339_opts(SecondsFormat::Nanos, true);
-            diagnostic_id("diag_run", &[&input.resource.tenant_id, &input.resource.integration_id, &input.requested_by, &ts])
+            diagnostic_id(
+                "diag_run",
+                &[
+                    &input.resource.tenant_id,
+                    &input.resource.integration_id,
+                    &input.requested_by,
+                    &ts,
+                ],
+            )
         } else {
             format!("diag_run_{client_key}")
         };
@@ -364,7 +388,11 @@ pub fn complete_diagnostic_run(
     results: &[DiagnosticResult],
     completed_at: DateTime<Utc>,
 ) -> DiagnosticRun {
-    let completed_at = if completed_at == DateTime::<Utc>::default() { Utc::now() } else { completed_at };
+    let completed_at = if completed_at == DateTime::<Utc>::default() {
+        Utc::now()
+    } else {
+        completed_at
+    };
     run.status = DiagnosticRunStatus::Completed;
     run.completed_at = Some(completed_at);
     run.result_ids = Vec::with_capacity(results.len());
@@ -372,15 +400,24 @@ pub fn complete_diagnostic_run(
         run.result_ids.push(result.diagnostic_result_id.clone());
         if result.redaction_status == RedactionStatus::FailedClosed {
             run.redaction_status = RedactionStatus::FailedClosed;
-            run.failure_reason_code = DiagnosticReasonCode::RedactionFailedClosed.as_str().to_string();
+            run.failure_reason_code = DiagnosticReasonCode::RedactionFailedClosed
+                .as_str()
+                .to_string();
         }
     }
     run
 }
 
 #[must_use]
-pub fn refresh_diagnostic_result_freshness(mut result: DiagnosticResult, now: DateTime<Utc>) -> DiagnosticResult {
-    let now = if now == DateTime::<Utc>::default() { Utc::now() } else { now };
+pub fn refresh_diagnostic_result_freshness(
+    mut result: DiagnosticResult,
+    now: DateTime<Utc>,
+) -> DiagnosticResult {
+    let now = if now == DateTime::<Utc>::default() {
+        Utc::now()
+    } else {
+        now
+    };
     result.freshness_state = diagnostic_freshness(now, result.stale_after);
     result
 }
@@ -458,20 +495,53 @@ impl FeishuLarkDiagnosticBackend {
             "failed"
         };
         let mut summary = Map::new();
-        summary.insert("integrationId".to_string(), Value::String(resource.integration_id.clone()));
-        summary.insert("domainKind".to_string(), Value::String(resource.domain_kind.clone()));
-        summary.insert("backendKind".to_string(), Value::String(resource.backend_binding.backend_kind.as_str().to_string()));
-        summary.insert("probeKind".to_string(), Value::String(probe_kind.as_str().to_string()));
-        summary.insert("operationClass".to_string(), Value::String(evidence.operation_class.clone()));
-        summary.insert("reasonCode".to_string(), Value::String(classification.reason_code.as_str().to_string()));
-        summary.insert("retrySafety".to_string(), Value::String(classification.retry_safety.as_str().to_string()));
-        summary.insert("remediationOwner".to_string(), Value::String(classification.remediation_owner.as_str().to_string()));
-        summary.insert("redactionStatus".to_string(), Value::String(classification.redaction_status.as_str().to_string()));
-        summary.insert("evidenceConfidence".to_string(), Value::String(classification.evidence_confidence.clone()));
+        summary.insert(
+            "integrationId".to_string(),
+            Value::String(resource.integration_id.clone()),
+        );
+        summary.insert(
+            "domainKind".to_string(),
+            Value::String(resource.domain_kind.clone()),
+        );
+        summary.insert(
+            "backendKind".to_string(),
+            Value::String(resource.backend_binding.backend_kind.as_str().to_string()),
+        );
+        summary.insert(
+            "probeKind".to_string(),
+            Value::String(probe_kind.as_str().to_string()),
+        );
+        summary.insert(
+            "operationClass".to_string(),
+            Value::String(evidence.operation_class.clone()),
+        );
+        summary.insert(
+            "reasonCode".to_string(),
+            Value::String(classification.reason_code.as_str().to_string()),
+        );
+        summary.insert(
+            "retrySafety".to_string(),
+            Value::String(classification.retry_safety.as_str().to_string()),
+        );
+        summary.insert(
+            "remediationOwner".to_string(),
+            Value::String(classification.remediation_owner.as_str().to_string()),
+        );
+        summary.insert(
+            "redactionStatus".to_string(),
+            Value::String(classification.redaction_status.as_str().to_string()),
+        );
+        summary.insert(
+            "evidenceConfidence".to_string(),
+            Value::String(classification.evidence_confidence.clone()),
+        );
         Ok(ProbeResult {
             probe_kind,
             status: status.to_string(),
-            failure_class: crate::first_non_empty(&[&classification.redacted_provider_code, classification.reason_code.as_str()]),
+            failure_class: crate::first_non_empty(&[
+                &classification.redacted_provider_code,
+                classification.reason_code.as_str(),
+            ]),
             result_summary: summary,
             ..ProbeResult::default()
         })
@@ -487,7 +557,10 @@ impl FeishuLarkDiagnosticBackend {
 }
 
 #[must_use]
-fn feishu_lark_evidence_from_probe(resource: &Resource, input: &Map<String, Value>) -> ProviderDiagnosticEvidence {
+fn feishu_lark_evidence_from_probe(
+    resource: &Resource,
+    input: &Map<String, Value>,
+) -> ProviderDiagnosticEvidence {
     let mut raw_evidence: Map<String, Value> = Map::new();
     if let Some(Value::Object(nested)) = input.get("providerEvidence") {
         for (key, value) in nested {
@@ -503,9 +576,16 @@ fn feishu_lark_evidence_from_probe(resource: &Resource, input: &Map<String, Valu
         }
     }
     if raw_evidence.is_empty() && !resource.readiness_reason.trim().is_empty() {
-        raw_evidence.insert("message".to_string(), Value::String(resource.readiness_reason.clone()));
+        raw_evidence.insert(
+            "message".to_string(),
+            Value::String(resource.readiness_reason.clone()),
+        );
     }
-    let mut evidence = provider_evidence_from_map(BackendKind::FeishuLark.as_str(), &resource.domain_kind, &raw_evidence);
+    let mut evidence = provider_evidence_from_map(
+        BackendKind::FeishuLark.as_str(),
+        &resource.domain_kind,
+        &raw_evidence,
+    );
     evidence.integration_id = resource.integration_id.clone();
     evidence.operation_class = input
         .get("operationClass")

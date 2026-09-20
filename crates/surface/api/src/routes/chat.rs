@@ -15,13 +15,13 @@
 
 use std::convert::Infallible;
 
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event as SseEvent, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use axum::Router;
 use kura_chat::{
     CancellationToken, ChatError, QueryExecution, QueryInput, QueryResult, StreamChunk,
 };
@@ -106,7 +106,9 @@ pub async fn handle_chat_query(
     let cancel = CancellationToken::new();
     let execution = match tokio::task::spawn_blocking(move || service.query(input, &cancel)).await {
         Ok(execution) => execution,
-        Err(err) => return ApiError::Internal(format!("chat query task failed: {err}")).into_response(),
+        Err(err) => {
+            return ApiError::Internal(format!("chat query task failed: {err}")).into_response();
+        }
     };
     match execution {
         Ok(execution) => {
@@ -182,7 +184,9 @@ fn pump_stream(
                 .event("chat.query.started")
                 .json_data(started_from_chunk(&chunk, &query_text))
                 .unwrap_or_else(|err| {
-                    SseEvent::default().event("chat.query.started").data(err.to_string())
+                    SseEvent::default()
+                        .event("chat.query.started")
+                        .data(err.to_string())
                 });
             if sender.blocking_send(Ok(event)).is_err() {
                 return;
@@ -197,7 +201,9 @@ fn pump_stream(
                 reply: reply.clone(),
             })
             .unwrap_or_else(|err| {
-                SseEvent::default().event("chat.query.delta").data(err.to_string())
+                SseEvent::default()
+                    .event("chat.query.delta")
+                    .data(err.to_string())
             });
         if sender.blocking_send(Ok(event)).is_err() {
             return;
@@ -218,7 +224,9 @@ fn pump_stream(
             .event("chat.query.started")
             .json_data(started_from_result(&result, &query_text))
             .unwrap_or_else(|err| {
-                SseEvent::default().event("chat.query.started").data(err.to_string())
+                SseEvent::default()
+                    .event("chat.query.started")
+                    .data(err.to_string())
             });
         if sender.blocking_send(Ok(event)).is_err() {
             return;
@@ -232,7 +240,11 @@ fn pump_stream(
     }
     let terminal = terminal
         .json_data(build_chat_query_response(&result))
-        .unwrap_or_else(|err| SseEvent::default().event("chat.query.failed").data(err.to_string()));
+        .unwrap_or_else(|err| {
+            SseEvent::default()
+                .event("chat.query.failed")
+                .data(err.to_string())
+        });
     let _ = sender.blocking_send(Ok(terminal));
 }
 
@@ -289,7 +301,10 @@ fn decode_json_body<T: serde::de::DeserializeOwned>(body: &Bytes) -> Result<T, A
 /// Maps the wire request onto `kura_chat::QueryInput`, trimming strings and
 /// taking the tenant id from the resolved `TenantContext` extension when
 /// present (Go `tenantContextFromContext`).
-fn query_input_from_request(request: &ChatQueryRequest, tenant: Option<&TenantContext>) -> QueryInput {
+fn query_input_from_request(
+    request: &ChatQueryRequest,
+    tenant: Option<&TenantContext>,
+) -> QueryInput {
     QueryInput {
         query: request.query.trim().to_string(),
         provider: request.provider.trim().to_string(),
@@ -358,11 +373,7 @@ fn build_chat_query_response(result: &QueryResult) -> ChatQueryResponse {
 
 /// Go `optionalBool` / `optionalInt`: `None` when the include guard is false.
 fn optional_bool(value: bool, include: bool) -> Option<bool> {
-    if include {
-        Some(value)
-    } else {
-        None
-    }
+    if include { Some(value) } else { None }
 }
 
 /// Go `string(llm.DispatchStatus)`.
@@ -423,7 +434,10 @@ fn llm_prepare_error(err: &ChatError) -> ApiError {
 /// settled dispatch's error code.
 fn llm_dispatch_status_code(dispatch: &Dispatch) -> StatusCode {
     match dispatch.error_code.as_str() {
-        "timeout" | "connect_timeout" | "first_chunk_timeout" | "idle_timeout"
+        "timeout"
+        | "connect_timeout"
+        | "first_chunk_timeout"
+        | "idle_timeout"
         | "max_duration_exceeded" => StatusCode::GATEWAY_TIMEOUT,
         "provider_not_found" => StatusCode::BAD_REQUEST,
         "cancelled" => StatusCode::REQUEST_TIMEOUT,
@@ -455,9 +469,9 @@ mod tests {
     use std::sync::Arc;
 
     use axum::body::Body;
-    use kura_chat::Service as ChatService;
     use axum::body::to_bytes;
     use axum::http::Request as HttpRequest;
+    use kura_chat::Service as ChatService;
     use kura_events::Bus;
     use kura_llm::Dispatcher;
     use kura_store::SQLiteStore;
@@ -468,6 +482,7 @@ mod tests {
     fn test_config() -> kura_config::Config {
         kura_config::Config {
             project_root: String::new(),
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-test".to_string(),
@@ -492,6 +507,7 @@ mod tests {
                     ..Default::default()
                 },
             },
+            egress: Default::default(),
         }
     }
 
@@ -544,7 +560,9 @@ mod tests {
             .await
             .expect("oneshot");
         assert_eq!(response.status(), StatusCode::OK);
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
         assert_eq!(json["provider"], "echo");
         assert_eq!(json["model"], "echo-model");
@@ -568,7 +586,9 @@ mod tests {
             .await
             .expect("oneshot");
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
         assert_eq!(json["error"], "chat service is not configured");
     }
@@ -615,7 +635,9 @@ mod tests {
             content_type.starts_with("text/event-stream"),
             "expected text/event-stream, got {content_type}"
         );
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let body = String::from_utf8(bytes.to_vec()).expect("utf8 body");
         assert!(
             body.contains("event: chat.query.started"),
@@ -629,8 +651,14 @@ mod tests {
             body.contains("event: chat.query.completed"),
             "missing completed event:\n{body}"
         );
-        assert!(body.contains("\"reply\":\"hello world\""), "unexpected reply:\n{body}");
-        assert!(body.contains("\"delta\":\"hello\""), "unexpected delta:\n{body}");
+        assert!(
+            body.contains("\"reply\":\"hello world\""),
+            "unexpected reply:\n{body}"
+        );
+        assert!(
+            body.contains("\"delta\":\"hello\""),
+            "unexpected delta:\n{body}"
+        );
     }
 
     #[tokio::test]

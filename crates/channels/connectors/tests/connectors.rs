@@ -8,18 +8,17 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Utc};
 use kura_connectors::{
-    AccountBindingSummary, CapabilityProfile, ConformanceArea, ConformanceResult,
-    ConformanceResultStatus, Connector, ConnectorDiagnosticState, ConnectorsError,
-    DiagnosticReasonCode, FreshnessState, GroupRoomCapabilities, HandoffCapabilities,
-    LifecycleState, MatrixCase, RedactionStatus, RegisterInput, RemediationOwner,
-    ReportFailureInput, ReportHealthInput, RetrySafety, Status, Supervisor, SurfaceSupport,
-    clean_strings, core_invariant_areas, core_reason_code, min_int, run_matrix_case,
-    surface_result, validate_capability_profile, CONNECTOR_KIND_MATRIX,
-    GROUP_ROOM_SURFACE_ALLOWLIST_EVIDENCE, GROUP_ROOM_SURFACE_DELETED_MESSAGE_EVIDENCE,
-    GROUP_ROOM_SURFACE_DUPLICATE_MESSAGE_EVIDENCE, GROUP_ROOM_SURFACE_EDITED_MESSAGE_EVIDENCE,
-    GROUP_ROOM_SURFACE_MENTION_EVIDENCE, GROUP_ROOM_SURFACE_UNSUPPORTED_SOURCE_EVIDENCE,
+    AccountBindingSummary, CONNECTOR_KIND_MATRIX, CapabilityProfile, ConformanceArea,
+    ConformanceResult, ConformanceResultStatus, Connector, ConnectorDiagnosticState,
+    ConnectorsError, DiagnosticReasonCode, FreshnessState, GROUP_ROOM_SURFACE_ALLOWLIST_EVIDENCE,
+    GROUP_ROOM_SURFACE_DELETED_MESSAGE_EVIDENCE, GROUP_ROOM_SURFACE_DUPLICATE_MESSAGE_EVIDENCE,
+    GROUP_ROOM_SURFACE_EDITED_MESSAGE_EVIDENCE, GROUP_ROOM_SURFACE_MENTION_EVIDENCE,
+    GROUP_ROOM_SURFACE_UNSUPPORTED_SOURCE_EVIDENCE, GroupRoomCapabilities,
     HANDOFF_SURFACE_DESTINATION_SUPPORT, HANDOFF_SURFACE_FIRST_RESPONSE_SOURCE_REFERENCES,
-    HANDOFF_SURFACE_SOURCE_SUPPORT,
+    HANDOFF_SURFACE_SOURCE_SUPPORT, HandoffCapabilities, LifecycleState, MatrixCase,
+    RedactionStatus, RegisterInput, RemediationOwner, ReportFailureInput, ReportHealthInput,
+    RetrySafety, Status, Supervisor, SurfaceSupport, clean_strings, core_invariant_areas,
+    core_reason_code, min_int, run_matrix_case, surface_result, validate_capability_profile,
 };
 use kura_livevalidation::FakeOutcome;
 
@@ -188,8 +187,14 @@ fn enum_wire_values_match_go_constants() {
     assert_eq!(Status::Disabled.as_str(), "disabled");
 
     assert_eq!(LifecycleState::Configured.as_str(), "configured");
-    assert_eq!(LifecycleState::PermissionBlocked.as_str(), "permission_blocked");
-    assert_eq!(LifecycleState::UnsupportedCapability.as_str(), "unsupported_capability");
+    assert_eq!(
+        LifecycleState::PermissionBlocked.as_str(),
+        "permission_blocked"
+    );
+    assert_eq!(
+        LifecycleState::UnsupportedCapability.as_str(),
+        "unsupported_capability"
+    );
 
     assert_eq!(ConformanceResultStatus::Fail.as_str(), "fail");
     assert_eq!(ConformanceResultStatus::Limited.as_str(), "limited");
@@ -199,7 +204,10 @@ fn enum_wire_values_match_go_constants() {
     assert_eq!(RedactionStatus::Failed.as_str(), "redaction_failed");
 
     assert_eq!(DiagnosticReasonCode::AuthMissing.as_str(), "auth_missing");
-    assert_eq!(DiagnosticReasonCode::UnknownConnectorFailure.as_str(), "unknown_connector_failure");
+    assert_eq!(
+        DiagnosticReasonCode::UnknownConnectorFailure.as_str(),
+        "unknown_connector_failure"
+    );
 
     assert_eq!(RemediationOwner::User.as_str(), "product_user");
     assert_eq!(RemediationOwner::NoneRequired.as_str(), "none_required");
@@ -249,7 +257,10 @@ fn capability_profile_roundtrips_camel_case_fields_and_omitempty() {
     // omitempty: unset optional fields are absent.
     assert!(!obj.contains_key("equivalentDurableIdentityRule"));
     // enum wire values are snake_case.
-    assert_eq!(obj["coreInvariantResults"]["redaction"], serde_json::json!("pass"));
+    assert_eq!(
+        obj["coreInvariantResults"]["redaction"],
+        serde_json::json!("pass")
+    );
     assert_eq!(
         obj["providerSurfaceResults"]["direct_message"],
         serde_json::json!("supported")
@@ -330,7 +341,9 @@ fn connector_supervisor_lifecycle() {
         "expected backoff state to be set, got {connector:?}"
     );
 
-    let connector = supervisor.restart(&connector.connector_id).expect("restart");
+    let connector = supervisor
+        .restart(&connector.connector_id)
+        .expect("restart");
     assert_eq!(connector.status, Status::Registered);
     assert_eq!(connector.restart_count, 1);
 }
@@ -386,7 +399,9 @@ fn connector_supervisor_tenant_ownership_and_disable() {
     assert_eq!(ten_a[0].connector_id, "discord-shared");
     assert_eq!(ten_a[0].secret_refs, vec!["discord/token".to_string()]);
     assert!(
-        supervisor.get_for_tenant("discord-shared", "ten_b").is_none(),
+        supervisor
+            .get_for_tenant("discord-shared", "ten_b")
+            .is_none(),
         "tenant B unexpectedly resolved tenant A connector"
     );
 
@@ -432,7 +447,12 @@ fn connector_supervisor_register_update_keeps_status_tenant_and_refs() {
         .expect("register");
     assert!(created);
     let _ = supervisor
-        .report_health(&connector.connector_id, ReportHealthInput { status: Status::Healthy })
+        .report_health(
+            &connector.connector_id,
+            ReportHealthInput {
+                status: Status::Healthy,
+            },
+        )
         .expect("report health");
 
     // Re-register without tenant/refs: kind + display name update, everything
@@ -502,7 +522,11 @@ fn connector_supervisor_list_and_tenant_scoping() {
         .map(|c| c.connector_id)
         .collect();
     assert_eq!(ten_a, vec!["c1"]);
-    assert_eq!(supervisor.list_for_tenant("").len(), 3, "empty tenant matches all");
+    assert_eq!(
+        supervisor.list_for_tenant("").len(),
+        3,
+        "empty tenant matches all"
+    );
 
     assert_eq!(supervisor.get("c2").unwrap().kind, "discord");
     assert_eq!(supervisor.get("nope"), None);
@@ -528,7 +552,10 @@ fn connector_supervisor_require_inbound_ready() {
         })
         .expect("register");
     assert_eq!(
-        supervisor.require_inbound_ready("c1", "ten_a").unwrap().connector_id,
+        supervisor
+            .require_inbound_ready("c1", "ten_a")
+            .unwrap()
+            .connector_id,
         "c1"
     );
     assert_eq!(
@@ -560,16 +587,31 @@ fn connector_supervisor_report_health_validation_and_reset() {
         );
     }
     assert_eq!(
-        supervisor.report_health("missing", ReportHealthInput { status: Status::Healthy }),
+        supervisor.report_health(
+            "missing",
+            ReportHealthInput {
+                status: Status::Healthy
+            }
+        ),
         Err(ConnectorsError::ConnectorNotFound)
     );
 
     // A degraded heartbeat resets failure/backoff state.
     let _ = supervisor
-        .report_failure(&connector.connector_id, ReportFailureInput { reason: "boom".to_string() })
+        .report_failure(
+            &connector.connector_id,
+            ReportFailureInput {
+                reason: "boom".to_string(),
+            },
+        )
         .expect("report failure");
     let degraded = supervisor
-        .report_health("c1", ReportHealthInput { status: Status::Degraded })
+        .report_health(
+            "c1",
+            ReportHealthInput {
+                status: Status::Degraded,
+            },
+        )
         .expect("report health");
     assert_eq!(degraded.status, Status::Degraded);
     assert_eq!(degraded.failure_count, 0);
@@ -579,7 +621,12 @@ fn connector_supervisor_report_health_validation_and_reset() {
 
     let _ = supervisor.disable("c1", "off");
     assert_eq!(
-        supervisor.report_health("c1", ReportHealthInput { status: Status::Healthy }),
+        supervisor.report_health(
+            "c1",
+            ReportHealthInput {
+                status: Status::Healthy
+            }
+        ),
         Err(ConnectorsError::ConnectorDisabled)
     );
 }
@@ -596,11 +643,21 @@ fn connector_supervisor_report_failure_backoff_and_threshold() {
         .expect("register");
 
     assert_eq!(
-        supervisor.report_failure("c1", ReportFailureInput { reason: String::new() }),
+        supervisor.report_failure(
+            "c1",
+            ReportFailureInput {
+                reason: String::new()
+            }
+        ),
         Err(ConnectorsError::ConnectorFailureRequired)
     );
     assert_eq!(
-        supervisor.report_failure("missing", ReportFailureInput { reason: "x".to_string() }),
+        supervisor.report_failure(
+            "missing",
+            ReportFailureInput {
+                reason: "x".to_string()
+            }
+        ),
         Err(ConnectorsError::ConnectorNotFound)
     );
 
@@ -637,7 +694,12 @@ fn connector_supervisor_report_failure_backoff_and_threshold() {
 
     let _ = supervisor.disable("c1", "off");
     assert_eq!(
-        supervisor.report_failure("c1", ReportFailureInput { reason: "x".to_string() }),
+        supervisor.report_failure(
+            "c1",
+            ReportFailureInput {
+                reason: "x".to_string()
+            }
+        ),
         Err(ConnectorsError::ConnectorDisabled)
     );
 }
@@ -645,7 +707,10 @@ fn connector_supervisor_report_failure_backoff_and_threshold() {
 #[test]
 fn connector_supervisor_restart_resets_state() {
     let supervisor = Supervisor::new();
-    assert_eq!(supervisor.restart("missing"), Err(ConnectorsError::ConnectorNotFound));
+    assert_eq!(
+        supervisor.restart("missing"),
+        Err(ConnectorsError::ConnectorNotFound)
+    );
     let (connector, _) = supervisor
         .register(RegisterInput {
             connector_id: "c1".to_string(),
@@ -654,7 +719,12 @@ fn connector_supervisor_restart_resets_state() {
         })
         .expect("register");
     let _ = supervisor
-        .report_failure(&connector.connector_id, ReportFailureInput { reason: "x".to_string() })
+        .report_failure(
+            &connector.connector_id,
+            ReportFailureInput {
+                reason: "x".to_string(),
+            },
+        )
         .expect("report failure");
 
     let restarted = supervisor.restart("c1").expect("restart");
@@ -665,13 +735,19 @@ fn connector_supervisor_restart_resets_state() {
     assert!(restarted.last_restart_at.is_some());
 
     let _ = supervisor.disable("c1", "off");
-    assert_eq!(supervisor.restart("c1"), Err(ConnectorsError::ConnectorDisabled));
+    assert_eq!(
+        supervisor.restart("c1"),
+        Err(ConnectorsError::ConnectorDisabled)
+    );
 }
 
 #[test]
 fn connector_supervisor_disable_and_re_enable() {
     let supervisor = Supervisor::new();
-    assert_eq!(supervisor.disable("missing", "x"), Err(ConnectorsError::ConnectorNotFound));
+    assert_eq!(
+        supervisor.disable("missing", "x"),
+        Err(ConnectorsError::ConnectorNotFound)
+    );
     let (connector, _) = supervisor
         .register(RegisterInput {
             connector_id: "c1".to_string(),
@@ -680,22 +756,34 @@ fn connector_supervisor_disable_and_re_enable() {
         })
         .expect("register");
     let _ = supervisor
-        .report_failure(&connector.connector_id, ReportFailureInput { reason: "x".to_string() })
+        .report_failure(
+            &connector.connector_id,
+            ReportFailureInput {
+                reason: "x".to_string(),
+            },
+        )
         .expect("report failure");
 
-    let disabled = supervisor.disable("c1", "integration disconnected").expect("disable");
+    let disabled = supervisor
+        .disable("c1", "integration disconnected")
+        .expect("disable");
     assert_eq!(disabled.status, Status::Disabled);
     assert_eq!(disabled.disabled_reason, "integration disconnected");
     assert_eq!(disabled.backoff_seconds, 0);
     assert_eq!(disabled.next_restart_at, None);
 
-    let disabled_again = supervisor.disable("c1", "other reason").expect("disable again");
+    let disabled_again = supervisor
+        .disable("c1", "other reason")
+        .expect("disable again");
     assert_eq!(disabled_again.disabled_reason, "other reason");
 
     let enabled = supervisor.re_enable("c1").expect("re-enable");
     assert_eq!(enabled.status, Status::Registered);
     assert_eq!(enabled.disabled_reason, "");
-    assert_eq!(supervisor.re_enable("missing"), Err(ConnectorsError::ConnectorNotFound));
+    assert_eq!(
+        supervisor.re_enable("missing"),
+        Err(ConnectorsError::ConnectorNotFound)
+    );
 }
 
 #[test]
@@ -762,8 +850,12 @@ fn connector_supervisor_with_connector_mutation_serializes_and_propagates() {
     // The closure may call supervisor methods without deadlocking (the
     // per-connector mutation lock and the registry lock are independent).
     let result = supervisor.with_connector_mutation("c1", || {
-        let connector = supervisor
-            .report_health("c1", ReportHealthInput { status: Status::Healthy })?;
+        let connector = supervisor.report_health(
+            "c1",
+            ReportHealthInput {
+                status: Status::Healthy,
+            },
+        )?;
         assert_eq!(connector.status, Status::Healthy);
         Ok(())
     });
@@ -803,11 +895,20 @@ fn core_invariant_areas_are_ordered_and_wired() {
         (ConformanceArea::TenantOwnership, "tenant_ownership"),
         (ConformanceArea::PermissionGating, "permission_gating"),
         (ConformanceArea::Redaction, "redaction"),
-        (ConformanceArea::ActiveTenantAccountBinding, "active_tenant_account_binding"),
+        (
+            ConformanceArea::ActiveTenantAccountBinding,
+            "active_tenant_account_binding",
+        ),
         (ConformanceArea::InboundIdentity, "inbound_identity"),
         (ConformanceArea::DurableDedupe, "durable_dedupe"),
-        (ConformanceArea::StableRoutingDecisions, "stable_routing_decisions"),
-        (ConformanceArea::MinimumForegroundReply, "minimum_foreground_reply"),
+        (
+            ConformanceArea::StableRoutingDecisions,
+            "stable_routing_decisions",
+        ),
+        (
+            ConformanceArea::MinimumForegroundReply,
+            "minimum_foreground_reply",
+        ),
         (ConformanceArea::RequiredDiagnostics, "required_diagnostics"),
         (ConformanceArea::DeliverySeparation, "delivery_separation"),
     ];
@@ -865,7 +966,9 @@ fn validate_capability_profile_rejects_failing_core_invariant() {
 
     // A missing area counts as a failure (Go zero value).
     let mut profile = passing_profile();
-    profile.core_invariant_results.remove(&ConformanceArea::DurableDedupe);
+    profile
+        .core_invariant_results
+        .remove(&ConformanceArea::DurableDedupe);
     assert_eq!(
         validate_capability_profile(&profile),
         Err(ConnectorsError::CoreInvariantFailed)
@@ -968,10 +1071,10 @@ fn run_matrix_case_declares_group_room_evidence_capabilities() {
             .any(|r| r.conformance_result_id == "conf_group_room_evidence_redaction")
     );
     assert!(
-        results.iter().any(|r|
-            r.conformance_result_id
-                == "conf_group_room_evidence_group_room_mention_evidence"
-        )
+        results
+            .iter()
+            .any(|r| r.conformance_result_id
+                == "conf_group_room_evidence_group_room_mention_evidence")
     );
 }
 
@@ -1002,7 +1105,9 @@ fn run_matrix_case_declares_handoff_capabilities() {
         Some(SurfaceSupport::Limited)
     );
     assert_eq!(
-        profile.handoff_capabilities.first_response_source_references,
+        profile
+            .handoff_capabilities
+            .first_response_source_references,
         Some(SurfaceSupport::Supported)
     );
 
@@ -1011,8 +1116,14 @@ fn run_matrix_case_declares_handoff_capabilities() {
         .map(|r| (r.area.as_str(), r.result))
         .collect();
     let want = [
-        (HANDOFF_SURFACE_SOURCE_SUPPORT, ConformanceResultStatus::Supported),
-        (HANDOFF_SURFACE_DESTINATION_SUPPORT, ConformanceResultStatus::Limited),
+        (
+            HANDOFF_SURFACE_SOURCE_SUPPORT,
+            ConformanceResultStatus::Supported,
+        ),
+        (
+            HANDOFF_SURFACE_DESTINATION_SUPPORT,
+            ConformanceResultStatus::Limited,
+        ),
         (
             HANDOFF_SURFACE_FIRST_RESPONSE_SOURCE_REFERENCES,
             ConformanceResultStatus::Supported,
@@ -1210,7 +1321,10 @@ fn surface_result_maps_support_levels() {
 
 #[test]
 fn core_reason_code_marks_only_failures() {
-    assert_eq!(core_reason_code(ConformanceResultStatus::Fail), "core_invariant_failed");
+    assert_eq!(
+        core_reason_code(ConformanceResultStatus::Fail),
+        "core_invariant_failed"
+    );
     assert_eq!(core_reason_code(ConformanceResultStatus::Pass), "");
     assert_eq!(core_reason_code(ConformanceResultStatus::Supported), "");
     assert_eq!(core_reason_code(ConformanceResultStatus::Limited), "");

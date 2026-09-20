@@ -5,9 +5,9 @@
 use chrono::Utc;
 use kura_identity::auth::{AccessToken, Pairing, PairingMode, PairingStatus, TokenStatus};
 use kura_identity::{
-    AuditEventFilter, InvitationFilter, LifecycleStatus, Membership, MembershipFilter,
-    Principal, PrincipalFilter, PrincipalKind, Role, Tenant, TenantAuditEvent, TenantFilter,
-    TenantInvitation, TenantKind, TokenTenantGrant,
+    AuditEventFilter, InvitationFilter, LifecycleStatus, Membership, MembershipFilter, Principal,
+    PrincipalFilter, PrincipalKind, Role, Tenant, TenantAuditEvent, TenantFilter, TenantInvitation,
+    TenantKind, TokenTenantGrant,
 };
 use kura_store::SQLiteStore;
 
@@ -167,8 +167,12 @@ fn tenant_round_trips_and_filters() {
     let dir = temp_dir("identity_tenant");
     let store = SQLiteStore::new(&dir).unwrap();
 
-    store.upsert_tenant(&make_tenant("ten_1", TenantKind::Personal)).unwrap();
-    store.upsert_tenant(&make_tenant("ten_2", TenantKind::Organization)).unwrap();
+    store
+        .upsert_tenant(&make_tenant("ten_1", TenantKind::Personal))
+        .unwrap();
+    store
+        .upsert_tenant(&make_tenant("ten_2", TenantKind::Organization))
+        .unwrap();
 
     let got = store.get_tenant("ten_1").unwrap().expect("tenant present");
     assert_eq!(got.tenant_id, "ten_1");
@@ -207,12 +211,17 @@ fn principal_round_trips_and_membership_join_filter() {
     let dir = temp_dir("identity_principal");
     let store = SQLiteStore::new(&dir).unwrap();
 
-    store.upsert_tenant(&make_tenant("ten_1", TenantKind::Personal)).unwrap();
+    store
+        .upsert_tenant(&make_tenant("ten_1", TenantKind::Personal))
+        .unwrap();
     let principal = make_principal("prn_1");
     store.upsert_principal(&principal).unwrap();
     store.upsert_principal(&make_principal("prn_2")).unwrap();
 
-    let got = store.get_principal("prn_1").unwrap().expect("principal present");
+    let got = store
+        .get_principal("prn_1")
+        .unwrap()
+        .expect("principal present");
     assert_eq!(got.principal_id, "prn_1");
     assert_eq!(got.principal_kind, PrincipalKind::User);
     assert_eq!(got.display_name, "principal prn_1");
@@ -363,7 +372,12 @@ fn token_tenant_grant_round_trips_through_sqlite() {
     assert_eq!(got.is_default, true);
     assert_eq!(got.status, LifecycleStatus::Active);
     assert_eq!(got.granted_by_principal_id, "prn_1");
-    assert!(store.list_token_tenant_grants("tok_missing").unwrap().is_empty());
+    assert!(
+        store
+            .list_token_tenant_grants("tok_missing")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -389,7 +403,10 @@ fn tenant_audit_event_round_trips_through_sqlite() {
     let stored = store.append_tenant_audit_event(&event).unwrap();
     // Missing id and zero created_at are filled in, mirroring the Go port.
     assert!(stored.audit_event_id.starts_with("audit_"));
-    assert_ne!(stored.created_at, chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+    assert_ne!(
+        stored.created_at,
+        chrono::DateTime::<chrono::Utc>::UNIX_EPOCH
+    );
     event.audit_event_id = stored.audit_event_id.clone();
 
     let listed = store

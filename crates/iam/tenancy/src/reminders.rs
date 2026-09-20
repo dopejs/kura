@@ -1,7 +1,7 @@
 //! Tenant-aware accessor for reminders, reminder_occurrences, reminder_actions.
 //! Port of daemon/internal/store/tenancy/reminders.go.
 
-use crate::{emit_denial, require, TenancyError};
+use crate::{TenancyError, emit_denial, require};
 use kura_store::reminders::{ReminderOccurrenceRecord, ReminderRecord};
 
 /// Tenant-aware accessor for the reminders family.
@@ -22,8 +22,15 @@ impl Reminders {
 
     pub fn upsert_reminder_for_tenant(&self, record: &ReminderRecord) -> Result<(), TenancyError> {
         let tenant_id = require()?;
-        self.store.upsert_reminder(record).map_err(TenancyError::from)?;
-        match self.store.bind_row_tenant("reminders", "reminder_id", &record.reminder_id, &tenant_id) {
+        self.store
+            .upsert_reminder(record)
+            .map_err(TenancyError::from)?;
+        match self.store.bind_row_tenant(
+            "reminders",
+            "reminder_id",
+            &record.reminder_id,
+            &tenant_id,
+        ) {
             Err(e) if crate::SQLiteStore::is_cross_tenant_row(&e) => {
                 self.emit("store:UpsertReminderForTenant", "reminder");
                 Err(TenancyError::CrossTenantWrite)
@@ -32,12 +39,25 @@ impl Reminders {
         }
     }
 
-    pub fn upsert_occurrence_for_tenant(&self, record: &ReminderOccurrenceRecord) -> Result<(), TenancyError> {
+    pub fn upsert_occurrence_for_tenant(
+        &self,
+        record: &ReminderOccurrenceRecord,
+    ) -> Result<(), TenancyError> {
         let tenant_id = require()?;
-        self.store.upsert_reminder_occurrence(record).map_err(TenancyError::from)?;
-        match self.store.bind_row_tenant("reminder_occurrences", "occurrence_id", &record.occurrence_id, &tenant_id) {
+        self.store
+            .upsert_reminder_occurrence(record)
+            .map_err(TenancyError::from)?;
+        match self.store.bind_row_tenant(
+            "reminder_occurrences",
+            "occurrence_id",
+            &record.occurrence_id,
+            &tenant_id,
+        ) {
             Err(e) if crate::SQLiteStore::is_cross_tenant_row(&e) => {
-                self.emit("store:UpsertReminderOccurrenceForTenant", "reminder_occurrence");
+                self.emit(
+                    "store:UpsertReminderOccurrenceForTenant",
+                    "reminder_occurrence",
+                );
                 Err(TenancyError::CrossTenantWrite)
             }
             other => other.map_err(TenancyError::from),

@@ -148,7 +148,9 @@ impl SessionRouter {
             .sessions_by_id
             .insert(session.session_id.clone(), session.clone());
         state.session_ids.push(session.session_id.clone());
-        state.by_routing_key.insert(routing_key, session.session_id.clone());
+        state
+            .by_routing_key
+            .insert(routing_key, session.session_id.clone());
 
         Ok((session, true))
     }

@@ -279,9 +279,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || needle.len() > haystack.len() {
         return None;
     }
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 fn is_ident_byte(b: u8) -> bool {
@@ -426,7 +424,10 @@ some prose
             if e.classification != Classification::TenantOwned {
                 continue;
             }
-            if e.tenant_id_source.trim().eq_ignore_ascii_case("not_applicable") {
+            if e.tenant_id_source
+                .trim()
+                .eq_ignore_ascii_case("not_applicable")
+            {
                 failures.push(format!(
                     "{}: tenant_owned row must not carry tenantIdSource=not_applicable",
                     e.name
@@ -445,7 +446,11 @@ some prose
                 }
             }
         }
-        assert!(failures.is_empty(), "classification invariant violations:\n{}", failures.join("\n"));
+        assert!(
+            failures.is_empty(),
+            "classification invariant violations:\n{}",
+            failures.join("\n")
+        );
     }
 
     /// Reports whether a cell is semantically empty: literal "none" or

@@ -9,6 +9,7 @@ import {
   type AgentProfileMutationInput,
   type ApprovalResource,
   type AuthMeResponse,
+  type MemoryOverview,
   type BillingDenialResource,
   type BillingQuotaDashboardResponse,
   type BillingQuotaStatusItem,
@@ -55,6 +56,7 @@ import { ChannelManagementView } from "../features/channel-management";
 import { AgentProfileEditor } from "../features/agent-profiles/AgentProfileEditor";
 import { AgentProfileHistory } from "../features/agent-profiles/AgentProfileHistory";
 import { ThreadLifecycleView } from "../features/thread-lifecycle";
+import { MemoryOverviewPanel } from "../features/memory-overview";
 
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:19192";
 const DEFAULT_RUN_GOAL = "Run an operator shell smoke check.";
@@ -101,6 +103,7 @@ type ShellSnapshot = {
   channelSupportEvidence: ChannelManagementSupportEvidence | null;
   threads: ThreadListResponse | null;
   profiles: AgentProfileListResponse | null;
+  memoryOverview: MemoryOverview | null;
   selectedProfile: AgentProfileDetailResponse | null;
 };
 
@@ -153,6 +156,7 @@ const EMPTY_SHELL: ShellSnapshot = {
   selectedChannelConnector: null,
   channelSupportEvidence: null,
   threads: null,
+  memoryOverview: null,
   profiles: null,
   selectedProfile: null
 };
@@ -406,12 +410,21 @@ export function App() {
         selectedProfilePromise
       ]);
 
+      // The memory inventory is best-effort: a daemon without the memory
+      // plugin enabled answers 500 here, and that must not take the whole
+      // shell down with it.
+      const memoryOverview: MemoryOverview | null = await Promise.resolve()
+        .then(() => scopedClient.getMemoryOverview(undefined, scopedOptions))
+        .then((value) => value ?? null)
+        .catch(() => null);
+
       if (generation !== generationRef.current || activeTenantRef.current !== tenant.tenantId) {
         return;
       }
 
       setShell({
         onboarding,
+        memoryOverview,
         activation,
         activationDiagnostics,
         setupTargets: setupTargets.items,
@@ -1676,6 +1689,27 @@ export function App() {
         error={activeTenantStatus === "denied" ? "Thread inspection unavailable until tenant access is restored." : ""}
         onRefresh={() => {
           void refreshShell({ tenantId: activeTenantId });
+        }}
+      />
+
+      <MemoryOverviewPanel
+        overview={shell.memoryOverview}
+        loading={status === "loading"}
+        denied={activeTenantStatus === "denied"}
+        error={activeTenantStatus === "denied" ? "Memory inventory unavailable until tenant access is restored." : ""}
+        onRefresh={() => {
+          void refreshShell({ soft: true, tenantId: activeTenantId });
+        }}
+        onRebuildIndexes={() => {
+          void (async () => {
+            try {
+              const result = await buildClient(activeTenantId).rebuildMemoryIndexes(undefined, tenantOptions);
+              setActionMessage(`Retrieval index rebuilt: ${result.clearedEmbeddings} vector(s) cleared; they are recomputed on the next retrieval.`);
+              await refreshShell({ soft: true, tenantId: activeTenantId });
+            } catch (err) {
+              setActionMessage(`Rebuild failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          })();
         }}
       />
 

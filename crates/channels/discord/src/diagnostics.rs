@@ -29,7 +29,10 @@ pub fn classify_discord_error_message(message: &str) -> String {
     if contains_any(&message, &["401", "unauthorized", "token"]) {
         return "auth_error".to_string();
     }
-    if contains_any(&message, &["403", "forbidden", "permission", "message content"]) {
+    if contains_any(
+        &message,
+        &["403", "forbidden", "permission", "message content"],
+    ) {
         return "permission_missing".to_string();
     }
     if contains_any(&message, &["429", "rate limit"]) {
@@ -47,7 +50,9 @@ pub fn classify_discord_error_message(message: &str) -> String {
 /// Go `DiagnosticReasonForError`: classified errors map their class onto the
 /// reason code; everything else falls back to the message scan.
 #[must_use]
-pub fn diagnostic_reason_for_error(err: &(dyn std::error::Error + 'static)) -> DiagnosticReasonCode {
+pub fn diagnostic_reason_for_error(
+    err: &(dyn std::error::Error + 'static),
+) -> DiagnosticReasonCode {
     if let Some(discord) = err.downcast_ref::<DiscordError>() {
         if let DiscordError::Classified { class, .. } = discord {
             match class.as_str() {
@@ -69,10 +74,16 @@ pub fn diagnostic_reason_for_error(err: &(dyn std::error::Error + 'static)) -> D
 #[must_use]
 pub fn diagnostic_reason_for_error_message(message: &str) -> DiagnosticReasonCode {
     let message = message.to_lowercase();
-    if contains_any(&message, &["401", "unauthorized", "token", "invalid session"]) {
+    if contains_any(
+        &message,
+        &["401", "unauthorized", "token", "invalid session"],
+    ) {
         return DiagnosticReasonCode::AuthMissing;
     }
-    if contains_any(&message, &["403", "forbidden", "permission", "message content"]) {
+    if contains_any(
+        &message,
+        &["403", "forbidden", "permission", "message content"],
+    ) {
         return DiagnosticReasonCode::PermissionMissing;
     }
     if contains_any(&message, &["429", "rate limit"]) {
@@ -235,7 +246,6 @@ fn severity_for_diagnostic(reason: DiagnosticReasonCode) -> &'static str {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,11 +261,31 @@ mod tests {
     #[test]
     fn diagnostic_reason_for_error_maps_discord_failure_families() {
         let cases = [
-            ("auth", "401 Unauthorized: invalid token", DiagnosticReasonCode::AuthMissing),
-            ("permission", "403 Forbidden: missing send messages permission", DiagnosticReasonCode::PermissionMissing),
-            ("rate_limit", "429 rate limit exceeded", DiagnosticReasonCode::RateLimited),
-            ("network", "gateway connection reset", DiagnosticReasonCode::NetworkFailed),
-            ("provider", "Discord provider unavailable 5xx", DiagnosticReasonCode::ProviderUnavailable),
+            (
+                "auth",
+                "401 Unauthorized: invalid token",
+                DiagnosticReasonCode::AuthMissing,
+            ),
+            (
+                "permission",
+                "403 Forbidden: missing send messages permission",
+                DiagnosticReasonCode::PermissionMissing,
+            ),
+            (
+                "rate_limit",
+                "429 rate limit exceeded",
+                DiagnosticReasonCode::RateLimited,
+            ),
+            (
+                "network",
+                "gateway connection reset",
+                DiagnosticReasonCode::NetworkFailed,
+            ),
+            (
+                "provider",
+                "Discord provider unavailable 5xx",
+                DiagnosticReasonCode::ProviderUnavailable,
+            ),
         ];
         for (name, message, want) in cases {
             assert_eq!(
@@ -269,31 +299,76 @@ mod tests {
     #[test]
     fn diagnostic_reason_for_error_uses_classified_class() {
         let err = wrap_discord_error("send discord reply", "401 Unauthorized: invalid token");
-        assert_eq!(diagnostic_reason_for_error(&err), DiagnosticReasonCode::AuthMissing);
+        assert_eq!(
+            diagnostic_reason_for_error(&err),
+            DiagnosticReasonCode::AuthMissing
+        );
         let err = wrap_discord_error("send discord reply", "403 Forbidden: missing permission");
-        assert_eq!(diagnostic_reason_for_error(&err), DiagnosticReasonCode::PermissionMissing);
+        assert_eq!(
+            diagnostic_reason_for_error(&err),
+            DiagnosticReasonCode::PermissionMissing
+        );
         let err = wrap_discord_error("open discord session", "429 rate limit exceeded");
-        assert_eq!(diagnostic_reason_for_error(&err), DiagnosticReasonCode::RateLimited);
+        assert_eq!(
+            diagnostic_reason_for_error(&err),
+            DiagnosticReasonCode::RateLimited
+        );
         let err = wrap_discord_error("open discord session", "gateway connection reset");
-        assert_eq!(diagnostic_reason_for_error(&err), DiagnosticReasonCode::NetworkFailed);
+        assert_eq!(
+            diagnostic_reason_for_error(&err),
+            DiagnosticReasonCode::NetworkFailed
+        );
         let err = wrap_discord_error("send discord reply", "provider unavailable 5xx");
-        assert_eq!(diagnostic_reason_for_error(&err), DiagnosticReasonCode::ProviderUnavailable);
+        assert_eq!(
+            diagnostic_reason_for_error(&err),
+            DiagnosticReasonCode::ProviderUnavailable
+        );
         // transport_error class falls through to the message scan.
         let err = wrap_discord_error("send discord reply", "something else broke");
-        assert_eq!(diagnostic_reason_for_error(&err), DiagnosticReasonCode::UnknownConnectorFailure);
+        assert_eq!(
+            diagnostic_reason_for_error(&err),
+            DiagnosticReasonCode::UnknownConnectorFailure
+        );
     }
 
     #[test]
     fn classify_discord_error_class_strings() {
-        assert_eq!(classify_discord_error_message("401 Unauthorized"), "auth_error");
-        assert_eq!(classify_discord_error_message("invalid token"), "auth_error");
-        assert_eq!(classify_discord_error_message("403 forbidden"), "permission_missing");
-        assert_eq!(classify_discord_error_message("missing send messages permission"), "permission_missing");
-        assert_eq!(classify_discord_error_message("message content intent not enabled"), "permission_missing");
-        assert_eq!(classify_discord_error_message("429 rate limit"), "rate_limited");
-        assert_eq!(classify_discord_error_message("service unavailable 5xx"), "provider_unavailable");
-        assert_eq!(classify_discord_error_message("gateway connection reset"), "network_failed");
-        assert_eq!(classify_discord_error_message("unknown thing"), "transport_error");
+        assert_eq!(
+            classify_discord_error_message("401 Unauthorized"),
+            "auth_error"
+        );
+        assert_eq!(
+            classify_discord_error_message("invalid token"),
+            "auth_error"
+        );
+        assert_eq!(
+            classify_discord_error_message("403 forbidden"),
+            "permission_missing"
+        );
+        assert_eq!(
+            classify_discord_error_message("missing send messages permission"),
+            "permission_missing"
+        );
+        assert_eq!(
+            classify_discord_error_message("message content intent not enabled"),
+            "permission_missing"
+        );
+        assert_eq!(
+            classify_discord_error_message("429 rate limit"),
+            "rate_limited"
+        );
+        assert_eq!(
+            classify_discord_error_message("service unavailable 5xx"),
+            "provider_unavailable"
+        );
+        assert_eq!(
+            classify_discord_error_message("gateway connection reset"),
+            "network_failed"
+        );
+        assert_eq!(
+            classify_discord_error_message("unknown thing"),
+            "transport_error"
+        );
     }
 
     // Go TestBuildDiagnosticStateUsesFreshnessRetentionAndRedactedEvidence
@@ -311,12 +386,18 @@ mod tests {
         .expect("build diagnostic state");
         assert_eq!(state.freshness_state, FreshnessState::Fresh);
         assert_eq!(state.retention_expires_at - now, Duration::days(90));
-        assert_eq!(state.safe_evidence.get("permission").map(String::as_str), Some("send_messages"));
+        assert_eq!(
+            state.safe_evidence.get("permission").map(String::as_str),
+            Some("send_messages")
+        );
         assert_eq!(state.redaction_status, RedactionStatus::Redacted);
         assert_eq!(state.status, LifecycleState::PermissionBlocked);
         assert_eq!(state.remediation_owner, RemediationOwner::Admin);
         assert_eq!(state.retry_safety, RetrySafety::Blocked);
-        assert_eq!(state.diagnostic_state_id, "diag_discord-main_permission_missing");
+        assert_eq!(
+            state.diagnostic_state_id,
+            "diag_discord-main_permission_missing"
+        );
     }
 
     #[test]
@@ -330,6 +411,9 @@ mod tests {
             ts(),
         )
         .expect_err("connector id required");
-        assert!(matches!(err, crate::DiscordError::DiagnosticConnectorRequired));
+        assert!(matches!(
+            err,
+            crate::DiscordError::DiagnosticConnectorRequired
+        ));
     }
 }

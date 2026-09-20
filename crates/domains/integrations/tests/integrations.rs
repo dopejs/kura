@@ -1,12 +1,11 @@
-
 use chrono::Utc;
 use kura_integrations::{
-    backend_kind_supports_domain, classify_provider_evidence,
-    diagnostic_failure_for_operation_failure, BackendBinding, BackendKind, CreateInput,
-    DiagnosticInspectionInput, DiagnosticManager, DiagnosticReasonCode, DiagnosticRetentionState,
-    FeishuLarkDiagnosticBackend, FreshnessState, IntegrationError, Manager, ProbeKind,
-    ProviderDiagnosticEvidence, ReadinessStatus, RedactionStatus, Resource,
-    UpdateReadinessInput, new_diagnostic_retention_record, redact_diagnostic_summary,
+    BackendBinding, BackendKind, CreateInput, DiagnosticInspectionInput, DiagnosticManager,
+    DiagnosticReasonCode, DiagnosticRetentionState, FeishuLarkDiagnosticBackend, FreshnessState,
+    IntegrationError, Manager, ProbeKind, ProviderDiagnosticEvidence, ReadinessStatus,
+    RedactionStatus, Resource, UpdateReadinessInput, backend_kind_supports_domain,
+    classify_provider_evidence, diagnostic_failure_for_operation_failure,
+    new_diagnostic_retention_record, redact_diagnostic_summary,
 };
 use serde_json::Map;
 
@@ -32,7 +31,9 @@ fn create_input(integration_id: &str, domain_kind: &str) -> CreateInput {
 #[test]
 fn create_sets_not_configured() {
     let manager = manager();
-    let resource = manager.create(create_input("cal-1", "calendar")).expect("create");
+    let resource = manager
+        .create(create_input("cal-1", "calendar"))
+        .expect("create");
     assert_eq!(resource.readiness_status, ReadinessStatus::NotConfigured);
     assert_eq!(resource.integration_id, "cal-1");
     assert_eq!(resource.domain_kind, "calendar");
@@ -41,7 +42,9 @@ fn create_sets_not_configured() {
 #[test]
 fn update_readiness_to_healthy() {
     let manager = manager();
-    let _ = manager.create(create_input("cal-1", "calendar")).expect("create");
+    let _ = manager
+        .create(create_input("cal-1", "calendar"))
+        .expect("create");
     let resource = manager
         .update_readiness(
             "cal-1",
@@ -64,18 +67,31 @@ fn create_rejects_missing_fields() {
 
 #[test]
 fn fake_backend_supports_calendar_and_mail() {
-    assert!(backend_kind_supports_domain(BackendKind::FakeLocal, "calendar"));
+    assert!(backend_kind_supports_domain(
+        BackendKind::FakeLocal,
+        "calendar"
+    ));
     assert!(backend_kind_supports_domain(BackendKind::FakeLocal, "mail"));
-    assert!(!backend_kind_supports_domain(BackendKind::FakeLocal, "reminders"));
-    assert!(!backend_kind_supports_domain(BackendKind::AdapterRpc, "calendar"));
+    assert!(!backend_kind_supports_domain(
+        BackendKind::FakeLocal,
+        "reminders"
+    ));
+    assert!(!backend_kind_supports_domain(
+        BackendKind::AdapterRpc,
+        "calendar"
+    ));
 }
 
 #[test]
 fn run_probe_returns_completed() {
     let manager = manager();
-    let _ = manager.create(create_input("cal-1", "calendar")).expect("create");
+    let _ = manager
+        .create(create_input("cal-1", "calendar"))
+        .expect("create");
     let input = Map::new();
-    let (_resource, result, summary) = manager.run_probe("cal-1", ProbeKind::Inspect, &input).expect("probe");
+    let (_resource, result, summary) = manager
+        .run_probe("cal-1", ProbeKind::Inspect, &input)
+        .expect("probe");
     assert_eq!(result.status, "completed");
     assert_eq!(summary.integration_id, "cal-1");
 }
@@ -87,7 +103,10 @@ fn classify_provider_evidence_maps_token_expired() {
         ..ProviderDiagnosticEvidence::default()
     };
     let classification = classify_provider_evidence(&evidence);
-    assert_eq!(classification.reason_code, DiagnosticReasonCode::TokenExpired);
+    assert_eq!(
+        classification.reason_code,
+        DiagnosticReasonCode::TokenExpired
+    );
     assert!(!classification.ambiguous);
 }
 
@@ -99,7 +118,10 @@ fn classify_provider_evidence_feishu_scope() {
         ..ProviderDiagnosticEvidence::default()
     };
     let classification = classify_provider_evidence(&evidence);
-    assert_eq!(classification.reason_code, DiagnosticReasonCode::ScopeMissing);
+    assert_eq!(
+        classification.reason_code,
+        DiagnosticReasonCode::ScopeMissing
+    );
 }
 
 #[test]
@@ -165,7 +187,9 @@ fn feishu_lark_backend_run_probe_healthy() {
         },
         ..Resource::default()
     };
-    let result = backend.run_probe(&resource, ProbeKind::Inspect, &serde_json::Map::new()).unwrap();
+    let result = backend
+        .run_probe(&resource, ProbeKind::Inspect, &serde_json::Map::new())
+        .unwrap();
     assert_eq!(result.status, "completed");
 }
 
@@ -180,7 +204,9 @@ fn feishu_lark_backend_rejects_unsupported_domain() {
         },
         ..Resource::default()
     };
-    let err = backend.run_probe(&resource, ProbeKind::Inspect, &serde_json::Map::new()).unwrap_err();
+    let err = backend
+        .run_probe(&resource, ProbeKind::Inspect, &serde_json::Map::new())
+        .unwrap_err();
     assert!(matches!(err, IntegrationError::ProbeUnsupported));
 }
 

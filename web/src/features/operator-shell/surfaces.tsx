@@ -13,6 +13,7 @@ import type {
   TriagePolicyResource,
   WebhookEndpointResource,
   MemoryAssetResource,
+  MemoryOverview,
 } from "@kura/client";
 
 import type { ViewState } from "./navigation";
@@ -254,6 +255,85 @@ export function MemoryReviewView({
           </li>
         ))}
       </ul>
+    </SurfacePanel>
+  );
+}
+
+/**
+ * "What is remembered" — the tenant-level inventory (counts per layer and
+ * status, the derived-index size, and the two recency lists). The asset list
+ * answers the question only for someone who already knows what to look for;
+ * this answers it for someone who does not.
+ *
+ * `onRebuildIndexes` is the repair path: it drops the derived retrieval index
+ * so it is recomputed. It deletes no memory, which is why it is offered here
+ * rather than behind a warning.
+ */
+export function MemoryOverviewView({
+  overview,
+  state,
+  reason,
+  onRebuildIndexes,
+}: {
+  overview?: MemoryOverview;
+  state: ViewState;
+  reason?: string;
+  onRebuildIndexes?: () => void;
+}) {
+  const readyCount = (overview?.counts ?? [])
+    .filter((c) => c.status === "ready")
+    .reduce((sum, c) => sum + c.count, 0);
+  const indexed = overview?.derivedEmbeddings ?? 0;
+  // Surfacing the shortfall rather than only the two numbers: an index that
+  // has silently stopped being written looks identical to a healthy one until
+  // someone subtracts.
+  const indexLag = readyCount - indexed;
+
+  return (
+    <SurfacePanel title="What is remembered" state={state} reason={reason}>
+      <dl className="surface__stats">
+        <dt>Remembered</dt>
+        <dd>{readyCount}</dd>
+        <dt>Retrieval index</dt>
+        <dd>
+          {indexed}
+          {indexLag > 0 ? <span className="surface__meta"> ({indexLag} not yet indexed)</span> : null}
+        </dd>
+      </dl>
+      <ul className="surface__list">
+        {(overview?.counts ?? []).map((c) => (
+          <li key={`${c.layer}-${c.status}`} className="surface__row">
+            <span className="surface__name">{c.layer}</span>
+            <span className={`status-chip status-${c.status}`}>{c.status}</span>
+            <span className="surface__meta">{c.count}</span>
+          </li>
+        ))}
+      </ul>
+      <h4 className="surface__subtitle">Recently remembered</h4>
+      <ul className="surface__list">
+        {(overview?.recentlyRemembered ?? []).map((e) => (
+          <li key={e.assetId} className="surface__row">
+            <span className="surface__name">{e.title || e.assetId}</span>
+            <span className="surface__meta">{e.layer}</span>
+            <span className="surface__meta">{e.updatedAt}</span>
+          </li>
+        ))}
+      </ul>
+      <h4 className="surface__subtitle">Recently forgotten</h4>
+      <ul className="surface__list">
+        {(overview?.recentlyForgotten ?? []).map((e) => (
+          <li key={e.assetId} className="surface__row">
+            <span className="surface__name">{e.title || e.assetId}</span>
+            <span className={`status-chip status-${e.status}`}>{e.status}</span>
+            <span className="surface__meta">{e.updatedAt}</span>
+          </li>
+        ))}
+      </ul>
+      {onRebuildIndexes ? (
+        <button type="button" onClick={onRebuildIndexes}>
+          Rebuild retrieval index
+        </button>
+      ) : null}
     </SurfacePanel>
   );
 }

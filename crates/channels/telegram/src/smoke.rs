@@ -65,7 +65,11 @@ pub fn build_smoke_evidence(input: SmokeInput) -> SmokeEvidence {
         id
     };
     let owner = input.owner.trim().to_string();
-    let owner = if owner.is_empty() { "operator".to_string() } else { owner };
+    let owner = if owner.is_empty() {
+        "operator".to_string()
+    } else {
+        owner
+    };
     let mut evidence = SmokeEvidence {
         smoke_evidence_id: id,
         tenant_id: input.tenant_id.trim().to_string(),
@@ -74,9 +78,10 @@ pub fn build_smoke_evidence(input: SmokeInput) -> SmokeEvidence {
         credential_mode: CredentialMode::Unavailable,
         owner,
         reason: first_non_empty(&[input.reason.trim(), "safe_credentials_unavailable"]),
-        remaining_risk: first_non_empty(
-            &[input.remaining_risk.trim(), "Live Telegram hosted smoke was not run."],
-        ),
+        remaining_risk: first_non_empty(&[
+            input.remaining_risk.trim(),
+            "Live Telegram hosted smoke was not run.",
+        ]),
         validated_at: now,
         retention_expires_at: now + chrono::Duration::days(90),
         redaction_status: RedactionStatus::Redacted,
@@ -98,7 +103,10 @@ pub fn build_smoke_evidence(input: SmokeInput) -> SmokeEvidence {
         return evidence;
     }
     evidence.status = SmokeStatus::Failed;
-    evidence.reason = first_non_empty(&[input.reason.trim(), DiagnosticReasonCode::UnknownConnectorFailure.as_str()]);
+    evidence.reason = first_non_empty(&[
+        input.reason.trim(),
+        DiagnosticReasonCode::UnknownConnectorFailure.as_str(),
+    ]);
     evidence
 }
 
@@ -108,7 +116,9 @@ mod tests {
     use chrono::TimeZone;
 
     fn ts(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(y, mo, d, h, mi, s).single().expect("valid timestamp")
+        Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
+            .single()
+            .expect("valid timestamp")
     }
 
     // Go TestBuildSmokeEvidenceStructuredSkipAndFakePass.

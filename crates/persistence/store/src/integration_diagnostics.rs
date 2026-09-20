@@ -17,10 +17,10 @@
 //! whose enum field holds the default variant (Go's zero value) is skipped.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, params_from_iter, types::Value, Row};
+use rusqlite::{Row, params, params_from_iter, types::Value};
 
-use crate::crud::{enum_str, now_rfc3339, null_string, opt_time_string};
 use crate::SQLiteStore;
+use crate::crud::{enum_str, now_rfc3339, null_string, opt_time_string};
 
 use kura_integrations::{
     DiagnosticReasonCode, DiagnosticResult, DiagnosticResultFilter, DiagnosticRetentionRecord,
@@ -92,12 +92,20 @@ impl SQLiteStore {
                     document,
                 ],
             )
-            .map_err(|e| format!("save integration diagnostic run {}: {e}", item.diagnostic_run_id))?;
+            .map_err(|e| {
+                format!(
+                    "save integration diagnostic run {}: {e}",
+                    item.diagnostic_run_id
+                )
+            })?;
         Ok(())
     }
 
     /// Go `SaveIntegrationDiagnosticResult`.
-    pub fn save_integration_diagnostic_result(&self, item: &DiagnosticResult) -> Result<(), String> {
+    pub fn save_integration_diagnostic_result(
+        &self,
+        item: &DiagnosticResult,
+    ) -> Result<(), String> {
         let document = serde_json::to_string(item)
             .map_err(|e| format!("marshal integration diagnostic result: {e}"))?;
 
@@ -154,8 +162,9 @@ impl SQLiteStore {
         now: DateTime<Utc>,
     ) -> Result<Vec<DiagnosticResult>, String> {
         let now = if is_unset_time(&now) { Utc::now() } else { now };
-        let mut sql =
-            String::from("SELECT document_json FROM integration_diagnostic_results WHERE tenant_id = ?");
+        let mut sql = String::from(
+            "SELECT document_json FROM integration_diagnostic_results WHERE tenant_id = ?",
+        );
         let mut args: Vec<Value> = vec![Value::Text(filter.tenant_id.trim().to_string())];
         if !filter.integration_id.trim().is_empty() {
             sql.push_str(" AND integration_id = ?");
@@ -188,7 +197,9 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("list integration diagnostic results: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let mut item: DiagnosticResult = scan_document(row)?;
@@ -206,8 +217,9 @@ impl SQLiteStore {
         now: DateTime<Utc>,
     ) -> Result<Vec<DiagnosticRun>, String> {
         let now = if is_unset_time(&now) { Utc::now() } else { now };
-        let mut sql =
-            String::from("SELECT document_json FROM integration_diagnostic_runs WHERE tenant_id = ?");
+        let mut sql = String::from(
+            "SELECT document_json FROM integration_diagnostic_runs WHERE tenant_id = ?",
+        );
         let mut args: Vec<Value> = vec![Value::Text(filter.tenant_id.trim().to_string())];
         if !filter.integration_id.trim().is_empty() {
             sql.push_str(" AND integration_id = ?");
@@ -240,7 +252,9 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("list integration diagnostic runs: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_document(row)?);
@@ -274,7 +288,9 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("get integration diagnostic run {run_id}: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(&args)).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(&args))
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -317,7 +333,12 @@ impl SQLiteStore {
                     document,
                 ],
             )
-            .map_err(|e| format!("save diagnostic retention record {}: {e}", record.retention_record_id))?;
+            .map_err(|e| {
+                format!(
+                    "save diagnostic retention record {}: {e}",
+                    record.retention_record_id
+                )
+            })?;
         Ok(())
     }
 

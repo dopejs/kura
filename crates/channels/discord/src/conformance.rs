@@ -62,24 +62,63 @@ pub fn conformance_profile_for_evidence(
     let allowlist_configured =
         !cfg.allowed_guild_ids.is_empty() || !cfg.allowed_channel_ids.is_empty();
     let surfaces = HashMap::from([
-        ("direct_message".to_string(), support_flag(cfg.respond_in_dm)),
-        ("group_channel".to_string(), support_flag(allowlist_configured)),
-        ("mention_gating".to_string(), support_flag(cfg.require_mention)),
+        (
+            "direct_message".to_string(),
+            support_flag(cfg.respond_in_dm),
+        ),
+        (
+            "group_channel".to_string(),
+            support_flag(allowlist_configured),
+        ),
+        (
+            "mention_gating".to_string(),
+            support_flag(cfg.require_mention),
+        ),
         ("room".to_string(), SurfaceSupport::Unsupported),
         ("voice".to_string(), SurfaceSupport::Unsupported),
         ("thread_reply".to_string(), SurfaceSupport::Limited),
         ("thinking_visibility".to_string(), SurfaceSupport::Limited),
-        ("incremental_visible_updates".to_string(), incremental_support),
+        (
+            "incremental_visible_updates".to_string(),
+            incremental_support,
+        ),
         ("rich_media".to_string(), SurfaceSupport::Unsupported),
-        ("placeholder_card_update".to_string(), SurfaceSupport::Unsupported),
-        ("provider_specific_stop".to_string(), SurfaceSupport::Unsupported),
-        ("connector_backed_delivery".to_string(), SurfaceSupport::Supported),
-        ("final_only_foreground_reply".to_string(), SurfaceSupport::Supported),
-        ("thinking_plus_final_reply".to_string(), SurfaceSupport::Supported),
-        ("thinking_plus_incremental".to_string(), SurfaceSupport::Unsupported),
-        ("equivalent_durable_identity".to_string(), SurfaceSupport::Unsupported),
-        ("standard_durable_identity".to_string(), SurfaceSupport::Supported),
-        ("blocked_route_classification".to_string(), SurfaceSupport::Supported),
+        (
+            "placeholder_card_update".to_string(),
+            SurfaceSupport::Unsupported,
+        ),
+        (
+            "provider_specific_stop".to_string(),
+            SurfaceSupport::Unsupported,
+        ),
+        (
+            "connector_backed_delivery".to_string(),
+            SurfaceSupport::Supported,
+        ),
+        (
+            "final_only_foreground_reply".to_string(),
+            SurfaceSupport::Supported,
+        ),
+        (
+            "thinking_plus_final_reply".to_string(),
+            SurfaceSupport::Supported,
+        ),
+        (
+            "thinking_plus_incremental".to_string(),
+            SurfaceSupport::Unsupported,
+        ),
+        (
+            "equivalent_durable_identity".to_string(),
+            SurfaceSupport::Unsupported,
+        ),
+        (
+            "standard_durable_identity".to_string(),
+            SurfaceSupport::Supported,
+        ),
+        (
+            "blocked_route_classification".to_string(),
+            SurfaceSupport::Supported,
+        ),
     ]);
     CapabilityProfile {
         profile_id: format!("profile_discord_{}", cfg.connector_id),
@@ -118,7 +157,6 @@ pub fn support_flag(enabled: bool) -> SurfaceSupport {
         SurfaceSupport::Unsupported
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -180,13 +218,16 @@ mod tests {
             ..HostedSetupInput::default()
         });
         let profile = conformance_profile_for_setup(&cfg, &setup, now);
-        validate_capability_profile(&profile).expect("validated hosted Discord profile passes core invariants");
+        validate_capability_profile(&profile)
+            .expect("validated hosted Discord profile passes core invariants");
         assert_eq!(
             profile.provider_surface_results.get("voice"),
             Some(&SurfaceSupport::Unsupported)
         );
         assert_eq!(
-            profile.provider_surface_results.get("connector_backed_delivery"),
+            profile
+                .provider_surface_results
+                .get("connector_backed_delivery"),
             Some(&SurfaceSupport::Supported)
         );
     }
@@ -216,7 +257,9 @@ mod tests {
             Some(&SurfaceSupport::Limited)
         );
         assert_eq!(
-            profile.provider_surface_results.get("incremental_visible_updates"),
+            profile
+                .provider_surface_results
+                .get("incremental_visible_updates"),
             Some(&SurfaceSupport::Unsupported)
         );
     }
@@ -232,28 +275,73 @@ mod tests {
         };
         let profile = conformance_profile(&cfg, ts());
         let surfaces = &profile.provider_surface_results;
-        assert_eq!(surfaces.get("direct_message"), Some(&SurfaceSupport::Supported));
-        assert_eq!(surfaces.get("group_channel"), Some(&SurfaceSupport::Supported));
-        assert_eq!(surfaces.get("mention_gating"), Some(&SurfaceSupport::Supported));
+        assert_eq!(
+            surfaces.get("direct_message"),
+            Some(&SurfaceSupport::Supported)
+        );
+        assert_eq!(
+            surfaces.get("group_channel"),
+            Some(&SurfaceSupport::Supported)
+        );
+        assert_eq!(
+            surfaces.get("mention_gating"),
+            Some(&SurfaceSupport::Supported)
+        );
         assert_eq!(surfaces.get("room"), Some(&SurfaceSupport::Unsupported));
         assert_eq!(surfaces.get("voice"), Some(&SurfaceSupport::Unsupported));
         assert_eq!(surfaces.get("thread_reply"), Some(&SurfaceSupport::Limited));
-        assert_eq!(surfaces.get("thinking_visibility"), Some(&SurfaceSupport::Limited));
-        assert_eq!(surfaces.get("rich_media"), Some(&SurfaceSupport::Unsupported));
-        assert_eq!(surfaces.get("placeholder_card_update"), Some(&SurfaceSupport::Unsupported));
-        assert_eq!(surfaces.get("provider_specific_stop"), Some(&SurfaceSupport::Unsupported));
-        assert_eq!(surfaces.get("connector_backed_delivery"), Some(&SurfaceSupport::Supported));
-        assert_eq!(surfaces.get("final_only_foreground_reply"), Some(&SurfaceSupport::Supported));
-        assert_eq!(surfaces.get("thinking_plus_final_reply"), Some(&SurfaceSupport::Supported));
-        assert_eq!(surfaces.get("thinking_plus_incremental"), Some(&SurfaceSupport::Unsupported));
-        assert_eq!(surfaces.get("equivalent_durable_identity"), Some(&SurfaceSupport::Unsupported));
-        assert_eq!(surfaces.get("standard_durable_identity"), Some(&SurfaceSupport::Supported));
-        assert_eq!(surfaces.get("blocked_route_classification"), Some(&SurfaceSupport::Supported));
+        assert_eq!(
+            surfaces.get("thinking_visibility"),
+            Some(&SurfaceSupport::Limited)
+        );
+        assert_eq!(
+            surfaces.get("rich_media"),
+            Some(&SurfaceSupport::Unsupported)
+        );
+        assert_eq!(
+            surfaces.get("placeholder_card_update"),
+            Some(&SurfaceSupport::Unsupported)
+        );
+        assert_eq!(
+            surfaces.get("provider_specific_stop"),
+            Some(&SurfaceSupport::Unsupported)
+        );
+        assert_eq!(
+            surfaces.get("connector_backed_delivery"),
+            Some(&SurfaceSupport::Supported)
+        );
+        assert_eq!(
+            surfaces.get("final_only_foreground_reply"),
+            Some(&SurfaceSupport::Supported)
+        );
+        assert_eq!(
+            surfaces.get("thinking_plus_final_reply"),
+            Some(&SurfaceSupport::Supported)
+        );
+        assert_eq!(
+            surfaces.get("thinking_plus_incremental"),
+            Some(&SurfaceSupport::Unsupported)
+        );
+        assert_eq!(
+            surfaces.get("equivalent_durable_identity"),
+            Some(&SurfaceSupport::Unsupported)
+        );
+        assert_eq!(
+            surfaces.get("standard_durable_identity"),
+            Some(&SurfaceSupport::Supported)
+        );
+        assert_eq!(
+            surfaces.get("blocked_route_classification"),
+            Some(&SurfaceSupport::Supported)
+        );
         assert_eq!(
             surfaces.get("incremental_visible_updates"),
             Some(&SurfaceSupport::Unsupported)
         );
-        assert_eq!(profile.equivalent_durable_identity_rule_id, "discord_message_id");
+        assert_eq!(
+            profile.equivalent_durable_identity_rule_id,
+            "discord_message_id"
+        );
         assert_eq!(
             profile.equivalent_durable_identity_rule,
             "tenant_id + connector_account_id + channel_or_conversation_id + provider_message_id"
@@ -288,11 +376,15 @@ mod tests {
         });
         let profile = conformance_profile_for_setup(&cfg, &setup, now);
         assert_eq!(
-            profile.core_invariant_results.get(&kura_connectors::ConformanceArea::Redaction),
+            profile
+                .core_invariant_results
+                .get(&kura_connectors::ConformanceArea::Redaction),
             Some(&ConformanceResultStatus::Pass)
         );
         assert_eq!(
-            profile.provider_surface_results.get("incremental_visible_updates"),
+            profile
+                .provider_surface_results
+                .get("incremental_visible_updates"),
             Some(&SurfaceSupport::Limited)
         );
         validate_capability_profile(&profile).expect("passes core invariants");

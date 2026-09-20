@@ -61,8 +61,7 @@ pub const GROUP_ROOM_SURFACE_UNSUPPORTED_SOURCE_EVIDENCE: &str =
 pub const GROUP_ROOM_SURFACE_DUPLICATE_MESSAGE_EVIDENCE: &str =
     "group_room_duplicate_message_evidence";
 pub const GROUP_ROOM_SURFACE_EDITED_MESSAGE_EVIDENCE: &str = "group_room_edited_message_evidence";
-pub const GROUP_ROOM_SURFACE_DELETED_MESSAGE_EVIDENCE: &str =
-    "group_room_deleted_message_evidence";
+pub const GROUP_ROOM_SURFACE_DELETED_MESSAGE_EVIDENCE: &str = "group_room_deleted_message_evidence";
 
 pub const HANDOFF_SURFACE_SOURCE_SUPPORT: &str = "handoff_source_support";
 pub const HANDOFF_SURFACE_DESTINATION_SUPPORT: &str = "handoff_destination_support";
@@ -144,16 +143,28 @@ impl GroupRoomCapabilities {
             results.insert(GROUP_ROOM_SURFACE_ALLOWLIST_EVIDENCE.to_string(), value);
         }
         if let Some(value) = self.unsupported_source_evidence {
-            results.insert(GROUP_ROOM_SURFACE_UNSUPPORTED_SOURCE_EVIDENCE.to_string(), value);
+            results.insert(
+                GROUP_ROOM_SURFACE_UNSUPPORTED_SOURCE_EVIDENCE.to_string(),
+                value,
+            );
         }
         if let Some(value) = self.duplicate_message_evidence {
-            results.insert(GROUP_ROOM_SURFACE_DUPLICATE_MESSAGE_EVIDENCE.to_string(), value);
+            results.insert(
+                GROUP_ROOM_SURFACE_DUPLICATE_MESSAGE_EVIDENCE.to_string(),
+                value,
+            );
         }
         if let Some(value) = self.edited_message_evidence {
-            results.insert(GROUP_ROOM_SURFACE_EDITED_MESSAGE_EVIDENCE.to_string(), value);
+            results.insert(
+                GROUP_ROOM_SURFACE_EDITED_MESSAGE_EVIDENCE.to_string(),
+                value,
+            );
         }
         if let Some(value) = self.deleted_message_evidence {
-            results.insert(GROUP_ROOM_SURFACE_DELETED_MESSAGE_EVIDENCE.to_string(), value);
+            results.insert(
+                GROUP_ROOM_SURFACE_DELETED_MESSAGE_EVIDENCE.to_string(),
+                value,
+            );
         }
         results
     }
@@ -183,7 +194,10 @@ impl HandoffCapabilities {
             results.insert(HANDOFF_SURFACE_DESTINATION_SUPPORT.to_string(), value);
         }
         if let Some(value) = self.first_response_source_references {
-            results.insert(HANDOFF_SURFACE_FIRST_RESPONSE_SOURCE_REFERENCES.to_string(), value);
+            results.insert(
+                HANDOFF_SURFACE_FIRST_RESPONSE_SOURCE_REFERENCES.to_string(),
+                value,
+            );
         }
         results
     }
@@ -236,11 +250,15 @@ pub fn validate_capability_profile(profile: &CapabilityProfile) -> Result<(), Co
         return Err(ConnectorsError::ConnectorKindRequired);
     }
     for area in core_invariant_areas() {
-        if profile.core_invariant_results.get(&area).copied() != Some(ConformanceResultStatus::Pass) {
+        if profile.core_invariant_results.get(&area).copied() != Some(ConformanceResultStatus::Pass)
+        {
             return Err(ConnectorsError::CoreInvariantFailed);
         }
     }
-    if !profile.equivalent_durable_identity_rule_id.trim().is_empty()
+    if !profile
+        .equivalent_durable_identity_rule_id
+        .trim()
+        .is_empty()
         && profile.equivalent_durable_identity_rule.trim().is_empty()
     {
         return Err(ConnectorsError::EquivalentIdentityRequired);
@@ -295,7 +313,10 @@ pub fn run_matrix_case(
         surfaces.insert(key, value);
     }
     if input.unsafe_incremental_update_degraded {
-        surfaces.insert("incremental_visible_updates".to_string(), SurfaceSupport::Limited);
+        surfaces.insert(
+            "incremental_visible_updates".to_string(),
+            SurfaceSupport::Limited,
+        );
     }
 
     let mut results = Vec::with_capacity(core.len() + surfaces.len());

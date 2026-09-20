@@ -53,7 +53,7 @@ mod tests {
     use std::io::BufReader;
 
     use super::*;
-    use crate::types::{Status, CONTRACT_VERSION};
+    use crate::types::{CONTRACT_VERSION, Status};
 
     fn sample_request() -> Request {
         Request {
@@ -62,7 +62,10 @@ mod tests {
             domain: "calendar".to_owned(),
             operation: "CreateEvent".to_owned(),
             deadline_ms: 30_000,
-            resource: Some(serde_json::value::to_raw_value(&serde_json::json!({"integrationId":"int-1"})).unwrap()),
+            resource: Some(
+                serde_json::value::to_raw_value(&serde_json::json!({"integrationId":"int-1"}))
+                    .unwrap(),
+            ),
             credential: None,
             payload: Some(serde_json::value::to_raw_value(&serde_json::json!({"x":1})).unwrap()),
         }

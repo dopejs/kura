@@ -17,6 +17,7 @@ pub fn fake_mcp_server_bin() -> &'static str {
 }
 
 /// Builds the fake RPC response for one request (shared by all three servers).
+#[allow(dead_code)]
 pub fn fake_response(request: &RpcRequest) -> RpcResponse {
     let id = request.id.clone();
     match request.method.as_str() {
@@ -177,6 +178,7 @@ pub fn spawn_mcp_ws_server() -> SocketAddr {
     std::thread::spawn(move || {
         // Exactly one connection, as the doc comment states. A `for` loop that
         // always breaks says "iterate" while meaning "take the first".
+        // Exactly one connection: accept it and serve it, nothing more.
         if let Some(Ok(mut stream)) = listener.incoming().next() {
             let _ = handle_ws_connection(&mut stream);
         }
@@ -306,8 +308,7 @@ fn ws_accept_key(key: &str) -> String {
 }
 
 fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for chunk in input.chunks(3) {
         let b0 = chunk[0] as u32;

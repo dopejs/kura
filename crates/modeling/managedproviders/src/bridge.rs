@@ -13,13 +13,13 @@ use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
+use futures::future::BoxFuture;
 use kura_llm::CancelToken;
 use kura_providers::{AuthMode, AuthState, Family, Model};
-use futures::future::BoxFuture;
 
 use crate::evaluate::{
-    ManagedProviderOperationPlan, REQUESTED_BY_PREFIX, clone_access_request,
-    build_managed_provider_consumer_view, operation_metadata_from_plan,
+    ManagedProviderOperationPlan, REQUESTED_BY_PREFIX, build_managed_provider_consumer_view,
+    clone_access_request, operation_metadata_from_plan,
 };
 use crate::helpers::{clone_roots, first_non_empty};
 
@@ -70,8 +70,12 @@ pub trait Bridge: Send + Sync {
     fn available(&self) -> bool;
     fn detect(&self, cancel: &CancelToken) -> Result<(AuthState, Vec<Model>), crate::error::Error>;
     fn start(&self, cancel: &CancelToken) -> Result<(AuthState, Vec<Model>), crate::error::Error>;
-    fn complete(&self, cancel: &CancelToken) -> Result<(AuthState, Vec<Model>), crate::error::Error>;
-    fn refresh(&self, cancel: &CancelToken) -> Result<(AuthState, Vec<Model>), crate::error::Error>;
+    fn complete(
+        &self,
+        cancel: &CancelToken,
+    ) -> Result<(AuthState, Vec<Model>), crate::error::Error>;
+    fn refresh(&self, cancel: &CancelToken)
+    -> Result<(AuthState, Vec<Model>), crate::error::Error>;
     fn revoke(&self, cancel: &CancelToken) -> Result<(AuthState, Vec<Model>), crate::error::Error>;
     fn provider(&self) -> Arc<dyn kura_llm::Provider>;
 
@@ -299,7 +303,8 @@ impl Runner for SandboxRunner {
         match execution.status {
             kura_sandbox::ExecutionStatus::Completed => (result, None),
             kura_sandbox::ExecutionStatus::Failed => {
-                if execution.result.error_class == kura_sandbox::ErrorClass::ProcessFailed.as_str() {
+                if execution.result.error_class == kura_sandbox::ErrorClass::ProcessFailed.as_str()
+                {
                     (
                         result,
                         Some(RunError {
@@ -490,8 +495,10 @@ impl Registry {
             codex_runner,
             sandboxes.clone(),
         ));
-        let items: Vec<Arc<dyn Bridge>> =
-            vec![Arc::clone(&claude_bridge) as Arc<dyn Bridge>, Arc::clone(&codex_bridge) as Arc<dyn Bridge>];
+        let items: Vec<Arc<dyn Bridge>> = vec![
+            Arc::clone(&claude_bridge) as Arc<dyn Bridge>,
+            Arc::clone(&codex_bridge) as Arc<dyn Bridge>,
+        ];
         for bridge in items {
             let id = bridge.provider_id();
             registry.bridges.insert(id.clone(), bridge);
@@ -558,43 +565,63 @@ impl kura_providers::ManagedBridge for ManagedBridgeAdapter {
         self.bridge.auth_mode()
     }
 
-    fn detect(&self) -> BoxFuture<'_, Result<(AuthState, Vec<Model>), kura_providers::ProvidersError>> {
+    fn detect(
+        &self,
+    ) -> BoxFuture<'_, Result<(AuthState, Vec<Model>), kura_providers::ProvidersError>> {
         let bridge = Arc::clone(&self.bridge);
         Box::pin(async move {
             let cancel = CancelToken::new();
-            bridge.detect(&cancel).map_err(crate::error::Error::map_providers_error)
+            bridge
+                .detect(&cancel)
+                .map_err(crate::error::Error::map_providers_error)
         })
     }
 
-    fn start(&self) -> BoxFuture<'_, Result<(AuthState, Vec<Model>), kura_providers::ProvidersError>> {
+    fn start(
+        &self,
+    ) -> BoxFuture<'_, Result<(AuthState, Vec<Model>), kura_providers::ProvidersError>> {
         let bridge = Arc::clone(&self.bridge);
         Box::pin(async move {
             let cancel = CancelToken::new();
-            bridge.start(&cancel).map_err(crate::error::Error::map_providers_error)
+            bridge
+                .start(&cancel)
+                .map_err(crate::error::Error::map_providers_error)
         })
     }
 
-    fn complete(&self) -> BoxFuture<'_, Result<(AuthState, Vec<Model>), kura_providers::ProvidersError>> {
+    fn complete(
+        &self,
+    ) -> BoxFuture<'_, Result<(AuthState, Vec<Model>), kura_providers::ProvidersError>> {
         let bridge = Arc::clone(&self.bridge);
         Box::pin(async move {
             let cancel = CancelToken::new();
-            bridge.complete(&cancel).map_err(crate::error::Error::map_providers_error)
+            bridge
+                .complete(&cancel)
+                .map_err(crate::error::Error::map_providers_error)
         })
     }
 
-    fn refresh(&self) -> BoxFuture<'_, Result<(AuthState, Vec<Model>), kura_providers::ProvidersError>> {
+    fn refresh(
+        &self,
+    ) -> BoxFuture<'_, Result<(AuthState, Vec<Model>), kura_providers::ProvidersError>> {
         let bridge = Arc::clone(&self.bridge);
         Box::pin(async move {
             let cancel = CancelToken::new();
-            bridge.refresh(&cancel).map_err(crate::error::Error::map_providers_error)
+            bridge
+                .refresh(&cancel)
+                .map_err(crate::error::Error::map_providers_error)
         })
     }
 
-    fn revoke(&self) -> BoxFuture<'_, Result<(AuthState, Vec<Model>), kura_providers::ProvidersError>> {
+    fn revoke(
+        &self,
+    ) -> BoxFuture<'_, Result<(AuthState, Vec<Model>), kura_providers::ProvidersError>> {
         let bridge = Arc::clone(&self.bridge);
         Box::pin(async move {
             let cancel = CancelToken::new();
-            bridge.revoke(&cancel).map_err(crate::error::Error::map_providers_error)
+            bridge
+                .revoke(&cancel)
+                .map_err(crate::error::Error::map_providers_error)
         })
     }
 
@@ -607,12 +634,16 @@ impl kura_providers::ManagedRegistry for Registry {
     fn list(&self) -> Vec<Arc<dyn kura_providers::ManagedBridge>> {
         Registry::list(self)
             .into_iter()
-            .map(|bridge| Arc::new(ManagedBridgeAdapter::new(bridge)) as Arc<dyn kura_providers::ManagedBridge>)
+            .map(|bridge| {
+                Arc::new(ManagedBridgeAdapter::new(bridge))
+                    as Arc<dyn kura_providers::ManagedBridge>
+            })
             .collect()
     }
 
     fn get(&self, provider_id: &str) -> Option<Arc<dyn kura_providers::ManagedBridge>> {
-        Registry::get(self, provider_id)
-            .map(|bridge| Arc::new(ManagedBridgeAdapter::new(bridge)) as Arc<dyn kura_providers::ManagedBridge>)
+        Registry::get(self, provider_id).map(|bridge| {
+            Arc::new(ManagedBridgeAdapter::new(bridge)) as Arc<dyn kura_providers::ManagedBridge>
+        })
     }
 }

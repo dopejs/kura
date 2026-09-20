@@ -1,13 +1,13 @@
 //! SQLite CRUD for policy approvals and decisions. Ported from `daemon/internal/store/store.go`
 //! tenantless write paths (the tenant column is written as NULL until tenancy is ported).
 
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
+use crate::SQLiteStore;
 use crate::crud::{
     decode_vec, enum_str, marshal_vec, now_rfc3339, null_string, opt_time_string, parse_enum,
     parse_opt_rfc3339, parse_rfc3339,
 };
-use crate::SQLiteStore;
 
 fn scan_approval(row: &Row) -> Result<kura_policy::Approval, String> {
     let approval_id: String = row.get(0).map_err(|e| e.to_string())?;

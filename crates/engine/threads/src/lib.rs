@@ -28,6 +28,8 @@ pub use projection::*;
 pub use redaction::*;
 pub use source::*;
 
-pub(crate) fn utc_now_or(now: Option<chrono::DateTime<chrono::Utc>>) -> chrono::DateTime<chrono::Utc> {
+pub(crate) fn utc_now_or(
+    now: Option<chrono::DateTime<chrono::Utc>>,
+) -> chrono::DateTime<chrono::Utc> {
     now.unwrap_or_else(chrono::Utc::now)
 }

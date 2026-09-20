@@ -1,0 +1,40 @@
+# TLS termination for a Kura team deployment (Stage 10.4).
+#
+# Decision (2026-09-19): the daemon does not terminate TLS in-process. A
+# reverse proxy does, so certificates, renewal and cipher policy stay in a
+# tool built for them, and the daemon keeps binding loopback / the compose
+# network only. Caddy is the reference because it provisions and renews
+# Let's Encrypt certificates on its own; nginx works the same way with a
+# `proxy_pass` block.
+#
+# Usage:
+#   KURA_PUBLIC_HOST=kura.example.com docker compose \
+#     -f docker-compose.yml -f docker-compose.tls.yml up -d --build
+#
+# Every request still needs a bearer token: TLS protects the transport, the
+# daemon's auth protects the data. `/healthz` stays open for probes.
+
+{$KURA_PUBLIC_HOST} {
+	encode zstd gzip
+
+	# Long-lived SSE streams (chat, events): do not buffer, do not time out.
+	@stream path /v1/chat/query/stream /v1/events/stream*
+	reverse_proxy @stream kura-agent:19191 {
+		flush_interval -1
+		transport http {
+			read_timeout 0
+			write_timeout 0
+		}
+	}
+
+	reverse_proxy kura-agent:19191 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Request-Id {http.request.uuid}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+}

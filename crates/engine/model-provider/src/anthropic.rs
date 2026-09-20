@@ -16,12 +16,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_stream::try_stream;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use kura_protocol::{ResponseItem, Role};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::openai::{checked_bytes_stream, Credential};
+use crate::openai::{Credential, checked_bytes_stream};
 use crate::provider::{ModelProvider, Prompt, ProviderError, ResponseEvent};
 
 /// The version header the Messages API requires.
@@ -217,8 +217,8 @@ fn accumulate_event(
     pending: &mut BTreeMap<i64, ToolUseAcc>,
     done: &mut bool,
 ) -> Result<Vec<ResponseEvent>, ProviderError> {
-    let value: Value = serde_json::from_str(data)
-        .map_err(|error| ProviderError::Malformed(error.to_string()))?;
+    let value: Value =
+        serde_json::from_str(data).map_err(|error| ProviderError::Malformed(error.to_string()))?;
     let mut events = Vec::new();
     let index = value["index"].as_i64().unwrap_or(0);
 
@@ -250,7 +250,11 @@ fn accumulate_event(
                 // until concatenated, so they are held rather than emitted.
                 "input_json_delta" => {
                     if let Some(fragment) = delta["partial_json"].as_str() {
-                        pending.entry(index).or_default().arguments.push_str(fragment);
+                        pending
+                            .entry(index)
+                            .or_default()
+                            .arguments
+                            .push_str(fragment);
                     }
                 }
                 _ => {}
@@ -287,12 +291,7 @@ fn accumulate_event(
 /// instructions are a top-level `system` rather than a message, `max_tokens` is
 /// required, and a tool result is a block inside a *user* message rather than a
 /// message with its own role.
-fn build_request(
-    model: &str,
-    prompt: &Prompt,
-    max_tokens: i64,
-    subscription: bool,
-) -> Value {
+fn build_request(model: &str, prompt: &Prompt, max_tokens: i64, subscription: bool) -> Value {
     let mut messages: Vec<Value> = Vec::new();
 
     for item in &prompt.input {
@@ -310,12 +309,15 @@ fn build_request(
                     "content": [{"type": "text", "text": content}],
                 }));
             }
-            ResponseItem::FunctionCall { call_id, name, arguments } => {
+            ResponseItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+            } => {
                 // `input` must be an object; the model's fragments are text
                 // until parsed, and a malformed one becomes an empty object
                 // rather than a body the endpoint rejects outright.
-                let input: Value =
-                    serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
+                let input: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
                 messages.push(json!({
                     "role": "assistant",
                     "content": [{
@@ -414,7 +416,9 @@ mod tests {
                     }
                     received.extend_from_slice(&buffer[..read]);
                     let text = String::from_utf8_lossy(&received);
-                    let Some(head_end) = text.find("\r\n\r\n") else { continue };
+                    let Some(head_end) = text.find("\r\n\r\n") else {
+                        continue;
+                    };
                     let length: usize = text
                         .lines()
                         .find_map(|line| {
@@ -427,8 +431,7 @@ mod tests {
                         break;
                     }
                 }
-                *recorded.lock().expect("lock") =
-                    String::from_utf8_lossy(&received).to_string();
+                *recorded.lock().expect("lock") = String::from_utf8_lossy(&received).to_string();
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body.len(),
@@ -453,7 +456,8 @@ mod tests {
         Prompt {
             input: vec![ResponseItem::Message {
                 role: Role::User,
-                content: text.to_string(),            }],
+                content: text.to_string(),
+            }],
             ..Prompt::default()
         }
     }
@@ -551,7 +555,10 @@ mod tests {
         let client = AnthropicClient::new(base, "claude-sonnet-4-5", Some("oauth-token".into()));
         let prompt = Prompt {
             instructions: Some("be brief".to_string()),
-            input: vec![ResponseItem::Message { role: Role::User, content: "hi".into() }],
+            input: vec![ResponseItem::Message {
+                role: Role::User,
+                content: "hi".into(),
+            }],
             tools: vec![ToolSpec {
                 name: "read_file".into(),
                 description: "read".into(),
@@ -563,8 +570,14 @@ mod tests {
 
         let request = seen.lock().expect("lock").clone();
         // The beta is what makes a subscription grant acceptable here.
-        assert!(request.contains("anthropic-beta: oauth-2025-04-20"), "{request}");
-        assert!(request.contains("anthropic-version: 2023-06-01"), "{request}");
+        assert!(
+            request.contains("anthropic-beta: oauth-2025-04-20"),
+            "{request}"
+        );
+        assert!(
+            request.contains("anthropic-version: 2023-06-01"),
+            "{request}"
+        );
         assert!(request.contains("Bearer oauth-token"), "{request}");
         // Required by this endpoint, unlike the chat-completions shape.
         assert!(request.contains("\"max_tokens\""), "{request}");
@@ -575,10 +588,8 @@ mod tests {
         // follow it as a second block. Anthropic reads the first one: the
         // same request is accepted with it and answered 429 without it, under
         // a `rate_limit_error` that names a quota which is not the reason.
-        let body: serde_json::Value = serde_json::from_str(
-            request.split("\r\n\r\n").nth(1).expect("body"),
-        )
-        .expect("json");
+        let body: serde_json::Value =
+            serde_json::from_str(request.split("\r\n\r\n").nth(1).expect("body")).expect("json");
         let system = body["system"].as_array().expect("system blocks");
         assert_eq!(
             system[0]["text"].as_str(),
@@ -604,17 +615,18 @@ mod tests {
         );
         let prompt = Prompt {
             instructions: Some("be brief".to_string()),
-            input: vec![ResponseItem::Message { role: Role::User, content: "hi".into() }],
+            input: vec![ResponseItem::Message {
+                role: Role::User,
+                content: "hi".into(),
+            }],
             tools: Vec::new(),
         };
 
         collect(&client, &prompt).await;
 
         let request = seen.lock().expect("lock").clone();
-        let body: serde_json::Value = serde_json::from_str(
-            request.split("\r\n\r\n").nth(1).expect("body"),
-        )
-        .expect("json");
+        let body: serde_json::Value =
+            serde_json::from_str(request.split("\r\n\r\n").nth(1).expect("body")).expect("json");
         let system = body["system"].as_array().expect("system blocks");
         assert_eq!(system.len(), 1);
         assert_eq!(system[0]["text"].as_str(), Some("be brief"));

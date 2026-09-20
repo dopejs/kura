@@ -7,8 +7,8 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use kura_store::SQLiteStore;
 use kura_threads::{
     ConversationShape, HandoffLink, HandoffSourceReference, HandoffSourceReferenceDecision,
-    HandoffSourceReferenceEligibility, HandoffSourceReferenceStatus, HandoffStatus, RedactionStatus,
-    SourceKind, Thread,
+    HandoffSourceReferenceEligibility, HandoffSourceReferenceStatus, HandoffStatus,
+    RedactionStatus, SourceKind, Thread,
 };
 
 fn temp_dir(name: &str) -> String {
@@ -63,7 +63,12 @@ fn link(tenant_id: &str, source: &str, destination: &str) -> HandoffLink {
     }
 }
 
-fn source_ref(handoff_link_id: &str, turn_id: &str, decision: HandoffSourceReferenceDecision, eligibility: HandoffSourceReferenceEligibility) -> HandoffSourceReference {
+fn source_ref(
+    handoff_link_id: &str,
+    turn_id: &str,
+    decision: HandoffSourceReferenceDecision,
+    eligibility: HandoffSourceReferenceEligibility,
+) -> HandoffSourceReference {
     HandoffSourceReference {
         handoff_source_reference_id: String::new(),
         handoff_link_id: handoff_link_id.to_string(),
@@ -89,31 +94,71 @@ fn handoff_link_save_get_list_round_trip() {
     let dir = temp_dir("handoff_link");
     let store = SQLiteStore::new(&dir).unwrap();
     let now = Utc.with_ymd_and_hms(2026, 5, 11, 10, 0, 0).unwrap();
-    store.upsert_thread(&thread("thr_source", "ten_1", now)).unwrap();
-    store.upsert_thread(&thread("thr_dest", "ten_1", now)).unwrap();
+    store
+        .upsert_thread(&thread("thr_source", "ten_1", now))
+        .unwrap();
+    store
+        .upsert_thread(&thread("thr_dest", "ten_1", now))
+        .unwrap();
 
-    let saved = store.save_handoff_link(link("ten_1", "thr_source", "thr_dest")).unwrap();
+    let saved = store
+        .save_handoff_link(link("ten_1", "thr_source", "thr_dest"))
+        .unwrap();
     assert!(!saved.handoff_link_id.is_empty());
     assert_eq!(saved.permission_gate, "connectors.manage");
     assert_eq!(saved.status, HandoffStatus::Succeeded);
     assert!(saved.created_at.is_some());
-    assert!(saved.retention_expires_at.is_some(), "default retention applied");
+    assert!(
+        saved.retention_expires_at.is_some(),
+        "default retention applied"
+    );
 
-    let got = store.get_handoff_link("ten_1", &saved.handoff_link_id).unwrap().expect("present");
+    let got = store
+        .get_handoff_link("ten_1", &saved.handoff_link_id)
+        .unwrap()
+        .expect("present");
     assert_eq!(got.handoff_link_id, saved.handoff_link_id);
     assert_eq!(got.source_thread_id, "thr_source");
     assert_eq!(got.destination_thread_id, "thr_dest");
     assert_eq!(got.source_conversation_shape, ConversationShape::Room);
-    assert_eq!(got.destination_conversation_shape, ConversationShape::DirectMessage);
-    assert_eq!(got.source_reference_status, HandoffSourceReferenceStatus::Available);
+    assert_eq!(
+        got.destination_conversation_shape,
+        ConversationShape::DirectMessage
+    );
+    assert_eq!(
+        got.source_reference_status,
+        HandoffSourceReferenceStatus::Available
+    );
 
     // Listed from either side of the link, tenant-scoped.
-    assert_eq!(store.list_handoff_links("ten_1", "thr_source", 20).unwrap().len(), 1);
-    assert_eq!(store.list_handoff_links("ten_1", "thr_dest", 20).unwrap().len(), 1);
-    assert!(store.list_handoff_links("ten_2", "thr_source", 20).unwrap().is_empty());
+    assert_eq!(
+        store
+            .list_handoff_links("ten_1", "thr_source", 20)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .list_handoff_links("ten_1", "thr_dest", 20)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        store
+            .list_handoff_links("ten_2", "thr_source", 20)
+            .unwrap()
+            .is_empty()
+    );
 
     // Missing link → None.
-    assert!(store.get_handoff_link("ten_1", "handoff_missing").unwrap().is_none());
+    assert!(
+        store
+            .get_handoff_link("ten_1", "handoff_missing")
+            .unwrap()
+            .is_none()
+    );
 
     // Upsert via SaveHandoffLink with a fixed id flips status fields.
     let mut updated = got.clone();
@@ -121,7 +166,10 @@ fn handoff_link_save_get_list_round_trip() {
     updated.reason_code = "destination_unavailable".to_string();
     let resaved = store.save_handoff_link(updated).unwrap();
     assert_eq!(resaved.status, HandoffStatus::FailedClosed);
-    let after = store.get_handoff_link("ten_1", &saved.handoff_link_id).unwrap().unwrap();
+    let after = store
+        .get_handoff_link("ten_1", &saved.handoff_link_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(after.reason_code, "destination_unavailable");
 }
 
@@ -130,33 +178,70 @@ fn handoff_source_references_save_and_consume() {
     let dir = temp_dir("handoff_refs");
     let store = SQLiteStore::new(&dir).unwrap();
     let now = Utc.with_ymd_and_hms(2026, 5, 11, 10, 0, 0).unwrap();
-    store.upsert_thread(&thread("thr_source", "ten_1", now)).unwrap();
-    store.upsert_thread(&thread("thr_dest", "ten_1", now)).unwrap();
-    let saved = store.save_handoff_link(link("ten_1", "thr_source", "thr_dest")).unwrap();
+    store
+        .upsert_thread(&thread("thr_source", "ten_1", now))
+        .unwrap();
+    store
+        .upsert_thread(&thread("thr_dest", "ten_1", now))
+        .unwrap();
+    let saved = store
+        .save_handoff_link(link("ten_1", "thr_source", "thr_dest"))
+        .unwrap();
 
     let mut refs = vec![
-        source_ref(&saved.handoff_link_id, "turn_1", HandoffSourceReferenceDecision::Referenced, HandoffSourceReferenceEligibility::Eligible),
-        source_ref(&saved.handoff_link_id, "turn_2", HandoffSourceReferenceDecision::Excluded, HandoffSourceReferenceEligibility::RetentionExpired),
+        source_ref(
+            &saved.handoff_link_id,
+            "turn_1",
+            HandoffSourceReferenceDecision::Referenced,
+            HandoffSourceReferenceEligibility::Eligible,
+        ),
+        source_ref(
+            &saved.handoff_link_id,
+            "turn_2",
+            HandoffSourceReferenceDecision::Excluded,
+            HandoffSourceReferenceEligibility::RetentionExpired,
+        ),
     ];
     store.save_handoff_source_references(&mut refs).unwrap();
     assert!(!refs[0].handoff_source_reference_id.is_empty());
     assert!(refs[0].created_at.is_some());
     assert!(refs[0].retention_expires_at.is_some());
 
-    let listed = store.list_handoff_source_references_for_link("ten_1", &saved.handoff_link_id).unwrap();
+    let listed = store
+        .list_handoff_source_references_for_link("ten_1", &saved.handoff_link_id)
+        .unwrap();
     assert_eq!(listed.len(), 2);
     assert_eq!(listed[0].continuity_turn_id, "turn_1");
     assert_eq!(listed[1].decision, HandoffSourceReferenceDecision::Excluded);
 
     // Consume: link becomes consumed; Referenced refs flip to Consumed.
     store
-        .mark_handoff_source_references_consumed("ten_1", &saved.handoff_link_id, "resp_1", Some(now))
+        .mark_handoff_source_references_consumed(
+            "ten_1",
+            &saved.handoff_link_id,
+            "resp_1",
+            Some(now),
+        )
         .unwrap();
-    let consumed_link = store.get_handoff_link("ten_1", &saved.handoff_link_id).unwrap().unwrap();
-    assert_eq!(consumed_link.source_reference_status, HandoffSourceReferenceStatus::Consumed);
+    let consumed_link = store
+        .get_handoff_link("ten_1", &saved.handoff_link_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        consumed_link.source_reference_status,
+        HandoffSourceReferenceStatus::Consumed
+    );
     assert_eq!(consumed_link.first_destination_response_id, "resp_1");
-    let consumed_refs = store.list_handoff_source_references_for_link("ten_1", &saved.handoff_link_id).unwrap();
-    assert_eq!(consumed_refs[0].decision, HandoffSourceReferenceDecision::Consumed);
-    assert_eq!(consumed_refs[1].decision, HandoffSourceReferenceDecision::Excluded);
+    let consumed_refs = store
+        .list_handoff_source_references_for_link("ten_1", &saved.handoff_link_id)
+        .unwrap();
+    assert_eq!(
+        consumed_refs[0].decision,
+        HandoffSourceReferenceDecision::Consumed
+    );
+    assert_eq!(
+        consumed_refs[1].decision,
+        HandoffSourceReferenceDecision::Excluded
+    );
     assert!(consumed_refs[0].consumed_at.is_some());
 }

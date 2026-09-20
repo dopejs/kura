@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use kura_store::{schema_migrations, SQLiteStore, CURRENT_SCHEMA_VERSION};
+use kura_store::{CURRENT_SCHEMA_VERSION, SQLiteStore, schema_migrations};
 
 fn temp_dir(name: &str) -> String {
     let dir = std::env::temp_dir().join(format!("kura_store_{name}_{}", std::process::id()));
@@ -16,7 +16,10 @@ fn opens_store_and_creates_schema_migrations_table() {
     assert!(Path::new(store.db_path()).exists());
 
     // All ported migrations are applied on open, up to the head of the ported list.
-    let applied: i64 = store_conn_query(store.db_path(), "SELECT MAX(version) FROM schema_migrations");
+    let applied: i64 = store_conn_query(
+        store.db_path(),
+        "SELECT MAX(version) FROM schema_migrations",
+    );
     assert_eq!(applied, schema_migrations().last().unwrap().version);
 }
 
@@ -45,13 +48,13 @@ fn store_conn_query(db_path: &str, query: &str) -> i64 {
 }
 use chrono::Utc;
 use kura_capabilities::{Capability, Status as CapabilityStatus};
-use kura_router::{Session, SessionKind, SessionStatus};
 use kura_events::{Event, Filter, Resource, Scope};
 use kura_llm::{Dispatch, DispatchStatus, Message, MessageRole, Usage};
 use kura_policy::{Approval, ApprovalStatus, Decision, DecisionOutcome};
 use kura_providers::{
     AuthMode, AuthState, AuthStatus, Check, CheckStatus, Family, Model, Preference,
 };
+use kura_router::{Session, SessionKind, SessionStatus};
 use kura_runtime::{Run, RunCheckpoint, RunStatus, Step, StepStatus, ToolCall, ToolCallStatus};
 
 fn make_run() -> Run {
@@ -178,7 +181,10 @@ fn tool_call_round_trips_through_sqlite() {
     assert_eq!(got.sandbox.get("session"), Some(&serde_json::json!("s-1")));
     assert_eq!(got.integration_bindings.len(), 1);
     assert_eq!(got.integration_bindings[0].integration_id, "int_1");
-    assert_eq!(got.integration_bindings[0].backend_kind, kura_integrations::BackendKind::Native);
+    assert_eq!(
+        got.integration_bindings[0].backend_kind,
+        kura_integrations::BackendKind::Native
+    );
 }
 
 #[test]
@@ -306,7 +312,11 @@ fn a_dispatch_remembers_the_tools_it_was_given_and_asked_for() {
         dispatch_id: "disp_tools".to_string(),
         provider: "anthropic".to_string(),
         model: "m".to_string(),
-        messages: vec![Message { role: MessageRole::User, content: "where am i".to_string(), ..Default::default() }],
+        messages: vec![Message {
+            role: MessageRole::User,
+            content: "where am i".to_string(),
+            ..Default::default()
+        }],
         stream: false,
         status: DispatchStatus::Completed,
         output: String::new(),
@@ -326,7 +336,10 @@ fn a_dispatch_remembers_the_tools_it_was_given_and_asked_for() {
     store.upsert_llm_dispatch(&dispatch).unwrap();
 
     let listed = store.list_llm_dispatches().unwrap();
-    let got = listed.iter().find(|d| d.dispatch_id == "disp_tools").unwrap();
+    let got = listed
+        .iter()
+        .find(|d| d.dispatch_id == "disp_tools")
+        .unwrap();
     assert_eq!(got.tools, tools);
     assert_eq!(got.tool_calls, tool_calls);
 }
@@ -341,13 +354,20 @@ fn every_migration_survives_being_replayed() {
     let dir = temp_dir("replay");
     {
         let store = SQLiteStore::new(&dir).unwrap();
-        assert_eq!(store.schema_version().unwrap(), kura_store::CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            kura_store::CURRENT_SCHEMA_VERSION
+        );
         let conn = rusqlite::Connection::open(store.db_path()).unwrap();
-        conn.execute("DELETE FROM schema_migrations WHERE version > 1", []).unwrap();
+        conn.execute("DELETE FROM schema_migrations WHERE version > 1", [])
+            .unwrap();
     }
 
     let store = SQLiteStore::new(&dir).expect("a replayed migration must not fail the open");
-    assert_eq!(store.schema_version().unwrap(), kura_store::CURRENT_SCHEMA_VERSION);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        kura_store::CURRENT_SCHEMA_VERSION
+    );
 }
 
 #[test]
@@ -361,12 +381,20 @@ fn llm_dispatch_round_trips_through_sqlite() {
         dispatch_id: "disp_1".to_string(),
         provider: "openai".to_string(),
         model: "gpt-4o".to_string(),
-        messages: vec![Message { role: MessageRole::User, content: "hi".to_string(), ..Default::default() }],
+        messages: vec![Message {
+            role: MessageRole::User,
+            content: "hi".to_string(),
+            ..Default::default()
+        }],
         stream: true,
         status: DispatchStatus::Completed,
         output: "hello".to_string(),
         finish_reason: "stop".to_string(),
-        usage: Usage { input_tokens: 3, output_tokens: 1, total_tokens: 4 },
+        usage: Usage {
+            input_tokens: 3,
+            output_tokens: 1,
+            total_tokens: 4,
+        },
         error_code: String::new(),
         error: String::new(),
         timeout_ms: 30000,
@@ -418,7 +446,11 @@ fn provider_check_and_auth_state_round_trip() {
         error_class: String::new(),
         error_code: String::new(),
         error_message: String::new(),
-        usage: Usage { input_tokens: 5, output_tokens: 5, total_tokens: 10 },
+        usage: Usage {
+            input_tokens: 5,
+            output_tokens: 5,
+            total_tokens: 10,
+        },
         created_at: now,
         completed_at: now,
     };
@@ -428,7 +460,14 @@ fn provider_check_and_auth_state_round_trip() {
     assert_eq!(checks[0].family, Family::OpenAICompatible);
     assert_eq!(checks[0].status, CheckStatus::Passed);
     assert_eq!(checks[0].usage.total_tokens, 10);
-    assert_eq!(store.get_provider_check("prov_1", "chk_1").unwrap().unwrap().check_id, "chk_1");
+    assert_eq!(
+        store
+            .get_provider_check("prov_1", "chk_1")
+            .unwrap()
+            .unwrap()
+            .check_id,
+        "chk_1"
+    );
 
     let mut metadata = std::collections::HashMap::new();
     metadata.insert("region".to_string(), "us-east-1".to_string());
@@ -458,7 +497,10 @@ fn provider_check_and_auth_state_round_trip() {
     assert_eq!(states[0].status, AuthStatus::Authenticated);
     assert_eq!(states[0].cli_available, true);
     assert_eq!(states[0].login_command, vec!["login".to_string()]);
-    assert_eq!(states[0].metadata.get("region"), Some(&"us-east-1".to_string()));
+    assert_eq!(
+        states[0].metadata.get("region"),
+        Some(&"us-east-1".to_string())
+    );
     assert!(states[0].sandbox.is_some());
 }
 
@@ -489,9 +531,19 @@ fn provider_models_and_preference_round_trip() {
     assert_eq!(models[0].default, true);
     assert_eq!(models[0].tool_use, true);
     assert_eq!(models[0].reasoning_levels.len(), 2);
-    assert_eq!(store.list_provider_models_by_provider("prov_1").unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_provider_models_by_provider("prov_1")
+            .unwrap()
+            .len(),
+        1
+    );
 
-    let preference = Preference { provider_id: "prov_1".to_string(), default_model: "gpt-4o".to_string(), updated_at: now };
+    let preference = Preference {
+        provider_id: "prov_1".to_string(),
+        default_model: "gpt-4o".to_string(),
+        updated_at: now,
+    };
     store.upsert_provider_preference(&preference).unwrap();
     let prefs = store.list_provider_preferences().unwrap();
     assert_eq!(prefs.len(), 1);
@@ -565,7 +617,10 @@ fn manager_document_round_trips_through_sqlite() {
 
     store.delete_manager_document("triage", "t1").unwrap();
     assert_eq!(store.list_manager_documents("triage").unwrap().len(), 0);
-    assert_eq!(store.schema_version().unwrap(), kura_store::CURRENT_SCHEMA_VERSION);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        kura_store::CURRENT_SCHEMA_VERSION
+    );
 }
 #[test]
 fn sandbox_execution_round_trips_through_sqlite() {
@@ -612,7 +667,10 @@ fn legacy_dev_head_database_is_restamped_as_baseline() {
     let store = SQLiteStore::new(&dir).unwrap();
     // The re-stamp lands on baseline v1, then any post-baseline migrations
     // (v2+) apply on top.
-    assert_eq!(store.schema_version().unwrap(), kura_store::CURRENT_SCHEMA_VERSION);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        kura_store::CURRENT_SCHEMA_VERSION
+    );
 }
 #[test]
 fn event_append_and_list_round_trip() {
@@ -629,8 +687,14 @@ fn event_append_and_list_round_trip() {
         category: "audit".to_string(),
         name: "audit.cross_tenant_access_denied".to_string(),
         occurred_at: now,
-        scope: Scope { run_id: "run_1".to_string(), ..Scope::default() },
-        resource: Resource { kind: "run".to_string(), id: "run_1".to_string() },
+        scope: Scope {
+            run_id: "run_1".to_string(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "run".to_string(),
+            id: "run_1".to_string(),
+        },
         payload: payload.clone(),
     };
     let appended = store.append_event(&event).unwrap();
@@ -653,7 +717,10 @@ fn event_append_and_list_round_trip() {
 
     // Cursor filter: no rows after the last sequence.
     let after = store
-        .list_events(&Filter { cursor: appended.sequence, ..Filter::default() })
+        .list_events(&Filter {
+            cursor: appended.sequence,
+            ..Filter::default()
+        })
         .unwrap();
     assert!(after.is_empty());
 }

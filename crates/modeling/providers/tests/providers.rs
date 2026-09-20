@@ -15,7 +15,10 @@ use kura_providers::{new_check_id, new_manager};
 fn manager_with_echo() -> kura_providers::Manager {
     let dispatcher = Arc::new(Dispatcher::new());
     dispatcher.register_provider(Arc::new(EchoProvider::new()));
-    let cfg = LlmConfig { default_provider: "echo".to_string(), ..LlmConfig::default() };
+    let cfg = LlmConfig {
+        default_provider: "echo".to_string(),
+        ..LlmConfig::default()
+    };
     new_manager(cfg, Some(dispatcher), vec![])
 }
 
@@ -26,7 +29,10 @@ fn only_what_was_configured_is_listed() {
     // Echo was asked for; the HTTP endpoint was not configured, so it is
     // absent rather than listed with faults nobody can clear.
     assert_eq!(
-        profiles.iter().map(|p| p.provider_id.as_str()).collect::<Vec<_>>(),
+        profiles
+            .iter()
+            .map(|p| p.provider_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["echo"]
     );
 }
@@ -53,7 +59,11 @@ fn a_configured_endpoint_is_listed() {
     let manager = new_manager(cfg, Some(Arc::new(Dispatcher::new())), vec![]);
 
     assert_eq!(
-        manager.list_profiles().iter().map(|p| p.provider_id.as_str()).collect::<Vec<_>>(),
+        manager
+            .list_profiles()
+            .iter()
+            .map(|p| p.provider_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["openai_compatible"]
     );
 }
@@ -83,7 +93,9 @@ fn new_check_id_has_prefix() {
 fn set_default_model_rejects_unknown_model() {
     let manager = manager_with_echo();
     // echo is ModelSelectionMode::Fixed with known model "echo-v1".
-    let err = manager.set_default_model("echo", "unknown-model").unwrap_err();
+    let err = manager
+        .set_default_model("echo", "unknown-model")
+        .unwrap_err();
     assert!(err.to_string().contains("not supported"), "err: {err}");
     assert!(manager.set_default_model("echo", "echo-v1").is_ok());
 }
@@ -111,10 +123,16 @@ fn an_account_configured_before_startup_is_listed() {
 
     let profiles = manager.list_profiles();
     assert_eq!(
-        profiles.iter().map(|p| p.provider_id.as_str()).collect::<Vec<_>>(),
+        profiles
+            .iter()
+            .map(|p| p.provider_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["anthropic"]
     );
-    assert!(profiles[0].default, "the configured default must be the one listed");
+    assert!(
+        profiles[0].default,
+        "the configured default must be the one listed"
+    );
 }
 
 #[test]
@@ -143,7 +161,11 @@ fn an_account_added_while_running_joins_the_configured_ones() {
     });
 
     assert_eq!(
-        manager.list_profiles().iter().map(|p| p.provider_id.as_str()).collect::<Vec<_>>(),
+        manager
+            .list_profiles()
+            .iter()
+            .map(|p| p.provider_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["anthropic", "zhipu"]
     );
 }

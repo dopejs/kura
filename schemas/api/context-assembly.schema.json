@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/context-assembly.schema.json",
+  "title": "ContextAssembly",
+  "description": "One recorded pre-dispatch context assembly: what memory was injected, what was excluded and why. Correlated by tenant and thread in time order; an assembly cannot carry a dispatch id because it is recorded before the dispatch exists (the model-visible = logged ordering).",
+  "type": "object",
+  "required": ["assemblyId", "recordedAt", "record"],
+  "additionalProperties": false,
+  "properties": {
+    "assemblyId": { "type": "string" },
+    "tenantId": { "type": "string" },
+    "threadId": { "type": "string" },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "record": {
+      "type": "object",
+      "required": ["included", "excluded", "budgetChars", "usedChars"],
+      "properties": {
+        "included": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["assetId", "layer", "chars", "source"],
+            "properties": {
+              "assetId": { "type": "string" },
+              "layer": { "type": "string" },
+              "chars": { "type": "integer", "minimum": 0 },
+              "source": { "type": "string" }
+            }
+          }
+        },
+        "excluded": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["assetId", "layer", "reason", "source"],
+            "properties": {
+              "assetId": { "type": "string" },
+              "layer": { "type": "string" },
+              "reason": { "type": "string" },
+              "source": { "type": "string" }
+            }
+          }
+        },
+        "budgetChars": { "type": "integer", "minimum": 0 },
+        "usedChars": { "type": "integer", "minimum": 0 },
+        "retrievalBudgetChars": { "type": "integer", "minimum": 0 },
+        "retrievalUsedChars": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

@@ -13,14 +13,16 @@ use kura_api::AppState;
 use kura_audit::Emitter as AuditEmitter;
 use kura_checkpoints::Manager as CheckpointsManager;
 use kura_config::{Config, Environment};
-use kura_discord::{GatewayTransport as DiscordGatewayTransport, new_runtime as new_discord_runtime};
+use kura_discord::{
+    GatewayTransport as DiscordGatewayTransport, new_runtime as new_discord_runtime,
+};
 use kura_events::Bus;
 use kura_identity::auth::Manager as AuthManager;
 use kura_identity::{Manager as IdentityManager, Store as IdentityStore};
 use kura_im::MessageLoop;
 use kura_matrix::{
-    ClientTransportConfig as MatrixClientTransportConfig, new_client_transport as new_matrix_transport,
-    new_runtime as new_matrix_runtime,
+    ClientTransportConfig as MatrixClientTransportConfig,
+    new_client_transport as new_matrix_transport, new_runtime as new_matrix_runtime,
 };
 use kura_policy::Engine as PolicyEngine;
 use kura_router::SessionRouter;
@@ -32,17 +34,20 @@ use kura_slack::{
 };
 use kura_store::{SQLiteStore, SecretStoreHandle};
 use kura_telegram::{
-    BotApiTransport as TelegramBotApiTransport, BotApiTransportConfig as TelegramBotApiTransportConfig,
-    Runtime as TelegramRuntime,
+    BotApiTransport as TelegramBotApiTransport,
+    BotApiTransportConfig as TelegramBotApiTransportConfig, Runtime as TelegramRuntime,
 };
 
 mod adapters;
 mod error;
 mod external;
 mod plugins;
+pub mod rehearsal;
 mod restore;
+pub mod tool_host;
 
 pub use error::AppError;
+pub use rehearsal::{RehearsalReport, rehearse_upgrade};
 
 /// Port of Go `environmentScope` for `config.Environment`.
 pub fn environment_scope(environment: Environment) -> &'static str {
@@ -268,9 +273,9 @@ impl App {
         // unusable one, without weakening authentication: a caller still has
         // to complete the pairing exchange.
         let auth_manager = if cfg.environment == Environment::Embedded {
-            Arc::new(AuthManager::with_pairing_identity(bootstrap_local_identity(
-                &store,
-            )?))
+            Arc::new(AuthManager::with_pairing_identity(
+                bootstrap_local_identity(&store)?,
+            ))
         } else {
             Arc::new(AuthManager::new())
         };
@@ -300,6 +305,12 @@ impl App {
 
         // --- kernel state population ---
         let mut state = AppState::new(cfg.clone(), event_bus.clone(), store.clone());
+        // Stage 10.2: reader connections beside the writer. `readers = 0`
+        // (the default) is exactly the pre-pool single-connection behaviour.
+        state.store_pool = Arc::new(
+            kura_store::StorePool::new(store.clone(), cfg.store.readers)
+                .map_err(AppError::Store)?,
+        );
         state.policy = Some(policy_engine);
         state.auth = Some(auth_manager);
         state.identity = Some(identity_manager);
@@ -325,8 +336,7 @@ impl App {
         // --- plugin assembly: builtins first, then discovered externals
         // (tier 2). Third-party manifest problems are warnings, not boot
         // failures.
-        let (external_plugins_found, external_warnings) =
-            kura_plugin::discover_external(&data_dir);
+        let (external_plugins_found, external_warnings) = kura_plugin::discover_external(&data_dir);
         let mut specs: Vec<kura_plugin::PluginSpec> = plugins::descriptors()
             .iter()
             .map(kura_plugin::PluginSpec::from_descriptor)
@@ -341,8 +351,7 @@ impl App {
         for warning in &report.warnings {
             eprintln!("[kura] plugin profile: {warning}");
         }
-        let late_state: Arc<std::sync::OnceLock<AppState>> =
-            Arc::new(std::sync::OnceLock::new());
+        let late_state: Arc<std::sync::OnceLock<AppState>> = Arc::new(std::sync::OnceLock::new());
         let mut asm = plugins::Assembly {
             cfg: cfg.clone(),
             profile: profile.clone(),
@@ -390,7 +399,12 @@ impl App {
             // Seam providers: the first enabled external plugin declaring
             // `context.embedder` serves the embedding seam (later
             // declarations warn and are ignored — deterministic assembly).
-            if plugin.manifest.seams.iter().any(|s| s == "context.embedder") {
+            if plugin
+                .manifest
+                .seams
+                .iter()
+                .any(|s| s == "context.embedder")
+            {
                 if asm.state.embedder.is_none() {
                     asm.state.embedder =
                         Some(Arc::new(external::ExternalEmbedder::new(host.clone())));
@@ -456,6 +470,9 @@ impl App {
     /// binds the HTTP listener, serves until a shutdown signal, then closes
     /// the application. Port of Go `App.Run`.
     pub async fn serve(self: Arc<Self>) -> Result<(), AppError> {
+        // Stage 10.3: the access log and every instrumented crate share
+        // one process-global logger at the configured level.
+        kura_telemetry::install_global_logger(kura_telemetry::Logger::new(&self.config.log_level));
         let bind_addr = self.config.bind_addr.clone();
 
         self.start_background_loops();
@@ -569,7 +586,11 @@ impl App {
     /// per-runtime im.NewMessageLoop(sessionRouter, ...) construction.
     fn connector_message_loop(&self) -> MessageLoop {
         let runtime = self.state.runtime.clone().expect("runtime wired in kernel");
-        let chat = self.state.chat.clone().expect("chat plugin enabled (channel requires)");
+        let chat = self
+            .state
+            .chat
+            .clone()
+            .expect("chat plugin enabled (channel requires)");
         MessageLoop::new(
             SessionRouter::new(),
             runtime.clone(),
@@ -675,9 +696,7 @@ impl App {
                     base_url: connector_cfg.telegram.bot_api_base_url.clone(),
                     ..Default::default()
                 })
-                .map_err(|err| {
-                    AppError::ConnectorRuntime(format!("telegram transport: {err}"))
-                })?,
+                .map_err(|err| AppError::ConnectorRuntime(format!("telegram transport: {err}")))?,
             ))
         } else {
             None
@@ -759,9 +778,7 @@ impl App {
                     allowed_direct_user_ids: connector_cfg.matrix.allowed_direct_user_ids.clone(),
                     ..Default::default()
                 })
-                .map_err(|err| {
-                    AppError::ConnectorRuntime(format!("matrix transport: {err}"))
-                })?,
+                .map_err(|err| AppError::ConnectorRuntime(format!("matrix transport: {err}")))?,
             ))
         } else {
             None
@@ -790,10 +807,7 @@ impl App {
     /// block). Discord/slack start non-blocking on the calling thread; the
     /// telegram transport loop blocks until close, so it runs on a dedicated
     /// thread that is joined in App::close.
-    fn start_connector_runtimes(
-        &self,
-        runtimes: &mut ConnectorRuntimes,
-    ) -> Result<(), AppError> {
+    fn start_connector_runtimes(&self, runtimes: &mut ConnectorRuntimes) -> Result<(), AppError> {
         if let Some(discord) = &runtimes.discord {
             discord
                 .start()
@@ -911,6 +925,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("create temp data dir");
         Config {
             project_root: String::new(),
+            store: Default::default(),
             environment: Environment::Test,
             bind_addr: "127.0.0.1:0".to_string(),
             data_dir: dir.to_string_lossy().into_owned(),
@@ -920,8 +935,12 @@ mod tests {
             // provider the daemon ships: it appears only where something names
             // it. Asking for it here is what these tests were relying on the
             // inventory to do for them.
-            llm: LlmConfig { default_provider: "echo".to_string(), ..Default::default() },
+            llm: LlmConfig {
+                default_provider: "echo".to_string(),
+                ..Default::default()
+            },
             connectors: Default::default(),
+            egress: Default::default(),
         }
     }
 
@@ -935,8 +954,14 @@ mod tests {
         config.environment = Environment::Embedded;
         let app = App::new(config).expect("build embedded app");
 
-        assert!(app.state.auth.is_some(), "embedded still requires a bearer token");
-        assert!(app.state.identity.is_some(), "tenant resolution stays enabled");
+        assert!(
+            app.state.auth.is_some(),
+            "embedded still requires a bearer token"
+        );
+        assert!(
+            app.state.identity.is_some(),
+            "tenant resolution stays enabled"
+        );
 
         let store = app.state.store.lock();
         let tenant = store.get_tenant(LOCAL_TENANT_ID).expect("tenant lookup");
@@ -972,7 +997,10 @@ mod tests {
             .get_tenant(LOCAL_TENANT_ID)
             .expect("tenant")
             .expect("tenant");
-        assert_eq!(reused.created_at, created_at, "tenant reused, not recreated");
+        assert_eq!(
+            reused.created_at, created_at,
+            "tenant reused, not recreated"
+        );
     }
 
     #[tokio::test]
@@ -981,7 +1009,10 @@ mod tests {
         assert!(app.state.identity.is_some());
         let store = app.state.store.lock();
         assert!(
-            store.get_principal(LOCAL_PRINCIPAL_ID).expect("lookup").is_none(),
+            store
+                .get_principal(LOCAL_PRINCIPAL_ID)
+                .expect("lookup")
+                .is_none(),
             "only embedded provisions a local operator"
         );
     }
@@ -1053,10 +1084,14 @@ mod tests {
             .expect("oneshot");
         assert_eq!(started.status(), StatusCode::CREATED);
         let started: serde_json::Value = serde_json::from_slice(
-            &to_bytes(started.into_body(), usize::MAX).await.expect("body"),
+            &to_bytes(started.into_body(), usize::MAX)
+                .await
+                .expect("body"),
         )
         .expect("json");
-        let pairing_id = started["pairing"]["pairingId"].as_str().expect("pairing id");
+        let pairing_id = started["pairing"]["pairingId"]
+            .as_str()
+            .expect("pairing id");
         let code = started["pairingCode"].as_str().expect("code");
 
         let completed = router
@@ -1073,7 +1108,9 @@ mod tests {
             .expect("oneshot");
         assert_eq!(completed.status(), StatusCode::OK);
         let completed: serde_json::Value = serde_json::from_slice(
-            &to_bytes(completed.into_body(), usize::MAX).await.expect("body"),
+            &to_bytes(completed.into_body(), usize::MAX)
+                .await
+                .expect("body"),
         )
         .expect("json");
         let secret = completed["accessToken"].as_str().expect("access token");
@@ -1124,7 +1161,10 @@ mod tests {
 
         // The default profile resolves every builtin plugin enabled.
         let report = app.state.plugins.as_ref().expect("assembly report");
-        assert!(report.plugins.iter().all(|p| p.enabled), "all builtins enabled");
+        assert!(
+            report.plugins.iter().all(|p| p.enabled),
+            "all builtins enabled"
+        );
         assert!(report.warnings.is_empty());
 
         let router = app.router();
@@ -1214,7 +1254,11 @@ mod tests {
         assert!(app.state.chat.is_some(), "unrelated plugins unaffected");
         let report = app.state.plugins.as_ref().expect("report");
         assert!(!report.enabled("triage"));
-        let triage = report.plugins.iter().find(|p| p.id == "triage").expect("entry");
+        let triage = report
+            .plugins
+            .iter()
+            .find(|p| p.id == "triage")
+            .expect("entry");
         assert_eq!(triage.reason.as_deref(), Some("disabled by profile"));
         app.close();
     }
@@ -1231,12 +1275,25 @@ mod tests {
         };
         let app = App::with_profile(config, profile).expect("build app");
         assert!(app.state.billing.is_none());
-        assert!(app.state.activation.is_none(), "activation requires billing");
+        assert!(
+            app.state.activation.is_none(),
+            "activation requires billing"
+        );
         assert!(app.state.webhooks.is_none(), "webhooks require billing");
-        assert!(app.state.evaluation.is_none(), "evaluation requires billing");
-        assert!(app.state.live_validation.is_none(), "live-validation requires billing");
+        assert!(
+            app.state.evaluation.is_none(),
+            "evaluation requires billing"
+        );
+        assert!(
+            app.state.live_validation.is_none(),
+            "live-validation requires billing"
+        );
         let report = app.state.plugins.as_ref().expect("report");
-        let webhooks = report.plugins.iter().find(|p| p.id == "webhooks").expect("entry");
+        let webhooks = report
+            .plugins
+            .iter()
+            .find(|p| p.id == "webhooks")
+            .expect("entry");
         assert_eq!(
             webhooks.reason.as_deref(),
             Some("requires disabled plugin `billing`")
@@ -1254,7 +1311,10 @@ mod tests {
         )
         .expect("write profile");
         let app = App::new(config).expect("build app");
-        assert!(app.state.memory.is_none(), "memory disabled via plugins.json");
+        assert!(
+            app.state.memory.is_none(),
+            "memory disabled via plugins.json"
+        );
         app.close();
     }
 
@@ -1404,11 +1464,19 @@ mod tests {
             "memory capture hook registered"
         );
         // Lifecycle registrations are plugin-owned.
-        let start_ids: Vec<&str> =
-            app.lifecycle.starts.iter().map(|(id, _)| id.as_str()).collect();
+        let start_ids: Vec<&str> = app
+            .lifecycle
+            .starts
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect();
         assert_eq!(start_ids, ["memory", "scheduler", "reminders"]);
-        let close_ids: Vec<&str> =
-            app.lifecycle.closes.iter().map(|(id, _)| id.as_str()).collect();
+        let close_ids: Vec<&str> = app
+            .lifecycle
+            .closes
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect();
         assert_eq!(close_ids, ["sandbox", "scheduler", "reminders"]);
 
         let chat = app.state.chat.clone().expect("chat wired");
@@ -1584,14 +1652,19 @@ mod tests {
             .expect("bootstrap injected with citation");
         assert_eq!(bootstrap["role"], "system");
         assert!(
-            bootstrap["content"].as_str().unwrap().contains("Chinese-speaking operator"),
+            bootstrap["content"]
+                .as_str()
+                .unwrap()
+                .contains("Chinese-speaking operator"),
             "content injected"
         );
         // Session-strategy still shaped the window afterwards: history
         // elided, bootstrap (system frame) survived, current query kept.
-        assert!(messages.iter().any(|m| m["content"]
-            .as_str()
-            .is_some_and(|c| c.contains("elided by the session-strategy"))));
+        assert!(messages.iter().any(|m| {
+            m["content"]
+                .as_str()
+                .is_some_and(|c| c.contains("elided by the session-strategy"))
+        }));
         assert_eq!(
             messages.last().unwrap()["content"],
             "what language should replies use"
@@ -1619,7 +1692,10 @@ mod tests {
             .iter()
             .find(|e| e.name == "context.assembled")
             .expect("context.assembled event recorded");
-        assert_eq!(assembled.payload["record"]["included"][0]["assetId"], asset.asset_id);
+        assert_eq!(
+            assembled.payload["record"]["included"][0]["assetId"],
+            asset.asset_id
+        );
         let record_included = assembled.payload["record"]["included"]
             .as_array()
             .expect("included array");
@@ -1628,6 +1704,735 @@ mod tests {
                 .iter()
                 .any(|item| item["source"] == "retrieval" && item["assetId"] == l1.asset_id),
             "retrieval inclusion recorded: {record_included:?}"
+        );
+        app.close();
+    }
+
+    /// Stage 1.1 + 2.3: corpus vectors are computed once and persisted, so a
+    /// turn embeds only the query; and a revoked asset's cached vector is
+    /// cleared, because persisting the index removed the free guarantee that
+    /// forgetting also clears derived state.
+    #[tokio::test]
+    async fn retrieval_caches_corpus_embeddings_and_revocation_clears_them() {
+        let app = App::new(test_config()).expect("build app");
+        let hooks = app.state.hooks.as_ref().expect("hook bus");
+        let memory = app.state.memory.as_deref().expect("memory wired");
+        let operator = kura_memory::Actor {
+            kind: kura_memory::ActorKind::Operator,
+            id: "op".to_string(),
+        };
+        let (atom, _) = memory
+            .create(kura_memory::CreateAssetInput {
+                kind: kura_memory::AssetKind::ChatMemory,
+                layer: kura_memory::MemoryLayer::L1,
+                owner: operator.clone(),
+                visibility: kura_memory::Visibility::Private,
+                atom_type: Some(kura_memory::AtomType::Preference),
+                title: "language".to_string(),
+                content: "replies in Chinese".to_string(),
+                source_links: vec![kura_memory::SourceLink {
+                    kind: kura_memory::SourceKind::Thread,
+                    id: "thr_seed".to_string(),
+                    ..kura_memory::SourceLink::default()
+                }],
+                ..kura_memory::CreateAssetInput::default()
+            })
+            .expect("seed L1 atom");
+        assert_eq!(atom.status, kura_memory::AssetStatus::Ready);
+        // The derived index has a foreign key onto memory_assets (that FK is
+        // what makes deletion cascade), so the asset must be persisted the way
+        // every production write path persists it.
+        kura_api::routes::memory::persist_capture(&app.state, &atom);
+
+        let fingerprint =
+            kura_context::Embedder::fingerprint(&kura_context::HashedNgramEmbedder::default());
+        let ids = vec![atom.asset_id.clone()];
+        let cached = |app: &App| {
+            app.state
+                .store
+                .lock()
+                .get_memory_asset_embeddings(&fingerprint, &ids)
+                .expect("read derived index")
+        };
+
+        // Nothing is embedded until a retrieval actually needs it.
+        assert!(cached(&app).is_empty(), "index starts empty");
+
+        let mut payload = serde_json::json!({
+            "tenantId": "",
+            "sourceKind": "chat",
+            "provider": "echo",
+            "model": "",
+            "messages": [
+                { "role": "user", "content": "what language should replies use" }
+            ]
+        });
+        let outcome = hooks.run(kura_plugin::points::CHAT_PRE_DISPATCH, &mut payload);
+        assert!(outcome.allowed());
+
+        // One turn populated the derived index for the corpus.
+        let after_first = cached(&app);
+        assert_eq!(
+            after_first.len(),
+            1,
+            "the corpus vector is persisted after the first turn"
+        );
+        let vector = after_first.get(&atom.asset_id).expect("vector").clone();
+        assert!(!vector.is_empty());
+
+        // A second turn reuses it rather than recomputing: the stored vector
+        // is byte-identical and the recall still happens.
+        let mut payload = serde_json::json!({
+            "tenantId": "",
+            "sourceKind": "chat",
+            "provider": "echo",
+            "model": "",
+            "messages": [
+                { "role": "user", "content": "what language should replies use" }
+            ]
+        });
+        assert!(
+            hooks
+                .run(kura_plugin::points::CHAT_PRE_DISPATCH, &mut payload)
+                .allowed()
+        );
+        let messages = payload["messages"].as_array().expect("messages");
+        assert!(
+            messages.iter().any(|m| m["content"]
+                .as_str()
+                .is_some_and(|c| c.contains(&format!("Memory[l1 {}]", atom.asset_id)))),
+            "the cached vector still serves recall: {messages:?}"
+        );
+        assert_eq!(cached(&app).get(&atom.asset_id), Some(&vector));
+
+        // ("a turn embeds exactly one text" is proved at the mechanism level
+        // in kura-context: `retrieve_fused_with_vectors` never embeds a doc.
+        // It cannot be proved by swapping `state.embedder` here, because the
+        // hooks capture the AppState during `App::with_profile`.)
+
+        // 2.3: revoking clears the derived row. Without this the persisted
+        // vector would outlive the asset's recallability.
+        let revoked = memory
+            .revoke(&atom.asset_id, "operator forgot it")
+            .expect("revoke");
+        assert_eq!(revoked.status, kura_memory::AssetStatus::Revoked);
+        kura_api::routes::memory::persist_capture(&app.state, &revoked);
+        assert!(
+            cached(&app).is_empty(),
+            "revocation must clear the derived index"
+        );
+        app.close();
+    }
+
+    /// Stage 4.1 (tool plane): the production assembly wires the real
+    /// billing-backed quota gate, not a permissive default.
+    ///
+    /// Roadmap 75 recorded that constructing the webhook manager with
+    /// `quota: None -> AllowAllQuota` was "a real exposure, not just
+    /// defense-in-depth". The tool plane spends money on third-party APIs, so
+    /// this asserts the equivalent mistake is not present: the plane declares
+    /// `billing` as a dependency and the runtime is built.
+    #[tokio::test]
+    async fn the_tool_plane_assembles_with_a_real_quota_gate() {
+        let app = App::new(test_config()).expect("build app");
+
+        assert!(app.state.tools.is_some(), "profile manager wired");
+        assert!(
+            app.state.tool_runtime.is_some(),
+            "the guarded call path is wired, so no family can be invoked outside it"
+        );
+
+        let report = app.state.plugins.as_ref().expect("assembly report");
+        let tools = report
+            .plugins
+            .iter()
+            .find(|p| p.id == "tools")
+            .expect("tools plugin in the assembly");
+        assert!(tools.enabled, "{tools:?}");
+        assert!(
+            tools.requires.iter().any(|r| r == "billing"),
+            "the tool plane must not assemble without the quota plane: {tools:?}"
+        );
+        app.close();
+    }
+
+    /// Stage 1.4: an L2/L3 asset that the bootstrap budget could not fit is
+    /// still recallable when the query matches it, and an asset bootstrap
+    /// already injected is not injected a second time.
+    #[tokio::test]
+    async fn retrieval_reaches_l2_beyond_the_bootstrap_budget_without_double_injecting() {
+        let config = test_config();
+        // A bootstrap budget small enough that only the newest asset fits.
+        std::fs::write(
+            std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
+            serde_json::json!({
+                "entries": { "context": { "config": { "memoryBudgetChars": 40 } } }
+            })
+            .to_string(),
+        )
+        .expect("write profile");
+        let app = App::new(config).expect("build app");
+        let memory = app.state.memory.as_deref().expect("memory wired");
+        let operator = kura_memory::Actor {
+            kind: kura_memory::ActorKind::Operator,
+            id: "op".to_string(),
+        };
+        // An L2 scenario aggregates L1 atoms (the governance rule), so each
+        // one is seeded through the real chain rather than fabricated.
+        let mut scenario = |title: &str, content: &str| {
+            let (atom, _) = memory
+                .create(kura_memory::CreateAssetInput {
+                    kind: kura_memory::AssetKind::ChatMemory,
+                    layer: kura_memory::MemoryLayer::L1,
+                    owner: operator.clone(),
+                    visibility: kura_memory::Visibility::Private,
+                    atom_type: Some(kura_memory::AtomType::Preference),
+                    title: title.to_string(),
+                    content: content.to_string(),
+                    source_links: vec![kura_memory::SourceLink {
+                        kind: kura_memory::SourceKind::Thread,
+                        id: format!("thr_{title}"),
+                        ..kura_memory::SourceLink::default()
+                    }],
+                    ..kura_memory::CreateAssetInput::default()
+                })
+                .expect("seed L1");
+            memory
+                .create(kura_memory::CreateAssetInput {
+                    kind: kura_memory::AssetKind::ChatMemory,
+                    layer: kura_memory::MemoryLayer::L2,
+                    owner: operator.clone(),
+                    visibility: kura_memory::Visibility::Private,
+                    title: title.to_string(),
+                    content: content.to_string(),
+                    member_asset_ids: vec![atom.asset_id],
+                    ..kura_memory::CreateAssetInput::default()
+                })
+                .expect("seed L2")
+                .0
+        };
+        // Older, and the one the query matches — it will not fit the budget.
+        let matching = scenario("deployment", "the operator deploys on Fridays");
+        // Newer, unrelated: it takes the whole bootstrap budget.
+        let newest = scenario("unrelated", "kitchen renovation notes");
+
+        let mut payload = serde_json::json!({
+            "tenantId": "",
+            "sourceKind": "chat",
+            "provider": "echo",
+            "model": "",
+            "messages": [
+                { "role": "user", "content": "when does the operator deploy on Fridays" }
+            ]
+        });
+        let hooks = app.state.hooks.as_ref().expect("hook bus");
+        assert!(
+            hooks
+                .run(kura_plugin::points::CHAT_PRE_DISPATCH, &mut payload)
+                .allowed()
+        );
+        let messages = payload["messages"].as_array().expect("messages");
+        let rendered = messages
+            .iter()
+            .filter_map(|m| m["content"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            rendered.contains(&format!("Memory[l2 {}]", matching.asset_id)),
+            "the budget-excluded L2 scenario is recalled by the query: {rendered}"
+        );
+        // The newest one fit the bootstrap budget; it must appear once, not
+        // once from bootstrap and again from retrieval.
+        let occurrences = rendered
+            .matches(&format!("Memory[l2 {}]", newest.asset_id))
+            .count();
+        assert_eq!(occurrences, 1, "no double injection: {rendered}");
+
+        let events = app
+            .state
+            .store
+            .lock()
+            .list_events(&kura_events::Filter::default())
+            .expect("list events");
+        let assembled = events
+            .iter()
+            .find(|e| e.name == "context.assembled")
+            .expect("context.assembled recorded");
+        let excluded = assembled.payload["record"]["excluded"]
+            .as_array()
+            .expect("excluded array");
+        assert!(
+            excluded
+                .iter()
+                .any(|item| item["assetId"] == newest.asset_id.as_str()
+                    && item["reason"] == "already_injected"),
+            "the skip is recorded, not silent: {excluded:?}"
+        );
+        app.close();
+    }
+
+    /// Stage 1's own verification requirement (audit F1): the retrieval
+    /// benchmark at 10k Ready atoms. Cold turn embeds the whole corpus once;
+    /// warm turn must reuse the persisted index and be no slower. Numbers are
+    /// printed so the plan can record them; the assertion is the ordering.
+    #[tokio::test]
+    async fn retrieval_benchmark_10k_atoms_warm_turn_is_not_slower_than_cold() {
+        let app = App::new(test_config()).expect("build app");
+        let memory = app.state.memory.as_deref().expect("memory");
+        let operator = kura_memory::Actor {
+            kind: kura_memory::ActorKind::Operator,
+            id: "op".into(),
+        };
+        let store = app.state.store.clone();
+        for i in 0..10_000 {
+            let (atom, _) = memory
+                .create(kura_memory::CreateAssetInput {
+                    kind: kura_memory::AssetKind::ChatMemory,
+                    layer: kura_memory::MemoryLayer::L1,
+                    owner: operator.clone(),
+                    visibility: kura_memory::Visibility::Private,
+                    atom_type: Some(kura_memory::AtomType::Preference),
+                    title: format!("fact {i}"),
+                    content: format!("the operator noted item number {i} about topic {}", i % 97),
+                    source_links: vec![kura_memory::SourceLink {
+                        kind: kura_memory::SourceKind::Thread,
+                        id: "thr_bench".into(),
+                        ..kura_memory::SourceLink::default()
+                    }],
+                    ..kura_memory::CreateAssetInput::default()
+                })
+                .expect("seed");
+            store.lock().upsert_memory_asset(&atom).expect("persist");
+        }
+        let hooks = app.state.hooks.as_ref().expect("hooks");
+        let turn = || {
+            let mut payload = serde_json::json!({
+                "tenantId": "", "sourceKind": "chat", "provider": "echo", "model": "",
+                "messages": [{ "role": "user", "content": "what did the operator note about topic 42" }]
+            });
+            let start = std::time::Instant::now();
+            assert!(
+                hooks
+                    .run(kura_plugin::points::CHAT_PRE_DISPATCH, &mut payload)
+                    .allowed()
+            );
+            start.elapsed()
+        };
+        let cold = turn();
+        let warm = turn();
+        let warm2 = turn();
+        let warm_best = warm.min(warm2);
+        eprintln!("[bench] 10k atoms: cold={cold:?} warm={warm:?} warm2={warm2:?}");
+        // The corpus is bounded to RETRIEVAL_MAX_CORPUS (2000) newest atoms,
+        // so the index holds 2000 vectors after the cold turn.
+        let fp = kura_context::Embedder::fingerprint(&kura_context::HashedNgramEmbedder::default());
+        let n = store
+            .lock()
+            .count_memory_asset_embeddings_for_tenant("")
+            .expect("count");
+        assert_eq!(
+            n,
+            kura_context::RETRIEVAL_MAX_CORPUS as i64,
+            "index size, fingerprint {fp}"
+        );
+        assert!(
+            warm_best <= cold,
+            "warm {warm_best:?} must not be slower than cold {cold:?}"
+        );
+        app.close();
+    }
+
+    /// Stage 5.1: a thread's frame is injected first and survives elision.
+    #[tokio::test]
+    async fn session_frame_is_injected_first_and_survives_a_tight_window() {
+        let config = test_config();
+        std::fs::write(
+            std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
+            serde_json::json!({
+                "entries": { "session-strategy": { "config": { "personalBudgetChars": 120, "keepRecent": 1 } } }
+            })
+            .to_string(),
+        )
+        .expect("write profile");
+        let app = App::new(config).expect("build app");
+        {
+            let store = app.state.store.lock();
+            let frame = kura_session::SessionFrame {
+                thread_id: "thr_frame".into(),
+                goal: "ship the Q4 report".into(),
+                constraints: vec!["cite sources".into()],
+                ..kura_session::SessionFrame::default()
+            };
+            kura_store::put_document(
+                &store,
+                kura_session::DOC_KIND_SESSION_FRAME,
+                "thr_frame",
+                "",
+                "",
+                &frame,
+            )
+            .expect("persist frame");
+        }
+        let mut payload = serde_json::json!({
+            "tenantId": "", "threadId": "thr_frame", "sourceKind": "chat", "provider": "echo", "model": "",
+            "messages": [
+                { "role": "user", "content": "old history ".repeat(30) },
+                { "role": "assistant", "content": "old reply ".repeat(30) },
+                { "role": "user", "content": "what next" }
+            ]
+        });
+        let hooks = app.state.hooks.as_ref().expect("hooks");
+        assert!(
+            hooks
+                .run(kura_plugin::points::CHAT_PRE_DISPATCH, &mut payload)
+                .allowed()
+        );
+        let messages = payload["messages"].as_array().expect("messages");
+        assert!(
+            messages[0]["content"]
+                .as_str()
+                .unwrap()
+                .starts_with("[session frame] goal: ship the Q4 report"),
+            "frame first: {messages:?}"
+        );
+        assert!(
+            messages.iter().any(|m| m["content"]
+                .as_str()
+                .is_some_and(|c| c.contains("elided by the session-strategy"))),
+            "history was elided around it: {messages:?}"
+        );
+        assert_eq!(messages.last().unwrap()["content"], "what next");
+        app.close();
+    }
+
+    /// Stage 5.2: an idle channel thread opens a new session segment through
+    /// the real lifecycle reset; an active one does not.
+    #[tokio::test]
+    async fn idle_channel_thread_opens_a_new_segment_at_turn_start() {
+        let config = test_config();
+        std::fs::write(
+            std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
+            serde_json::json!({
+                "entries": { "session-strategy": { "config": {
+                    "channelSegmentation": { "*": { "idleGapSeconds": 3600 } }
+                } } }
+            })
+            .to_string(),
+        )
+        .expect("write profile");
+        let app = App::new(config).expect("build app");
+        let now = chrono::Utc::now();
+        let seed = |thread_id: &str, last_turn_age_seconds: i64| {
+            let store = app.state.store.lock();
+            store
+                .upsert_thread(&kura_threads::Thread {
+                    thread_id: thread_id.into(),
+                    tenant_id: "ten_seg".into(),
+                    lifecycle_state: kura_threads::LifecycleState::Active,
+                    current_session_segment_id: format!("{thread_id}_seg1"),
+                    source_kind: kura_threads::SourceKind::Channel,
+                    source_summary: "Discord / #general".into(),
+                    last_activity_at: now,
+                    created_at: now,
+                    updated_at: now,
+                    retention_expires_at: Some(now + chrono::Duration::days(90)),
+                    redaction_status: kura_threads::RedactionStatus::Redacted,
+                })
+                .expect("thread");
+            store
+                .upsert_thread_session_segment(&kura_threads::SessionSegment {
+                    session_segment_id: format!("{thread_id}_seg1"),
+                    thread_id: thread_id.into(),
+                    tenant_id: "ten_seg".into(),
+                    session_id: String::new(),
+                    generation: 1,
+                    state: "active".into(),
+                    started_at: now,
+                    ended_at: None,
+                    last_active_at: now,
+                    reset_from_session_segment_id: String::new(),
+                    partial_evidence: false,
+                })
+                .expect("segment");
+            let recorded = now - chrono::Duration::seconds(last_turn_age_seconds);
+            store
+                .save_continuity_turn(&kura_threads::ContinuityTurn {
+                    continuity_turn_id: format!("{thread_id}_turn1"),
+                    tenant_id: "ten_seg".into(),
+                    thread_id: thread_id.into(),
+                    session_segment_id: format!("{thread_id}_seg1"),
+                    acceptance_sequence: 1,
+                    role: kura_threads::ContinuityRole::User,
+                    source_kind: kura_threads::SourceKind::Channel,
+                    source_linkage_id: String::new(),
+                    source_message_id: String::new(),
+                    source_timestamp: Some(recorded),
+                    dispatch_id: String::new(),
+                    response_to_turn_id: String::new(),
+                    safe_content: "earlier message".into(),
+                    content_redaction_status: kura_threads::RedactionStatus::Redacted,
+                    artifact_excerpt_refs: Vec::new(),
+                    recorded_at: recorded,
+                    retention_expires_at: Some(now + chrono::Duration::days(90)),
+                    source_event_key: String::new(),
+                })
+                .expect("turn");
+        };
+        seed("thr_idle", 7200);
+        seed("thr_busy", 60);
+
+        let hooks = app.state.hooks.as_ref().expect("hooks");
+        let run = |thread_id: &str| {
+            let mut payload = serde_json::json!({
+                "tenantId": "ten_seg", "threadId": thread_id, "query": "hello again",
+                "sourceKind": "channel", "channelScopeRef": "discord-main:general",
+                "sourceTimestamp": now.to_rfc3339(),
+            });
+            assert!(
+                hooks
+                    .run(kura_plugin::points::CHAT_TURN_START, &mut payload)
+                    .allowed()
+            );
+            app.state
+                .store
+                .lock()
+                .get_thread_for_tenant("ten_seg", thread_id)
+                .expect("get")
+                .expect("thread")
+        };
+        let idle = run("thr_idle");
+        assert_ne!(
+            idle.current_session_segment_id, "thr_idle_seg1",
+            "idle thread opened a new segment"
+        );
+        assert_eq!(idle.lifecycle_state, kura_threads::LifecycleState::Reset);
+        let busy = run("thr_busy");
+        assert_eq!(
+            busy.current_session_segment_id, "thr_busy_seg1",
+            "active thread keeps its segment"
+        );
+
+        // The boundary is an audited lifecycle action, same as an operator reset.
+        let actions = app
+            .state
+            .store
+            .lock()
+            .list_thread_lifecycle_actions("ten_seg", "thr_idle", now)
+            .expect("actions");
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.reason_code == "idle_gap_segmentation"),
+            "{actions:?}"
+        );
+        app.close();
+    }
+
+    /// Stage 4: a fan-out runs each goal as a real chat turn on its own
+    /// thread, records a structured result per child, and publishes progress
+    /// events. Verified against the real assembly with the echo provider.
+    #[tokio::test]
+    async fn swarm_runs_children_concurrently_with_structured_results_and_events() {
+        let config = test_config();
+        std::fs::write(
+            std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
+            serde_json::json!({ "entries": { "swarm": { "config": { "enabled": true, "maxConcurrentChildren": 2 } } } }).to_string(),
+        ).expect("write profile");
+        // Single-user assembly for this test: no bearer auth, no tenant, so
+        // the per-child gate takes its recorded "nothing to meter" path and
+        // the children run as ordinary local turns.
+        let mut app = App::new(config).expect("build app");
+        assert!(
+            app.state.swarm_quota.is_some(),
+            "billing-backed child quota gate wired"
+        );
+        app.state.auth = None;
+        // Proof that each child is a hooked turn: a counting pre-dispatch
+        // hook registered before the launch must fire once per child.
+        struct Count(std::sync::atomic::AtomicUsize);
+        impl kura_plugin::Hook for Count {
+            fn handle(&self, _p: &mut serde_json::Value) -> kura_plugin::HookOutcome {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                kura_plugin::HookOutcome::Continue
+            }
+        }
+        let counter = Arc::new(Count(std::sync::atomic::AtomicUsize::new(0)));
+        app.state.hooks.as_ref().expect("hooks").register(
+            kura_plugin::points::CHAT_PRE_DISPATCH,
+            "swarm-test",
+            counter.clone(),
+        );
+        let app = Arc::new(app);
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/swarm/runs")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({
+                    "goals": ["summarise A", "summarise B", "summarise C"], "provider": "echo"
+                })
+                .to_string(),
+            ))
+            .expect("request");
+        let response = app.router().oneshot(request).await.expect("oneshot");
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let run: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        let run_id = run["runId"].as_str().expect("runId").to_string();
+        assert_eq!(run["status"], "queued");
+        assert_eq!(run["children"].as_array().unwrap().len(), 3);
+
+        let manager = app.state.swarm.clone().expect("swarm");
+        let mut done = None;
+        for _ in 0..200 {
+            if let Some(r) = manager.get(&run_id) {
+                if !matches!(
+                    r.status,
+                    kura_swarm::RunStatus::Queued | kura_swarm::RunStatus::Running
+                ) {
+                    done = Some(r);
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let run = done.expect("run finished within 10s");
+        assert_eq!(run.status, kura_swarm::RunStatus::Completed, "{run:?}");
+        for child in &run.children {
+            assert_eq!(
+                child.status,
+                kura_swarm::ChildStatus::Completed,
+                "{child:?}"
+            );
+            assert!(
+                !child.dispatch_id.is_empty(),
+                "each child persisted a dispatch"
+            );
+            assert!(
+                child.output_preview.contains(&child.goal),
+                "echo output carries the goal: {child:?}"
+            );
+            assert_eq!(
+                child.thread_id,
+                format!("swarm:{run_id}:{}", child.index),
+                "own thread per child"
+            );
+        }
+
+        let events = app
+            .state
+            .store
+            .lock()
+            .list_events(&kura_events::Filter::default())
+            .expect("events");
+        let names: Vec<&str> = events
+            .iter()
+            .filter(|e| e.category == "swarm")
+            .map(|e| e.name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"swarm.run_queued") && names.contains(&"swarm.run_started"),
+            "{names:?}"
+        );
+        assert_eq!(
+            names
+                .iter()
+                .filter(|n| **n == "swarm.child_completed")
+                .count(),
+            3,
+            "{names:?}"
+        );
+        assert!(names.contains(&"swarm.run_completed"), "{names:?}");
+
+        // Each child went through the chat hooks (model-visible = logged per
+        // child): the pre-dispatch hook fired once per child.
+        assert_eq!(counter.0.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+        let request = Request::builder()
+            .uri(format!("/v1/swarm/runs/{run_id}"))
+            .body(axum::body::Body::empty())
+            .expect("request");
+        let response = app.router().oneshot(request).await.expect("oneshot");
+        assert_eq!(response.status(), StatusCode::OK);
+        app.close();
+    }
+
+    /// Opt-in, not default-on: with no profile entry every launch is refused.
+    #[tokio::test]
+    async fn swarm_is_refused_until_opted_in() {
+        let mut app = App::new(test_config()).expect("build app");
+        app.state.auth = None;
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/swarm/runs")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(r#"{"goals":["a"]}"#))
+            .expect("request");
+        let response = app.router().oneshot(request).await.expect("oneshot");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        app.close();
+    }
+
+    /// Stage 3.1: distillation runs as a visible chat turn on its own thread
+    /// and lands a Pending proposal in the review queue. A canned provider
+    /// stands in for the model so the success path is exercised.
+    #[tokio::test]
+    async fn distillation_runs_as_a_visible_turn_and_lands_a_pending_proposal() {
+        // The echo provider returns the prompt, and guidance is placed first in
+        // it — so a corrected draft given as guidance is exactly what the model
+        // 'answers', which is also the real steering path.
+        let mut app = App::new(test_config()).expect("build app");
+        app.state.auth = None;
+        let app = Arc::new(app);
+
+        let request = Request::builder()
+            .method("POST").uri("/v1/skills/proposals/distill").header("content-type", "application/json")
+            .body(axum::body::Body::from(serde_json::json!({ "threadId": "thr_source", "provider": "echo", "guidance": "{\"name\": \"deploy-check\", \"description\": \"pre-deploy checklist\", \"body\": \"1. run tests\\n2. check CI\"}" }).to_string()))
+            .expect("request");
+        let response = app.router().oneshot(request).await.expect("oneshot");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(json["distillThreadId"], "skill-distill:thr_source");
+        assert!(
+            !json["dispatchId"].as_str().unwrap().is_empty(),
+            "the distillation is a persisted dispatch"
+        );
+        assert_eq!(json["proposal"]["asset"]["status"], "pending", "{json}");
+        assert_eq!(json["proposal"]["asset"]["title"], "deploy-check");
+        let links = json["proposal"]["asset"]["sourceLinks"].as_array().unwrap();
+        assert!(
+            links.iter().any(|l| l["id"] == "thr_source"),
+            "evidence links the source thread: {links:?}"
+        );
+        assert!(
+            links.iter().any(|l| l["id"] == "skill-distill:thr_source"),
+            "and the distill thread"
+        );
+
+        // The distill thread is an ordinary conversation: its dispatch carries
+        // the operator's guidance, so replying there steers a second pass.
+        let dispatches = app
+            .state
+            .store
+            .lock()
+            .list_llm_dispatches()
+            .expect("dispatches");
+        let mine = dispatches
+            .iter()
+            .find(|d| d.dispatch_id == json["dispatchId"].as_str().unwrap())
+            .expect("dispatch");
+        assert!(
+            mine.messages
+                .iter()
+                .any(|m| m.content.contains("Operator guidance: {"))
         );
         app.close();
     }
@@ -1658,14 +2463,19 @@ mod tests {
         let messages = payload["messages"].as_array().expect("messages");
         let externalized = messages
             .iter()
-            .find(|m| m["content"].as_str().is_some_and(|c| c.contains("[externalized:")))
+            .find(|m| {
+                m["content"]
+                    .as_str()
+                    .is_some_and(|c| c.contains("[externalized:"))
+            })
             .expect("oversized message externalized");
         assert!(
             externalized["content"].as_str().unwrap().len() < 500,
             "window keeps only the preview + citation"
         );
         assert_eq!(
-            messages.last().unwrap()["content"], "current query",
+            messages.last().unwrap()["content"],
+            "current query",
             "current query untouched"
         );
         let assets = app
@@ -1678,7 +2488,10 @@ mod tests {
             .iter()
             .find(|asset| asset.title == "context_ref")
             .expect("ref asset persisted");
-        assert!(asset.content.len() > 8000, "full content preserved in the ref");
+        assert!(
+            asset.content.len() > 8000,
+            "full content preserved in the ref"
+        );
         assert!(asset.source_links.iter().any(|l| l.id == "thr_refs"));
         app.close();
     }
@@ -1706,9 +2519,10 @@ mod tests {
         let report = app.state.plugins.as_ref().expect("report");
         assert!(report.enabled("session-strategy"));
         let hooks = app.state.hooks.as_ref().expect("hook bus");
-        assert!(hooks
-            .registrations()
-            .contains(&("chat/pre-dispatch".to_string(), "session-strategy".to_string())));
+        assert!(hooks.registrations().contains(&(
+            "chat/pre-dispatch".to_string(),
+            "session-strategy".to_string()
+        )));
 
         let mut payload = serde_json::json!({
             "sourceKind": "chat",
@@ -1747,7 +2561,10 @@ mod tests {
             .find(|m| m["content"].as_str().is_some_and(|c| c.contains("elided")))
             .expect("marker");
         assert!(
-            marker["content"].as_str().unwrap().contains("captured as Memory[l0_ref mem_"),
+            marker["content"]
+                .as_str()
+                .unwrap()
+                .contains("captured as Memory[l0_ref mem_"),
             "marker cites the captured span: {marker:?}"
         );
         let assets = app
@@ -1760,7 +2577,10 @@ mod tests {
             .iter()
             .find(|asset| asset.title == "session_eviction")
             .expect("elided span captured to the memory plane");
-        assert!(span.content.contains("old old"), "span holds the elided history");
+        assert!(
+            span.content.contains("old old"),
+            "span holds the elided history"
+        );
         assert!(
             span.source_links.iter().any(|link| link.id == "thr_evict"),
             "span links back to the thread"
@@ -1784,7 +2604,10 @@ mod tests {
                     .clone(),
             },
         );
-        let profile = kura_plugin::PluginProfile { disabled: vec![], entries };
+        let profile = kura_plugin::PluginProfile {
+            disabled: vec![],
+            entries,
+        };
         match App::with_profile(config, profile) {
             Err(AppError::PluginProfile(message)) => {
                 assert!(message.contains("session-strategy"), "{message}");
@@ -1845,8 +2668,7 @@ mod tests {
     #[test]
     fn external_plugin_rewrites_chat_context_end_to_end() {
         let config = test_config();
-        let plugin_dir =
-            std::path::Path::new(&config.data_dir).join("plugins/external-window");
+        let plugin_dir = std::path::Path::new(&config.data_dir).join("plugins/external-window");
         std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin");
         std::fs::write(
             plugin_dir.join("run.sh"),
@@ -1922,15 +2744,532 @@ mod tests {
             wiring.activation_store.is_some(),
             "activation StateStore/IdentityRepository/AuditSink (SqliteActivationStore)"
         );
-        assert!(wiring.activation_billing.is_some(), "activation BillingProjector");
+        assert!(
+            wiring.activation_billing.is_some(),
+            "activation BillingProjector"
+        );
         assert!(wiring.activation_chat.is_some(), "activation ChatRunner");
-        assert!(wiring.computeruse_recorder.is_some(), "computeruse ArtifactRecorder");
-        assert!(wiring.execprofile_health.is_some(), "execprofile HealthChecker");
+        assert!(
+            wiring.computeruse_recorder.is_some(),
+            "computeruse ArtifactRecorder"
+        );
+        assert!(
+            wiring.execprofile_health.is_some(),
+            "execprofile HealthChecker"
+        );
         assert!(wiring.evidence_collector.is_some(), "evidence Collector");
-        assert!(wiring.delivery_connector.is_some(), "delivery ConnectorAdapter");
+        assert!(
+            wiring.delivery_connector.is_some(),
+            "delivery ConnectorAdapter"
+        );
         assert!(wiring.mcp_starter.is_some(), "mcp AttachedExecutionStarter");
         assert!(wiring.mcp_secret_resolver.is_some(), "mcp SecretResolver");
         app.close();
     }
+}
 
+#[cfg(test)]
+mod tool_host_tests {
+    //! Stage 9.0b/9.2 against the real assembly: the model asks for a tool,
+    //! the assembly's tool source answers from the real memory / tool planes
+    //! through the `kura-core` loop.
+
+    use std::sync::Arc;
+
+    use futures::future::BoxFuture;
+    use kura_chat::{CancellationToken, QueryInput, ToolSource as _, ToolTurn};
+    use kura_config::{Config, Environment};
+    use kura_core::ToolInvocation;
+    use kura_llm::{
+        MessageRole, Provider, ProviderError, ProviderRequest, ProviderResponse, StreamEmitter,
+        Usage,
+    };
+
+    use crate::App;
+
+    fn test_config() -> Config {
+        let dir = std::env::temp_dir().join(format!("kura-app-tools-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).expect("create temp data dir");
+        Config {
+            environment: Environment::Test,
+            bind_addr: "127.0.0.1:0".to_string(),
+            data_dir: dir.to_string_lossy().into_owned(),
+            log_level: "info".to_string(),
+            version: "dev".to_string(),
+            // A configured openai_compatible profile so the providers manager
+            // resolves the name; the test then swaps the registered provider
+            // for a scripted one under that same name.
+            llm: kura_config::LlmConfig {
+                default_provider: "openai_compatible".to_string(),
+                default_model: "m".to_string(),
+                openai_compatible: kura_config::OpenAiCompatibleProviderConfig {
+                    base_url: "https://llm.example.org/v1".to_string(),
+                    api_key: "test-key".to_string(),
+                    model: "m".to_string(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            connectors: Default::default(),
+            egress: Default::default(),
+            store: Default::default(),
+            project_root: String::new(),
+        }
+    }
+
+    /// Asks for `tool` with `arguments` once, then answers with the tool
+    /// result it was shown.
+    struct AskOnce {
+        tool: String,
+        arguments: String,
+        requests: parking_lot::RwLock<Vec<ProviderRequest>>,
+    }
+
+    impl AskOnce {
+        fn respond(&self, request: &ProviderRequest) -> ProviderResponse {
+            self.requests.write().push(request.clone());
+            let offered: Vec<&str> = request.tools.iter().map(|t| t.name.as_str()).collect();
+            let answered = request.messages.iter().any(|m| m.role == MessageRole::Tool);
+            if offered.contains(&self.tool.as_str()) && !answered {
+                return ProviderResponse {
+                    output: String::new(),
+                    finish_reason: "tool_calls".into(),
+                    usage: Usage::default(),
+                    tool_calls: vec![kura_llm::ToolCall {
+                        call_id: "c1".into(),
+                        name: self.tool.clone(),
+                        arguments: self.arguments.clone(),
+                    }],
+                };
+            }
+            let seen = request
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == MessageRole::Tool)
+                .map(|m| m.content.clone())
+                .unwrap_or_else(|| format!("no tool; offered {offered:?}"));
+            ProviderResponse {
+                output: format!("final: {seen}"),
+                finish_reason: "stop".into(),
+                usage: Usage::default(),
+                tool_calls: Vec::new(),
+            }
+        }
+    }
+
+    impl Provider for AskOnce {
+        fn name(&self) -> &str {
+            "openai_compatible"
+        }
+        fn complete<'a>(
+            &'a self,
+            request: ProviderRequest,
+        ) -> BoxFuture<'a, Result<ProviderResponse, ProviderError>> {
+            Box::pin(async move { Ok(self.respond(&request)) })
+        }
+        fn stream<'a>(
+            &'a self,
+            request: ProviderRequest,
+            _emit: StreamEmitter<'a>,
+        ) -> BoxFuture<'a, Result<ProviderResponse, ProviderError>> {
+            Box::pin(async move { Ok(self.respond(&request)) })
+        }
+    }
+
+    fn app_with_provider(tool: &str, arguments: &str) -> (App, Arc<AskOnce>) {
+        let app = App::new(test_config()).expect("build app");
+        let provider = Arc::new(AskOnce {
+            tool: tool.to_string(),
+            arguments: arguments.to_string(),
+            requests: parking_lot::RwLock::new(Vec::new()),
+        });
+        app.state
+            .llm
+            .as_ref()
+            .expect("llm")
+            .register_provider(provider.clone());
+        (app, provider)
+    }
+
+    fn query(text: &str) -> QueryInput {
+        QueryInput {
+            query: text.to_string(),
+            provider: "openai_compatible".to_string(),
+            model: "m".to_string(),
+            ..QueryInput::default()
+        }
+    }
+
+    fn source_for(app: &App) -> crate::tool_host::AppTools {
+        let late = Arc::new(std::sync::OnceLock::new());
+        let _ = late.set(app.state.clone());
+        crate::tool_host::AppTools::new(late)
+    }
+
+    fn call(app: &App, name: &str, arguments: &str) -> kura_core::ToolOutput {
+        let registry = source_for(app).registry(&ToolTurn::default());
+        let tool = registry
+            .get(name)
+            .unwrap_or_else(|| panic!("tool {name} offered"));
+        futures::executor::block_on(tool.call(&ToolInvocation {
+            call_id: "c".into(),
+            name: name.into(),
+            arguments: arguments.into(),
+        }))
+        .expect("tool call returns an output, never an error")
+    }
+
+    fn offered(app: &App) -> Vec<String> {
+        source_for(app)
+            .registry(&ToolTurn::default())
+            .specs()
+            .into_iter()
+            .map(|s| s.name)
+            .collect()
+    }
+
+    /// 9.0b: the model recalls memory mid-turn through the same governed
+    /// corpus the retrieval API exposes, and the reply cites it.
+    #[test]
+    fn memory_lookup_tool_recalls_ready_memory_mid_turn() {
+        let (app, provider) =
+            app_with_provider("memory.lookup", "{\"query\":\"package manager for web\"}");
+        let memory = app.state.memory.as_deref().expect("memory");
+        let operator = kura_memory::Actor {
+            kind: kura_memory::ActorKind::Operator,
+            id: "op".to_string(),
+        };
+        let (atom, _) = memory
+            .create(kura_memory::CreateAssetInput {
+                kind: kura_memory::AssetKind::ChatMemory,
+                layer: kura_memory::MemoryLayer::L1,
+                owner: operator.clone(),
+                visibility: kura_memory::Visibility::Private,
+                atom_type: Some(kura_memory::AtomType::Preference),
+                title: "package manager".to_string(),
+                content: "pnpm is the package manager for web projects".to_string(),
+                source_links: vec![kura_memory::SourceLink {
+                    kind: kura_memory::SourceKind::Thread,
+                    id: "thr_seed".to_string(),
+                    ..kura_memory::SourceLink::default()
+                }],
+                ..kura_memory::CreateAssetInput::default()
+            })
+            .expect("seed atom");
+        assert_eq!(atom.status, kura_memory::AssetStatus::Ready);
+        // A restricted asset must not be recallable by the tool.
+        memory
+            .create(kura_memory::CreateAssetInput {
+                kind: kura_memory::AssetKind::ChatMemory,
+                layer: kura_memory::MemoryLayer::L1,
+                owner: operator,
+                visibility: kura_memory::Visibility::Restricted,
+                atom_type: Some(kura_memory::AtomType::Fact),
+                title: "secret".to_string(),
+                content: "restricted package manager note".to_string(),
+                source_links: vec![kura_memory::SourceLink {
+                    kind: kura_memory::SourceKind::Thread,
+                    id: "thr_seed".to_string(),
+                    ..kura_memory::SourceLink::default()
+                }],
+                ..kura_memory::CreateAssetInput::default()
+            })
+            .expect("seed restricted");
+
+        let chat = app.state.chat.clone().expect("chat");
+        let execution = chat
+            .query(query("which package manager?"), &CancellationToken::new())
+            .expect("query");
+        assert!(execution.exec_error.is_none(), "{:?}", execution.exec_error);
+        let output = &execution.result.dispatch.output;
+        assert!(output.starts_with("final: [1] Memory[l1"), "{output}");
+        assert!(
+            output.contains(&atom.asset_id) && output.contains("pnpm"),
+            "{output}"
+        );
+        assert!(!output.contains("restricted"), "{output}");
+        // The first round offered the memory tool; the assembly built it.
+        let first: Vec<String> = provider.requests.read()[0]
+            .tools
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert!(first.contains(&"memory.lookup".to_string()), "{first:?}");
+        assert!(
+            !first.contains(&"web.search".to_string()),
+            "no search profile configured"
+        );
+        // The call was audited.
+        let events = app.state.event_bus.list(&kura_events::Filter {
+            category: "chat".to_string(),
+            ..kura_events::Filter::default()
+        });
+        assert!(
+            events
+                .iter()
+                .any(|e| e.name == "chat.tool.called" && e.payload["name"] == "memory.lookup")
+        );
+    }
+
+    /// 9.2 mechanism through the real source: a Ready `web.search` profile is
+    /// offered by capability name and runs through `ToolRuntime`; the stub
+    /// family proves the path with no vendor account.
+    #[test]
+    fn a_ready_search_profile_is_offered_and_called_through_the_runtime() {
+        let (app, provider) = app_with_provider("web.search", "{\"query\":\"kura daemon\"}");
+        let tools = app.state.tools.clone().expect("tools");
+        tools
+            .create(
+                "",
+                kura_tools::CreateProfileInput {
+                    title: "stub search".into(),
+                    capability: kura_tools::Capability::WebSearch,
+                    family: kura_tools::Family::BuiltinStub,
+                    auth_mode: kura_tools::AuthMode::None,
+                    is_default: Some(true),
+                    ..kura_tools::CreateProfileInput::default()
+                },
+            )
+            .expect("create profile");
+        let chat = app.state.chat.clone().expect("chat");
+        let execution = chat
+            .query(query("search for kura"), &CancellationToken::new())
+            .expect("query");
+        assert!(execution.exec_error.is_none());
+        let output = &execution.result.dispatch.output;
+        assert!(output.contains("stub result 1 for kura daemon"), "{output}");
+        let first: Vec<String> = provider.requests.read()[0]
+            .tools
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert!(first.contains(&"web.search".to_string()), "{first:?}");
+    }
+
+    /// The Stage 9 verification bar: a tool call meets a quota denial and a
+    /// policy denial, and both reach the model as failed calls — never as a
+    /// silent skip, never as a call that ran anyway.
+    #[test]
+    fn a_tool_call_meets_quota_and_policy_denials_as_failed_calls() {
+        struct DenyAll;
+        impl kura_tools::QuotaGate for DenyAll {
+            fn reserve(
+                &self,
+                _tenant_id: &str,
+                _profile: &kura_tools::ToolProfile,
+            ) -> kura_tools::QuotaDecision {
+                kura_tools::QuotaDecision::Denied {
+                    reason_code: "quota_exhausted".to_string(),
+                    detail: "daily tool calls used".to_string(),
+                }
+            }
+            fn commit(&self, _tenant_id: &str, _operation_key: &str) {}
+            fn release(&self, _tenant_id: &str, _operation_key: &str, _reason: &str) {}
+        }
+        let mut app = App::new(test_config()).expect("build app");
+        app.state.tool_runtime = Some(Arc::new(kura_tools::ToolRuntime::new(
+            Arc::new(DenyAll),
+            kura_egress::EgressPolicy::default(),
+        )));
+        app.state
+            .tools
+            .clone()
+            .expect("tools")
+            .create(
+                "",
+                kura_tools::CreateProfileInput {
+                    title: "stub search".into(),
+                    capability: kura_tools::Capability::WebSearch,
+                    family: kura_tools::Family::BuiltinStub,
+                    auth_mode: kura_tools::AuthMode::None,
+                    is_default: Some(true),
+                    ..kura_tools::CreateProfileInput::default()
+                },
+            )
+            .expect("create profile");
+        // Quota denial: the runtime refuses before the provider runs.
+        let outcome = call(&app, "web.search", "{\"query\":\"x\"}");
+        assert!(!outcome.success);
+        assert!(
+            outcome.content.contains("quota denied: quota_exhausted"),
+            "{}",
+            outcome.content
+        );
+
+        // Policy denial: a `chat/tool-call` hook vetoes; the inner tool never runs.
+        struct Veto;
+        impl kura_plugin::Hook for Veto {
+            fn handle(&self, payload: &mut serde_json::Value) -> kura_plugin::HookOutcome {
+                assert_eq!(payload["name"], "memory.lookup");
+                kura_plugin::HookOutcome::Halt("no recall in this workspace".to_string())
+            }
+        }
+        app.state.hooks.clone().expect("hooks").register(
+            kura_plugin::points::CHAT_TOOL_CALL,
+            "policy-test",
+            Arc::new(Veto),
+        );
+        let outcome = call(&app, "memory.lookup", "{\"query\":\"anything\"}");
+        assert!(!outcome.success);
+        assert!(
+            outcome.content.contains("vetoed by plugin policy-test"),
+            "{}",
+            outcome.content
+        );
+    }
+
+    /// An `mcp_backed` profile whose server is unknown is not offered: the
+    /// model must not be shown a tool that cannot be called.
+    #[test]
+    fn an_mcp_backed_profile_without_a_live_server_is_not_offered() {
+        let app = App::new(test_config()).expect("build app");
+        app.state
+            .tools
+            .clone()
+            .expect("tools")
+            .create(
+                "",
+                kura_tools::CreateProfileInput {
+                    title: "my search".into(),
+                    capability: kura_tools::Capability::WebSearch,
+                    family: kura_tools::Family::McpBacked,
+                    auth_mode: kura_tools::AuthMode::None,
+                    mcp_server_id: "mcp_missing".into(),
+                    mcp_tool_name: "search".into(),
+                    is_default: Some(true),
+                    ..kura_tools::CreateProfileInput::default()
+                },
+            )
+            .expect("create profile");
+        let names = offered(&app);
+        assert!(!names.contains(&"web.search".to_string()), "{names:?}");
+        assert!(names.contains(&"memory.lookup".to_string()), "{names:?}");
+    }
+}
+
+#[cfg(test)]
+mod browser_driver_tests {
+    //! Stage 9.4 wiring: `entries.computer-use.config.driver = "subprocess"`
+    //! puts a supervised worker behind the computer-use manager and its
+    //! health lands in the capability supervisor.
+
+    use kura_config::{Config, Environment};
+
+    use crate::App;
+
+    fn test_config() -> Config {
+        let dir = std::env::temp_dir().join(format!("kura-app-browser-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).expect("create temp data dir");
+        Config {
+            project_root: Default::default(),
+            environment: Environment::Test,
+            bind_addr: "127.0.0.1:0".to_string(),
+            data_dir: dir.to_string_lossy().into_owned(),
+            log_level: "info".to_string(),
+            version: "dev".to_string(),
+            llm: Default::default(),
+            connectors: Default::default(),
+            egress: Default::default(),
+            store: kura_config::StoreConfig { readers: 2 },
+        }
+    }
+
+    /// A protocol-conformant worker in POSIX sh: answers every request
+    /// `ok:true` with the session echoed back as active. Enough to prove the
+    /// wiring; the driver's own supervision tests use the Rust fake worker.
+    fn write_sh_worker(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("worker.sh");
+        std::fs::write(
+            &path,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  session=$(printf '%s' "$line" | sed -n 's/.*"session":\({[^}]*}\).*/\1/p')
+  session=$(printf '%s' "$session" | sed 's/"status":"[a-z_]*"/"status":"active"/')
+  printf '{"id":%s,"ok":true,"session":%s}\n' "$id" "$session"
+done
+"#,
+        )
+        .expect("write worker");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        path
+    }
+
+    #[test]
+    fn subprocess_driver_is_wired_from_plugin_config_and_reports_to_the_supervisor() {
+        let config = test_config();
+        let worker = write_sh_worker(std::path::Path::new(&config.data_dir));
+        std::fs::write(
+            std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
+            serde_json::json!({ "entries": { "computer-use": { "config": {
+                "driver": "subprocess",
+                "command": "/bin/sh",
+                "args": [worker.to_string_lossy()],
+                "timeoutMs": 5000
+            } } } })
+            .to_string(),
+        )
+        .expect("write profile");
+        let app = App::new(config).expect("build app");
+
+        let capabilities = app.state.capabilities.clone().expect("supervisor");
+
+        let runtime = app.state.runtime.clone().expect("runtime");
+        let run = runtime
+            .create_run(kura_runtime::CreateRunInput {
+                entrypoint: "chat".to_string(),
+                ..kura_runtime::CreateRunInput::default()
+            })
+            .expect("create run");
+        // Sessions reference runs by foreign key; the API persists runs, the
+        // in-memory runtime alone does not.
+        app.state
+            .store
+            .lock()
+            .upsert_run(&run)
+            .expect("persist run");
+        let manager = app.state.computer_use.clone().expect("computer use");
+        let session = manager
+            .create_session(
+                &run.run_id,
+                &kura_computeruse::CreateSessionInput {
+                    initial_url: "https://example.org".to_string(),
+                    ..kura_computeruse::CreateSessionInput::default()
+                },
+            )
+            .expect("session through the worker");
+        assert_eq!(session.status, kura_computeruse::SessionStatus::Active);
+        // Boot-time restore replaces the supervisor registry, so the worker
+        // registers on its first report; the healthy answer lands there.
+        let browser = capabilities
+            .get("browser")
+            .expect("browser worker registered");
+        assert_eq!(browser.kind, "browser_worker");
+        assert_eq!(
+            browser.status,
+            kura_capabilities::Status::Healthy,
+            "a healthy answer is reported to the supervisor"
+        );
+    }
+
+    #[test]
+    fn an_unknown_driver_name_fails_the_build_loudly() {
+        let config = test_config();
+        std::fs::write(
+            std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
+            serde_json::json!({ "entries": { "computer-use": { "config": { "driver": "chrome" } } } })
+                .to_string(),
+        )
+        .expect("write profile");
+        let err = match App::new(config) {
+            Ok(_) => panic!("unknown driver must fail the build"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("unknown driver"), "{err}");
+    }
 }

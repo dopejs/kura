@@ -4,20 +4,19 @@
 use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
-use kura_billing::go_zero_time;
 use kura_billing::BillingError;
 use kura_billing::EffectiveQuota;
 use kura_billing::EnforcementMode;
+use kura_billing::go_zero_time;
 use kura_identity::Principal;
 use kura_identity::Tenant;
 use serde_json::Map;
 use serde_json::Value;
 
-use crate::error::activation_error;
 use crate::error::ActivationError;
-use crate::service::stable_activation_id;
+use crate::error::activation_error;
 use crate::service::Service;
-use crate::types::default_test_chat_first_action;
+use crate::service::stable_activation_id;
 use crate::types::FailureReason;
 use crate::types::FailureStage;
 use crate::types::QuotaBaseline;
@@ -28,12 +27,13 @@ use crate::types::ReadinessKind;
 use crate::types::ReadinessStatus;
 use crate::types::ReasonCode;
 use crate::types::RemediationOwner;
-use crate::types::State;
-use crate::types::Status;
 use crate::types::STEP_QUOTA_BASELINE;
 use crate::types::STEP_QUOTA_BASELINE_READY;
 use crate::types::STEP_TENANT_RESOLVED;
 use crate::types::STEP_TEST_CHAT;
+use crate::types::State;
+use crate::types::Status;
+use crate::types::default_test_chat_first_action;
 
 /// Builds the freshly evaluated active (or quota-blocked) activation state
 /// for a personal tenant.
@@ -61,8 +61,18 @@ pub(crate) async fn active_state_for_personal_tenant(
         ],
         blocking_reason_codes: Vec::new(),
         readiness_items: vec![
-            ready_readiness_item("tenant-access", ReadinessKind::TENANT_ACCESS.into(), "Tenant access", now),
-            ready_readiness_item("environment", ReadinessKind::ENVIRONMENT.into(), "Hosted environment", now),
+            ready_readiness_item(
+                "tenant-access",
+                ReadinessKind::TENANT_ACCESS.into(),
+                "Tenant access",
+                now,
+            ),
+            ready_readiness_item(
+                "environment",
+                ReadinessKind::ENVIRONMENT.into(),
+                "Hosted environment",
+                now,
+            ),
         ],
         quota_baseline: None,
         first_action: default_test_chat_first_action(true, Vec::new()),
@@ -109,13 +119,21 @@ async fn project_quota_baseline(
     let Some(billing) = &service.billing else {
         return Ok((
             default_quota_baseline(tenant_id, now),
-            ready_readiness_item("quota-baseline", ReadinessKind::QUOTA_BASELINE.into(), "Quota baseline", now),
+            ready_readiness_item(
+                "quota-baseline",
+                ReadinessKind::QUOTA_BASELINE.into(),
+                "Quota baseline",
+                now,
+            ),
         ));
     };
     let summary = match billing.usage_summary(tenant_id, service.hosted).await {
         Ok(summary) => summary,
         Err(BillingError::QuotaStateUnavailable) => {
-            return Ok((unavailable_quota_baseline(tenant_id, now), blocked_quota_readiness(now)));
+            return Ok((
+                unavailable_quota_baseline(tenant_id, now),
+                blocked_quota_readiness(now),
+            ));
         }
         Err(err) => {
             return Err(activation_error(
@@ -142,7 +160,12 @@ async fn project_quota_baseline(
     };
     Ok((
         baseline,
-        ready_readiness_item("quota-baseline", ReadinessKind::QUOTA_BASELINE.into(), "Quota baseline", now),
+        ready_readiness_item(
+            "quota-baseline",
+            ReadinessKind::QUOTA_BASELINE.into(),
+            "Quota baseline",
+            now,
+        ),
     ))
 }
 
@@ -206,7 +229,8 @@ fn unavailable_quota_baseline(tenant_id: &str, now: DateTime<Utc>) -> QuotaBasel
 }
 
 fn quota_projection(quota: &EffectiveQuota) -> QuotaProjection {
-    let used = quota.consumed_amount + quota.reserved_amount + quota.adjusted_amount - quota.carryover_applied;
+    let used = quota.consumed_amount + quota.reserved_amount + quota.adjusted_amount
+        - quota.carryover_applied;
     let mut metadata = Map::new();
     if quota.period_start != go_zero_time() {
         metadata.insert(
@@ -215,7 +239,10 @@ fn quota_projection(quota: &EffectiveQuota) -> QuotaProjection {
         );
     }
     if quota.period_end != go_zero_time() {
-        metadata.insert("periodEnd".to_string(), Value::String(rfc3339(quota.period_end)));
+        metadata.insert(
+            "periodEnd".to_string(),
+            Value::String(rfc3339(quota.period_end)),
+        );
     }
     if !quota.period_anchor.is_empty() {
         metadata.insert(
@@ -238,8 +265,16 @@ fn quota_projection(quota: &EffectiveQuota) -> QuotaProjection {
         limit: Some(quota.limit),
         used: Some(used),
         remaining: Some(quota.remaining_amount),
-        period: format!("{}/{}", rfc3339(quota.period_start), rfc3339(quota.period_end)),
-        metadata: if metadata.is_empty() { None } else { Some(metadata) },
+        period: format!(
+            "{}/{}",
+            rfc3339(quota.period_start),
+            rfc3339(quota.period_end)
+        ),
+        metadata: if metadata.is_empty() {
+            None
+        } else {
+            Some(metadata)
+        },
     }
 }
 
@@ -266,18 +301,18 @@ mod tests {
     use kura_billing::Category;
     use kura_billing::EffectiveQuota;
     use kura_billing::EnforcementMode;
-    use kura_billing::UsageSummary;
-    use kura_billing::Unit;
     use kura_billing::PERIOD_ANCHOR_UTC;
+    use kura_billing::Unit;
+    use kura_billing::UsageSummary;
     use kura_identity::TenantContext;
 
     use super::*;
-    use crate::error::reason_code_from_error;
-    use crate::testutil::*;
     use crate::ActivateInput;
     use crate::Dependencies;
     use crate::Service;
     use crate::StateStore;
+    use crate::error::reason_code_from_error;
+    use crate::testutil::*;
 
     fn quota_usage_summary(tenant_id: &str) -> UsageSummary {
         let limit = 10;
@@ -291,8 +326,14 @@ mod tests {
                 plan_key: "hosted-free".to_string(),
                 category: Category::RUN_LAUNCHES.into(),
                 unit: Unit::COUNT.into(),
-                period_start: Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).single().unwrap_or_default(),
-                period_end: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).single().unwrap_or_default(),
+                period_start: Utc
+                    .with_ymd_and_hms(2026, 5, 1, 0, 0, 0)
+                    .single()
+                    .unwrap_or_default(),
+                period_end: Utc
+                    .with_ymd_and_hms(2026, 6, 1, 0, 0, 0)
+                    .single()
+                    .unwrap_or_default(),
                 period_anchor: PERIOD_ANCHOR_UTC.to_string(),
                 limit,
                 consumed_amount: used,
@@ -363,9 +404,10 @@ mod tests {
     async fn activate_blocks_when_quota_baseline_unavailable() {
         let now = test_now();
         let repo = Arc::new(MemoryIdentityRepository::default());
-        repo.principals
-            .lock()
-            .insert("prn_blocked".to_string(), active_principal("prn_blocked", now));
+        repo.principals.lock().insert(
+            "prn_blocked".to_string(),
+            active_principal("prn_blocked", now),
+        );
         let state_store = Arc::new(MemoryStateStore::default());
         let svc = Service::new(Dependencies {
             state_store: Some(state_store.clone()),
@@ -396,7 +438,10 @@ mod tests {
         assert_eq!(baseline.status, QuotaBaselineStatus::UNAVAILABLE);
         assert_eq!(baseline.reason_code, ReasonCode::QUOTA_BASELINE_UNAVAILABLE);
         assert!(!state.first_action.available);
-        assert_eq!(state.first_action.blocking_item_ids, vec!["quota-baseline".to_string()]);
+        assert_eq!(
+            state.first_action.blocking_item_ids,
+            vec!["quota-baseline".to_string()]
+        );
         let failure = state.failure_reason.as_ref().expect("failure reason");
         assert_eq!(failure.reason_code, ReasonCode::QUOTA_BASELINE_UNAVAILABLE);
         assert!(failure.retryable);
@@ -421,15 +466,18 @@ mod tests {
     async fn activate_propagates_unexpected_quota_projection_failures() {
         let now = test_now();
         let repo = Arc::new(MemoryIdentityRepository::default());
-        repo.principals
-            .lock()
-            .insert("prn_quota_error".to_string(), active_principal("prn_quota_error", now));
+        repo.principals.lock().insert(
+            "prn_quota_error".to_string(),
+            active_principal("prn_quota_error", now),
+        );
         let svc = Service::new(Dependencies {
             state_store: Some(Arc::new(MemoryStateStore::default())),
             identity: Some(repo),
             billing: Some(Arc::new(StaticBillingProjector {
                 summary: None,
-                err: Some(BillingError::Repository("billing database unavailable".to_string())),
+                err: Some(BillingError::Repository(
+                    "billing database unavailable".to_string(),
+                )),
             })),
             chat: None,
             audit: Some(Arc::new(RecordingAuditSink::default())),

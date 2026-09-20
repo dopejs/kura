@@ -60,7 +60,10 @@ fn make_session(now: DateTime<Utc>) -> Session {
 
 fn make_action(now: DateTime<Utc>) -> Action {
     let mut input = serde_json::Map::new();
-    input.insert("url".to_string(), serde_json::json!("https://example.com/page"));
+    input.insert(
+        "url".to_string(),
+        serde_json::json!("https://example.com/page"),
+    );
     Action {
         computer_use_action_id: "cuact_1".to_string(),
         environment_scope: "test".to_string(),
@@ -144,12 +147,23 @@ fn computer_use_session_round_trips_through_sqlite() {
     assert_eq!(scope.origin, "https://example.com");
     assert_eq!(scope.scope_revision, 1);
     assert!(got.current_page.is_some());
-    assert_eq!(got.current_page.as_ref().unwrap().url, "https://example.com/");
+    assert_eq!(
+        got.current_page.as_ref().unwrap().url,
+        "https://example.com/"
+    );
 
-    let fetched = store.get_computer_use_session("test", "run_cu", "cusess_1").unwrap().expect("found");
+    let fetched = store
+        .get_computer_use_session("test", "run_cu", "cusess_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(fetched.computer_use_session_id, "cusess_1");
     assert_eq!(fetched.status, SessionStatus::Active);
-    assert_eq!(store.get_computer_use_session("test", "run_cu", "missing").unwrap(), None);
+    assert_eq!(
+        store
+            .get_computer_use_session("test", "run_cu", "missing")
+            .unwrap(),
+        None
+    );
 
     // Upserting the same id overwrites the row instead of duplicating it.
     let mut updated = session;
@@ -166,11 +180,15 @@ fn computer_use_action_round_trips_through_sqlite() {
     let store = SQLiteStore::new(&dir).unwrap();
     store.upsert_run(&make_run()).unwrap();
     let now = Utc::now();
-    store.upsert_computer_use_session(&make_session(now)).unwrap();
+    store
+        .upsert_computer_use_session(&make_session(now))
+        .unwrap();
     let action = make_action(now);
     store.upsert_computer_use_action(&action).unwrap();
 
-    let listed = store.list_computer_use_actions("test", "run_cu", "cusess_1").unwrap();
+    let listed = store
+        .list_computer_use_actions("test", "run_cu", "cusess_1")
+        .unwrap();
     assert_eq!(listed.len(), 1);
     let got = &listed[0];
     assert_eq!(got.computer_use_action_id, "cuact_1");
@@ -181,17 +199,34 @@ fn computer_use_action_round_trips_through_sqlite() {
     assert_eq!(got.status, ActionStatus::Completed);
     assert_eq!(got.risk_level, RiskLevel::Low);
     assert_eq!(got.approval_id, "apr_1");
-    assert_eq!(got.input.get("url"), Some(&serde_json::json!("https://example.com/page")));
+    assert_eq!(
+        got.input.get("url"),
+        Some(&serde_json::json!("https://example.com/page"))
+    );
     assert!(got.target_match_context.is_some());
-    assert_eq!(got.target_match_context.as_ref().unwrap().match_result, Some(MatchResult::Matched));
+    assert_eq!(
+        got.target_match_context.as_ref().unwrap().match_result,
+        Some(MatchResult::Matched)
+    );
     assert!(got.page_after.is_some());
-    assert_eq!(got.page_after.as_ref().unwrap().url, "https://example.com/page");
+    assert_eq!(
+        got.page_after.as_ref().unwrap().url,
+        "https://example.com/page"
+    );
     assert_eq!(got.completed_at, Some(now));
 
-    let fetched = store.get_computer_use_action("test", "run_cu", "cusess_1", "cuact_1").unwrap().expect("found");
+    let fetched = store
+        .get_computer_use_action("test", "run_cu", "cusess_1", "cuact_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(fetched.computer_use_action_id, "cuact_1");
     assert_eq!(fetched.status, ActionStatus::Completed);
-    assert_eq!(store.get_computer_use_action("test", "run_cu", "cusess_1", "missing").unwrap(), None);
+    assert_eq!(
+        store
+            .get_computer_use_action("test", "run_cu", "cusess_1", "missing")
+            .unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -200,12 +235,16 @@ fn computer_use_artifact_round_trips_through_sqlite() {
     let store = SQLiteStore::new(&dir).unwrap();
     store.upsert_run(&make_run()).unwrap();
     let now = Utc::now();
-    store.upsert_computer_use_session(&make_session(now)).unwrap();
+    store
+        .upsert_computer_use_session(&make_session(now))
+        .unwrap();
     store.upsert_computer_use_action(&make_action(now)).unwrap();
     let artifact = make_artifact(now);
     store.upsert_computer_use_artifact(&artifact).unwrap();
 
-    let listed = store.list_computer_use_artifacts_for_action("test", "run_cu", "cuact_1").unwrap();
+    let listed = store
+        .list_computer_use_artifacts_for_action("test", "run_cu", "cuact_1")
+        .unwrap();
     assert_eq!(listed.len(), 1);
     let got = &listed[0];
     assert_eq!(got.artifact_id, "cuart_1");
@@ -220,10 +259,16 @@ fn computer_use_artifact_round_trips_through_sqlite() {
     assert_eq!(got.sha256, "abc123");
     assert_eq!(got.available_at, Some(now));
 
-    let fetched = store.get_computer_use_artifact("test", "cuart_1").unwrap().expect("found");
+    let fetched = store
+        .get_computer_use_artifact("test", "cuart_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(fetched.artifact_id, "cuart_1");
     assert_eq!(fetched.kind, ArtifactKind::PageSnapshot);
-    assert_eq!(store.get_computer_use_artifact("test", "missing").unwrap(), None);
+    assert_eq!(
+        store.get_computer_use_artifact("test", "missing").unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -232,7 +277,9 @@ fn find_pending_computer_use_action_by_approval_returns_waiting_action() {
     let store = SQLiteStore::new(&dir).unwrap();
     store.upsert_run(&make_run()).unwrap();
     let now = Utc::now();
-    store.upsert_computer_use_session(&make_session(now)).unwrap();
+    store
+        .upsert_computer_use_session(&make_session(now))
+        .unwrap();
 
     let mut waiting = make_action(now);
     waiting.computer_use_action_id = "cuact_pending".to_string();
@@ -253,7 +300,12 @@ fn find_pending_computer_use_action_by_approval_returns_waiting_action() {
     assert_eq!(found.computer_use_action_id, "cuact_pending");
     assert_eq!(found.status, ActionStatus::WaitingApproval);
     assert_eq!(found.approval_id, "apr_123");
-    assert_eq!(store.find_pending_computer_use_action_by_approval("test", "missing").unwrap(), None);
+    assert_eq!(
+        store
+            .find_pending_computer_use_action_by_approval("test", "missing")
+            .unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -284,7 +336,9 @@ fn mark_inflight_computer_use_interrupted_marks_sessions_and_actions() {
     store.upsert_computer_use_action(&done).unwrap();
 
     let interrupted_at = Utc::now();
-    let (sessions, actions) = store.mark_inflight_computer_use_interrupted("test", &interrupted_at).unwrap();
+    let (sessions, actions) = store
+        .mark_inflight_computer_use_interrupted("test", &interrupted_at)
+        .unwrap();
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].computer_use_session_id, "cusess_1");
     assert_eq!(sessions[0].status, SessionStatus::Interrupted);
@@ -293,14 +347,23 @@ fn mark_inflight_computer_use_interrupted_marks_sessions_and_actions() {
     assert_eq!(actions[0].computer_use_action_id, "cuact_1");
     assert_eq!(actions[0].status, ActionStatus::Interrupted);
     assert_eq!(actions[0].failure_class, "interrupted");
-    assert_eq!(actions[0].failure_reason, "daemon restarted before computer-use action completed");
+    assert_eq!(
+        actions[0].failure_reason,
+        "daemon restarted before computer-use action completed"
+    );
     assert_eq!(actions[0].completed_at, Some(interrupted_at));
 
     // The interruption is persisted, not just returned in memory.
-    let got_session = store.get_computer_use_session("test", "run_cu", "cusess_1").unwrap().expect("session");
+    let got_session = store
+        .get_computer_use_session("test", "run_cu", "cusess_1")
+        .unwrap()
+        .expect("session");
     assert_eq!(got_session.status, SessionStatus::Interrupted);
     assert_eq!(got_session.interrupted_at, Some(interrupted_at));
-    let got_action = store.get_computer_use_action("test", "run_cu", "cusess_1", "cuact_1").unwrap().expect("action");
+    let got_action = store
+        .get_computer_use_action("test", "run_cu", "cusess_1", "cuact_1")
+        .unwrap()
+        .expect("action");
     assert_eq!(got_action.status, ActionStatus::Interrupted);
     assert_eq!(got_action.failure_class, "interrupted");
     assert_eq!(got_action.completed_at, Some(interrupted_at));

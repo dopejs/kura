@@ -92,7 +92,9 @@ pub fn create_product_fixture_from_candidate(
         tenant_id: input.tenant_id.trim().to_string(),
         display_name: input.display_name.trim().to_string(),
         domain_class: input.domain_class,
-        source_kind: ProductResourceKind::DiscoveredCandidate.as_str().to_string(),
+        source_kind: ProductResourceKind::DiscoveredCandidate
+            .as_str()
+            .to_string(),
         source_refs: input.source_candidate.source_refs.clone(),
         source_candidate_id: input.source_candidate.discovered_candidate_id.clone(),
         current_revision_id: revision_id,
@@ -199,7 +201,9 @@ pub fn apply_product_fixture_retention(
         return Err(EvaluationError::ProductBoundsInvalid);
     }
     fixture.retention_state = state;
-    if fixture.retention_state == RetentionState::Deleted || fixture.retention_state == RetentionState::Tombstone {
+    if fixture.retention_state == RetentionState::Deleted
+        || fixture.retention_state == RetentionState::Tombstone
+    {
         fixture.review_state = ProductLifecycleStatus::Deleted;
     }
     fixture.updated_at = now;
@@ -207,11 +211,15 @@ pub fn apply_product_fixture_retention(
 }
 
 /// Go `EnsureProductFixtureEditable`.
-pub fn ensure_product_fixture_editable(fixture: &ProductManagedFixture) -> Result<(), EvaluationError> {
+pub fn ensure_product_fixture_editable(
+    fixture: &ProductManagedFixture,
+) -> Result<(), EvaluationError> {
     if fixture.fixture_id.trim().is_empty() || fixture.tenant_id.trim().is_empty() {
         return Err(EvaluationError::ProductFixtureSourceRequired);
     }
-    if fixture.source_kind == "repo_fixture" || fixture.source_kind == crate::types::SourceKind::Fixture.as_str() {
+    if fixture.source_kind == "repo_fixture"
+        || fixture.source_kind == crate::types::SourceKind::Fixture.as_str()
+    {
         return Err(EvaluationError::RepoFixtureImmutable);
     }
     if fixture.retention_state == RetentionState::Deleted
@@ -239,7 +247,11 @@ fn validate_product_fixture_input(input: &ProductFixtureInput) -> Result<(), Eva
     if input.display_name.trim().is_empty() || input.domain_class.as_str().is_empty() {
         return Err(EvaluationError::ProductFixtureSourceRequired);
     }
-    if input.source_candidate.discovered_candidate_id.trim().is_empty()
+    if input
+        .source_candidate
+        .discovered_candidate_id
+        .trim()
+        .is_empty()
         || input.source_evidence.evidence_id.trim().is_empty()
     {
         return Err(EvaluationError::ProductFixtureSourceRequired);

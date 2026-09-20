@@ -136,7 +136,10 @@ impl RuntimeReplayRecorder {
 }
 
 impl RuntimeRecorder for RuntimeReplayRecorder {
-    fn record_replay(&self, input: ReplayRecordInput) -> BoxFuture<'_, Result<ReplayRecordResult, EvaluationError>> {
+    fn record_replay(
+        &self,
+        input: ReplayRecordInput,
+    ) -> BoxFuture<'_, Result<ReplayRecordResult, EvaluationError>> {
         Box::pin(async move { self.record_replay_inner(input).await })
     }
 }
@@ -243,7 +246,11 @@ impl RuntimeReplayRecorder {
             .await;
             return Err(EvaluationError::RecordReplay(err.to_string()));
         }
-        let now = if is_zero_time(input.now) { Utc::now() } else { input.now };
+        let now = if is_zero_time(input.now) {
+            Utc::now()
+        } else {
+            input.now
+        };
 
         let step = match runtime.create_step(
             &run.run_id,
@@ -333,7 +340,14 @@ impl RuntimeReplayRecorder {
         if let Some(updated_run) = run_update {
             run = updated_run;
         }
-        let workflow = replay_workflow(&input, &run.run_id, &workflow_id, &workflow_step_id, &step.step_id, now);
+        let workflow = replay_workflow(
+            &input,
+            &run.run_id,
+            &workflow_id,
+            &workflow_step_id,
+            &step.step_id,
+            now,
+        );
         if let Err(err) = self.upsert_workflow(workflow.clone()) {
             release_replay_runtime_reservation(
                 &self.billing_manager,
@@ -343,7 +357,8 @@ impl RuntimeReplayRecorder {
             .await;
             return Err(EvaluationError::RecordReplay(err));
         }
-        if let Err(err) = self.replace_workflow_steps(&workflow.workflow_id, workflow.steps.clone()) {
+        if let Err(err) = self.replace_workflow_steps(&workflow.workflow_id, workflow.steps.clone())
+        {
             release_replay_runtime_reservation(
                 &self.billing_manager,
                 &workflow_reservation,
@@ -426,18 +441,30 @@ impl RuntimeReplayRecorder {
     }
 
     fn upsert_run(&self, run: kura_runtime::Run) -> Result<(), String> {
-        let Some(store) = &self.store else { return Ok(()); };
-        store.upsert_run(run).map_err(|e| format!("upsert run: {e}"))
+        let Some(store) = &self.store else {
+            return Ok(());
+        };
+        store
+            .upsert_run(run)
+            .map_err(|e| format!("upsert run: {e}"))
     }
 
     fn upsert_step(&self, step: kura_runtime::Step) -> Result<(), String> {
-        let Some(store) = &self.store else { return Ok(()); };
-        store.upsert_step(step).map_err(|e| format!("upsert step: {e}"))
+        let Some(store) = &self.store else {
+            return Ok(());
+        };
+        store
+            .upsert_step(step)
+            .map_err(|e| format!("upsert step: {e}"))
     }
 
     fn upsert_workflow(&self, workflow: kura_orchestration::Workflow) -> Result<(), String> {
-        let Some(store) = &self.store else { return Ok(()); };
-        store.upsert_workflow(workflow).map_err(|e| format!("upsert workflow: {e}"))
+        let Some(store) = &self.store else {
+            return Ok(());
+        };
+        store
+            .upsert_workflow(workflow)
+            .map_err(|e| format!("upsert workflow: {e}"))
     }
 
     fn replace_workflow_steps(
@@ -445,7 +472,9 @@ impl RuntimeReplayRecorder {
         workflow_id: &str,
         steps: Vec<kura_orchestration::WorkflowStep>,
     ) -> Result<(), String> {
-        let Some(store) = &self.store else { return Ok(()); };
+        let Some(store) = &self.store else {
+            return Ok(());
+        };
         store
             .replace_workflow_steps(workflow_id, steps)
             .map_err(|e| format!("replace workflow steps {workflow_id}: {e}"))
@@ -461,16 +490,19 @@ async fn reserve_replay_runtime_quotas(
 ) -> Result<ReserveAllResult, EvaluationError> {
     let Some(manager) = manager else {
         if hosted {
-            let denial = kura_billing::new_quota_state_unavailable_denial(tenant_id, run_operation_key);
-            return Err(EvaluationError::BillingReservation(BillingReservationError {
-                result: ReserveResult {
-                    allowed: false,
-                    denial: Some(denial),
-                    failure: Some(BillingError::QuotaStateUnavailable),
-                    ..Default::default()
+            let denial =
+                kura_billing::new_quota_state_unavailable_denial(tenant_id, run_operation_key);
+            return Err(EvaluationError::BillingReservation(
+                BillingReservationError {
+                    result: ReserveResult {
+                        allowed: false,
+                        denial: Some(denial),
+                        failure: Some(BillingError::QuotaStateUnavailable),
+                        ..Default::default()
+                    },
+                    error: BillingError::QuotaStateUnavailable,
                 },
-                error: BillingError::QuotaStateUnavailable,
-            }));
+            ));
         }
         return Ok(ReserveAllResult {
             allowed: true,
@@ -503,14 +535,18 @@ async fn reserve_replay_runtime_quotas(
         .await;
     match result {
         Ok(result) if result.allowed => Ok(result),
-        Ok(result) => Err(EvaluationError::BillingReservation(BillingReservationError {
-            result: result.results.first().cloned().unwrap_or_default(),
-            error: result.failure.clone().unwrap_or(BillingError::QuotaDenied),
-        })),
-        Err(err) => Err(EvaluationError::BillingReservation(BillingReservationError {
-            result: ReserveResult::default(),
-            error: err,
-        })),
+        Ok(result) => Err(EvaluationError::BillingReservation(
+            BillingReservationError {
+                result: result.results.first().cloned().unwrap_or_default(),
+                error: result.failure.clone().unwrap_or(BillingError::QuotaDenied),
+            },
+        )),
+        Err(err) => Err(EvaluationError::BillingReservation(
+            BillingReservationError {
+                result: ReserveResult::default(),
+                error: err,
+            },
+        )),
     }
 }
 
@@ -519,7 +555,9 @@ async fn release_replay_runtime_reservation(
     reservation: &UsageReservation,
     reason: &str,
 ) {
-    let Some(manager) = manager else { return; };
+    let Some(manager) = manager else {
+        return;
+    };
     if reservation.reservation_id.trim().is_empty() {
         return;
     }
@@ -541,7 +579,9 @@ async fn commit_replay_runtime_reservation(
     reservation: &UsageReservation,
     reason: &str,
 ) -> Result<(), BillingError> {
-    let Some(manager) = manager else { return Ok(()); };
+    let Some(manager) = manager else {
+        return Ok(());
+    };
     if reservation.reservation_id.trim().is_empty() {
         return Ok(());
     }
@@ -562,19 +602,29 @@ async fn commit_replay_runtime_reservation(
 /// Go `redactReplayRecordInput`.
 #[must_use]
 pub fn redact_replay_record_input(mut input: ReplayRecordInput) -> ReplayRecordInput {
-    input.attempt.change_window_label = redact_replay_credential_string(&input.attempt.change_window_label);
+    input.attempt.change_window_label =
+        redact_replay_credential_string(&input.attempt.change_window_label);
     input.attempt.runtime_summary = redact_replay_credential_string(&input.attempt.runtime_summary);
     input.attempt.policy_summary = redact_replay_credential_string(&input.attempt.policy_summary);
-    input.attempt.integration_summary = redact_replay_credential_string(&input.attempt.integration_summary);
-    input.attempt.delivery_summary = redact_replay_credential_string(&input.attempt.delivery_summary);
-    input.attempt.evidence_summary = redact_replay_credential_string(&input.attempt.evidence_summary);
-    input.attempt.blocked_reasons = redact_replay_credential_strings(&input.attempt.blocked_reasons);
-    input.evidence.runtime_summary = redact_replay_credential_string(&input.evidence.runtime_summary);
+    input.attempt.integration_summary =
+        redact_replay_credential_string(&input.attempt.integration_summary);
+    input.attempt.delivery_summary =
+        redact_replay_credential_string(&input.attempt.delivery_summary);
+    input.attempt.evidence_summary =
+        redact_replay_credential_string(&input.attempt.evidence_summary);
+    input.attempt.blocked_reasons =
+        redact_replay_credential_strings(&input.attempt.blocked_reasons);
+    input.evidence.runtime_summary =
+        redact_replay_credential_string(&input.evidence.runtime_summary);
     input.evidence.policy_summary = redact_replay_credential_string(&input.evidence.policy_summary);
-    input.evidence.integration_summary = redact_replay_credential_string(&input.evidence.integration_summary);
-    input.evidence.delivery_summary = redact_replay_credential_string(&input.evidence.delivery_summary);
-    input.evidence.evidence_summary = redact_replay_credential_string(&input.evidence.evidence_summary);
-    input.evidence.blocked_reasons = redact_replay_credential_strings(&input.evidence.blocked_reasons);
+    input.evidence.integration_summary =
+        redact_replay_credential_string(&input.evidence.integration_summary);
+    input.evidence.delivery_summary =
+        redact_replay_credential_string(&input.evidence.delivery_summary);
+    input.evidence.evidence_summary =
+        redact_replay_credential_string(&input.evidence.evidence_summary);
+    input.evidence.blocked_reasons =
+        redact_replay_credential_strings(&input.evidence.blocked_reasons);
     input.evidence.limitations = redact_replay_credential_strings(&input.evidence.limitations);
     input
 }
@@ -606,7 +656,10 @@ pub fn replay_run_goal(candidate: &ReplayCandidate, attempt: &ReplayAttempt) -> 
     if attempt.change_window_label.is_empty() {
         format!("Replay evaluation candidate {name}")
     } else {
-        format!("Replay evaluation candidate {name} for {}", attempt.change_window_label)
+        format!(
+            "Replay evaluation candidate {name} for {}",
+            attempt.change_window_label
+        )
     }
 }
 
@@ -652,7 +705,8 @@ pub fn replay_workflow(
         environment_scope: input.candidate.environment_scope.clone(),
         goal,
         status: kura_orchestration::WorkflowStatus::Completed,
-        plan_summary: "Replay captured evidence through the evaluation runtime envelope.".to_string(),
+        plan_summary: "Replay captured evidence through the evaluation runtime envelope."
+            .to_string(),
         created_at: now,
         updated_at: now,
         started_at: Some(now),

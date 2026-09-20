@@ -26,8 +26,14 @@ pub fn connector_foreground_reply_failed(input: ConnectorForegroundReplyFailedIn
         tenant_id: input.tenant_id.clone(),
         category: "connector".to_string(),
         name: "connector.foreground_reply_failed".to_string(),
-        scope: Scope { connector_id: input.connector_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "connector_foreground_reply".to_string(), id: input.message_delivery_id.clone() },
+        scope: Scope {
+            connector_id: input.connector_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "connector_foreground_reply".to_string(),
+            id: input.message_delivery_id.clone(),
+        },
         payload: payload![
             "tenantId" => input.tenant_id,
             "connectorId" => input.connector_id,
@@ -63,8 +69,14 @@ pub fn connector_delivery_separation_recorded(input: ConnectorDeliverySeparation
         tenant_id: input.tenant_id.clone(),
         category: "connector".to_string(),
         name: "connector.delivery_separation_recorded".to_string(),
-        scope: Scope { connector_id: input.connector_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "connector_delivery_boundary".to_string(), id: input.boundary_id.clone() },
+        scope: Scope {
+            connector_id: input.connector_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "connector_delivery_boundary".to_string(),
+            id: input.boundary_id.clone(),
+        },
         payload: payload![
             "tenantId" => input.tenant_id,
             "connectorId" => input.connector_id,

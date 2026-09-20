@@ -6,8 +6,20 @@ use kura_computeruse::{
 #[test]
 fn memory_driver_start_session() {
     let driver = MemoryDriver::new();
-    let session = Session { computer_use_session_id: "s1".to_string(), run_id: "r1".to_string(), ..Session::default() };
-    let started = driver.start_session(session, CreateSessionInput { initial_url: "https://example.com".to_string(), ..CreateSessionInput::default() }).unwrap();
+    let session = Session {
+        computer_use_session_id: "s1".to_string(),
+        run_id: "r1".to_string(),
+        ..Session::default()
+    };
+    let started = driver
+        .start_session(
+            session,
+            CreateSessionInput {
+                initial_url: "https://example.com".to_string(),
+                ..CreateSessionInput::default()
+            },
+        )
+        .unwrap();
     assert_eq!(started.status, SessionStatus::Active);
     assert_eq!(started.driver_kind, "browser");
     let page = started.current_page.expect("current page");
@@ -18,10 +30,19 @@ fn memory_driver_start_session() {
 #[test]
 fn memory_driver_navigate_completes() {
     let driver = MemoryDriver::new();
-    let session = Session { computer_use_session_id: "s1".to_string(), run_id: "r1".to_string(), ..Session::default() };
-    let started = driver.start_session(session, CreateSessionInput::default()).unwrap();
+    let session = Session {
+        computer_use_session_id: "s1".to_string(),
+        run_id: "r1".to_string(),
+        ..Session::default()
+    };
+    let started = driver
+        .start_session(session, CreateSessionInput::default())
+        .unwrap();
     let mut input = serde_json::Map::new();
-    input.insert("url".to_string(), serde_json::Value::String("https://foo.com".to_string()));
+    input.insert(
+        "url".to_string(),
+        serde_json::Value::String("https://foo.com".to_string()),
+    );
     let action = Action {
         computer_use_action_id: "a1".to_string(),
         computer_use_session_id: "s1".to_string(),
@@ -40,8 +61,14 @@ fn memory_driver_navigate_completes() {
 #[test]
 fn snapshot_produces_capture() {
     let driver = MemoryDriver::new();
-    let session = Session { computer_use_session_id: "s1".to_string(), run_id: "r1".to_string(), ..Session::default() };
-    let started = driver.start_session(session, CreateSessionInput::default()).unwrap();
+    let session = Session {
+        computer_use_session_id: "s1".to_string(),
+        run_id: "r1".to_string(),
+        ..Session::default()
+    };
+    let started = driver
+        .start_session(session, CreateSessionInput::default())
+        .unwrap();
     let action = Action {
         computer_use_action_id: "a1".to_string(),
         computer_use_session_id: "s1".to_string(),

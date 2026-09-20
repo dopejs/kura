@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use futures::future::BoxFuture;
 use kura_bindings::{
     CapabilityDecision, EffectiveBindingSelection, EffectiveVisibility, ResolutionOutcome,
     RuntimeBindingEvidence,
@@ -37,7 +38,6 @@ use kura_threads::{
     HandoffSourceReferenceStatus, LifecycleState, RedactionStatus, RuntimeArtifactExcerpt,
     SourceKind, Thread,
 };
-use futures::future::BoxFuture;
 use parking_lot::RwLock;
 
 // ------------------------------------------------------------------------
@@ -82,7 +82,7 @@ impl Provider for TestProvider {
         Box::pin(async move {
             requests.write().push(request.clone());
             Ok(ProviderResponse {
-            tool_calls: Vec::new(),
+                tool_calls: Vec::new(),
                 output: format!("reply:{}", request.model),
                 finish_reason: "stop".to_string(),
                 usage: Usage {
@@ -119,7 +119,7 @@ impl Provider for TestProvider {
                 ..Default::default()
             })?;
             Ok(ProviderResponse {
-            tool_calls: Vec::new(),
+                tool_calls: Vec::new(),
                 output: format!("reply:{}", request.model),
                 finish_reason: "stop".to_string(),
                 usage: Usage {
@@ -155,7 +155,7 @@ impl Provider for SlowProvider {
             requests.write().push(request.clone());
             tokio::time::sleep(delay).await;
             Ok(ProviderResponse {
-            tool_calls: Vec::new(),
+                tool_calls: Vec::new(),
                 output: "late reply".to_string(),
                 finish_reason: "stop".to_string(),
                 usage: Usage::default(),
@@ -1494,7 +1494,6 @@ fn manager_is_send_sync() {
     assert_send_sync::<kura_chat::Service>();
 }
 
-
 // ------------------------------------------------------------------------
 // Cancellation token semantics
 // ------------------------------------------------------------------------
@@ -2026,14 +2025,21 @@ fn turn_start_hook_veto_blocks_the_turn() {
         )
         .expect_err("veto must fail the turn");
     match err {
-        ChatError::HookVetoed { point, plugin_id, reason } => {
+        ChatError::HookVetoed {
+            point,
+            plugin_id,
+            reason,
+        } => {
             assert_eq!(point, kura_plugin::points::CHAT_TURN_START);
             assert_eq!(plugin_id, "policy-plugin");
             assert_eq!(reason, "tenant policy forbids this turn");
         }
         other => panic!("expected HookVetoed, got {other:?}"),
     }
-    assert!(provider.requests.read().is_empty(), "no dispatch reached the provider");
+    assert!(
+        provider.requests.read().is_empty(),
+        "no dispatch reached the provider"
+    );
     assert!(store.dispatches().is_empty(), "no dispatch persisted");
     assert!(
         store
@@ -2158,10 +2164,12 @@ fn stream_runs_hook_points() {
     assert!(!chunks.is_empty());
     assert!(provider.saw_message("session-strategy window"));
     let dispatches = store.dispatches();
-    assert!(dispatches.iter().all(|dispatch| dispatch
-        .messages
-        .first()
-        .is_some_and(|message| message.content == "session-strategy window")));
+    assert!(dispatches.iter().all(|dispatch| {
+        dispatch
+            .messages
+            .first()
+            .is_some_and(|message| message.content == "session-strategy window")
+    }));
 }
 
 // ------------------------------------------------------------------------
@@ -2182,10 +2190,15 @@ struct ScriptedProvider {
 }
 
 impl ScriptedProvider {
-    fn new(rounds: Vec<ProviderResponse>) -> (Arc<Self>, Arc<parking_lot::RwLock<Vec<ProviderRequest>>>) {
+    fn new(
+        rounds: Vec<ProviderResponse>,
+    ) -> (Arc<Self>, Arc<parking_lot::RwLock<Vec<ProviderRequest>>>) {
         let seen = Arc::new(parking_lot::RwLock::new(Vec::new()));
         (
-            Arc::new(Self { rounds: parking_lot::Mutex::new(rounds.into()), seen: Arc::clone(&seen) }),
+            Arc::new(Self {
+                rounds: parking_lot::Mutex::new(rounds.into()),
+                seen: Arc::clone(&seen),
+            }),
             seen,
         )
     }
@@ -2223,7 +2236,7 @@ impl Provider for ScriptedProvider {
 struct FixedTools(Arc<kura_core::ToolRegistry>);
 
 impl kura_chat::ToolSource for FixedTools {
-    fn registry(&self) -> Arc<kura_core::ToolRegistry> {
+    fn registry(&self, _turn: &kura_chat::ToolTurn) -> Arc<kura_core::ToolRegistry> {
         Arc::clone(&self.0)
     }
 }
@@ -2248,7 +2261,11 @@ impl kura_core::Tool for RecordingTool {
         &'a self,
         invocation: &'a kura_core::ToolInvocation,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<kura_core::ToolOutput, kura_core::ToolError>> + Send + 'a>,
+        Box<
+            dyn std::future::Future<Output = Result<kura_core::ToolOutput, kura_core::ToolError>>
+                + Send
+                + 'a,
+        >,
     > {
         self.calls.write().push(invocation.arguments.clone());
         let answer = self.answer.clone();
@@ -2297,12 +2314,18 @@ fn a_turn_runs_the_call_the_model_asked_for_and_answers_with_the_result() {
         calls: Arc::clone(&calls),
     });
     let (svc, seen) = service_with_tool(
-        vec![asked_for("call_1", "loopforge_status", "{}"), answered("You are in DISCOVERY.")],
+        vec![
+            asked_for("call_1", "loopforge_status", "{}"),
+            answered("You are in DISCOVERY."),
+        ],
         tool,
     );
 
     let execution = svc
-        .query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "where am i"), &CancellationToken::new())
+        .query(
+            base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "where am i"),
+            &CancellationToken::new(),
+        )
         .expect("query");
 
     assert!(execution.exec_error.is_none());
@@ -2323,12 +2346,18 @@ fn the_second_round_shows_the_model_its_own_call_and_the_result() {
         calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
     });
     let (svc, seen) = service_with_tool(
-        vec![asked_for("call_1", "loopforge_status", "{}"), answered("done")],
+        vec![
+            asked_for("call_1", "loopforge_status", "{}"),
+            answered("done"),
+        ],
         tool,
     );
 
-    svc.query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "where am i"), &CancellationToken::new())
-        .expect("query");
+    svc.query(
+        base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "where am i"),
+        &CancellationToken::new(),
+    )
+    .expect("query");
 
     let requests = seen.read();
     let second = &requests[1];
@@ -2355,12 +2384,18 @@ fn every_round_is_offered_the_same_tools() {
         calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
     });
     let (svc, seen) = service_with_tool(
-        vec![asked_for("call_1", "loopforge_status", "{}"), answered("done")],
+        vec![
+            asked_for("call_1", "loopforge_status", "{}"),
+            answered("done"),
+        ],
         tool,
     );
 
-    svc.query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "hi"), &CancellationToken::new())
-        .expect("query");
+    svc.query(
+        base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "hi"),
+        &CancellationToken::new(),
+    )
+    .expect("query");
 
     for request in seen.read().iter() {
         assert_eq!(request.tools.len(), 1, "a round was offered no tools");
@@ -2379,7 +2414,10 @@ fn a_turn_that_needs_no_tool_is_still_one_dispatch() {
     let (svc, seen) = service_with_tool(vec![answered("hello")], tool);
 
     let execution = svc
-        .query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "hi"), &CancellationToken::new())
+        .query(
+            base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "hi"),
+            &CancellationToken::new(),
+        )
         .expect("query");
 
     assert_eq!(execution.result.dispatch.output, "hello");
@@ -2392,8 +2430,11 @@ fn a_service_with_no_registry_offers_nothing_and_runs_one_round() {
     let (provider, seen) = ScriptedProvider::new(vec![answered("hello")]);
     let svc = service(new_dispatcher(provider), None, None);
 
-    svc.query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "hi"), &CancellationToken::new())
-        .expect("query");
+    svc.query(
+        base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "hi"),
+        &CancellationToken::new(),
+    )
+    .expect("query");
 
     assert_eq!(seen.read().len(), 1);
     assert!(seen.read()[0].tools.is_empty());
@@ -2409,12 +2450,18 @@ fn a_failing_tool_is_reported_to_the_model_rather_than_ending_the_turn() {
         calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
     });
     let (svc, seen) = service_with_tool(
-        vec![asked_for("call_1", "no_such_tool", "{}"), answered("I could not do that.")],
+        vec![
+            asked_for("call_1", "no_such_tool", "{}"),
+            answered("I could not do that."),
+        ],
         tool,
     );
 
     let execution = svc
-        .query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "do it"), &CancellationToken::new())
+        .query(
+            base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "do it"),
+            &CancellationToken::new(),
+        )
         .expect("query");
 
     assert!(execution.exec_error.is_none());
@@ -2425,7 +2472,11 @@ fn a_failing_tool_is_reported_to_the_model_rather_than_ending_the_turn() {
         .iter()
         .find(|m| m.role == MessageRole::Tool)
         .expect("the failure must reach the model");
-    assert!(reported.content.contains("no_such_tool"), "{}", reported.content);
+    assert!(
+        reported.content.contains("no_such_tool"),
+        "{}",
+        reported.content
+    );
 }
 
 #[test]
@@ -2437,18 +2488,25 @@ fn a_turn_that_never_stops_calling_is_failed_rather_than_run_forever() {
         answer: "ok".to_string(),
         calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
     });
-    let rounds: Vec<ProviderResponse> =
-        (0..10).map(|_| asked_for("call_1", "loopforge_status", "{}")).collect();
+    let rounds: Vec<ProviderResponse> = (0..10)
+        .map(|_| asked_for("call_1", "loopforge_status", "{}"))
+        .collect();
     let (mut svc, seen) = service_with_tool(rounds, tool);
     svc.set_max_tool_rounds(3);
 
     let error = svc
-        .query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "loop"), &CancellationToken::new())
+        .query(
+            base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "loop"),
+            &CancellationToken::new(),
+        )
         .expect_err("a turn that never stops must fail");
 
     // The loop's own wording: the cap belongs to `kura-core`, which is what
     // counts the rounds.
-    assert!(error.to_string().contains("exceeded 3 tool rounds"), "{error}");
+    assert!(
+        error.to_string().contains("exceeded 3 tool rounds"),
+        "{error}"
+    );
     assert_eq!(seen.read().len(), 3);
 }
 
@@ -2459,7 +2517,7 @@ struct CountingTools {
 }
 
 impl kura_chat::ToolSource for CountingTools {
-    fn registry(&self) -> Arc<kura_core::ToolRegistry> {
+    fn registry(&self, _turn: &kura_chat::ToolTurn) -> Arc<kura_core::ToolRegistry> {
         *self.asked.write() += 1;
         Arc::clone(&self.registry.read())
     }
@@ -2472,7 +2530,9 @@ fn the_tools_are_asked_for_per_turn_rather_than_snapshotted() {
     // nothing, because a server registered a moment later would never appear
     // and every turn would silently offer no tools.
     let asked = Arc::new(parking_lot::RwLock::new(0usize));
-    let registry = Arc::new(parking_lot::RwLock::new(Arc::new(kura_core::ToolRegistry::new())));
+    let registry = Arc::new(parking_lot::RwLock::new(Arc::new(
+        kura_core::ToolRegistry::new(),
+    )));
     let (provider, seen) = ScriptedProvider::new(vec![answered("one"), answered("two")]);
     let mut svc = service(new_dispatcher(provider), None, None);
     svc.set_tools(Arc::new(CountingTools {
@@ -2480,8 +2540,11 @@ fn the_tools_are_asked_for_per_turn_rather_than_snapshotted() {
         registry: Arc::clone(&registry),
     }));
 
-    svc.query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "hi"), &CancellationToken::new())
-        .expect("first turn");
+    svc.query(
+        base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "hi"),
+        &CancellationToken::new(),
+    )
+    .expect("first turn");
 
     // A tool appears between the turns, the way one does when a user connects
     // a server.
@@ -2493,11 +2556,21 @@ fn the_tools_are_asked_for_per_turn_rather_than_snapshotted() {
     }));
     *registry.write() = Arc::new(grown);
 
-    svc.query(base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "again"), &CancellationToken::new())
-        .expect("second turn");
+    svc.query(
+        base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "again"),
+        &CancellationToken::new(),
+    )
+    .expect("second turn");
 
     assert_eq!(*asked.read(), 2, "the source was not consulted per turn");
     let requests = seen.read();
-    assert!(requests[0].tools.is_empty(), "the first turn should have had none");
-    assert_eq!(requests[1].tools.len(), 1, "the second turn did not see the new tool");
+    assert!(
+        requests[0].tools.is_empty(),
+        "the first turn should have had none"
+    );
+    assert_eq!(
+        requests[1].tools.len(),
+        1,
+        "the second turn did not see the new tool"
+    );
 }

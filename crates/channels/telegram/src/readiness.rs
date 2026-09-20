@@ -7,8 +7,7 @@ use kura_connectors::{DiagnosticReasonCode, LifecycleState, RedactionStatus};
 use serde::{Deserialize, Serialize};
 
 use crate::allowment::{
-    allowment_state, has_valid_allowment, normalize_allowments, AllowmentState,
-    AllowmentValidation,
+    AllowmentState, AllowmentValidation, allowment_state, has_valid_allowment, normalize_allowments,
 };
 use crate::wire_enum;
 
@@ -103,8 +102,14 @@ pub fn evaluate_hosted_setup(input: HostedSetupInput) -> HostedSetup {
         input.started_at
     };
     let group_behavior = input.group_behavior;
-    let allowments = normalize_allowments(&input.tenant_id, &input.connector_id, input.allowments, now);
-    let binding = normalize_account_binding(&input.tenant_id, &input.connector_id, input.account_binding, now);
+    let allowments =
+        normalize_allowments(&input.tenant_id, &input.connector_id, input.allowments, now);
+    let binding = normalize_account_binding(
+        &input.tenant_id,
+        &input.connector_id,
+        input.account_binding,
+        now,
+    );
     let mut setup = HostedSetup {
         tenant_id: input.tenant_id.trim().to_string(),
         connector_id: input.connector_id.trim().to_string(),
@@ -127,7 +132,11 @@ pub fn evaluate_hosted_setup(input: HostedSetupInput) -> HostedSetup {
         retention_expires_at: now + chrono::Duration::days(90),
     };
     if input.cancelled {
-        return setup.not_ready(LifecycleState::Disabled, TerminalState::Cancelled, "user_cancelled");
+        return setup.not_ready(
+            LifecycleState::Disabled,
+            TerminalState::Cancelled,
+            "user_cancelled",
+        );
     }
     if !crate::is_unset_time(&started)
         && now.signed_duration_since(started) > chrono::Duration::minutes(5)
@@ -211,7 +220,12 @@ pub fn evaluate_hosted_setup(input: HostedSetupInput) -> HostedSetup {
 
 impl HostedSetup {
     /// Go `(setup HostedSetup).notReady`.
-    fn not_ready(mut self, status: LifecycleState, terminal: TerminalState, reason: &str) -> HostedSetup {
+    fn not_ready(
+        mut self,
+        status: LifecycleState,
+        terminal: TerminalState,
+        reason: &str,
+    ) -> HostedSetup {
         self.status = status;
         self.terminal_state = terminal;
         self.hosted_ready = false;
@@ -261,7 +275,9 @@ mod tests {
     use chrono::TimeZone;
 
     fn ts(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(y, mo, d, h, mi, s).single().expect("valid timestamp")
+        Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
+            .single()
+            .expect("valid timestamp")
     }
 
     // Go TestEvaluateHostedSetupRequiresCredentialBindingAndAllowmentBeforeReady.
@@ -327,13 +343,19 @@ mod tests {
         let cases: Vec<(&str, HostedSetupInput, TerminalState, &str)> = vec![
             (
                 "missing credential",
-                HostedSetupInput { credential: CredentialState::Missing, ..HostedSetupInput::default() },
+                HostedSetupInput {
+                    credential: CredentialState::Missing,
+                    ..HostedSetupInput::default()
+                },
                 TerminalState::ActionRequired,
                 "auth_missing",
             ),
             (
                 "revoked credential",
-                HostedSetupInput { credential: CredentialState::Revoked, ..HostedSetupInput::default() },
+                HostedSetupInput {
+                    credential: CredentialState::Revoked,
+                    ..HostedSetupInput::default()
+                },
                 TerminalState::ActionRequired,
                 "auth_missing",
             ),

@@ -72,8 +72,8 @@ pub use dashboard::{
     DashboardProjectionInput, build_dashboard_projection, page_dashboard_projections,
 };
 pub use discovery::{
-    DISCOVERY_PARTIAL_REASON_MAX_EMITTED_CANDIDATES, DISCOVERY_PARTIAL_REASON_MAX_INSPECTED_RECORDS,
-    DiscoveryProgress, StartDiscoveryRunInput,
+    DISCOVERY_PARTIAL_REASON_MAX_EMITTED_CANDIDATES,
+    DISCOVERY_PARTIAL_REASON_MAX_INSPECTED_RECORDS, DiscoveryProgress, StartDiscoveryRunInput,
     apply_discovery_run_progress, build_discovery_run_from_policy, discovery_idempotency_scope,
 };
 pub use discovery_scoring::{
@@ -82,8 +82,8 @@ pub use discovery_scoring::{
     score_band_for,
 };
 pub use discovery_sources::{
-    DiscoverySourceFilter, DiscoverySourceReader, DiscoverySourceRecord, collect_discovery_source_refs,
-    discovery_source_route, read_discovery_source_refs,
+    DiscoverySourceFilter, DiscoverySourceReader, DiscoverySourceRecord,
+    collect_discovery_source_refs, discovery_source_route, read_discovery_source_refs,
 };
 pub use error::{BillingReservationError, EvaluationError};
 pub use fixtures::{
@@ -92,13 +92,14 @@ pub use fixtures::{
 };
 pub use manager::{Dependencies, Manager, Store};
 pub use product_fixture::{
-    FixtureRevisionInput, FixtureReviewDecision, ProductFixtureInput, apply_product_fixture_retention,
-    create_product_fixture_from_candidate, create_product_fixture_revision,
-    ensure_product_fixture_editable, product_fixture_selectable, review_product_fixture,
-    suppress_product_fixture,
+    FixtureReviewDecision, FixtureRevisionInput, ProductFixtureInput,
+    apply_product_fixture_retention, create_product_fixture_from_candidate,
+    create_product_fixture_revision, ensure_product_fixture_editable, product_fixture_selectable,
+    review_product_fixture, suppress_product_fixture,
 };
 pub use product_fixture_validation::{
-    ProductFixturePayloadValidation, reject_repo_managed_fixture_edit, validate_product_fixture_payload,
+    ProductFixturePayloadValidation, reject_repo_managed_fixture_edit,
+    validate_product_fixture_payload,
 };
 pub use product_redaction::{
     CandidateEvidenceInput, RedactedEvidence, RedactionPolicy, candidate_evidence_from_payload,
@@ -113,11 +114,10 @@ pub use product_validation::{
     validate_discovery_policy, validate_tenant_scoped_product_request,
 };
 pub use runtime_recorder::{
-    REPLAY_CREDENTIAL_LEAK_MARKERS, REPLAY_REDACTED_CREDENTIAL, REPLAY_RUNTIME_ENTRYPOINT,
-    BoxFuture, ReplayRecordInput, ReplayRecordResult, ReplayRuntime, ReplayRuntimeStore,
-    RuntimeRecorder, RuntimeReplayRecorder, redact_replay_credential_string,
-    redact_replay_credential_strings, redact_replay_record_input, replay_run_goal,
-    replay_workflow,
+    BoxFuture, REPLAY_CREDENTIAL_LEAK_MARKERS, REPLAY_REDACTED_CREDENTIAL,
+    REPLAY_RUNTIME_ENTRYPOINT, ReplayRecordInput, ReplayRecordResult, ReplayRuntime,
+    ReplayRuntimeStore, RuntimeRecorder, RuntimeReplayRecorder, redact_replay_credential_string,
+    redact_replay_credential_strings, redact_replay_record_input, replay_run_goal, replay_workflow,
 };
 pub use suppression::{
     CreateSuppressionInput, candidate_source_ref, filter_suppressed_candidates,
@@ -129,8 +129,8 @@ pub use tool_call_inspection::{
     INSPECTION_LIVE_VALIDATION_COMPLETED, INSPECTION_LIVE_VALIDATION_DENIED,
     INSPECTION_LIVE_VALIDATION_FAILED, INSPECTION_LIVE_VALIDATION_OPERATOR_ACTION,
     INSPECTION_MATCHED, INSPECTION_MISSING_ORIGINAL_EVIDENCE, INSPECTION_MISSING_REPLAY_EVIDENCE,
-    INSPECTION_UNSUPPORTED, ToolCallInspectionInput,
-    build_tool_call_inspection, classify_tool_call_inspection,
+    INSPECTION_UNSUPPORTED, ToolCallInspectionInput, build_tool_call_inspection,
+    classify_tool_call_inspection,
 };
 pub use tool_call_inspection_diff::{ToolCallDiffInput, redacted_tool_call_diff};
 pub use types::*;

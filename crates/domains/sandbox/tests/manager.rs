@@ -51,6 +51,8 @@ fn test_config(data_dir: &str) -> kura_config::Config {
             ..Default::default()
         },
         connectors: kura_config::ConnectorConfig::default(),
+        egress: Default::default(),
+        store: Default::default(),
     }
 }
 
@@ -941,7 +943,11 @@ fn a_daemon_serving_no_project_has_no_project_profile() {
     let dir = temp_dir("noproject");
     let manager = test_manager(&dir);
 
-    assert!(manager.get_profile(kura_sandbox::PROFILE_ID_PROJECT_TOOLS).is_none());
+    assert!(
+        manager
+            .get_profile(kura_sandbox::PROFILE_ID_PROJECT_TOOLS)
+            .is_none()
+    );
 }
 
 #[test]
@@ -978,7 +984,9 @@ fn the_project_profile_permits_working_in_the_project() {
         Engine::new(),
     );
 
-    let scoped = manager.get_profile(kura_sandbox::PROFILE_ID_PROJECT_TOOLS).unwrap();
+    let scoped = manager
+        .get_profile(kura_sandbox::PROFILE_ID_PROJECT_TOOLS)
+        .unwrap();
     let (resolution, _) = kura_sandbox::evaluate_filesystem(
         &scoped,
         &project,
@@ -999,7 +1007,11 @@ fn the_project_profile_permits_working_in_the_project() {
         "/Users/someone/Code/a-game",
         &AccessRequest::default(),
     );
-    assert_eq!(denied, DecisionResolution::Deny, "the default profile should still refuse");
+    assert_eq!(
+        denied,
+        DecisionResolution::Deny,
+        "the default profile should still refuse"
+    );
 }
 
 #[test]
@@ -1018,12 +1030,20 @@ fn the_project_profile_outlives_a_command_timeout() {
         Engine::new(),
     );
 
-    let profile = manager.get_profile(kura_sandbox::PROFILE_ID_PROJECT_TOOLS).unwrap();
+    let profile = manager
+        .get_profile(kura_sandbox::PROFILE_ID_PROJECT_TOOLS)
+        .unwrap();
     let effective = kura_sandbox::effective_timeout(&profile, 0);
-    assert!(effective >= 60 * 60 * 1000, "a session would be killed after {effective}ms");
+    assert!(
+        effective >= 60 * 60 * 1000,
+        "a session would be killed after {effective}ms"
+    );
 
     // Still bounded: a wedged child that nothing reaps is the other failure.
-    assert!(effective <= 24 * 60 * 60 * 1000, "{effective}ms is effectively unlimited");
+    assert!(
+        effective <= 24 * 60 * 60 * 1000,
+        "{effective}ms is effectively unlimited"
+    );
 
     let default_profile = manager.get_profile(PROFILE_ID_SUBPROCESS_DEFAULT).unwrap();
     assert!(
@@ -1046,15 +1066,14 @@ fn the_project_profile_does_not_widen_beyond_the_project() {
         Engine::new(),
     );
 
-    let profile = manager.get_profile(kura_sandbox::PROFILE_ID_PROJECT_TOOLS).unwrap();
+    let profile = manager
+        .get_profile(kura_sandbox::PROFILE_ID_PROJECT_TOOLS)
+        .unwrap();
     assert!(!profile.filesystem_policy.allow_home_read);
     assert!(!profile.filesystem_policy.allow_home_write);
     assert_eq!(profile.network_policy.mode, NetworkMode::Deny);
 
-    let (elsewhere, _) = kura_sandbox::evaluate_filesystem(
-        &profile,
-        "/etc",
-        &AccessRequest::default(),
-    );
+    let (elsewhere, _) =
+        kura_sandbox::evaluate_filesystem(&profile, "/etc", &AccessRequest::default());
     assert_eq!(elsewhere, DecisionResolution::Deny);
 }

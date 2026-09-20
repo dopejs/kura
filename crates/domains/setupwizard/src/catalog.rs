@@ -46,7 +46,11 @@ pub fn catalog_targets(tenant_id: &str) -> Vec<SetupTarget> {
             TargetKind::Connector,
             SetupStyle::OAuth,
             "Slack connector",
-            vec!["metadata_read", "route_policy_validation", "workspace_validation"],
+            vec![
+                "metadata_read",
+                "route_policy_validation",
+                "workspace_validation",
+            ],
         ),
         setup_target(
             TARGET_MATRIX_CONNECTOR,
@@ -54,7 +58,11 @@ pub fn catalog_targets(tenant_id: &str) -> Vec<SetupTarget> {
             TargetKind::Connector,
             SetupStyle::SubmittedSecret,
             "Matrix connector",
-            vec!["metadata_read", "route_policy_validation", "homeserver_validation"],
+            vec![
+                "metadata_read",
+                "route_policy_validation",
+                "homeserver_validation",
+            ],
         ),
     ];
     targets.sort_by(|a, b| a.target_id.cmp(&b.target_id));
@@ -108,7 +116,10 @@ fn setup_target(
             PERMISSION_SECRETS_MANAGE.to_string(),
             PERMISSION_INTEGRATIONS_MANAGE.to_string(),
         ],
-        limited_safe_capabilities: limited_safe_capabilities.into_iter().map(str::to_string).collect(),
+        limited_safe_capabilities: limited_safe_capabilities
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         ..Default::default()
     }
 }

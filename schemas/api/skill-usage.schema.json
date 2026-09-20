@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/skill-usage.schema.json",
+  "title": "SkillUsage",
+  "description": "Per-skill usage. invocations are counted automatically from chat turn-end; helpful/corrected are explicit feedback, because inferring a correction from the next message is a guess.",
+  "type": "object",
+  "required": ["skillId", "invocations", "helpful", "corrected"],
+  "additionalProperties": false,
+  "properties": {
+    "skillId": { "type": "string" },
+    "invocations": { "type": "integer", "minimum": 0 },
+    "helpful": { "type": "integer", "minimum": 0 },
+    "corrected": { "type": "integer", "minimum": 0 },
+    "lastUsedAt": { "type": "string", "format": "date-time" },
+    "lastFeedbackAt": { "type": "string", "format": "date-time" }
+  }
+}

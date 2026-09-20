@@ -62,3 +62,22 @@ The hosted restore evidence records `targetIsAlternate`, tenant count, tenant
 state, migration state, credential remediation, quota state, daemon health,
 cross-tenant leakage, and raw-credential scan result. Release readiness requires
 at least three tenants with distinct credential, quota, and work states.
+
+## Under multi-user load (Stage 10.6, 2026-09-19)
+
+The backup is an **online** SQLite backup (`.backup` in the script,
+`SQLiteStore::snapshot_to` in-process): it reads through the WAL while the
+daemon keeps writing, so it does not need a quiet window and does not stop
+tenants mid-turn. D9 is what happens when a plain file copy is used
+instead — an intact, empty database.
+
+Verified in `crates/surface/app/tests/backup_restore_load.rs` against the
+pooled store (Stage 10.2, `store.readers = 2`): two tenants run chat turns
+continuously while a snapshot is taken; the snapshot opens as a fresh data
+directory, migrates to the current schema, opens its reader connections,
+and each tenant's bearer token lists only that tenant's dispatches. Tokens
+issued before the backup authenticate on the restored copy.
+
+Restore procedure is unchanged. After restoring, start the daemon with the
+same `store.readers` setting as the source; reader connections are opened
+against the restored file at boot and need nothing from the backup.

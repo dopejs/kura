@@ -4,10 +4,10 @@
 //! ListMailArtifacts). The tenant column is written as NULL until the tenancy package is
 //! ported; `document_json` holds the whole document, matching Go.
 
-use rusqlite::{params, params_from_iter, Row};
+use rusqlite::{Row, params, params_from_iter};
 
-use crate::crud::{enum_str, now_rfc3339, null_string, parse_rfc3339};
 use crate::SQLiteStore;
+use crate::crud::{enum_str, now_rfc3339, null_string, parse_rfc3339};
 
 /// Mirrors Go's `MailOperationFilter`: non-empty trimmed fields are ANDed into the query.
 #[derive(Debug, Clone, Default)]
@@ -36,7 +36,8 @@ fn scan_mail_operation(row: &Row) -> Result<kura_mail::Operation, String> {
     let updated_at: String = row.get(14).map_err(|e| e.to_string())?;
     parse_rfc3339(&updated_at)?;
     let document_json: String = row.get(15).map_err(|e| e.to_string())?;
-    crate::crud::decode_json_field(&document_json).map_err(|e| format!("decode mail operation: {e}"))
+    crate::crud::decode_json_field(&document_json)
+        .map_err(|e| format!("decode mail operation: {e}"))
 }
 
 fn scan_mail_artifact(row: &Row) -> Result<kura_mail::Artifact, String> {
@@ -89,7 +90,10 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn list_mail_accounts(&self, environment_scope: &str) -> Result<Vec<kura_mail::AccountProjection>, String> {
+    pub fn list_mail_accounts(
+        &self,
+        environment_scope: &str,
+    ) -> Result<Vec<kura_mail::AccountProjection>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -99,7 +103,9 @@ impl SQLiteStore {
                 ORDER BY updated_at ASC, mail_account_id ASC"#,
             )
             .map_err(|e| format!("list mail accounts for {environment_scope}: {e}"))?;
-        let mut rows = stmt.query(params![environment_scope.trim()]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![environment_scope.trim()])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_mail_account(row)?);
@@ -244,7 +250,9 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("list mail operations for {environment_scope}: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(args.iter())).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(args.iter()))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_mail_operation(row)?);
@@ -258,7 +266,8 @@ impl SQLiteStore {
         operation_id: &str,
     ) -> Result<Option<kura_mail::Operation>, String> {
         let wanted = operation_id.trim();
-        let items = self.list_mail_operations(environment_scope, &MailOperationFilter::default())?;
+        let items =
+            self.list_mail_operations(environment_scope, &MailOperationFilter::default())?;
         Ok(items.into_iter().find(|item| item.operation_id == wanted))
     }
 
@@ -333,7 +342,9 @@ impl SQLiteStore {
             .conn
             .prepare(&sql)
             .map_err(|e| format!("list mail artifacts for {environment_scope}: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(args.iter())).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params_from_iter(args.iter()))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_mail_artifact(row)?);

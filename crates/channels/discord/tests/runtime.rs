@@ -9,12 +9,14 @@ use kura_chat::Service as ChatService;
 use kura_checkpoints::Manager as CheckpointManager;
 use kura_connectors::{DiagnosticReasonCode, Status, Supervisor};
 use kura_discord::{
-    Config, DestinationType, DestinationValidation, DestinationValidationState, DiscordError,
-    DestinationValidator, Runtime, Transport,
+    Config, DestinationType, DestinationValidation, DestinationValidationState,
+    DestinationValidator, DiscordError, Runtime, Transport,
 };
 use kura_events::{Bus, Filter};
 use kura_im::{MessageLoop, ReplyProgressor, ReplySender};
-use kura_imtypes::{InboundMessage, OutboundReply, ReplyCapabilities, ReplyEdit, SentReply, ThinkingSignal};
+use kura_imtypes::{
+    InboundMessage, OutboundReply, ReplyCapabilities, ReplyEdit, SentReply, ThinkingSignal,
+};
 use kura_llm::{
     Dispatcher, Provider, ProviderError, ProviderRequest, ProviderResponse, StreamChunk,
     StreamEmitter, Usage,
@@ -44,10 +46,14 @@ impl Provider for ReplyEchoProvider {
                 .map(|message| message.content.clone())
                 .unwrap_or_default();
             Ok(ProviderResponse {
-            tool_calls: Vec::new(),
+                tool_calls: Vec::new(),
                 output: format!("reply:{content}"),
                 finish_reason: "stop".to_string(),
-                usage: Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    total_tokens: 2,
+                },
             })
         })
     }
@@ -64,12 +70,19 @@ impl Provider for ReplyEchoProvider {
                 .map(|message| message.content.clone())
                 .unwrap_or_default();
             let output = format!("reply:{content}");
-            emit(StreamChunk { delta: output.clone(), ..StreamChunk::default() })?;
+            emit(StreamChunk {
+                delta: output.clone(),
+                ..StreamChunk::default()
+            })?;
             Ok(ProviderResponse {
-            tool_calls: Vec::new(),
+                tool_calls: Vec::new(),
                 output,
                 finish_reason: "stop".to_string(),
-                usage: Usage { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    total_tokens: 2,
+                },
             })
         })
     }
@@ -160,7 +173,9 @@ impl FakeTransport {
 impl ReplySender for FakeTransport {
     fn send_reply(&self, reply: OutboundReply) -> Result<SentReply, String> {
         self.inner.sent.lock().push(reply);
-        Ok(SentReply { external_message_id: "discord_reply_1".to_string() })
+        Ok(SentReply {
+            external_message_id: "discord_reply_1".to_string(),
+        })
     }
 
     fn reply_progressor(&self) -> Option<&dyn ReplyProgressor> {
@@ -185,10 +200,7 @@ impl ReplyProgressor for FakeTransport {
 }
 
 impl Transport for FakeTransport {
-    fn start(
-        &self,
-        handle: Arc<dyn Fn(InboundMessage) + Send + Sync>,
-    ) -> Result<(), DiscordError> {
+    fn start(&self, handle: Arc<dyn Fn(InboundMessage) + Send + Sync>) -> Result<(), DiscordError> {
         if let Some(err) = self.inner.start_err.lock().as_ref() {
             return Err(err.clone());
         }
@@ -239,7 +251,9 @@ fn harness() -> Harness {
     let bus = Bus::new();
     let dispatcher = Arc::new(Dispatcher::new());
     dispatcher.register_provider(Arc::new(ReplyEchoProvider));
-    dispatcher.set_default_provider("echo").expect("default provider");
+    dispatcher
+        .set_default_provider("echo")
+        .expect("default provider");
     dispatcher.set_default_model("echo-v1");
     let chat = ChatService::new_service(dispatcher, None, None, Some(bus.clone()), None);
     let runtime = Arc::new(kura_runtime::Manager::new());
@@ -257,7 +271,12 @@ fn harness() -> Harness {
         store.clone(),
         chat,
     ));
-    Harness { store, bus, loop_, _dir: dir }
+    Harness {
+        store,
+        bus,
+        loop_,
+        _dir: dir,
+    }
 }
 
 fn start_runtime(
@@ -314,18 +333,28 @@ fn base_cfg() -> Config {
 #[test]
 fn runtime_processes_direct_message_end_to_end() {
     let harness = harness();
-    let caps = ReplyCapabilities { supports_thinking: true, supports_streaming: true, max_message_length: 2000 };
+    let caps = ReplyCapabilities {
+        supports_thinking: true,
+        supports_streaming: true,
+        max_message_length: 2000,
+    };
     let (runtime, transport) = start_runtime(&harness, base_cfg(), FakeTransport::new(caps));
     runtime.start().expect("start");
 
     transport.invoke(direct_inbound("discord_msg_1", "hello"));
     runtime.drain_pending();
 
-    assert!(!transport.thinking().is_empty(), "expected at least one thinking signal");
+    assert!(
+        !transport.thinking().is_empty(),
+        "expected at least one thinking signal"
+    );
     let sent = transport.sent();
     assert_eq!(sent.len(), 1, "expected 1 reply");
     assert_eq!(sent[0].content, "reply:hello");
-    assert!(transport.edited().is_empty(), "expected no edit for single-chunk stream");
+    assert!(
+        transport.edited().is_empty(),
+        "expected no edit for single-chunk stream"
+    );
 
     let items = harness.store.list_connectors().expect("list connectors");
     assert_eq!(items.len(), 1);
@@ -336,7 +365,11 @@ fn runtime_processes_direct_message_end_to_end() {
 #[test]
 fn runtime_ignores_guild_message_without_mention_when_required() {
     let harness = harness();
-    let caps = ReplyCapabilities { supports_thinking: true, supports_streaming: true, max_message_length: 2000 };
+    let caps = ReplyCapabilities {
+        supports_thinking: true,
+        supports_streaming: true,
+        max_message_length: 2000,
+    };
     let (runtime, transport) = start_runtime(&harness, base_cfg(), FakeTransport::new(caps));
     runtime.start().expect("start");
 
@@ -359,13 +392,25 @@ fn runtime_ignores_guild_message_without_mention_when_required() {
     });
     runtime.drain_pending();
 
-    assert!(transport.sent().is_empty(), "expected guild message without mention to be ignored");
-    let connector_events = harness.bus.list(&Filter { category: "connector".to_string(), ..Filter::default() });
+    assert!(
+        transport.sent().is_empty(),
+        "expected guild message without mention to be ignored"
+    );
+    let connector_events = harness.bus.list(&Filter {
+        category: "connector".to_string(),
+        ..Filter::default()
+    });
     assert!(!connector_events.is_empty(), "expected route outcome event");
     let last = connector_events.last().expect("last event");
     assert_eq!(last.name, "connector.route_outcome_recorded");
-    assert_eq!(last.payload.get("outcome").and_then(|v| v.as_str()), Some("ignored"));
-    assert_eq!(last.payload.get("reasonCode").and_then(|v| v.as_str()), Some("mention_required"));
+    assert_eq!(
+        last.payload.get("outcome").and_then(|v| v.as_str()),
+        Some("ignored")
+    );
+    assert_eq!(
+        last.payload.get("reasonCode").and_then(|v| v.as_str()),
+        Some("mention_required")
+    );
 }
 
 // Go TestNewRuntimeRejectsMissingBotToken
@@ -393,7 +438,8 @@ fn new_runtime_rejects_missing_bot_token() {
 #[test]
 fn runtime_publishes_classified_failure_when_transport_start_fails() {
     let harness = harness();
-    let transport = FakeTransport::with_start_err(DiscordError::Other("401 Unauthorized".to_string()));
+    let transport =
+        FakeTransport::with_start_err(DiscordError::Other("401 Unauthorized".to_string()));
     let runtime = kura_discord::new_runtime(
         base_cfg(),
         None,
@@ -406,14 +452,25 @@ fn runtime_publishes_classified_failure_when_transport_start_fails() {
     .expect("new runtime")
     .expect("runtime enabled");
 
-    let err = runtime.start().expect_err("expected transport start failure");
+    let err = runtime
+        .start()
+        .expect_err("expected transport start failure");
     assert!(err.to_string().contains("401 Unauthorized"));
 
-    let connector_events = harness.bus.list(&Filter { category: "connector".to_string(), ..Filter::default() });
-    assert!(!connector_events.is_empty(), "expected connector failure event");
+    let connector_events = harness.bus.list(&Filter {
+        category: "connector".to_string(),
+        ..Filter::default()
+    });
+    assert!(
+        !connector_events.is_empty(),
+        "expected connector failure event"
+    );
     let last = connector_events.last().expect("last event");
     assert_eq!(last.name, "connector.failed");
-    assert_eq!(last.payload.get("errorClass").and_then(|v| v.as_str()), Some("auth_error"));
+    assert_eq!(
+        last.payload.get("errorClass").and_then(|v| v.as_str()),
+        Some("auth_error")
+    );
 }
 
 // Go TestRuntimeDoesNotMarkHostedReadyWithoutDestinationValidationEvidence
@@ -423,7 +480,11 @@ fn runtime_does_not_mark_hosted_ready_without_destination_validation_evidence() 
     let mut cfg = base_cfg();
     cfg.allowed_guild_ids = vec!["guild_1".to_string()];
     cfg.allowed_channel_ids = vec!["channel_1".to_string()];
-    let caps = ReplyCapabilities { supports_thinking: true, supports_streaming: true, max_message_length: 2000 };
+    let caps = ReplyCapabilities {
+        supports_thinking: true,
+        supports_streaming: true,
+        max_message_length: 2000,
+    };
     let (runtime, _transport) = start_runtime(&harness, cfg, FakeTransport::new(caps));
     runtime.start().expect("start");
 
@@ -444,7 +505,10 @@ fn runtime_marks_hosted_ready_with_validated_destination_evidence() {
     let mut cfg = base_cfg();
     cfg.allowed_guild_ids = vec!["guild_1".to_string()];
     cfg.allowed_channel_ids = vec!["channel_1".to_string()];
-    let now = Utc.with_ymd_and_hms(2026, 5, 7, 10, 0, 0).single().expect("ts");
+    let now = Utc
+        .with_ymd_and_hms(2026, 5, 7, 10, 0, 0)
+        .single()
+        .expect("ts");
     let validations = vec![
         DestinationValidation {
             connector_id: "discord-main".to_string(),
@@ -471,7 +535,8 @@ fn runtime_marks_hosted_ready_with_validated_destination_evidence() {
             ..DestinationValidation::default()
         },
     ];
-    let (runtime, _transport) = start_runtime(&harness, cfg, FakeTransport::with_validations(validations));
+    let (runtime, _transport) =
+        start_runtime(&harness, cfg, FakeTransport::with_validations(validations));
     runtime.start().expect("start");
 
     let setup = harness
@@ -486,7 +551,10 @@ fn runtime_marks_hosted_ready_with_validated_destination_evidence() {
         .store
         .list_connector_conformance_results("ten_discord", "discord-main", Utc::now())
         .expect("list conformance results");
-    let passed_core = results.iter().filter(|result| result.result == kura_connectors::ConformanceResultStatus::Pass).count();
+    let passed_core = results
+        .iter()
+        .filter(|result| result.result == kura_connectors::ConformanceResultStatus::Pass)
+        .count();
     assert!(passed_core >= kura_connectors::core_invariant_areas().len());
 }
 
@@ -496,7 +564,11 @@ fn runtime_blocks_inbound_missing_durable_identity() {
     let harness = harness();
     let mut cfg = base_cfg();
     cfg.require_mention = false;
-    let caps = ReplyCapabilities { supports_thinking: true, supports_streaming: true, max_message_length: 2000 };
+    let caps = ReplyCapabilities {
+        supports_thinking: true,
+        supports_streaming: true,
+        max_message_length: 2000,
+    };
     let (runtime, transport) = start_runtime(&harness, cfg, FakeTransport::new(caps));
     runtime.start().expect("start");
 
@@ -515,29 +587,47 @@ fn runtime_blocks_inbound_missing_durable_identity() {
     });
     runtime.drain_pending();
 
-    assert!(transport.sent().is_empty(), "expected no replies for missing durable identity");
-    let connector_events = harness.bus.list(&Filter { category: "connector".to_string(), ..Filter::default() });
+    assert!(
+        transport.sent().is_empty(),
+        "expected no replies for missing durable identity"
+    );
+    let connector_events = harness.bus.list(&Filter {
+        category: "connector".to_string(),
+        ..Filter::default()
+    });
     assert!(!connector_events.is_empty(), "expected blocked route event");
     let last = connector_events.last().expect("last event");
     assert_eq!(last.name, "connector.route_outcome_recorded");
-    assert_eq!(last.payload.get("outcome").and_then(|v| v.as_str()), Some("blocked"));
-    assert_eq!(last.payload.get("reasonCode").and_then(|v| v.as_str()), Some("missing_durable_identity"));
+    assert_eq!(
+        last.payload.get("outcome").and_then(|v| v.as_str()),
+        Some("blocked")
+    );
+    assert_eq!(
+        last.payload.get("reasonCode").and_then(|v| v.as_str()),
+        Some("missing_durable_identity")
+    );
 
     let diagnostics = harness
         .store
         .list_connector_diagnostic_states("ten_discord", "discord-main", Utc::now())
         .expect("list diagnostics");
     assert!(!diagnostics.is_empty());
-    assert_eq!(diagnostics.last().expect("last diagnostic").reason_code, DiagnosticReasonCode::BlockedRoute);
+    assert_eq!(
+        diagnostics.last().expect("last diagnostic").reason_code,
+        DiagnosticReasonCode::BlockedRoute
+    );
 }
 
 #[test]
 fn runtime_close_marks_transport_closed() {
     let harness = harness();
-    let caps = ReplyCapabilities { supports_thinking: true, supports_streaming: true, max_message_length: 2000 };
+    let caps = ReplyCapabilities {
+        supports_thinking: true,
+        supports_streaming: true,
+        max_message_length: 2000,
+    };
     let (runtime, transport) = start_runtime(&harness, base_cfg(), FakeTransport::new(caps));
     runtime.start().expect("start");
     runtime.close().expect("close");
     assert!(transport.is_closed());
 }
-

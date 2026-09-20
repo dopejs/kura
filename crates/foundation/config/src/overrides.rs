@@ -15,11 +15,16 @@ pub(crate) fn apply_env_overrides(cfg: &mut Config) {
     cfg.project_root = getenv("KURA_PROJECT_ROOT", &cfg.project_root);
     cfg.log_level = getenv("KURA_LOG_LEVEL", &cfg.log_level);
     cfg.version = getenv("KURA_VERSION", &cfg.version);
+    cfg.store.readers =
+        usize::try_from(getenv_int("KURA_STORE_READERS", cfg.store.readers as i64).max(0))
+            .unwrap_or(0);
 
     cfg.llm.default_provider = getenv("KURA_LLM_DEFAULT_PROVIDER", &cfg.llm.default_provider);
     cfg.llm.default_model = getenv("KURA_LLM_DEFAULT_MODEL", &cfg.llm.default_model);
-    cfg.llm.default_timeout_ms = getenv_int("KURA_LLM_DEFAULT_TIMEOUT_MS", cfg.llm.default_timeout_ms);
-    cfg.llm.default_max_retries = getenv_int("KURA_LLM_DEFAULT_MAX_RETRIES", cfg.llm.default_max_retries);
+    cfg.llm.default_timeout_ms =
+        getenv_int("KURA_LLM_DEFAULT_TIMEOUT_MS", cfg.llm.default_timeout_ms);
+    cfg.llm.default_max_retries =
+        getenv_int("KURA_LLM_DEFAULT_MAX_RETRIES", cfg.llm.default_max_retries);
     // Signed-in subscriptions, as JSON, because the set is whatever the user
     // signed into rather than a fixed number of slots. Passed in the
     // environment for the same reason the API key is: it keeps the credential
@@ -102,8 +107,10 @@ pub(crate) fn apply_env_overrides(cfg: &mut Config) {
     cfg.llm.codex.default_model = getenv("KURA_LLM_CODEX_MODEL", &cfg.llm.codex.default_model);
     cfg.llm.codex.work_dir = getenv("KURA_LLM_CODEX_WORKDIR", &cfg.llm.codex.work_dir);
 
-    cfg.connectors.discord.enabled =
-        getenv_bool("KURA_CONNECTORS_DISCORD_ENABLED", cfg.connectors.discord.enabled);
+    cfg.connectors.discord.enabled = getenv_bool(
+        "KURA_CONNECTORS_DISCORD_ENABLED",
+        cfg.connectors.discord.enabled,
+    );
     cfg.connectors.discord.connector_id = getenv(
         "KURA_CONNECTORS_DISCORD_CONNECTOR_ID",
         &cfg.connectors.discord.connector_id,
@@ -141,8 +148,10 @@ pub(crate) fn apply_env_overrides(cfg: &mut Config) {
         &cfg.connectors.discord.allowed_channel_ids,
     );
 
-    cfg.connectors.telegram.enabled =
-        getenv_bool("KURA_CONNECTORS_TELEGRAM_ENABLED", cfg.connectors.telegram.enabled);
+    cfg.connectors.telegram.enabled = getenv_bool(
+        "KURA_CONNECTORS_TELEGRAM_ENABLED",
+        cfg.connectors.telegram.enabled,
+    );
     cfg.connectors.telegram.connector_id = getenv(
         "KURA_CONNECTORS_TELEGRAM_CONNECTOR_ID",
         &cfg.connectors.telegram.connector_id,
@@ -180,8 +189,10 @@ pub(crate) fn apply_env_overrides(cfg: &mut Config) {
         &cfg.connectors.telegram.allowed_group_ids,
     );
 
-    cfg.connectors.slack.enabled =
-        getenv_bool("KURA_CONNECTORS_SLACK_ENABLED", cfg.connectors.slack.enabled);
+    cfg.connectors.slack.enabled = getenv_bool(
+        "KURA_CONNECTORS_SLACK_ENABLED",
+        cfg.connectors.slack.enabled,
+    );
     cfg.connectors.slack.connector_id = getenv(
         "KURA_CONNECTORS_SLACK_CONNECTOR_ID",
         &cfg.connectors.slack.connector_id,
@@ -239,8 +250,10 @@ pub(crate) fn apply_env_overrides(cfg: &mut Config) {
         &cfg.connectors.slack.allowed_dm_user_groups,
     );
 
-    cfg.connectors.matrix.enabled =
-        getenv_bool("KURA_CONNECTORS_MATRIX_ENABLED", cfg.connectors.matrix.enabled);
+    cfg.connectors.matrix.enabled = getenv_bool(
+        "KURA_CONNECTORS_MATRIX_ENABLED",
+        cfg.connectors.matrix.enabled,
+    );
     cfg.connectors.matrix.connector_id = getenv(
         "KURA_CONNECTORS_MATRIX_CONNECTOR_ID",
         &cfg.connectors.matrix.connector_id,
@@ -287,15 +300,21 @@ pub(crate) fn apply_env_overrides(cfg: &mut Config) {
 /// env-ref name is set, read the named environment variable (Go
 /// `resolveSecretRefs`). Missing variables resolve to empty strings.
 pub(crate) fn resolve_secret_refs(cfg: &mut Config) {
-    if cfg.llm.openai_compatible.api_key.is_empty() && !cfg.llm.openai_compatible.api_key_env.is_empty() {
+    if cfg.llm.openai_compatible.api_key.is_empty()
+        && !cfg.llm.openai_compatible.api_key_env.is_empty()
+    {
         cfg.llm.openai_compatible.api_key =
             std::env::var(&cfg.llm.openai_compatible.api_key_env).unwrap_or_default();
     }
-    if cfg.connectors.discord.bot_token.is_empty() && !cfg.connectors.discord.bot_token_env.is_empty() {
+    if cfg.connectors.discord.bot_token.is_empty()
+        && !cfg.connectors.discord.bot_token_env.is_empty()
+    {
         cfg.connectors.discord.bot_token =
             std::env::var(&cfg.connectors.discord.bot_token_env).unwrap_or_default();
     }
-    if cfg.connectors.telegram.bot_token.is_empty() && !cfg.connectors.telegram.bot_token_env.is_empty() {
+    if cfg.connectors.telegram.bot_token.is_empty()
+        && !cfg.connectors.telegram.bot_token_env.is_empty()
+    {
         cfg.connectors.telegram.bot_token =
             std::env::var(&cfg.connectors.telegram.bot_token_env).unwrap_or_default();
     }

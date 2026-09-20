@@ -67,7 +67,14 @@ fn r42_seeded_ids_and_documents_load_back() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(retention, ("diagnostic_run".to_string(), "r42_diag_run_1".to_string(), "active".to_string()));
+    assert_eq!(
+        retention,
+        (
+            "diagnostic_run".to_string(),
+            "r42_diag_run_1".to_string(),
+            "active".to_string()
+        )
+    );
 
     // Probe outcome links to the smoke report.
     let probe: (String, String, String) = conn
@@ -77,5 +84,12 @@ fn r42_seeded_ids_and_documents_load_back() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(probe, ("r42_smoke_1".to_string(), "passed".to_string(), "healthy".to_string()));
+    assert_eq!(
+        probe,
+        (
+            "r42_smoke_1".to_string(),
+            "passed".to_string(),
+            "healthy".to_string()
+        )
+    );
 }

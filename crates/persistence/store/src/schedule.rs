@@ -5,10 +5,10 @@
 //! is ported.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
-use crate::crud::{now_rfc3339, null_string, opt_time_string, parse_opt_rfc3339, parse_rfc3339};
 use crate::SQLiteStore;
+use crate::crud::{now_rfc3339, null_string, opt_time_string, parse_opt_rfc3339, parse_rfc3339};
 
 /// A schedule ledger row. `document` is the JSON-serialized schedule document.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -217,7 +217,11 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn get_schedule(&self, environment_scope: &str, schedule_id: &str) -> Result<Option<ScheduleRecord>, String> {
+    pub fn get_schedule(
+        &self,
+        environment_scope: &str,
+        schedule_id: &str,
+    ) -> Result<Option<ScheduleRecord>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -228,7 +232,9 @@ impl SQLiteStore {
                 WHERE environment_scope = ?1 AND schedule_id = ?2"#,
             )
             .map_err(|e| format!("get schedule {schedule_id}: {e}"))?;
-        let mut rows = stmt.query(params![environment_scope, schedule_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![environment_scope, schedule_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -247,7 +253,9 @@ impl SQLiteStore {
                 ORDER BY created_at ASC, schedule_id ASC"#,
             )
             .map_err(|e| format!("list schedules: {e}"))?;
-        let mut rows = stmt.query(params![environment_scope]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![environment_scope])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_schedule(row)?);
@@ -285,7 +293,11 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn get_schedule_target(&self, schedule_id: &str, target_ref_id: &str) -> Result<Option<ScheduleTargetRecord>, String> {
+    pub fn get_schedule_target(
+        &self,
+        schedule_id: &str,
+        target_ref_id: &str,
+    ) -> Result<Option<ScheduleTargetRecord>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -295,14 +307,19 @@ impl SQLiteStore {
                 WHERE schedule_id = ?1 AND target_ref_id = ?2"#,
             )
             .map_err(|e| format!("get schedule target {target_ref_id}: {e}"))?;
-        let mut rows = stmt.query(params![schedule_id, target_ref_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![schedule_id, target_ref_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
         scan_schedule_target(row).map(Some)
     }
 
-    pub fn upsert_schedule_dispatch_attempt(&self, record: &ScheduleDispatchAttemptRecord) -> Result<(), String> {
+    pub fn upsert_schedule_dispatch_attempt(
+        &self,
+        record: &ScheduleDispatchAttemptRecord,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 r#"INSERT INTO schedule_dispatch_attempts (
@@ -359,7 +376,10 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn list_schedule_dispatch_attempts(&self, schedule_id: &str) -> Result<Vec<ScheduleDispatchAttemptRecord>, String> {
+    pub fn list_schedule_dispatch_attempts(
+        &self,
+        schedule_id: &str,
+    ) -> Result<Vec<ScheduleDispatchAttemptRecord>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -372,7 +392,9 @@ impl SQLiteStore {
                 ORDER BY due_at DESC, created_at DESC, attempt_id DESC"#,
             )
             .map_err(|e| format!("list schedule attempts {schedule_id}: {e}"))?;
-        let mut rows = stmt.query(params![schedule_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![schedule_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_schedule_dispatch_attempt(row)?);

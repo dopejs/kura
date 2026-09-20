@@ -153,7 +153,10 @@ mod tests {
             projection.deferred_binding_classification,
             DEFERRED_BINDING_CLASSIFICATION_MARKER
         );
-        assert_eq!(projection.configuration_scope, "explicit_profile_configuration");
+        assert_eq!(
+            projection.configuration_scope,
+            "explicit_profile_configuration"
+        );
     }
 
     #[test]
@@ -164,7 +167,10 @@ mod tests {
             build_runtime_projection(&profile, &selection, RuntimeProjectionInput::default());
         // None maps to Go's zero time: replaced with now, not left zero.
         let elapsed = Utc::now() - projection.occurred_at;
-        assert!(elapsed.num_seconds() < 60, "occurred_at should default to now");
+        assert!(
+            elapsed.num_seconds() < 60,
+            "occurred_at should default to now"
+        );
 
         let fixed = DateTime::parse_from_rfc3339("2026-05-12T10:00:00Z")
             .expect("fixture time")

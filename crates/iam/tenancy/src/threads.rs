@@ -23,12 +23,18 @@ impl ThreadAccessScope {
     }
 
     #[must_use]
-    pub fn allows_conversation_shape(&self, evidence: &kura_threads::ConversationShapeEvidence) -> bool {
+    pub fn allows_conversation_shape(
+        &self,
+        evidence: &kura_threads::ConversationShapeEvidence,
+    ) -> bool {
         self.allows(&evidence.tenant_id)
     }
 
     #[must_use]
-    pub fn allows_participation_decision(&self, decision: &kura_threads::ParticipationDecision) -> bool {
+    pub fn allows_participation_decision(
+        &self,
+        decision: &kura_threads::ParticipationDecision,
+    ) -> bool {
         self.allows(&decision.tenant_id)
     }
 
@@ -43,7 +49,10 @@ impl ThreadAccessScope {
     }
 
     #[must_use]
-    pub fn allows_handoff_source_reference(&self, reference: &kura_threads::HandoffSourceReference) -> bool {
+    pub fn allows_handoff_source_reference(
+        &self,
+        reference: &kura_threads::HandoffSourceReference,
+    ) -> bool {
         self.allows(&reference.tenant_id)
     }
 }

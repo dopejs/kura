@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use kura_identity::tenantctx;
-use kura_integrations::diagnostic_failure_for_reason;
 use kura_integrations::DiagnosticReasonCode;
+use kura_integrations::diagnostic_failure_for_reason;
 use kura_store::SQLiteStore;
 use parking_lot::Mutex;
 
@@ -42,7 +42,9 @@ pub fn refresh_follow_up_link(
                 let exists = store
                     .lock()
                     .run_exists_for_tenant(&out.source_id, &tenant_id)
-                    .map_err(|e| ReminderError::Store(format!("refresh follow-up run link: {e}")))?;
+                    .map_err(|e| {
+                        ReminderError::Store(format!("refresh follow-up run link: {e}"))
+                    })?;
                 !exists
             }
         }
@@ -94,7 +96,10 @@ pub fn resolve_tenant_id(store: &Arc<Mutex<SQLiteStore>>) -> String {
             return tc.tenant_id;
         }
     }
-    store.lock().resolve_default_tenant_binding().unwrap_or_default()
+    store
+        .lock()
+        .resolve_default_tenant_binding()
+        .unwrap_or_default()
 }
 
 /// Go cloneFollowUpLink: shallow copy of the link value.

@@ -6,8 +6,8 @@ use serde::Serialize;
 use crate::continuity::ContinuityTurn;
 use crate::error::ThreadsError;
 use crate::group_room::ConversationShape;
-use crate::redaction::safe_group_room_evidence_summary;
 use crate::redaction::RedactionStatus;
+use crate::redaction::safe_group_room_evidence_summary;
 use crate::source::SourceKind;
 use crate::utc_now_or;
 
@@ -277,7 +277,13 @@ mod tests {
         }
     }
 
-    fn turn(id: &str, thread_id: &str, segment: &str, status: RedactionStatus, expires: Option<DateTime<Utc>>) -> ContinuityTurn {
+    fn turn(
+        id: &str,
+        thread_id: &str,
+        segment: &str,
+        status: RedactionStatus,
+        expires: Option<DateTime<Utc>>,
+    ) -> ContinuityTurn {
         ContinuityTurn {
             continuity_turn_id: id.to_string(),
             tenant_id: String::new(),
@@ -329,22 +335,58 @@ mod tests {
         let refs = build_handoff_source_references(
             &link,
             &[
-                turn("turn_1", "", "seg_current", RedactionStatus::Redacted, Some(now + Duration::hours(1))),
-                turn("turn_old", "", "seg_old", RedactionStatus::Redacted, Some(now + Duration::hours(1))),
-                turn("turn_unsafe", "", "seg_current", RedactionStatus::Suppressed, Some(now + Duration::hours(1))),
-                turn("turn_expired", "", "seg_current", RedactionStatus::Redacted, Some(now - Duration::hours(1))),
+                turn(
+                    "turn_1",
+                    "",
+                    "seg_current",
+                    RedactionStatus::Redacted,
+                    Some(now + Duration::hours(1)),
+                ),
+                turn(
+                    "turn_old",
+                    "",
+                    "seg_old",
+                    RedactionStatus::Redacted,
+                    Some(now + Duration::hours(1)),
+                ),
+                turn(
+                    "turn_unsafe",
+                    "",
+                    "seg_current",
+                    RedactionStatus::Suppressed,
+                    Some(now + Duration::hours(1)),
+                ),
+                turn(
+                    "turn_expired",
+                    "",
+                    "seg_current",
+                    RedactionStatus::Redacted,
+                    Some(now - Duration::hours(1)),
+                ),
             ],
             Some(now),
         );
         assert_eq!(refs.len(), 4);
         assert_eq!(refs[0].decision, HandoffSourceReferenceDecision::Referenced);
-        assert_eq!(refs[0].eligibility_status, HandoffSourceReferenceEligibility::Eligible);
+        assert_eq!(
+            refs[0].eligibility_status,
+            HandoffSourceReferenceEligibility::Eligible
+        );
         assert_eq!(refs[1].decision, HandoffSourceReferenceDecision::Excluded);
-        assert_eq!(refs[1].eligibility_status, HandoffSourceReferenceEligibility::ResetBoundary);
+        assert_eq!(
+            refs[1].eligibility_status,
+            HandoffSourceReferenceEligibility::ResetBoundary
+        );
         assert_eq!(refs[2].decision, HandoffSourceReferenceDecision::Excluded);
-        assert_eq!(refs[2].eligibility_status, HandoffSourceReferenceEligibility::RedactionFailed);
+        assert_eq!(
+            refs[2].eligibility_status,
+            HandoffSourceReferenceEligibility::RedactionFailed
+        );
         assert_eq!(refs[3].decision, HandoffSourceReferenceDecision::Excluded);
-        assert_eq!(refs[3].eligibility_status, HandoffSourceReferenceEligibility::RetentionExpired);
+        assert_eq!(
+            refs[3].eligibility_status,
+            HandoffSourceReferenceEligibility::RetentionExpired
+        );
     }
 
     // Port of TestBuildHandoffSourceReferencesExcludesCrossRoomTurns.
@@ -355,11 +397,20 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 5, 11, 10, 0, 0).unwrap();
         let refs = build_handoff_source_references(
             &link,
-            &[turn("turn_cross_room", "thr_other_room", "seg_current", RedactionStatus::Redacted, None)],
+            &[turn(
+                "turn_cross_room",
+                "thr_other_room",
+                "seg_current",
+                RedactionStatus::Redacted,
+                None,
+            )],
             Some(now),
         );
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].decision, HandoffSourceReferenceDecision::Excluded);
-        assert_eq!(refs[0].eligibility_status, HandoffSourceReferenceEligibility::IncompleteEvidence);
+        assert_eq!(
+            refs[0].eligibility_status,
+            HandoffSourceReferenceEligibility::IncompleteEvidence
+        );
     }
 }

@@ -1,8 +1,8 @@
 //! Serde domain types consumed by daemon packages, mirroring the JSON shapes
 //! of `daemon/internal/llm/dispatcher.go`.
 
-use chrono::{DateTime, Utc};
 use crate::provider::ToolCall;
+use chrono::{DateTime, Utc};
 use kura_protocol::ToolSpec;
 use serde::{Deserialize, Serialize};
 
@@ -152,30 +152,64 @@ mod tests {
 
     #[test]
     fn message_role_wire_values_match_go() {
-        assert_eq!(serde_json::to_string(&MessageRole::System).unwrap(), "\"system\"");
-        assert_eq!(serde_json::to_string(&MessageRole::User).unwrap(), "\"user\"");
-        assert_eq!(serde_json::to_string(&MessageRole::Assistant).unwrap(), "\"assistant\"");
-        assert_eq!(serde_json::to_string(&MessageRole::Tool).unwrap(), "\"tool\"");
+        assert_eq!(
+            serde_json::to_string(&MessageRole::System).unwrap(),
+            "\"system\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageRole::User).unwrap(),
+            "\"user\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageRole::Assistant).unwrap(),
+            "\"assistant\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageRole::Tool).unwrap(),
+            "\"tool\""
+        );
     }
 
     #[test]
     fn dispatch_status_wire_values_match_go() {
-        assert_eq!(serde_json::to_string(&DispatchStatus::Queued).unwrap(), "\"queued\"");
-        assert_eq!(serde_json::to_string(&DispatchStatus::Running).unwrap(), "\"running\"");
-        assert_eq!(serde_json::to_string(&DispatchStatus::Completed).unwrap(), "\"completed\"");
+        assert_eq!(
+            serde_json::to_string(&DispatchStatus::Queued).unwrap(),
+            "\"queued\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DispatchStatus::Running).unwrap(),
+            "\"running\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DispatchStatus::Completed).unwrap(),
+            "\"completed\""
+        );
         assert_eq!(
             serde_json::to_string(&DispatchStatus::PartialFailed).unwrap(),
             "\"partial_failed\""
         );
-        assert_eq!(serde_json::to_string(&DispatchStatus::Failed).unwrap(), "\"failed\"");
-        assert_eq!(serde_json::to_string(&DispatchStatus::Cancelled).unwrap(), "\"cancelled\"");
+        assert_eq!(
+            serde_json::to_string(&DispatchStatus::Failed).unwrap(),
+            "\"failed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DispatchStatus::Cancelled).unwrap(),
+            "\"cancelled\""
+        );
     }
 
     #[test]
     fn usage_serializes_camel_case() {
-        let usage = Usage { input_tokens: 3, output_tokens: 1, total_tokens: 4 };
+        let usage = Usage {
+            input_tokens: 3,
+            output_tokens: 1,
+            total_tokens: 4,
+        };
         let json = serde_json::to_value(usage).unwrap();
-        assert_eq!(json, serde_json::json!({"inputTokens": 3, "outputTokens": 1, "totalTokens": 4}));
+        assert_eq!(
+            json,
+            serde_json::json!({"inputTokens": 3, "outputTokens": 1, "totalTokens": 4})
+        );
     }
 
     #[test]
@@ -220,7 +254,10 @@ mod tests {
 
     #[test]
     fn stream_chunk_omits_empty_optional_fields_like_go() {
-        let chunk = StreamChunk { delta: "hi".into(), ..StreamChunk::default() };
+        let chunk = StreamChunk {
+            delta: "hi".into(),
+            ..StreamChunk::default()
+        };
         let json = serde_json::to_value(&chunk).unwrap();
         assert_eq!(json, serde_json::json!({"delta": "hi"}));
     }

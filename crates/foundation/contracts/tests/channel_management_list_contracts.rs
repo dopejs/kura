@@ -6,14 +6,15 @@
 
 mod common;
 
-use common::{schema_root_dir, validate_fixtures, Fixture};
+use common::{Fixture, schema_root_dir, validate_fixtures};
 use kura_contracts::Validator;
 
 #[test]
 fn test_channel_management_list_schema_accepts_redacted_fixture() {
     let validator = Validator::new(schema_root_dir());
-    let fixtures: &[Fixture] = &[
-        (r##"schemas/api/channel-management-connector-list.response.schema.json"##, r##"{
+    let fixtures: &[Fixture] = &[(
+        r##"schemas/api/channel-management-connector-list.response.schema.json"##,
+        r##"{
   "tenantId": "ten_channel_management",
   "page": {
     "limit": 20,
@@ -51,7 +52,7 @@ fn test_channel_management_list_schema_accepts_redacted_fixture() {
     }
   ]
 }
-"##),
-    ];
+"##,
+    )];
     validate_fixtures(&validator, fixtures);
 }

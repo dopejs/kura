@@ -146,7 +146,8 @@ impl Tool for McpTool {
                 // rather than failing the turn, because the person is being
                 // asked right now and a turn that ended here would make them
                 // start it over.
-                ToolAuthorizationStatus::Pending => match self.await_approval(&authorization).await {
+                ToolAuthorizationStatus::Pending => match self.await_approval(&authorization).await
+                {
                     Some(granted) => granted,
                     None => {
                         return Ok(ToolOutput::failed(format!(
@@ -233,9 +234,7 @@ impl McpTool {
                 }
                 // Answered no, or withdrawn. Either way there is nothing to
                 // wait for.
-                Some(approval)
-                    if approval.status != kura_policy::ApprovalStatus::Pending =>
-                {
+                Some(approval) if approval.status != kura_policy::ApprovalStatus::Pending => {
                     return None;
                 }
                 // Still pending, or gone. A vanished approval is not something

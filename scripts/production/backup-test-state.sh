@@ -32,9 +32,26 @@ if [[ -n "$KURA_HOSTED_RUN_ID" ]]; then
 fi
 
 DEST="$BACKUP_DIR/daemon.sqlite.${TS}.bak"
-cp "$KURA_DATA_DIR/daemon.sqlite" "$DEST"
+# D9 (2026-09-19): this used to be `cp daemon.sqlite`. The daemon opens the
+# database in WAL mode, so committed data lives in daemon.sqlite-wal until a
+# checkpoint; copying the main file alone produced backups with ZERO tables
+# that still passed `PRAGMA integrity_check`. `.backup` uses SQLite's online
+# backup API and reads through the WAL into one self-contained file.
+sqlite3 "$KURA_DATA_DIR/daemon.sqlite" ".backup '$DEST'"
+# A backup that lost its data is intact and empty — integrity_check alone
+# would not have caught D9. Compare what actually matters: the migration
+# ledger must exist and report the same head version as the source.
+SRC_VERSION="$(sqlite3 "$KURA_DATA_DIR/daemon.sqlite" 'SELECT COALESCE(MAX(version),-1) FROM schema_migrations;' 2>/dev/null || printf -- -1)"
+DEST_VERSION="$(sqlite3 "$DEST" 'SELECT COALESCE(MAX(version),-1) FROM schema_migrations;' 2>/dev/null || printf -- -1)"
+if [[ "$SRC_VERSION" != "$DEST_VERSION" || "$DEST_VERSION" == "-1" ]]; then
+  printf 'backup validation failed: source schema version %s, backup %s\n' "$SRC_VERSION" "$DEST_VERSION" >&2
+  rm -f "$DEST"
+  exit 1
+fi
+sqlite3 "$DEST" 'PRAGMA integrity_check;' | grep -qx ok || { printf 'backup integrity check failed\n' >&2; rm -f "$DEST"; exit 1; }
+printf 'backup schema_version=%s (matches source)\n' "$DEST_VERSION"
 CHECKSUM="$(shasum -a 256 "$DEST" | awk '{print $1}')"
-shasum -a 256 "$KURA_DATA_DIR/daemon.sqlite" "$DEST"
+shasum -a 256 "$DEST"
 printf 'backup_artifact=%s\n' "$DEST"
 
 if [[ -n "$KURA_HOSTED_RUN_ID" ]]; then

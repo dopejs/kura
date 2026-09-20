@@ -3,10 +3,8 @@
 //! Pass A semantics mirror tenancy::Runtime: fail-closed reads, write-then-bind
 //! upserts, audit emission on cross-tenant lookup.
 
-use crate::{emit_denial, require, TenancyError};
-use kura_store::schedule::{
-    ScheduleDispatchAttemptRecord, ScheduleRecord, ScheduleTargetRecord,
-};
+use crate::{TenancyError, emit_denial, require};
+use kura_store::schedule::{ScheduleDispatchAttemptRecord, ScheduleRecord, ScheduleTargetRecord};
 
 /// Tenant-aware accessor for the schedules family.
 pub struct Schedules {
@@ -26,7 +24,10 @@ impl Schedules {
 
     // ----- schedules -----
 
-    pub fn list_schedules_for_tenant(&self, environment_scope: &str) -> Result<Vec<ScheduleRecord>, TenancyError> {
+    pub fn list_schedules_for_tenant(
+        &self,
+        environment_scope: &str,
+    ) -> Result<Vec<ScheduleRecord>, TenancyError> {
         let tenant_id = require()?;
         self.store
             .list_schedules_for_tenant_raw(&tenant_id, environment_scope)
@@ -49,14 +50,24 @@ impl Schedules {
                 self.emit("store:GetScheduleForTenant", "schedule");
                 Ok(None)
             }
-            _ => self.store.get_schedule(environment_scope, schedule_id).map_err(TenancyError::from),
+            _ => self
+                .store
+                .get_schedule(environment_scope, schedule_id)
+                .map_err(TenancyError::from),
         }
     }
 
     pub fn upsert_schedule_for_tenant(&self, record: &ScheduleRecord) -> Result<(), TenancyError> {
         let tenant_id = require()?;
-        self.store.upsert_schedule(record).map_err(TenancyError::from)?;
-        match self.store.bind_row_tenant("schedules", "schedule_id", &record.schedule_id, &tenant_id) {
+        self.store
+            .upsert_schedule(record)
+            .map_err(TenancyError::from)?;
+        match self.store.bind_row_tenant(
+            "schedules",
+            "schedule_id",
+            &record.schedule_id,
+            &tenant_id,
+        ) {
             Err(e) if crate::SQLiteStore::is_cross_tenant_row(&e) => {
                 self.emit("store:UpsertScheduleForTenant", "schedule");
                 Err(TenancyError::CrossTenantWrite)
@@ -67,10 +78,20 @@ impl Schedules {
 
     // ----- schedule_targets -----
 
-    pub fn upsert_schedule_target_for_tenant(&self, record: &ScheduleTargetRecord) -> Result<(), TenancyError> {
+    pub fn upsert_schedule_target_for_tenant(
+        &self,
+        record: &ScheduleTargetRecord,
+    ) -> Result<(), TenancyError> {
         let tenant_id = require()?;
-        self.store.upsert_schedule_target(record).map_err(TenancyError::from)?;
-        match self.store.bind_row_tenant("schedule_targets", "target_ref_id", &record.target_ref_id, &tenant_id) {
+        self.store
+            .upsert_schedule_target(record)
+            .map_err(TenancyError::from)?;
+        match self.store.bind_row_tenant(
+            "schedule_targets",
+            "target_ref_id",
+            &record.target_ref_id,
+            &tenant_id,
+        ) {
             Err(e) if crate::SQLiteStore::is_cross_tenant_row(&e) => {
                 self.emit("store:UpsertScheduleTargetForTenant", "schedule_target");
                 Err(TenancyError::CrossTenantWrite)
@@ -95,7 +116,10 @@ impl Schedules {
                 self.emit("store:GetScheduleTargetForTenant", "schedule_target");
                 Ok(None)
             }
-            _ => self.store.get_schedule_target(schedule_id, target_ref_id).map_err(TenancyError::from),
+            _ => self
+                .store
+                .get_schedule_target(schedule_id, target_ref_id)
+                .map_err(TenancyError::from),
         }
     }
 
@@ -106,10 +130,20 @@ impl Schedules {
         record: &ScheduleDispatchAttemptRecord,
     ) -> Result<(), TenancyError> {
         let tenant_id = require()?;
-        self.store.upsert_schedule_dispatch_attempt(record).map_err(TenancyError::from)?;
-        match self.store.bind_row_tenant("schedule_dispatch_attempts", "attempt_id", &record.attempt_id, &tenant_id) {
+        self.store
+            .upsert_schedule_dispatch_attempt(record)
+            .map_err(TenancyError::from)?;
+        match self.store.bind_row_tenant(
+            "schedule_dispatch_attempts",
+            "attempt_id",
+            &record.attempt_id,
+            &tenant_id,
+        ) {
             Err(e) if crate::SQLiteStore::is_cross_tenant_row(&e) => {
-                self.emit("store:UpsertScheduleDispatchAttemptForTenant", "schedule_dispatch_attempt");
+                self.emit(
+                    "store:UpsertScheduleDispatchAttemptForTenant",
+                    "schedule_dispatch_attempt",
+                );
                 Err(TenancyError::CrossTenantWrite)
             }
             other => other.map_err(TenancyError::from),
@@ -131,7 +165,10 @@ impl Schedules {
                 self.emit("store:ListScheduleDispatchAttemptsForTenant", "schedule");
                 Ok(Vec::new())
             }
-            _ => self.store.list_schedule_dispatch_attempts(schedule_id).map_err(TenancyError::from),
+            _ => self
+                .store
+                .list_schedule_dispatch_attempts(schedule_id)
+                .map_err(TenancyError::from),
         }
     }
 }

@@ -13,11 +13,11 @@ use kura_calendar::{
 };
 use kura_integrations::{AccountBinding, BackendBinding, BackendKind, ReadinessStatus, Resource};
 use kura_mail::{
-    AccountProjection as MailAccount, Artifact as MailArtifact,
-    ArtifactKind as MailArtifactKind, Operation as MailOperation,
-    OperationClass as MailOperationClass, OperationStatus as MailOperationStatus, ResultMode,
+    AccountProjection as MailAccount, Artifact as MailArtifact, ArtifactKind as MailArtifactKind,
+    Operation as MailOperation, OperationClass as MailOperationClass,
+    OperationStatus as MailOperationStatus, ResultMode,
 };
-use kura_store::{calendar::CalendarOperationFilter, mail::MailOperationFilter, SQLiteStore};
+use kura_store::{SQLiteStore, calendar::CalendarOperationFilter, mail::MailOperationFilter};
 
 fn temp_dir(name: &str) -> String {
     let dir = std::env::temp_dir().join(format!("kura_store_{name}_{}", std::process::id()));
@@ -138,19 +138,35 @@ fn calendar_domain_round_trips_through_sqlite() {
         ..CalendarOperationFilter::default()
     };
     assert_eq!(
-        store.list_calendar_operations("test", &status_filter).unwrap().len(),
+        store
+            .list_calendar_operations("test", &status_filter)
+            .unwrap()
+            .len(),
         1
     );
     let missed_filter = CalendarOperationFilter {
         status: "failed".to_string(),
         ..CalendarOperationFilter::default()
     };
-    assert!(store.list_calendar_operations("test", &missed_filter).unwrap().is_empty());
+    assert!(
+        store
+            .list_calendar_operations("test", &missed_filter)
+            .unwrap()
+            .is_empty()
+    );
 
     // Get by id matches Go's in-memory lookup over the unfiltered list.
-    let got = store.get_calendar_operation_by_id("test", "cal_op_1").unwrap().expect("found");
+    let got = store
+        .get_calendar_operation_by_id("test", "cal_op_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(got.operation_id, "cal_op_1");
-    assert_eq!(store.get_calendar_operation_by_id("test", "missing").unwrap(), None);
+    assert_eq!(
+        store
+            .get_calendar_operation_by_id("test", "missing")
+            .unwrap(),
+        None
+    );
 
     let artifact = CalendarArtifact {
         artifact_id: "cal_art_1".to_string(),
@@ -168,7 +184,12 @@ fn calendar_domain_round_trips_through_sqlite() {
     assert_eq!(artifacts[0].artifact_id, "cal_art_1");
     assert_eq!(artifacts[0].kind, CalendarArtifactKind::EventSnapshot);
     assert_eq!(artifacts[0].external_event_id, "evt_1");
-    assert!(store.list_calendar_artifacts("test", "other_op").unwrap().is_empty());
+    assert!(
+        store
+            .list_calendar_artifacts("test", "other_op")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -240,16 +261,33 @@ fn mail_domain_round_trips_through_sqlite() {
         result_mode: ResultMode::Sent.as_str().to_string(),
         ..MailOperationFilter::default()
     };
-    assert_eq!(store.list_mail_operations("test", &mode_filter).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_mail_operations("test", &mode_filter)
+            .unwrap()
+            .len(),
+        1
+    );
     let missed_filter = MailOperationFilter {
         thread_id: "other_thread".to_string(),
         ..MailOperationFilter::default()
     };
-    assert!(store.list_mail_operations("test", &missed_filter).unwrap().is_empty());
+    assert!(
+        store
+            .list_mail_operations("test", &missed_filter)
+            .unwrap()
+            .is_empty()
+    );
 
-    let got = store.get_mail_operation_by_id("test", "mail_op_1").unwrap().expect("found");
+    let got = store
+        .get_mail_operation_by_id("test", "mail_op_1")
+        .unwrap()
+        .expect("found");
     assert_eq!(got.operation_id, "mail_op_1");
-    assert_eq!(store.get_mail_operation_by_id("test", "missing").unwrap(), None);
+    assert_eq!(
+        store.get_mail_operation_by_id("test", "missing").unwrap(),
+        None
+    );
 
     let artifact = MailArtifact {
         artifact_id: "mail_art_1".to_string(),
@@ -273,5 +311,10 @@ fn mail_domain_round_trips_through_sqlite() {
     assert_eq!(artifacts[0].message_id, "msg_1");
     assert_eq!(artifacts[0].draft_id, "drf_1");
     assert_eq!(artifacts[0].attachment_ref_id, "att_1");
-    assert!(store.list_mail_artifacts("test", "other_op").unwrap().is_empty());
+    assert!(
+        store
+            .list_mail_artifacts("test", "other_op")
+            .unwrap()
+            .is_empty()
+    );
 }

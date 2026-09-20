@@ -36,7 +36,7 @@ use kura_llm as llm;
 use kura_providers as providers;
 
 use crate::error::ApiError;
-use crate::middleware::{environment_scope_from_config, TenantContext};
+use crate::middleware::{TenantContext, environment_scope_from_config};
 use crate::state::AppState;
 
 use super::decode_json_required;
@@ -45,7 +45,10 @@ use super::decode_json_required;
 #[must_use]
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/v1/llm/dispatches", get(list_dispatches).post(create_dispatch))
+        .route(
+            "/v1/llm/dispatches",
+            get(list_dispatches).post(create_dispatch),
+        )
         .route("/v1/llm/dispatches/stream", post(stream_dispatch))
         .route("/v1/llm/dispatches/{dispatch_id}", get(get_dispatch))
 }
@@ -89,7 +92,10 @@ fn map_providers_error(err: &providers::ProvidersError) -> ApiError {
 /// Go llmDispatchStatusCode for a settled-but-failed dispatch.
 fn dispatch_status_code(dispatch: &llm::Dispatch) -> StatusCode {
     match dispatch.error_code.as_str() {
-        "timeout" | "connect_timeout" | "first_chunk_timeout" | "idle_timeout"
+        "timeout"
+        | "connect_timeout"
+        | "first_chunk_timeout"
+        | "idle_timeout"
         | "max_duration_exceeded" => StatusCode::GATEWAY_TIMEOUT,
         "provider_not_found" => StatusCode::BAD_REQUEST,
         "cancelled" => StatusCode::REQUEST_TIMEOUT,
@@ -128,7 +134,9 @@ fn persist_dispatch(
 ) -> Result<(), ApiError> {
     let store = state.store.lock();
     if tenant_id.is_empty() {
-        store.upsert_llm_dispatch(dispatch).map_err(ApiError::from_store)
+        store
+            .upsert_llm_dispatch(dispatch)
+            .map_err(ApiError::from_store)
     } else {
         store
             .upsert_llm_dispatch_for_tenant_safe(dispatch, tenant_id)
@@ -159,18 +167,33 @@ fn publish_dispatch_event(
     );
     if terminal {
         payload.insert("partial".to_string(), serde_json::json!(dispatch.partial));
-        payload.insert("attemptCount".to_string(), serde_json::json!(dispatch.attempt_count));
-        payload.insert("finishReason".to_string(), serde_json::json!(dispatch.finish_reason));
+        payload.insert(
+            "attemptCount".to_string(),
+            serde_json::json!(dispatch.attempt_count),
+        );
+        payload.insert(
+            "finishReason".to_string(),
+            serde_json::json!(dispatch.finish_reason),
+        );
         payload.insert(
             "usage".to_string(),
             serde_json::to_value(&dispatch.usage).unwrap_or(serde_json::Value::Null),
         );
-        payload.insert("errorCode".to_string(), serde_json::json!(dispatch.error_code));
+        payload.insert(
+            "errorCode".to_string(),
+            serde_json::json!(dispatch.error_code),
+        );
         payload.insert("error".to_string(), serde_json::json!(dispatch.error));
     } else {
         payload.insert("stream".to_string(), serde_json::json!(dispatch.stream));
-        payload.insert("timeoutMs".to_string(), serde_json::json!(dispatch.timeout_ms));
-        payload.insert("maxRetries".to_string(), serde_json::json!(dispatch.max_retries));
+        payload.insert(
+            "timeoutMs".to_string(),
+            serde_json::json!(dispatch.timeout_ms),
+        );
+        payload.insert(
+            "maxRetries".to_string(),
+            serde_json::json!(dispatch.max_retries),
+        );
     }
 
     let event = events::Event {
@@ -273,9 +296,12 @@ async fn create_dispatch(
     if let Err(err) = persist_dispatch(&state, &tenant_id, &final_dispatch) {
         return err.into_response();
     }
-    if let Err(err) =
-        publish_dispatch_event(&state, terminal_event_name(&final_dispatch), &final_dispatch, true)
-    {
+    if let Err(err) = publish_dispatch_event(
+        &state,
+        terminal_event_name(&final_dispatch),
+        &final_dispatch,
+        true,
+    ) {
         return err.into_response();
     }
     if failed {
@@ -406,11 +432,19 @@ mod tests {
     #[tokio::test]
     async fn create_get_and_list_dispatches() {
         let state = state_with_dispatcher();
-        let (status, created) =
-            request_json(state.clone(), "POST", "/v1/llm/dispatches", Some(dispatch_body())).await;
+        let (status, created) = request_json(
+            state.clone(),
+            "POST",
+            "/v1/llm/dispatches",
+            Some(dispatch_body()),
+        )
+        .await;
         assert_eq!(status, StatusCode::CREATED, "{created}");
         assert_eq!(created["status"], "completed", "{created}");
-        let dispatch_id = created["dispatchId"].as_str().expect("dispatchId").to_string();
+        let dispatch_id = created["dispatchId"]
+            .as_str()
+            .expect("dispatchId")
+            .to_string();
 
         let (status, fetched) = request_json(
             state.clone(),
@@ -421,8 +455,7 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "{fetched}");
 
-        let (status, listed) =
-            request_json(state.clone(), "GET", "/v1/llm/dispatches", None).await;
+        let (status, listed) = request_json(state.clone(), "GET", "/v1/llm/dispatches", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(listed["items"].as_array().expect("items").len(), 1);
 
@@ -448,8 +481,7 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 
-        let (status, body) =
-            request_json(test_state(), "GET", "/v1/llm/dispatches", None).await;
+        let (status, body) = request_json(test_state(), "GET", "/v1/llm/dispatches", None).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(body["error"], "llm dispatcher is not configured");
     }

@@ -6,10 +6,10 @@
 //! metadata row and version rows (with value backend refs) are persisted.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
-use crate::crud::{now_rfc3339, null_string, parse_opt_rfc3339, parse_rfc3339};
 use crate::SQLiteStore;
+use crate::crud::{now_rfc3339, null_string, parse_opt_rfc3339, parse_rfc3339};
 
 fn is_unset_time(dt: &DateTime<Utc>) -> bool {
     dt.timestamp() == 0 && dt.timestamp_subsec_nanos() == 0
@@ -48,7 +48,9 @@ fn secret_status_from_str(value: &str) -> Result<kura_secrets::SecretStatus, Str
     }
 }
 
-fn secret_version_status_from_str(value: &str) -> Result<kura_secrets::SecretVersionStatus, String> {
+fn secret_version_status_from_str(
+    value: &str,
+) -> Result<kura_secrets::SecretVersionStatus, String> {
     match value {
         "active" => Ok(kura_secrets::SecretVersionStatus::Active),
         "superseded" => Ok(kura_secrets::SecretVersionStatus::Superseded),
@@ -61,14 +63,26 @@ fn secret_version_status_from_str(value: &str) -> Result<kura_secrets::SecretVer
 fn marshal_document(document: &Option<kura_secrets::Document>) -> Result<String, String> {
     match document {
         None => Ok("{}".to_string()),
-        Some(doc) => serde_json::to_string(doc).map_err(|e| format!("marshal tenant secret document: {e}")),
+        Some(doc) => {
+            serde_json::to_string(doc).map_err(|e| format!("marshal tenant secret document: {e}"))
+        }
     }
 }
 
 type TenantSecretRow = (
-    String, String, String, Option<String>, String, Option<String>,
-    Option<String>, Option<String>, String, String, Option<String>,
-    Option<String>, Option<String>,
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
 );
 
 fn decode_tenant_secret(
@@ -87,9 +101,10 @@ fn decode_tenant_secret(
     document_raw: Option<String>,
 ) -> Result<kura_secrets::TenantSecret, String> {
     let document = match document_raw {
-        Some(raw) if !raw.trim().is_empty() && raw.trim() != "{}" => {
-            Some(serde_json::from_str(&raw).map_err(|e| format!("decode tenant secret document: {e}"))?)
-        }
+        Some(raw) if !raw.trim().is_empty() && raw.trim() != "{}" => Some(
+            serde_json::from_str(&raw)
+                .map_err(|e| format!("decode tenant secret document: {e}"))?,
+        ),
         _ => None,
     };
     Ok(kura_secrets::TenantSecret {
@@ -111,15 +126,33 @@ fn decode_tenant_secret(
 
 fn tenant_secret_row(row: &Row) -> Result<TenantSecretRow, rusqlite::Error> {
     Ok((
-        row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
-        row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
-        row.get(10)?, row.get(11)?, row.get(12)?,
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+        row.get(10)?,
+        row.get(11)?,
+        row.get(12)?,
     ))
 }
 
 type SecretVersionRow = (
-    String, String, String, String, i64, String, String, String,
-    Option<String>, Option<String>,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
 );
 
 fn decode_secret_version(
@@ -150,8 +183,16 @@ fn decode_secret_version(
 
 fn secret_version_row(row: &Row) -> Result<SecretVersionRow, rusqlite::Error> {
     Ok((
-        row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
-        row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?,
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
     ))
 }
 
@@ -172,7 +213,10 @@ impl SQLiteStore {
             .map_err(|e| format!("commit create tenant secret transaction: {e}"))
     }
 
-    pub fn update_secret_metadata(&self, secret: &kura_secrets::TenantSecret) -> Result<(), String> {
+    pub fn update_secret_metadata(
+        &self,
+        secret: &kura_secrets::TenantSecret,
+    ) -> Result<(), String> {
         let document_json = marshal_document(&secret.document)?;
         self.conn
             .execute(
@@ -242,7 +286,8 @@ impl SQLiteStore {
             ],
         )
         .map_err(|e| format!("update rotated tenant secret: {e}"))?;
-        tx.commit().map_err(|e| format!("commit rotate tenant secret transaction: {e}"))
+        tx.commit()
+            .map_err(|e| format!("commit rotate tenant secret transaction: {e}"))
     }
 
     pub fn disable_tenant_secret(&self, secret: &kura_secrets::TenantSecret) -> Result<(), String> {
@@ -264,7 +309,11 @@ impl SQLiteStore {
         Ok(())
     }
 
-    pub fn get_secret_by_ref(&self, tenant_id: &str, secret_ref: &str) -> Result<Option<kura_secrets::TenantSecret>, String> {
+    pub fn get_secret_by_ref(
+        &self,
+        tenant_id: &str,
+        secret_ref: &str,
+    ) -> Result<Option<kura_secrets::TenantSecret>, String> {
         let result: Result<TenantSecretRow, rusqlite::Error> = self.conn.query_row(
             r#"SELECT secret_id, tenant_id, secret_ref, display_name, status, active_version_id,
                       disabled_reason, remediation_reason, created_at, updated_at, rotated_at,
@@ -274,13 +323,20 @@ impl SQLiteStore {
             tenant_secret_row,
         );
         match result {
-            Ok(row) => Ok(Some(decode_tenant_secret(row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9, row.10, row.11, row.12)?)),
+            Ok(row) => Ok(Some(decode_tenant_secret(
+                row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9, row.10,
+                row.11, row.12,
+            )?)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(format!("get tenant secret by ref: {e}")),
         }
     }
 
-    pub fn get_secret_version(&self, tenant_id: &str, secret_version_id: &str) -> Result<Option<kura_secrets::SecretVersion>, String> {
+    pub fn get_secret_version(
+        &self,
+        tenant_id: &str,
+        secret_version_id: &str,
+    ) -> Result<Option<kura_secrets::SecretVersion>, String> {
         let result: Result<SecretVersionRow, rusqlite::Error> = self.conn.query_row(
             r#"SELECT secret_version_id, secret_id, tenant_id, secret_ref, version_number, status,
                       value_backend_ref, created_at, activated_at, superseded_at
@@ -289,7 +345,9 @@ impl SQLiteStore {
             secret_version_row,
         );
         match result {
-            Ok(row) => Ok(Some(decode_secret_version(row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9)?)),
+            Ok(row) => Ok(Some(decode_secret_version(
+                row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9,
+            )?)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(format!("get tenant secret version: {e}")),
         }
@@ -310,7 +368,10 @@ impl SQLiteStore {
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let row = tenant_secret_row(&row).map_err(|e| e.to_string())?;
-            items.push(decode_tenant_secret(row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9, row.10, row.11, row.12)?);
+            items.push(decode_tenant_secret(
+                row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9, row.10,
+                row.11, row.12,
+            )?);
         }
         Ok(items)
     }
@@ -401,7 +462,9 @@ impl kura_secrets::Store for SecretStoreHandle {
     ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<()>> {
         Box::pin(async move {
             let store = self.0.lock();
-            store.create_tenant_secret(&secret, &version).map_err(kura_secrets::SecretsError::Store)
+            store
+                .create_tenant_secret(&secret, &version)
+                .map_err(kura_secrets::SecretsError::Store)
         })
     }
 
@@ -411,7 +474,9 @@ impl kura_secrets::Store for SecretStoreHandle {
     ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<()>> {
         Box::pin(async move {
             let store = self.0.lock();
-            store.update_secret_metadata(&secret).map_err(kura_secrets::SecretsError::Store)
+            store
+                .update_secret_metadata(&secret)
+                .map_err(kura_secrets::SecretsError::Store)
         })
     }
 
@@ -423,7 +488,9 @@ impl kura_secrets::Store for SecretStoreHandle {
     ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<()>> {
         Box::pin(async move {
             let store = self.0.lock();
-            store.rotate_tenant_secret(&secret, previous_version_id, version).map_err(kura_secrets::SecretsError::Store)
+            store
+                .rotate_tenant_secret(&secret, previous_version_id, version)
+                .map_err(kura_secrets::SecretsError::Store)
         })
     }
 
@@ -433,7 +500,9 @@ impl kura_secrets::Store for SecretStoreHandle {
     ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<()>> {
         Box::pin(async move {
             let store = self.0.lock();
-            store.disable_tenant_secret(&secret).map_err(kura_secrets::SecretsError::Store)
+            store
+                .disable_tenant_secret(&secret)
+                .map_err(kura_secrets::SecretsError::Store)
         })
     }
 
@@ -444,7 +513,9 @@ impl kura_secrets::Store for SecretStoreHandle {
     ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<Option<kura_secrets::TenantSecret>>> {
         Box::pin(async move {
             let store = self.0.lock();
-            store.get_secret_by_ref(tenant_id, secret_ref).map_err(kura_secrets::SecretsError::Store)
+            store
+                .get_secret_by_ref(tenant_id, secret_ref)
+                .map_err(kura_secrets::SecretsError::Store)
         })
     }
 
@@ -452,10 +523,13 @@ impl kura_secrets::Store for SecretStoreHandle {
         &'a self,
         tenant_id: &'a str,
         secret_version_id: &'a str,
-    ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<Option<kura_secrets::SecretVersion>>> {
+    ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<Option<kura_secrets::SecretVersion>>>
+    {
         Box::pin(async move {
             let store = self.0.lock();
-            store.get_secret_version(tenant_id, secret_version_id).map_err(kura_secrets::SecretsError::Store)
+            store
+                .get_secret_version(tenant_id, secret_version_id)
+                .map_err(kura_secrets::SecretsError::Store)
         })
     }
 
@@ -465,7 +539,9 @@ impl kura_secrets::Store for SecretStoreHandle {
     ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<Vec<kura_secrets::TenantSecret>>> {
         Box::pin(async move {
             let store = self.0.lock();
-            store.list_secrets(tenant_id).map_err(kura_secrets::SecretsError::Store)
+            store
+                .list_secrets(tenant_id)
+                .map_err(kura_secrets::SecretsError::Store)
         })
     }
 }

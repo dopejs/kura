@@ -206,8 +206,8 @@ impl Registry {
     /// `<home>/.agents` as the home root. Requires `HOME` to be set.
     #[must_use]
     pub fn new(data_root: &str) -> Result<Self, SkillsError> {
-        let home_dir = std::env::var("HOME")
-            .map_err(|err| SkillsError::HomeResolution(err.to_string()))?;
+        let home_dir =
+            std::env::var("HOME").map_err(|err| SkillsError::HomeResolution(err.to_string()))?;
         let home_root = Path::new(&home_dir).join(".agents");
         Self::with_roots(&home_root.to_string_lossy(), data_root)
     }
@@ -242,8 +242,10 @@ impl Registry {
         )?;
         let home_overlay =
             load_overlay(&Path::new(&self.home_root).join("AGENTS.md"), Source::Home)?;
-        let data_overlay =
-            load_overlay(&Path::new(&self.data_root).join("AGENTS.md"), Source::DataDir)?;
+        let data_overlay = load_overlay(
+            &Path::new(&self.data_root).join("AGENTS.md"),
+            Source::DataDir,
+        )?;
 
         let mut index: HashMap<String, Skill> = HashMap::new();
         for skill in &home_skills {
@@ -373,8 +375,8 @@ pub async fn resolve_executable_skill_secrets_for_tenant(
     let Some(secret_manager) = secret_manager else {
         return Err(SkillsError::SecretManagerRequired);
     };
-    let tenant_id = kura_identity::tenantctx::require()
-        .map_err(|_| SkillsError::TenantContextRequired)?;
+    let tenant_id =
+        kura_identity::tenantctx::require().map_err(|_| SkillsError::TenantContextRequired)?;
     for secret_ref in &refs {
         let secret = secret_manager
             .resolve(kura_secrets::ResolveInput {
@@ -441,7 +443,10 @@ fn load_skill(skill_root: &str, source: Source, secret_root: &str) -> Result<Ski
     };
 
     let (frontmatter_raw, frontmatter, body) = parse_skill_frontmatter(&content);
-    let frontmatter_name = frontmatter.get("name").map(|name| name.trim()).unwrap_or("");
+    let frontmatter_name = frontmatter
+        .get("name")
+        .map(|name| name.trim())
+        .unwrap_or("");
     let skill_name = if frontmatter_name.is_empty() {
         Path::new(skill_root)
             .file_name()
@@ -748,7 +753,11 @@ fn parse_executable_manifest(
             );
         }
     }
-    (Some(manifest), SkillAvailabilityStatus::Available, String::new())
+    (
+        Some(manifest),
+        SkillAvailabilityStatus::Available,
+        String::new(),
+    )
 }
 
 fn load_executable_skill_secret_file(
@@ -953,9 +962,7 @@ fn parse_skill_frontmatter(raw: &str) -> (String, HashMap<String, String>, Strin
         return (String::new(), HashMap::new(), trimmed);
     };
     let header = &rest[..end];
-    let body = rest[end..]
-        .strip_prefix("\n---\n")
-        .unwrap_or(&rest[end..]);
+    let body = rest[end..].strip_prefix("\n---\n").unwrap_or(&rest[end..]);
     let mut fields = HashMap::new();
     for line in header.split('\n') {
         if line.trim().is_empty() {
@@ -967,10 +974,7 @@ fn parse_skill_frontmatter(raw: &str) -> (String, HashMap<String, String>, Strin
         let Some((key, value)) = line.split_once(':') else {
             continue;
         };
-        fields.insert(
-            key.trim().to_string(),
-            unquote_yaml_scalar(value.trim()),
-        );
+        fields.insert(key.trim().to_string(), unquote_yaml_scalar(value.trim()));
     }
     (header.to_string(), fields, body.to_string())
 }

@@ -215,7 +215,11 @@ pub struct ReplayCandidate {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub latest_comparison_id: String,
     // Go json tag is "expectedComparisonSummary" (not the camelCase of the field).
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "expectedComparisonSummary")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "expectedComparisonSummary"
+    )]
     pub expected_comparison: Option<PlaneSummaries>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub captured_evidence_refs: Vec<SourceRef>,
@@ -655,7 +659,6 @@ pub struct DashboardProjection {
     pub cursor: String,
     pub retention_state: RetentionState,
 }
-
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

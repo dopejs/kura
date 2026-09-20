@@ -25,14 +25,34 @@ pub const MINIMUM_RESTART_COUNT: usize = 3;
 pub const MINIMUM_TENANT_COUNT: usize = 3;
 
 pub const RAW_CREDENTIAL_MARKERS: &[&str] = &[
-    "raw_secret", "access_token", "refresh_token", "oauth_code", "provider_token",
-    "r37_fake_secret", "r37_fake_token", "r39_raw_secret", "do_not_leak",
+    "raw_secret",
+    "access_token",
+    "refresh_token",
+    "oauth_code",
+    "provider_token",
+    "r37_fake_secret",
+    "r37_fake_token",
+    "r39_raw_secret",
+    "do_not_leak",
 ];
 
 pub const REQUIRED_LAUNCH_WORKLOADS: &[&str] = &[
-    "activation", "setup", "channels", "sessions", "profile_binding", "routines", "webhooks",
-    "quota_denial", "diagnostics", "evaluation", "live_validation", "support_bundle",
-    "backup", "restore", "upgrade", "rollback",
+    "activation",
+    "setup",
+    "channels",
+    "sessions",
+    "profile_binding",
+    "routines",
+    "webhooks",
+    "quota_denial",
+    "diagnostics",
+    "evaluation",
+    "live_validation",
+    "support_bundle",
+    "backup",
+    "restore",
+    "upgrade",
+    "rollback",
 ];
 
 pub const LAUNCH_GATE_STATEMENT: &str = "Context, knowledge, and memory work may begin only after non-knowledge parity release evidence passes or residual exceptions are explicitly accepted.";
@@ -92,8 +112,10 @@ pub struct MailSmokeInput {
     pub skip_reason: String,
 }
 
-const DEFAULT_CALENDAR_SKIP_REASON: &str = "safe Feishu/Lark calendar credentials unavailable in this environment";
-const DEFAULT_MAIL_SKIP_REASON: &str = "safe Feishu/Lark mail credentials unavailable in this environment";
+const DEFAULT_CALENDAR_SKIP_REASON: &str =
+    "safe Feishu/Lark calendar credentials unavailable in this environment";
+const DEFAULT_MAIL_SKIP_REASON: &str =
+    "safe Feishu/Lark mail credentials unavailable in this environment";
 
 // ---- primitive validation helpers ----
 
@@ -117,7 +139,11 @@ pub fn require_items(label: &str, values: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-pub fn require_elapsed_at_most(label: &str, elapsed: Duration, max: Duration) -> Result<(), String> {
+pub fn require_elapsed_at_most(
+    label: &str,
+    elapsed: Duration,
+    max: Duration,
+) -> Result<(), String> {
     if elapsed <= Duration::ZERO {
         return Err(format!("{label} elapsed time is required"));
     }
@@ -129,11 +155,15 @@ pub fn require_elapsed_at_most(label: &str, elapsed: Duration, max: Duration) ->
 
 pub fn contains_raw_credential_material(value: &str) -> bool {
     let lower = value.to_lowercase();
-    RAW_CREDENTIAL_MARKERS.iter().any(|marker| lower.contains(marker))
+    RAW_CREDENTIAL_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
 }
 
 pub fn contains_any_raw_credential_material(values: &[String]) -> bool {
-    values.iter().any(|value| contains_raw_credential_material(value))
+    values
+        .iter()
+        .any(|value| contains_raw_credential_material(value))
 }
 
 pub fn join_errors(results: Vec<Result<(), String>>) -> Result<(), String> {
@@ -153,12 +183,23 @@ pub fn require_allowed(label: &str, value: &str, allowed: &[&str]) -> Result<(),
     }
 }
 
-fn require_coverage(label: &str, coverage: &HashMap<String, bool>, required: &[&str]) -> Result<(), String> {
-    let missing: Vec<&str> = required.iter().filter(|key| !coverage.get(**key).copied().unwrap_or(false)).copied().collect();
+fn require_coverage(
+    label: &str,
+    coverage: &HashMap<String, bool>,
+    required: &[&str],
+) -> Result<(), String> {
+    let missing: Vec<&str> = required
+        .iter()
+        .filter(|key| !coverage.get(**key).copied().unwrap_or(false))
+        .copied()
+        .collect();
     if missing.is_empty() {
         Ok(())
     } else {
-        Err(format!("{label} missing required coverage: {}", missing.join(", ")))
+        Err(format!(
+            "{label} missing required coverage: {}",
+            missing.join(", ")
+        ))
     }
 }
 
@@ -174,7 +215,11 @@ fn require_no_raw_credential_slice(label: &str, values: &[String]) -> Result<(),
 
 pub fn validate_release_readiness(evidence: &ReleaseReadinessEvidence) -> Result<(), String> {
     let mut results = vec![
-        require_elapsed_at_most("release readiness review", evidence.review_elapsed, MAX_RELEASE_REVIEW_ELAPSED),
+        require_elapsed_at_most(
+            "release readiness review",
+            evidence.review_elapsed,
+            MAX_RELEASE_REVIEW_ELAPSED,
+        ),
         validate_real_account_smoke(&evidence.real_account_smoke),
     ];
     let required: Vec<(&str, bool)> = vec![
@@ -182,27 +227,55 @@ pub fn validate_release_readiness(evidence: &ReleaseReadinessEvidence) -> Result
         ("upgrade runbook", evidence.upgrade_runbook_passed),
         ("backup artifact", evidence.backup_artifact_passed),
         ("restore verification", evidence.restore_verification_passed),
-        ("migration verification", evidence.migration_verification_passed),
+        (
+            "migration verification",
+            evidence.migration_verification_passed,
+        ),
         ("rollback guidance", evidence.rollback_guidance_present),
         ("soak report", evidence.soak_report_passed),
-        ("resource growth checks", evidence.resource_growth_checks_passed),
+        (
+            "resource growth checks",
+            evidence.resource_growth_checks_passed,
+        ),
         ("credential redaction", evidence.credential_redaction_passed),
-        ("fake-backend coverage", evidence.fake_backend_coverage_passed),
-        ("Roadmap 40 rerun gate", evidence.roadmap40_rerun_gate_present),
-        ("Roadmap 41 rerun gate", evidence.roadmap41_rerun_gate_present),
-        ("Roadmap 42 diagnostics", evidence.roadmap42_diagnostics_present),
-        ("Roadmap 42 smoke", evidence.roadmap42_smoke_evidence_present),
+        (
+            "fake-backend coverage",
+            evidence.fake_backend_coverage_passed,
+        ),
+        (
+            "Roadmap 40 rerun gate",
+            evidence.roadmap40_rerun_gate_present,
+        ),
+        (
+            "Roadmap 41 rerun gate",
+            evidence.roadmap41_rerun_gate_present,
+        ),
+        (
+            "Roadmap 42 diagnostics",
+            evidence.roadmap42_diagnostics_present,
+        ),
+        (
+            "Roadmap 42 smoke",
+            evidence.roadmap42_smoke_evidence_present,
+        ),
     ];
     for (label, ok) in required {
         if !ok {
             results.push(Err(format!("{label} is required for release readiness")));
         }
     }
-    if evidence.decision != crate::RESULT_SHIP && evidence.decision != crate::RESULT_SHIP_WITH_RECORDED_SKIPS {
-        results.push(Err("release decision must be ship or ship_with_recorded_skips when evidence passes".to_string()));
+    if evidence.decision != crate::RESULT_SHIP
+        && evidence.decision != crate::RESULT_SHIP_WITH_RECORDED_SKIPS
+    {
+        results.push(Err(
+            "release decision must be ship or ship_with_recorded_skips when evidence passes"
+                .to_string(),
+        ));
     }
     if evidence.roadmap42_smoke_evidence_present && evidence.diagnostic_smoke_reports.is_empty() {
-        results.push(Err("Roadmap 42 smoke evidence requires at least one diagnostic smoke report".to_string()));
+        results.push(Err(
+            "Roadmap 42 smoke evidence requires at least one diagnostic smoke report".to_string(),
+        ));
     }
     join_errors(results)
 }
@@ -221,14 +294,22 @@ pub fn validate_backup_artifact(artifact: &BackupArtifact) -> Result<(), String>
         require_credential_exclusions(&artifact.excluded_material),
     ];
     for (i, tenant) in artifact.tenant_state_summary.iter().enumerate() {
-        results.push(validate_tenant_state_summary(&format!("tenant state summary[{i}]"), tenant));
+        results.push(validate_tenant_state_summary(
+            &format!("tenant state summary[{i}]"),
+            tenant,
+        ));
     }
     join_errors(results)
 }
 
-pub fn validate_representative_tenants(count: i64, tenants: &[TenantStateSummary]) -> Result<(), String> {
+pub fn validate_representative_tenants(
+    count: i64,
+    tenants: &[TenantStateSummary],
+) -> Result<(), String> {
     if count < MINIMUM_TENANT_COUNT as i64 || tenants.len() < MINIMUM_TENANT_COUNT {
-        return Err(format!("representative backup requires at least {MINIMUM_TENANT_COUNT} tenants"));
+        return Err(format!(
+            "representative backup requires at least {MINIMUM_TENANT_COUNT} tenants"
+        ));
     }
     let mut seen: HashSet<&str> = HashSet::new();
     for tenant in tenants {
@@ -239,25 +320,49 @@ pub fn validate_representative_tenants(count: i64, tenants: &[TenantStateSummary
     Ok(())
 }
 
-pub fn validate_tenant_state_summary(label: &str, tenant: &TenantStateSummary) -> Result<(), String> {
+pub fn validate_tenant_state_summary(
+    label: &str,
+    tenant: &TenantStateSummary,
+) -> Result<(), String> {
     join_errors(vec![
         require_non_empty(&format!("{label}.tenant id"), &tenant.tenant_id),
         require_items(&format!("{label}.credential refs"), &tenant.credential_refs),
         require_non_empty(&format!("{label}.quota state"), &tenant.quota_state),
         require_non_empty(&format!("{label}.work state"), &tenant.work_state),
-        require_no_raw_credential_slice(&format!("{label}.credential refs"), &tenant.credential_refs),
+        require_no_raw_credential_slice(
+            &format!("{label}.credential refs"),
+            &tenant.credential_refs,
+        ),
     ])
 }
 
 fn require_credential_exclusions(values: &[String]) -> Result<(), String> {
-    let required = ["raw secret", "access token", "refresh token", "oauth", "provider token", "derived credential"];
-    let joined = values.join("
-").to_lowercase();
-    let missing: Vec<&str> = required.iter().filter(|item| !joined.contains(**item)).copied().collect();
+    let required = [
+        "raw secret",
+        "access token",
+        "refresh token",
+        "oauth",
+        "provider token",
+        "derived credential",
+    ];
+    let joined = values
+        .join(
+            "
+",
+        )
+        .to_lowercase();
+    let missing: Vec<&str> = required
+        .iter()
+        .filter(|item| !joined.contains(**item))
+        .copied()
+        .collect();
     if missing.is_empty() {
         Ok(())
     } else {
-        Err(format!("excluded material missing credential exclusions: {}", missing.join(", ")))
+        Err(format!(
+            "excluded material missing credential exclusions: {}",
+            missing.join(", ")
+        ))
     }
 }
 
@@ -268,10 +373,15 @@ pub fn validate_restore_result(result: &RestoreVerificationResult) -> Result<(),
         require_items("secret reference checks", &result.secret_reference_checks),
         require_items("quota state checks", &result.quota_state_checks),
         require_items("work state checks", &result.work_state_checks),
-        require_items("credential remediation states", &result.credential_remediation_states),
+        require_items(
+            "credential remediation states",
+            &result.credential_remediation_states,
+        ),
         require_non_empty("restore result", &result.result),
     ];
-    if result.tenant_record_checks_total <= 0 || result.tenant_record_checks_passed != result.tenant_record_checks_total {
+    if result.tenant_record_checks_total <= 0
+        || result.tenant_record_checks_passed != result.tenant_record_checks_total
+    {
         results.push(Err("100% of tenant record checks must pass".to_string()));
     }
     if result.cross_tenant_leakage_observed {
@@ -302,17 +412,26 @@ pub fn validate_rollback_decision(decision: &RollbackDecision) -> Result<(), Str
 
 pub fn validate_restart_recovery(events: &[RestartEvent]) -> Result<(), String> {
     if events.len() < MINIMUM_RESTART_COUNT {
-        return Err(format!("soak requires at least {MINIMUM_RESTART_COUNT} daemon restarts"));
+        return Err(format!(
+            "soak requires at least {MINIMUM_RESTART_COUNT} daemon restarts"
+        ));
     }
     for event in events {
-        require_allowed("restart classification", &event.classification, &[
-            crate::CLASSIFICATION_RECOVERED,
-            crate::CLASSIFICATION_INTERRUPTED,
-            crate::CLASSIFICATION_RETRIED,
-            crate::CLASSIFICATION_OPERATOR_ACTION_NEEDED,
-        ])?;
+        require_allowed(
+            "restart classification",
+            &event.classification,
+            &[
+                crate::CLASSIFICATION_RECOVERED,
+                crate::CLASSIFICATION_INTERRUPTED,
+                crate::CLASSIFICATION_RETRIED,
+                crate::CLASSIFICATION_OPERATOR_ACTION_NEEDED,
+            ],
+        )?;
         if event.recovery_time > MAX_RESTART_RECOVERY_ELAPSED {
-            return Err(format!("restart {} recovery {:?} exceeds {:?}", event.restart_id, event.recovery_time, MAX_RESTART_RECOVERY_ELAPSED));
+            return Err(format!(
+                "restart {} recovery {:?} exceeds {:?}",
+                event.restart_id, event.recovery_time, MAX_RESTART_RECOVERY_ELAPSED
+            ));
         }
     }
     Ok(())
@@ -325,20 +444,37 @@ pub fn validate_resource_observations(observations: &[ResourceObservation]) -> R
             coverage.insert(observation.category.clone(), true);
         }
         if observation.monotonic_growth {
-            return Err(format!("resource category {} grew monotonically", observation.category));
+            return Err(format!(
+                "resource category {} grew monotonically",
+                observation.category
+            ));
         }
-        if observation.category == "active_work_or_queue_backlog" && observation.queue_backlog_age > MAX_QUEUE_BACKLOG_AGE {
-            return Err(format!("queue backlog persisted for {:?}", observation.queue_backlog_age));
+        if observation.category == "active_work_or_queue_backlog"
+            && observation.queue_backlog_age > MAX_QUEUE_BACKLOG_AGE
+        {
+            return Err(format!(
+                "queue backlog persisted for {:?}",
+                observation.queue_backlog_age
+            ));
         }
     }
-    require_coverage("resource observations", &coverage, crate::REQUIRED_RESOURCE_CATEGORIES)
+    require_coverage(
+        "resource observations",
+        &coverage,
+        crate::REQUIRED_RESOURCE_CATEGORIES,
+    )
 }
 
 pub fn validate_credential_remediation(states: &[String]) -> Result<(), String> {
     require_items("credential remediation states", states)?;
     for state in states {
-        if state != "reconnect_required" && state != "revalidation_required" && state != "blocked_until_reconnected" {
-            return Err(format!("credential remediation state {state:?} does not block credential-bearing use"));
+        if state != "reconnect_required"
+            && state != "revalidation_required"
+            && state != "blocked_until_reconnected"
+        {
+            return Err(format!(
+                "credential remediation state {state:?} does not block credential-bearing use"
+            ));
         }
     }
     Ok(())
@@ -359,16 +495,28 @@ pub fn validate_soak_report(report: &SoakReport) -> Result<(), String> {
         validate_restart_recovery(&report.restart_events),
         validate_fault_drills(&report.fault_drill_results),
         validate_resource_observations(&report.resource_observations),
-        validate_representative_tenants(report.tenant_set_summary.len() as i64, &report.tenant_set_summary),
+        validate_representative_tenants(
+            report.tenant_set_summary.len() as i64,
+            &report.tenant_set_summary,
+        ),
     ];
     if report.baseline_topology != crate::TOPOLOGY_TENANT_SCOPED_SINGLE_NODE {
-        results.push(Err(format!("baseline topology must be {}", crate::TOPOLOGY_TENANT_SCOPED_SINGLE_NODE)));
+        results.push(Err(format!(
+            "baseline topology must be {}",
+            crate::TOPOLOGY_TENANT_SCOPED_SINGLE_NODE
+        )));
     }
     if report.environment != crate::ENVIRONMENT_TEST {
-        results.push(Err(format!("default soak environment must be {}", crate::ENVIRONMENT_TEST)));
+        results.push(Err(format!(
+            "default soak environment must be {}",
+            crate::ENVIRONMENT_TEST
+        )));
     }
     if report.duration < MINIMUM_SOAK_DURATION {
-        if !report.temporary_shorter_duration || report.temporary_duration_reason.is_empty() || !report.follow_up_full_rerun {
+        if !report.temporary_shorter_duration
+            || report.temporary_duration_reason.is_empty()
+            || !report.follow_up_full_rerun
+        {
             results.push(Err(format!("soak duration {:?} is shorter than {:?} without temporary threshold rationale and full rerun requirement", report.duration, MINIMUM_SOAK_DURATION)));
         }
     }
@@ -376,7 +524,10 @@ pub fn validate_soak_report(report: &SoakReport) -> Result<(), String> {
         results.push(Err("cross-tenant leakage observed".to_string()));
     }
     if !report.unclassified_failures.is_empty() {
-        results.push(Err(format!("unclassified failures observed: {:?}", report.unclassified_failures)));
+        results.push(Err(format!(
+            "unclassified failures observed: {:?}",
+            report.unclassified_failures
+        )));
     }
     if report.final_result != crate::STATUS_PASS {
         results.push(Err("final result must be pass".to_string()));
@@ -388,16 +539,26 @@ pub fn validate_fault_drills(results: &[FaultDrillResult]) -> Result<(), String>
     let mut coverage: HashMap<String, bool> = HashMap::new();
     for result in results {
         coverage.insert(result.fault_type.clone(), true);
-        require_allowed("fault classification", &result.observed_classification, &[
-            crate::CLASSIFICATION_RECOVERED,
-            crate::CLASSIFICATION_RETRY_EXHAUSTED,
-            crate::CLASSIFICATION_OPERATOR_ACTION_NEEDED,
-        ])?;
+        require_allowed(
+            "fault classification",
+            &result.observed_classification,
+            &[
+                crate::CLASSIFICATION_RECOVERED,
+                crate::CLASSIFICATION_RETRY_EXHAUSTED,
+                crate::CLASSIFICATION_OPERATOR_ACTION_NEEDED,
+            ],
+        )?;
         if result.retry_exhausted && !result.operator_action_needed {
-            return Err(format!("retry exhaustion for {} lacks operator-action-needed state", result.fault_type));
+            return Err(format!(
+                "retry exhaustion for {} lacks operator-action-needed state",
+                result.fault_type
+            ));
         }
         if result.contains_raw_credential_material {
-            return Err(format!("fault drill {} exposed raw credential material", result.fault_type));
+            return Err(format!(
+                "fault drill {} exposed raw credential material",
+                result.fault_type
+            ));
         }
     }
     require_coverage("fault drills", &coverage, crate::REQUIRED_FAULT_TYPES)
@@ -410,19 +571,37 @@ pub fn validate_real_account_smoke(statuses: &[RealAccountSmokeStatus]) -> Resul
     for status in statuses {
         require_non_empty("real-account smoke domain", &status.domain)?;
         if status.contains_raw_credential_material {
-            return Err(format!("real-account smoke for {} exposed raw credential material", status.domain));
+            return Err(format!(
+                "real-account smoke for {} exposed raw credential material",
+                status.domain
+            ));
         }
         if !status.fake_backend_coverage_passing {
-            return Err(format!("fake-backend coverage must pass for {}", status.domain));
+            return Err(format!(
+                "fake-backend coverage must pass for {}",
+                status.domain
+            ));
         }
         if status.safe_credentials_available && !status.enabled {
-            return Err(format!("safe credentials available for {} but smoke is not enabled", status.domain));
+            return Err(format!(
+                "safe credentials available for {} but smoke is not enabled",
+                status.domain
+            ));
         }
-        if status.safe_credentials_available && status.enabled && status.result != crate::STATUS_PASS {
-            return Err(format!("real-account smoke for {} must pass when safe credentials are used", status.domain));
+        if status.safe_credentials_available
+            && status.enabled
+            && status.result != crate::STATUS_PASS
+        {
+            return Err(format!(
+                "real-account smoke for {} must pass when safe credentials are used",
+                status.domain
+            ));
         }
         if !status.safe_credentials_available && status.skip_reason.is_empty() {
-            return Err(format!("missing safe credentials for {} require explicit skip reason", status.domain));
+            return Err(format!(
+                "missing safe credentials for {} require explicit skip reason",
+                status.domain
+            ));
         }
     }
     Ok(())
@@ -472,7 +651,9 @@ pub fn validate_install_runbook(evidence: &RunbookEvidence) -> Result<(), String
 
 fn require_no_production_data(label: &str, evidence: &RunbookEvidence) -> Result<(), String> {
     if evidence.used_production_data && !evidence.production_opt_in {
-        Err(format!("{label} used production data without explicit opt-in"))
+        Err(format!(
+            "{label} used production data without explicit opt-in"
+        ))
     } else {
         Ok(())
     }
@@ -488,18 +669,33 @@ pub fn validate_launch_gate(evidence: &LaunchGateEvidence) -> LaunchDecision {
     for &required in REQUIRED_LAUNCH_WORKLOADS {
         match by_name.get(required) {
             None => reasons.push(format!("missing required workload evidence: {required}")),
-            Some(w) if w.status == crate::STATUS_FAIL => reasons.push(format!("required workload failed: {required}")),
-            Some(w) if w.status == crate::STATUS_SKIP && w.reason.trim().is_empty() => reasons.push(format!("skipped workload requires an accepted reason: {required}")),
-            Some(w) if w.status != crate::STATUS_PASS && w.status != crate::STATUS_SKIP => reasons.push(format!("workload has invalid status {:?}: {required}", w.status)),
+            Some(w) if w.status == crate::STATUS_FAIL => {
+                reasons.push(format!("required workload failed: {required}"))
+            }
+            Some(w) if w.status == crate::STATUS_SKIP && w.reason.trim().is_empty() => reasons
+                .push(format!(
+                    "skipped workload requires an accepted reason: {required}"
+                )),
+            Some(w) if w.status != crate::STATUS_PASS && w.status != crate::STATUS_SKIP => reasons
+                .push(format!(
+                    "workload has invalid status {:?}: {required}",
+                    w.status
+                )),
             _ => {}
         }
     }
 
     if evidence.channels.len() < 3 {
-        reasons.push(format!("launch gate requires at least 3 channel entries, got {}", evidence.channels.len()));
+        reasons.push(format!(
+            "launch gate requires at least 3 channel entries, got {}",
+            evidence.channels.len()
+        ));
     }
     if validate_real_account_smoke(&evidence.channels).is_err() && !evidence.channels.is_empty() {
-        reasons.push(format!("channel smoke invalid: {}", validate_real_account_smoke(&evidence.channels).unwrap_err()));
+        reasons.push(format!(
+            "channel smoke invalid: {}",
+            validate_real_account_smoke(&evidence.channels).unwrap_err()
+        ));
     }
 
     let mut provider_domains: HashSet<String> = HashSet::new();
@@ -511,8 +707,13 @@ pub fn validate_launch_gate(evidence: &LaunchGateEvidence) -> LaunchDecision {
             reasons.push(format!("missing {domain} provider smoke entry"));
         }
     }
-    if validate_real_account_smoke(&evidence.provider_smoke).is_err() && !evidence.provider_smoke.is_empty() {
-        reasons.push(format!("provider smoke invalid: {}", validate_real_account_smoke(&evidence.provider_smoke).unwrap_err()));
+    if validate_real_account_smoke(&evidence.provider_smoke).is_err()
+        && !evidence.provider_smoke.is_empty()
+    {
+        reasons.push(format!(
+            "provider smoke invalid: {}",
+            validate_real_account_smoke(&evidence.provider_smoke).unwrap_err()
+        ));
     }
 
     if !evidence.soak_duration_met {

@@ -163,7 +163,10 @@ mod tests {
         });
         assert_eq!(d.effective, EffectiveVisibility::VISIBLE);
         assert!(d.offered && d.executable);
-        assert!(!d.default_enabled, "no policy should not be default-enabled");
+        assert!(
+            !d.default_enabled,
+            "no policy should not be default-enabled"
+        );
     }
 
     // Port of TestVisibility_HiddenWinsOverVisible.
@@ -293,7 +296,10 @@ mod tests {
                 ..Default::default()
             };
             assert!(
-                matches!(enforce_executable(&decision), Err(BindingError::CapabilityNotExecutable)),
+                matches!(
+                    enforce_executable(&decision),
+                    Err(BindingError::CapabilityNotExecutable)
+                ),
                 "effective {} must not be executable",
                 decision.effective
             );
@@ -311,7 +317,10 @@ mod tests {
             workspace_policy: Visibility::DISABLED,
             ..Default::default()
         });
-        assert!(!d.offered && !d.executable, "disabled capability must not be selectable");
+        assert!(
+            !d.offered && !d.executable,
+            "disabled capability must not be selectable"
+        );
         assert!(enforce_executable(&d).is_err());
     }
 }

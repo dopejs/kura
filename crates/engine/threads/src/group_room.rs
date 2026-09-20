@@ -5,8 +5,8 @@ use serde::Serialize;
 
 use crate::error::ThreadsError;
 use crate::lifecycle::LifecycleAction;
-use crate::redaction::safe_group_room_evidence_summary;
 use crate::redaction::RedactionStatus;
+use crate::redaction::safe_group_room_evidence_summary;
 use crate::source::SourceKind;
 use crate::utc_now_or;
 
@@ -277,7 +277,9 @@ pub fn normalize_conversation_shape(shape: &str) -> Result<ConversationShape, Th
 
 /// Go: `ResolveConversationShape` — unclaimed shapes fall back to source-kind
 /// evidence; unknown/unsupported claims downgrade the evidence status.
-pub fn resolve_conversation_shape(input: &ConversationShapeResolutionInput) -> ConversationShapeEvidence {
+pub fn resolve_conversation_shape(
+    input: &ConversationShapeResolutionInput,
+) -> ConversationShapeEvidence {
     let now = utc_now_or(input.now);
     let mut status = ShapeEvidenceStatus::Proven;
     let shape = match input.claimed_shape {
@@ -313,7 +315,10 @@ pub fn resolve_conversation_shape(input: &ConversationShapeResolutionInput) -> C
         connector_kind: input.connector_kind.clone(),
         source_account_id: input.source_account_id.clone(),
         source_conversation_id: input.source_conversation_id.trim().to_string(),
-        source_conversation_summary: safe_group_room_evidence_summary(&input.source_conversation_summary).text,
+        source_conversation_summary: safe_group_room_evidence_summary(
+            &input.source_conversation_summary,
+        )
+        .text,
         participant_summary: String::new(),
         shape_evidence_status: status,
         recorded_at: Some(now),
@@ -363,13 +368,21 @@ pub fn evaluate_participation(input: &ParticipationEvaluationInput) -> Participa
         allowlist_status: AllowlistStatus::Eligible,
         decision: ParticipationDecisionValue::Accepted,
         reason_code: GROUP_ROOM_REASON_ACCEPTED_QUALIFYING_MENTION.to_string(),
-        created_assistant_work: matches!(input.shape, ConversationShape::Group | ConversationShape::Room),
+        created_assistant_work: matches!(
+            input.shape,
+            ConversationShape::Group | ConversationShape::Room
+        ),
         occurred_at: Some(utc_now_or(input.occurred_at)),
         retention_expires_at: None,
         redaction_status: RedactionStatus::Redacted,
         safe_summary: safe_group_room_evidence_summary(&input.safe_summary).text,
     };
-    if input.unsupported || !matches!(input.shape, ConversationShape::Group | ConversationShape::Room) {
+    if input.unsupported
+        || !matches!(
+            input.shape,
+            ConversationShape::Group | ConversationShape::Room
+        )
+    {
         decision.mention_status = MentionStatus::Unsupported;
         decision.allowlist_status = AllowlistStatus::Unsupported;
         decision.decision = ParticipationDecisionValue::Unsupported;
@@ -405,15 +418,20 @@ pub fn evaluate_participation(input: &ParticipationEvaluationInput) -> Participa
 
 /// Go: `BuildScopedResetEvent` — records the reset against the conversation
 /// shape; unknown/unsupported shapes fail closed as unsupported.
-pub fn build_scoped_reset_event(action: &LifecycleAction, shape: &ConversationShapeEvidence) -> ResetEvent {
+pub fn build_scoped_reset_event(
+    action: &LifecycleAction,
+    shape: &ConversationShapeEvidence,
+) -> ResetEvent {
     let mut status = ResetEventStatus::Succeeded;
     let mut reason = action.reason_code.clone();
     if reason.trim().is_empty() {
         reason = GROUP_ROOM_REASON_SCOPED_RESET_SUCCEEDED.to_string();
     }
     let conversation_shape = shape.shape;
-    if matches!(conversation_shape, ConversationShape::Unknown | ConversationShape::Unsupported)
-        || shape.shape_evidence_status == ShapeEvidenceStatus::Unsupported
+    if matches!(
+        conversation_shape,
+        ConversationShape::Unknown | ConversationShape::Unsupported
+    ) || shape.shape_evidence_status == ShapeEvidenceStatus::Unsupported
     {
         status = ResetEventStatus::Unsupported;
         reason = GROUP_ROOM_REASON_UNSUPPORTED_CONVERSATION_SHAPE.to_string();
@@ -481,8 +499,14 @@ mod tests {
             redaction_allowed: true,
             ..evaluation_input(ConversationShape::Room)
         });
-        assert_eq!(missing_mention.decision, ParticipationDecisionValue::Ignored);
-        assert_eq!(missing_mention.reason_code, GROUP_ROOM_REASON_MISSING_QUALIFYING_MENTION);
+        assert_eq!(
+            missing_mention.decision,
+            ParticipationDecisionValue::Ignored
+        );
+        assert_eq!(
+            missing_mention.reason_code,
+            GROUP_ROOM_REASON_MISSING_QUALIFYING_MENTION
+        );
         assert!(!missing_mention.created_assistant_work);
 
         let not_allowlisted = evaluate_participation(&ParticipationEvaluationInput {
@@ -491,16 +515,22 @@ mod tests {
             redaction_allowed: true,
             ..evaluation_input(ConversationShape::Group)
         });
-        assert_eq!(not_allowlisted.decision, ParticipationDecisionValue::Blocked);
-        assert_eq!(not_allowlisted.reason_code, GROUP_ROOM_REASON_NOT_ALLOWLISTED);
+        assert_eq!(
+            not_allowlisted.decision,
+            ParticipationDecisionValue::Blocked
+        );
+        assert_eq!(
+            not_allowlisted.reason_code,
+            GROUP_ROOM_REASON_NOT_ALLOWLISTED
+        );
         assert!(!not_allowlisted.created_assistant_work);
     }
 
     // Port of TestResolveConversationShapePreservesStableRoomIdentity.
     #[test]
     fn resolve_conversation_shape_preserves_stable_room_identity() {
-        let resolution_input = |thread_id: &str, segment: &str, conversation: &str| {
-            ConversationShapeResolutionInput {
+        let resolution_input =
+            |thread_id: &str, segment: &str, conversation: &str| ConversationShapeResolutionInput {
                 tenant_id: "ten_1".to_string(),
                 thread_id: thread_id.to_string(),
                 session_segment_id: segment.to_string(),
@@ -512,10 +542,11 @@ mod tests {
                 source_conversation_summary: "Slack / #support".to_string(),
                 claimed_shape: Some(ConversationShape::Room),
                 now: None,
-            }
-        };
-        let first = resolve_conversation_shape(&resolution_input("thr_room_1", "seg_1", "channel_a"));
-        let second = resolve_conversation_shape(&resolution_input("thr_room_2", "seg_2", "channel_b"));
+            };
+        let first =
+            resolve_conversation_shape(&resolution_input("thr_room_1", "seg_1", "channel_a"));
+        let second =
+            resolve_conversation_shape(&resolution_input("thr_room_2", "seg_2", "channel_b"));
         assert_eq!(first.shape, ConversationShape::Room);
         assert_eq!(first.shape_evidence_status, ShapeEvidenceStatus::Proven);
         assert_ne!(first.source_conversation_id, second.source_conversation_id);
@@ -534,7 +565,10 @@ mod tests {
             now: None,
         });
         assert_eq!(unsupported.shape, ConversationShape::Unsupported);
-        assert_eq!(unsupported.shape_evidence_status, ShapeEvidenceStatus::Unsupported);
+        assert_eq!(
+            unsupported.shape_evidence_status,
+            ShapeEvidenceStatus::Unsupported
+        );
     }
 
     // Port of TestUnknownShapeDoesNotCreateParticipation.
@@ -572,7 +606,10 @@ mod tests {
         }
     }
 
-    fn shape_evidence(shape: ConversationShape, status: ShapeEvidenceStatus) -> ConversationShapeEvidence {
+    fn shape_evidence(
+        shape: ConversationShape,
+        status: ShapeEvidenceStatus,
+    ) -> ConversationShapeEvidence {
         ConversationShapeEvidence {
             conversation_shape_id: String::new(),
             tenant_id: String::new(),
@@ -608,7 +645,10 @@ mod tests {
             ConversationShape::Room,
             ConversationShape::Web,
         ] {
-            let event = build_scoped_reset_event(&action, &shape_evidence(shape, ShapeEvidenceStatus::Proven));
+            let event = build_scoped_reset_event(
+                &action,
+                &shape_evidence(shape, ShapeEvidenceStatus::Proven),
+            );
             assert_eq!(event.conversation_shape, shape);
             assert!(!event.source_conversation_id.is_empty());
             assert_eq!(event.status, ResetEventStatus::Succeeded);
@@ -627,9 +667,15 @@ mod tests {
         action.reason_code = String::new();
         let event = build_scoped_reset_event(
             &action,
-            &shape_evidence(ConversationShape::Unsupported, ShapeEvidenceStatus::Unsupported),
+            &shape_evidence(
+                ConversationShape::Unsupported,
+                ShapeEvidenceStatus::Unsupported,
+            ),
         );
         assert_eq!(event.status, ResetEventStatus::Unsupported);
-        assert_eq!(event.reason_code, GROUP_ROOM_REASON_UNSUPPORTED_CONVERSATION_SHAPE);
+        assert_eq!(
+            event.reason_code,
+            GROUP_ROOM_REASON_UNSUPPORTED_CONVERSATION_SHAPE
+        );
     }
 }

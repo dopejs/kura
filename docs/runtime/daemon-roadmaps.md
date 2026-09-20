@@ -482,15 +482,26 @@ engineering, agent-managed skills, and audited self-improvement
    Phase 1 (plugin kernel, builtin plugin assembly, `/v1/plugins`) landed
    2026-08-17; phase 2 is the hookable agent loop; phase 3 is
    out-of-process plugin providers.
-3. **Session/context management as plugins** — deferred until
-   pluginization phase 2; the session-strategy seam hosts the
-   `personal-session` (long-session) and `im-thread-session`
-   (context-per-thread) default plugins.
-4. **Knowledge retrieval** — retrieval over the memory plane with
-   source-linking (BM25+vector+RRF root design).
-5. **Agent-managed skills** — extending the operator catalog (R68) with
-   agent-proposed, operator-approved skill lifecycle.
-6. **Self-improvement** — review- and audit-gated behavior change.
+3. **Session/context management as plugins** — slice 1 complete
+   2026-08-17 (`6b22ac5`, `ce2635e`): the `session-strategy` builtin shapes
+   the window at `chat/pre-dispatch` (frame-preserving elision,
+   compression-to-memory), and the `context` builtin injects the memory
+   bootstrap with a full AssemblyRecord.
+4. **Knowledge retrieval** — slice 1 complete 2026-08-17
+   (`695bafe`, `b3cf38b`, `7fa2f46`): BM25 + recency + vector ranking fused
+   with RRF (k=60) over Ready L1 atoms, the `Embedder` seam, and
+   `POST /v1/retrieval/queries`.
+5. **Agent-managed skills** — slice 1 complete 2026-08-17 (`b41928a`): a
+   skill proposal is a `kind=skill` L1 memory asset riding the existing
+   memory review queue, plus the Ready-only publication bridge.
+6. **Self-improvement** — slice 1 complete 2026-08-17 (`9be4164`): bounded,
+   rate-limited proposals over one plugin-profile config value, each
+   carrying evidence and a recorded rollback snapshot.
+
+Every program item has landed slice 1; none is closed. The second slice wave
+for all six, together with the multi-tenant assembly, built-in tool, and
+server-deployment work surfaced by the 2026-09-18 audit, is planned in
+[`../harness/agent-deepening-program.md`](../harness/agent-deepening-program.md).
 
 ---
 

@@ -20,13 +20,13 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use kura_events::{Bus, Event, Resource, Scope};
-use kura_store::delivery::{
-    DeliveryAttemptRecord, DeliveryOutcomeFilter, DeliveryOutcomeRecord,
-    DeliveryPreferenceRecord, DeliverySummaryWindowRecord, DeliveryTargetRecord,
-};
 use kura_store::SQLiteStore;
+use kura_store::delivery::{
+    DeliveryAttemptRecord, DeliveryOutcomeFilter, DeliveryOutcomeRecord, DeliveryPreferenceRecord,
+    DeliverySummaryWindowRecord, DeliveryTargetRecord,
+};
 use parking_lot::Mutex;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::adapters::{ChannelDeliveryHooks, DeliveryAdapter};
 use crate::{
@@ -216,15 +216,15 @@ impl Manager {
     }
 
     /// Port of `ListOutcomes`.
-    pub fn list_outcomes(&self, filter: OutcomeFilter) -> Result<Vec<DeliveryOutcome>, DeliveryError> {
+    pub fn list_outcomes(
+        &self,
+        filter: OutcomeFilter,
+    ) -> Result<Vec<DeliveryOutcome>, DeliveryError> {
         self.inner.list_outcomes(&filter)
     }
 
     /// Port of `GetOutcome`.
-    pub fn get_outcome(
-        &self,
-        delivery_id: &str,
-    ) -> Result<(DeliveryOutcome, bool), DeliveryError> {
+    pub fn get_outcome(&self, delivery_id: &str) -> Result<(DeliveryOutcome, bool), DeliveryError> {
         self.inner.get_outcome(delivery_id)
     }
 
@@ -247,7 +247,10 @@ impl Manager {
 impl ManagerInner {
     // ---- targets ----
 
-    pub(crate) fn create_target(self: &Arc<Self>, mut target: DeliveryTarget) -> Result<DeliveryTarget, DeliveryError> {
+    pub(crate) fn create_target(
+        self: &Arc<Self>,
+        mut target: DeliveryTarget,
+    ) -> Result<DeliveryTarget, DeliveryError> {
         let now = Utc::now();
         if target.target_id.trim().is_empty() {
             return Err(DeliveryError::TargetIdRequired);
@@ -266,17 +269,23 @@ impl ManagerInner {
         if target.target_kind == TargetKind::TestSink {
             target.supports_digest = true;
         }
-        self.store.lock().upsert_delivery_target(&DeliveryTargetRecord {
-            target_id: target.target_id.clone(),
-            environment_scope: target.environment_scope.clone(),
-            target_kind: target.target_kind.as_str().to_string(),
-            status: target.status.as_str().to_string(),
-            updated_at: target.updated_at,
-            document: must_marshal(&target),
-        }).map_err(DeliveryError::Store)?;
+        self.store
+            .lock()
+            .upsert_delivery_target(&DeliveryTargetRecord {
+                target_id: target.target_id.clone(),
+                environment_scope: target.environment_scope.clone(),
+                target_kind: target.target_kind.as_str().to_string(),
+                status: target.status.as_str().to_string(),
+                updated_at: target.updated_at,
+                document: must_marshal(&target),
+            })
+            .map_err(DeliveryError::Store)?;
         self.publish_event(
             "delivery.target_registered",
-            Resource { kind: "delivery_target".to_string(), id: target.target_id.clone() },
+            Resource {
+                kind: "delivery_target".to_string(),
+                id: target.target_id.clone(),
+            },
             payload_map(json!({
                 "targetId": target.target_id,
                 "targetKind": target.target_kind,
@@ -300,7 +309,10 @@ impl ManagerInner {
         Ok(items)
     }
 
-    pub(crate) fn get_target(&self, target_id: &str) -> Result<(DeliveryTarget, bool), DeliveryError> {
+    pub(crate) fn get_target(
+        &self,
+        target_id: &str,
+    ) -> Result<(DeliveryTarget, bool), DeliveryError> {
         let record = self
             .store
             .lock()
@@ -324,17 +336,23 @@ impl ManagerInner {
         target.status = status;
         let now = Utc::now();
         target.updated_at = now;
-        self.store.lock().upsert_delivery_target(&DeliveryTargetRecord {
-            target_id: target.target_id.clone(),
-            environment_scope: target.environment_scope.clone(),
-            target_kind: target.target_kind.as_str().to_string(),
-            status: target.status.as_str().to_string(),
-            updated_at: target.updated_at,
-            document: must_marshal(&target),
-        }).map_err(DeliveryError::Store)?;
+        self.store
+            .lock()
+            .upsert_delivery_target(&DeliveryTargetRecord {
+                target_id: target.target_id.clone(),
+                environment_scope: target.environment_scope.clone(),
+                target_kind: target.target_kind.as_str().to_string(),
+                status: target.status.as_str().to_string(),
+                updated_at: target.updated_at,
+                document: must_marshal(&target),
+            })
+            .map_err(DeliveryError::Store)?;
         self.publish_event(
             "delivery.target_status_changed",
-            Resource { kind: "delivery_target".to_string(), id: target.target_id.clone() },
+            Resource {
+                kind: "delivery_target".to_string(),
+                id: target.target_id.clone(),
+            },
             payload_map(json!({
                 "targetId": target.target_id,
                 "targetKind": target.target_kind,
@@ -363,18 +381,24 @@ impl ManagerInner {
         }
         pref.active = true;
         pref.updated_at = now;
-        self.store.lock().upsert_delivery_preference(&DeliveryPreferenceRecord {
-            preference_id: pref.preference_id.clone(),
-            environment_scope: pref.environment_scope.clone(),
-            scope_kind: pref.scope_kind.as_str().to_string(),
-            integration_id: pref.integration_id.clone(),
-            active: pref.active,
-            updated_at: pref.updated_at,
-            document: must_marshal(&pref),
-        }).map_err(DeliveryError::Store)?;
+        self.store
+            .lock()
+            .upsert_delivery_preference(&DeliveryPreferenceRecord {
+                preference_id: pref.preference_id.clone(),
+                environment_scope: pref.environment_scope.clone(),
+                scope_kind: pref.scope_kind.as_str().to_string(),
+                integration_id: pref.integration_id.clone(),
+                active: pref.active,
+                updated_at: pref.updated_at,
+                document: must_marshal(&pref),
+            })
+            .map_err(DeliveryError::Store)?;
         self.publish_event(
             "delivery.preference_updated",
-            Resource { kind: "delivery_preference".to_string(), id: pref.preference_id.clone() },
+            Resource {
+                kind: "delivery_preference".to_string(),
+                id: pref.preference_id.clone(),
+            },
             payload_map(json!({
                 "preferenceId": pref.preference_id,
                 "environmentScope": pref.environment_scope,
@@ -415,7 +439,10 @@ impl ManagerInner {
 
     // ---- outcomes ----
 
-    pub(crate) fn emit_outcome(self: &Arc<Self>, input: OutcomeInput) -> Result<DeliveryOutcome, DeliveryError> {
+    pub(crate) fn emit_outcome(
+        self: &Arc<Self>,
+        input: OutcomeInput,
+    ) -> Result<DeliveryOutcome, DeliveryError> {
         let existing = self.list_outcomes(&OutcomeFilter {
             source_kind: input.source_kind.clone(),
             source_id: input.source_id.clone(),
@@ -464,7 +491,10 @@ impl ManagerInner {
         }
     }
 
-    pub(crate) fn list_outcomes(&self, filter: &OutcomeFilter) -> Result<Vec<DeliveryOutcome>, DeliveryError> {
+    pub(crate) fn list_outcomes(
+        &self,
+        filter: &OutcomeFilter,
+    ) -> Result<Vec<DeliveryOutcome>, DeliveryError> {
         let records = self
             .store
             .lock()
@@ -493,7 +523,10 @@ impl ManagerInner {
         Ok(items)
     }
 
-    pub(crate) fn get_outcome(&self, delivery_id: &str) -> Result<(DeliveryOutcome, bool), DeliveryError> {
+    pub(crate) fn get_outcome(
+        &self,
+        delivery_id: &str,
+    ) -> Result<(DeliveryOutcome, bool), DeliveryError> {
         let record = self
             .store
             .lock()
@@ -608,7 +641,10 @@ impl ManagerInner {
         }
         if result_class == ResultClass::RoutineSuccess
             && matches!(
-                selected.summary_policy.as_ref().map(|p| p.routine_success_mode),
+                selected
+                    .summary_policy
+                    .as_ref()
+                    .map(|p| p.routine_success_mode),
                 Some(Some(DeliveryMode::Digest))
             )
         {
@@ -633,7 +669,10 @@ impl ManagerInner {
 
     /// Port of `connectorDeliveryDisabled`: only consulted for connector-route targets with a
     /// non-empty connector binding. Without channel hooks (deferred), delivery is enabled.
-    pub(crate) fn connector_delivery_disabled(&self, target: &DeliveryTarget) -> Result<bool, DeliveryError> {
+    pub(crate) fn connector_delivery_disabled(
+        &self,
+        target: &DeliveryTarget,
+    ) -> Result<bool, DeliveryError> {
         if target.target_kind != TargetKind::ConnectorRoute || target.connector_binding.is_none() {
             return Ok(false);
         }
@@ -646,7 +685,9 @@ impl ManagerInner {
             return Ok(false);
         }
         match &self.hooks {
-            Some(hooks) => hooks.connector_delivery_disabled(&connector_id).map_err(DeliveryError::Store),
+            Some(hooks) => hooks
+                .connector_delivery_disabled(&connector_id)
+                .map_err(DeliveryError::Store),
             None => Ok(false),
         }
     }
@@ -698,7 +739,10 @@ impl ManagerInner {
 
     // ---- persistence helpers ----
 
-    pub(crate) fn attach_attempts(&self, mut outcome: DeliveryOutcome) -> Result<DeliveryOutcome, DeliveryError> {
+    pub(crate) fn attach_attempts(
+        &self,
+        mut outcome: DeliveryOutcome,
+    ) -> Result<DeliveryOutcome, DeliveryError> {
         let records = self
             .store
             .lock()
@@ -766,11 +810,17 @@ impl ManagerInner {
 
     // ---- event publishing ----
 
-    pub(crate) fn publish_outcome_created(&self, outcome: &DeliveryOutcome) -> Result<(), DeliveryError> {
+    pub(crate) fn publish_outcome_created(
+        &self,
+        outcome: &DeliveryOutcome,
+    ) -> Result<(), DeliveryError> {
         self.record_thread_delivery_projection(outcome, "delivery.outcome_created")?;
         self.publish_event(
             "delivery.outcome_created",
-            Resource { kind: "delivery".to_string(), id: outcome.delivery_id.clone() },
+            Resource {
+                kind: "delivery".to_string(),
+                id: outcome.delivery_id.clone(),
+            },
             payload_map(json!({
                 "deliveryId": outcome.delivery_id,
                 "sourceKind": outcome.source_kind,
@@ -796,7 +846,10 @@ impl ManagerInner {
     ) -> Result<(), DeliveryError> {
         self.publish_event(
             "delivery.attempt_recorded",
-            Resource { kind: "delivery".to_string(), id: outcome.delivery_id.clone() },
+            Resource {
+                kind: "delivery".to_string(),
+                id: outcome.delivery_id.clone(),
+            },
             payload_map(json!({
                 "sourceKind": outcome.source_kind,
                 "sourceId": outcome.source_id,
@@ -824,7 +877,10 @@ impl ManagerInner {
         self.record_thread_delivery_projection(outcome, "delivery.outcome_status_changed")?;
         self.publish_event(
             "delivery.outcome_status_changed",
-            Resource { kind: "delivery".to_string(), id: outcome.delivery_id.clone() },
+            Resource {
+                kind: "delivery".to_string(),
+                id: outcome.delivery_id.clone(),
+            },
             payload_map(json!({
                 "sourceKind": outcome.source_kind,
                 "sourceId": outcome.source_id,
@@ -913,7 +969,11 @@ fn is_unset_time(dt: &DateTime<Utc>) -> bool {
 
 /// Go `nonEmpty`: first argument with non-blank content, else the fallback.
 pub(crate) fn non_empty(a: &str, fallback: &str) -> String {
-    if a.trim().is_empty() { fallback.to_string() } else { a.to_string() }
+    if a.trim().is_empty() {
+        fallback.to_string()
+    } else {
+        a.to_string()
+    }
 }
 
 /// Go `suppressionReason` receiver on DeliveryPreference.

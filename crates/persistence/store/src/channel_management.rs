@@ -17,10 +17,10 @@
 //! existing `kura_store::channel_management::*` imports keep resolving.
 
 use chrono::{DateTime, Duration, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
-use crate::crud::now_rfc3339;
 use crate::SQLiteStore;
+use crate::crud::now_rfc3339;
 
 /// The channel-management record types, enums, and pure predicates, defined in
 /// `kura-connectors` (Go keeps them in the connectors package) and re-exported
@@ -173,7 +173,9 @@ impl SQLiteStore {
                 "SELECT document_json FROM channel_route_policies WHERE tenant_id = ?1 AND connector_id = ?2",
             )
             .map_err(|e| format!("get channel route policy {tenant_id}/{connector_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, connector_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, connector_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -241,7 +243,9 @@ impl SQLiteStore {
                 ORDER BY occurred_at DESC, routing_decision_id DESC
                 LIMIT 50"#,
             )
-            .map_err(|e| format!("list channel routing decisions {tenant_id}/{connector_id}: {e}"))?;
+            .map_err(|e| {
+                format!("list channel routing decisions {tenant_id}/{connector_id}: {e}")
+            })?;
         let mut rows = stmt
             .query(params![tenant_id, connector_id, now_rfc3339(&now)])
             .map_err(|e| e.to_string())?;
@@ -253,7 +257,10 @@ impl SQLiteStore {
     }
 
     /// Go `SaveChannelForegroundReplyOutcome`.
-    pub fn save_channel_foreground_reply_outcome(&self, outcome: &ForegroundReplyOutcome) -> Result<(), String> {
+    pub fn save_channel_foreground_reply_outcome(
+        &self,
+        outcome: &ForegroundReplyOutcome,
+    ) -> Result<(), String> {
         let mut outcome = outcome.clone();
         if outcome.reply_outcome_id.trim().is_empty() {
             outcome.reply_outcome_id = new_store_id("channel_reply_outcome");
@@ -390,7 +397,9 @@ impl SQLiteStore {
                 ORDER BY occurred_at DESC, delivery_outcome_id DESC
                 LIMIT 50"#,
             )
-            .map_err(|e| format!("list channel delivery outcomes {tenant_id}/{connector_id}: {e}"))?;
+            .map_err(|e| {
+                format!("list channel delivery outcomes {tenant_id}/{connector_id}: {e}")
+            })?;
         let mut rows = stmt
             .query(params![tenant_id, connector_id, now_rfc3339(&now)])
             .map_err(|e| e.to_string())?;
@@ -403,7 +412,10 @@ impl SQLiteStore {
 
     /// Go `SaveChannelSupportEvidence` — the current row plus its historical
     /// bundle document.
-    pub fn save_channel_support_evidence(&self, bundle: &SupportEvidenceBundle) -> Result<(), String> {
+    pub fn save_channel_support_evidence(
+        &self,
+        bundle: &SupportEvidenceBundle,
+    ) -> Result<(), String> {
         let mut bundle = bundle.clone();
         if bundle.support_evidence_id.trim().is_empty() {
             bundle.support_evidence_id = new_store_id("channel_support_evidence");
@@ -484,7 +496,9 @@ impl SQLiteStore {
                 ORDER BY retention_expires_at DESC, support_evidence_id DESC
                 LIMIT 50"#,
             )
-            .map_err(|e| format!("list expired channel support evidence {tenant_id}/{connector_id}: {e}"))?;
+            .map_err(|e| {
+                format!("list expired channel support evidence {tenant_id}/{connector_id}: {e}")
+            })?;
         let mut rows = stmt
             .query(params![tenant_id, connector_id, now_rfc3339(&now)])
             .map_err(|e| e.to_string())?;
@@ -534,7 +548,12 @@ impl SQLiteStore {
                     document,
                 ],
             )
-            .map_err(|e| format!("save channel connector enablement {}/{}: {e}", state.tenant_id, state.connector_id))?;
+            .map_err(|e| {
+                format!(
+                    "save channel connector enablement {}/{}: {e}",
+                    state.tenant_id, state.connector_id
+                )
+            })?;
         Ok(())
     }
 
@@ -550,7 +569,9 @@ impl SQLiteStore {
                 "SELECT document_json FROM channel_connector_enablement_states WHERE tenant_id = ?1 AND connector_id = ?2",
             )
             .map_err(|e| format!("get channel connector enablement {tenant_id}/{connector_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, connector_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, connector_id])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -626,7 +647,9 @@ impl SQLiteStore {
                 LIMIT 50"#,
             )
             .map_err(|e| format!("list channel repair actions {tenant_id}/{connector_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, connector_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, connector_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_channel_repair_action(row)?);
@@ -683,7 +706,12 @@ impl SQLiteStore {
                     document,
                 ],
             )
-            .map_err(|e| format!("save channel management audit {}: {e}", record.audit_event_id))?;
+            .map_err(|e| {
+                format!(
+                    "save channel management audit {}: {e}",
+                    record.audit_event_id
+                )
+            })?;
         Ok(())
     }
 
@@ -702,8 +730,12 @@ impl SQLiteStore {
                 ORDER BY created_at DESC, audit_event_id DESC
                 LIMIT 50"#,
             )
-            .map_err(|e| format!("list channel management audit {tenant_id}/{connector_id}: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, connector_id]).map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                format!("list channel management audit {tenant_id}/{connector_id}: {e}")
+            })?;
+        let mut rows = stmt
+            .query(params![tenant_id, connector_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_channel_audit_record(row)?);
@@ -711,4 +743,3 @@ impl SQLiteStore {
         Ok(items)
     }
 }
-

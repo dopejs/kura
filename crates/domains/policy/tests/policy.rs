@@ -1,4 +1,6 @@
-use kura_policy::{ApprovalStatus, DecisionOutcome, Engine, RequestApprovalInput, ResolveApprovalInput};
+use kura_policy::{
+    ApprovalStatus, DecisionOutcome, Engine, RequestApprovalInput, ResolveApprovalInput,
+};
 
 fn request(action: &str) -> RequestApprovalInput {
     RequestApprovalInput {
@@ -14,7 +16,9 @@ fn request(action: &str) -> RequestApprovalInput {
 #[test]
 fn request_approval_creates_pending() {
     let engine = Engine::new();
-    let (approval, decision) = engine.request_approval(request("calendar.create")).expect("request");
+    let (approval, decision) = engine
+        .request_approval(request("calendar.create"))
+        .expect("request");
     assert_eq!(approval.status, ApprovalStatus::Pending);
     assert_eq!(decision.outcome, DecisionOutcome::RequiresApproval);
     assert_eq!(decision.approval_id, approval.approval_id);
@@ -35,11 +39,16 @@ fn request_approval_requires_action_and_reason() {
 #[test]
 fn resolve_approval_approves() {
     let engine = Engine::new();
-    let (approval, _) = engine.request_approval(request("mail.send")).expect("request");
+    let (approval, _) = engine
+        .request_approval(request("mail.send"))
+        .expect("request");
     let (resolved, decision) = engine
         .resolve_approval(
             &approval.approval_id,
-            ResolveApprovalInput { resolution: "approved".to_string(), comment: "ok".to_string() },
+            ResolveApprovalInput {
+                resolution: "approved".to_string(),
+                comment: "ok".to_string(),
+            },
         )
         .expect("resolve");
     assert_eq!(resolved.status, ApprovalStatus::Approved);
@@ -50,29 +59,69 @@ fn resolve_approval_approves() {
 #[test]
 fn resolve_approval_rejects_non_pending_and_invalid() {
     let engine = Engine::new();
-    let (approval, _) = engine.request_approval(request("mail.send")).expect("request");
+    let (approval, _) = engine
+        .request_approval(request("mail.send"))
+        .expect("request");
     let _ = engine
-        .resolve_approval(&approval.approval_id, ResolveApprovalInput { resolution: "approved".to_string(), comment: String::new() })
+        .resolve_approval(
+            &approval.approval_id,
+            ResolveApprovalInput {
+                resolution: "approved".to_string(),
+                comment: String::new(),
+            },
+        )
         .expect("resolve once");
     // second resolve on non-pending fails
-    assert!(engine
-        .resolve_approval(&approval.approval_id, ResolveApprovalInput { resolution: "approved".to_string(), comment: String::new() })
-        .is_err());
+    assert!(
+        engine
+            .resolve_approval(
+                &approval.approval_id,
+                ResolveApprovalInput {
+                    resolution: "approved".to_string(),
+                    comment: String::new()
+                }
+            )
+            .is_err()
+    );
     // invalid resolution
-    let (a2, _) = engine.request_approval(request("mail.send")).expect("request2");
-    assert!(engine
-        .resolve_approval(&a2.approval_id, ResolveApprovalInput { resolution: "weird".to_string(), comment: String::new() })
-        .is_err());
+    let (a2, _) = engine
+        .request_approval(request("mail.send"))
+        .expect("request2");
+    assert!(
+        engine
+            .resolve_approval(
+                &a2.approval_id,
+                ResolveApprovalInput {
+                    resolution: "weird".to_string(),
+                    comment: String::new()
+                }
+            )
+            .is_err()
+    );
 }
 
 #[test]
 fn list_approvals_filters_by_status() {
     let engine = Engine::new();
-    let (a, _) = engine.request_approval(request("calendar.create")).expect("request");
+    let (a, _) = engine
+        .request_approval(request("calendar.create"))
+        .expect("request");
     let _ = engine
-        .resolve_approval(&a.approval_id, ResolveApprovalInput { resolution: "approved".to_string(), comment: String::new() })
+        .resolve_approval(
+            &a.approval_id,
+            ResolveApprovalInput {
+                resolution: "approved".to_string(),
+                comment: String::new(),
+            },
+        )
         .expect("resolve");
-    assert_eq!(engine.list_approvals(Some(ApprovalStatus::Pending)).len(), 0);
-    assert_eq!(engine.list_approvals(Some(ApprovalStatus::Approved)).len(), 1);
+    assert_eq!(
+        engine.list_approvals(Some(ApprovalStatus::Pending)).len(),
+        0
+    );
+    assert_eq!(
+        engine.list_approvals(Some(ApprovalStatus::Approved)).len(),
+        1
+    );
     assert_eq!(engine.list_decisions().len(), 2);
 }

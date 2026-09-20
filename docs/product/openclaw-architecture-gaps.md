@@ -6,6 +6,12 @@ This document captures where OpenClaw appears to have architectural improvement 
 
 This is not a dismissal of OpenClaw. It is a gap analysis against our target of a long-lived personal agent OS with stronger runtime, context, and memory boundaries.
 
+**Scope note (2026-09-18):** this document compares *architecture* and is not
+maintained against OpenClaw releases. Feature-level tracking of what OpenClaw
+ships and what we adopt lives in
+[`../harness/agent-deepening-program.md`](../harness/agent-deepening-program.md),
+which covers releases 2026.8.1 through 2026.9.4.
+
 ## Framing
 
 OpenClaw already has a strong product surface:

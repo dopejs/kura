@@ -6,6 +6,7 @@ version.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+kura-telemetry.workspace = true
 rusqlite.workspace = true
 chrono.workspace = true
 serde.workspace = true
@@ -13,6 +14,7 @@ serde_json.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 kura-runtime.workspace = true
 kura-memory.workspace = true
+kura-tools.workspace = true
 kura-router.workspace = true
 kura-capabilities.workspace = true
 kura-llm.workspace = true

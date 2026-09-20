@@ -48,6 +48,23 @@ pub struct Config {
     pub llm: LlmConfig,
     /// IM connector configuration.
     pub connectors: ConnectorConfig,
+    /// Outbound-request policy applied at every egress point.
+    #[serde(default)]
+    pub egress: EgressConfig,
+    /// Persistence settings (Stage 10.2: the connection pool).
+    #[serde(default)]
+    pub store: StoreConfig,
+}
+
+/// Persistence settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StoreConfig {
+    /// Query-only reader connections opened beside the single writer
+    /// (Stage 10.2). `0` keeps the pre-pool behaviour: every read goes
+    /// through the writer. Reads on a reader connection run concurrently
+    /// with writes under WAL.
+    pub readers: usize,
 }
 
 impl Config {
@@ -56,6 +73,7 @@ impl Config {
     pub(crate) fn defaults(environment: Environment, version: String, data_dir: String) -> Self {
         Config {
             project_root: String::new(),
+            store: Default::default(),
             environment,
             bind_addr: default_bind_addr(environment).to_string(),
             data_dir,
@@ -105,6 +123,10 @@ impl Config {
                     ..Default::default()
                 },
             },
+            // Deny-by-default: loopback, private ranges, and unconditionally
+            // the link-local/metadata range. An operator who needs a local
+            // model server widens this explicitly.
+            egress: EgressConfig::default(),
         }
     }
 }
@@ -314,6 +336,9 @@ pub struct AccountProviderConfig {
     pub headers: std::collections::BTreeMap<String, String>,
 }
 
+/// Egress policy, surfaced at the top level of the config because it applies
+/// to every outbound point rather than to one subsystem.
+
 /// Settings for an OpenAI-compatible HTTP provider.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -358,6 +383,13 @@ pub struct ManagedCliProviderConfig {
     /// Working directory for CLI invocations.
     pub work_dir: String,
 }
+
+/// Outbound-request policy shared by every egress point (Stage 7.3).
+///
+/// Defaults deny loopback, private ranges and — unconditionally —
+/// link-local/cloud-metadata addresses. Operators widen this explicitly rather
+/// than by omission.
+pub type EgressConfig = kura_egress::EgressPolicy;
 
 /// IM connector configurations keyed by platform.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

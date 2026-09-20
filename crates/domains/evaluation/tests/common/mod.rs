@@ -10,12 +10,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{DateTime, Utc};
 
-use kura_billing::{
-    BillingError, Category, DenialPayload, ReserveInput, ReserveResult,
-};
+use kura_billing::{BillingError, Category, DenialPayload, ReserveInput, ReserveResult};
 use kura_evaluation::{
     AttemptFilter, CandidateFilter, ComparisonFilter, ComparisonResult, EvaluationError,
-    FixtureFilter, ReplayAttempt, ReplayCandidate, RegressionFixture, ReplayRecordInput,
+    FixtureFilter, RegressionFixture, ReplayAttempt, ReplayCandidate, ReplayRecordInput,
     ReplayRecordResult, RuntimeRecorder, Store,
 };
 
@@ -23,7 +21,11 @@ pub static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub fn temp_dir(name: &str) -> String {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("kura_evaluation_{name}_{}_{}", std::process::id(), n));
+    let dir = std::env::temp_dir().join(format!(
+        "kura_evaluation_{name}_{}_{}",
+        std::process::id(),
+        n
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     dir.to_string_lossy().to_string()
 }
@@ -130,19 +132,31 @@ impl MemoryStore {
     }
 
     pub fn insert_candidate(&self, item: ReplayCandidate) {
-        self.inner.lock().candidates.insert(item.candidate_id.clone(), item);
+        self.inner
+            .lock()
+            .candidates
+            .insert(item.candidate_id.clone(), item);
     }
 
     pub fn insert_attempt(&self, item: ReplayAttempt) {
-        self.inner.lock().attempts.insert(item.attempt_id.clone(), item);
+        self.inner
+            .lock()
+            .attempts
+            .insert(item.attempt_id.clone(), item);
     }
 
     pub fn insert_comparison(&self, item: ComparisonResult) {
-        self.inner.lock().comparisons.insert(item.comparison_id.clone(), item);
+        self.inner
+            .lock()
+            .comparisons
+            .insert(item.comparison_id.clone(), item);
     }
 
     pub fn insert_fixture(&self, item: RegressionFixture) {
-        self.inner.lock().fixtures.insert(item.fixture_id.clone(), item);
+        self.inner
+            .lock()
+            .fixtures
+            .insert(item.fixture_id.clone(), item);
     }
 
     #[must_use]
@@ -171,7 +185,8 @@ impl Store for MemoryStore {
             .candidates
             .values()
             .filter(|item| {
-                (filter.environment_scope.is_empty() || item.environment_scope == filter.environment_scope)
+                (filter.environment_scope.is_empty()
+                    || item.environment_scope == filter.environment_scope)
                     && (filter.candidate_kind == kura_evaluation::CandidateKind::default()
                         || item.candidate_kind == filter.candidate_kind)
                     && (filter.source_kind == kura_evaluation::SourceKind::default()
@@ -214,7 +229,8 @@ impl Store for MemoryStore {
             .attempts
             .values()
             .filter(|item| {
-                (filter.environment_scope.is_empty() || item.environment_scope == filter.environment_scope)
+                (filter.environment_scope.is_empty()
+                    || item.environment_scope == filter.environment_scope)
                     && (filter.candidate_id.is_empty() || item.candidate_id == filter.candidate_id)
                     && (filter.status == kura_evaluation::ReplayAttemptStatus::default()
                         || item.status == filter.status)
@@ -254,10 +270,12 @@ impl Store for MemoryStore {
             .comparisons
             .values()
             .filter(|item| {
-                (filter.environment_scope.is_empty() || item.environment_scope == filter.environment_scope)
+                (filter.environment_scope.is_empty()
+                    || item.environment_scope == filter.environment_scope)
                     && (filter.candidate_id.is_empty() || item.candidate_id == filter.candidate_id)
                     && (filter.attempt_id.is_empty() || item.attempt_id == filter.attempt_id)
-                    && (filter.terminal_status == kura_evaluation::ComparisonTerminalStatus::default()
+                    && (filter.terminal_status
+                        == kura_evaluation::ComparisonTerminalStatus::default()
                         || item.terminal_status == filter.terminal_status)
             })
             .cloned()
@@ -295,7 +313,8 @@ impl Store for MemoryStore {
             .fixtures
             .values()
             .filter(|item| {
-                (filter.environment_scope.is_empty() || item.environment_scope == filter.environment_scope)
+                (filter.environment_scope.is_empty()
+                    || item.environment_scope == filter.environment_scope)
                     && (filter.domain_class == kura_evaluation::FixtureDomainClass::default()
                         || item.domain_class == filter.domain_class)
             })
@@ -327,37 +346,94 @@ impl SqliteStoreAdapter {
 
 impl Store for SqliteStoreAdapter {
     fn upsert_replay_candidate(&self, item: ReplayCandidate) -> Result<(), EvaluationError> {
-        self.0.lock().upsert_replay_candidate(&item).map_err(EvaluationError::Store)
+        self.0
+            .lock()
+            .upsert_replay_candidate(&item)
+            .map_err(EvaluationError::Store)
     }
-    fn list_replay_candidates(&self, filter: &CandidateFilter) -> Result<Vec<ReplayCandidate>, EvaluationError> {
-        self.0.lock().list_replay_candidates(filter).map_err(EvaluationError::Store)
+    fn list_replay_candidates(
+        &self,
+        filter: &CandidateFilter,
+    ) -> Result<Vec<ReplayCandidate>, EvaluationError> {
+        self.0
+            .lock()
+            .list_replay_candidates(filter)
+            .map_err(EvaluationError::Store)
     }
-    fn get_replay_candidate(&self, environment_scope: &str, candidate_id: &str) -> Result<Option<ReplayCandidate>, EvaluationError> {
-        self.0.lock().get_replay_candidate(environment_scope, candidate_id).map_err(EvaluationError::Store)
+    fn get_replay_candidate(
+        &self,
+        environment_scope: &str,
+        candidate_id: &str,
+    ) -> Result<Option<ReplayCandidate>, EvaluationError> {
+        self.0
+            .lock()
+            .get_replay_candidate(environment_scope, candidate_id)
+            .map_err(EvaluationError::Store)
     }
     fn upsert_replay_attempt(&self, item: ReplayAttempt) -> Result<(), EvaluationError> {
-        self.0.lock().upsert_replay_attempt(&item).map_err(EvaluationError::Store)
+        self.0
+            .lock()
+            .upsert_replay_attempt(&item)
+            .map_err(EvaluationError::Store)
     }
-    fn list_replay_attempts(&self, filter: &AttemptFilter) -> Result<Vec<ReplayAttempt>, EvaluationError> {
-        self.0.lock().list_replay_attempts(filter).map_err(EvaluationError::Store)
+    fn list_replay_attempts(
+        &self,
+        filter: &AttemptFilter,
+    ) -> Result<Vec<ReplayAttempt>, EvaluationError> {
+        self.0
+            .lock()
+            .list_replay_attempts(filter)
+            .map_err(EvaluationError::Store)
     }
-    fn get_replay_attempt(&self, environment_scope: &str, attempt_id: &str) -> Result<Option<ReplayAttempt>, EvaluationError> {
-        self.0.lock().get_replay_attempt(environment_scope, attempt_id).map_err(EvaluationError::Store)
+    fn get_replay_attempt(
+        &self,
+        environment_scope: &str,
+        attempt_id: &str,
+    ) -> Result<Option<ReplayAttempt>, EvaluationError> {
+        self.0
+            .lock()
+            .get_replay_attempt(environment_scope, attempt_id)
+            .map_err(EvaluationError::Store)
     }
     fn upsert_comparison_result(&self, item: ComparisonResult) -> Result<(), EvaluationError> {
-        self.0.lock().upsert_comparison_result(&item).map_err(EvaluationError::Store)
+        self.0
+            .lock()
+            .upsert_comparison_result(&item)
+            .map_err(EvaluationError::Store)
     }
-    fn list_comparison_results(&self, filter: &ComparisonFilter) -> Result<Vec<ComparisonResult>, EvaluationError> {
-        self.0.lock().list_comparison_results(filter).map_err(EvaluationError::Store)
+    fn list_comparison_results(
+        &self,
+        filter: &ComparisonFilter,
+    ) -> Result<Vec<ComparisonResult>, EvaluationError> {
+        self.0
+            .lock()
+            .list_comparison_results(filter)
+            .map_err(EvaluationError::Store)
     }
-    fn get_comparison_result(&self, environment_scope: &str, comparison_id: &str) -> Result<Option<ComparisonResult>, EvaluationError> {
-        self.0.lock().get_comparison_result(environment_scope, comparison_id).map_err(EvaluationError::Store)
+    fn get_comparison_result(
+        &self,
+        environment_scope: &str,
+        comparison_id: &str,
+    ) -> Result<Option<ComparisonResult>, EvaluationError> {
+        self.0
+            .lock()
+            .get_comparison_result(environment_scope, comparison_id)
+            .map_err(EvaluationError::Store)
     }
     fn upsert_regression_fixture(&self, item: RegressionFixture) -> Result<(), EvaluationError> {
-        self.0.lock().upsert_regression_fixture(&item).map_err(EvaluationError::Store)
+        self.0
+            .lock()
+            .upsert_regression_fixture(&item)
+            .map_err(EvaluationError::Store)
     }
-    fn list_regression_fixtures(&self, filter: &FixtureFilter) -> Result<Vec<RegressionFixture>, EvaluationError> {
-        self.0.lock().list_regression_fixtures(filter).map_err(EvaluationError::Store)
+    fn list_regression_fixtures(
+        &self,
+        filter: &FixtureFilter,
+    ) -> Result<Vec<RegressionFixture>, EvaluationError> {
+        self.0
+            .lock()
+            .list_regression_fixtures(filter)
+            .map_err(EvaluationError::Store)
     }
 }
 
@@ -400,7 +476,8 @@ impl kura_billing::Repository for QuotaDenyRepo {
         _tenant_id: &str,
         _category: &Category,
         _at: DateTime<Utc>,
-    ) -> kura_billing::BoxFuture<'_, Result<Option<kura_billing::QuotaOverride>, BillingError>> {
+    ) -> kura_billing::BoxFuture<'_, Result<Option<kura_billing::QuotaOverride>, BillingError>>
+    {
         Box::pin(async { Ok(None) })
     }
     fn open_period(
@@ -430,7 +507,8 @@ impl kura_billing::Repository for QuotaDenyRepo {
         _tenant_id: &str,
         _category: &Category,
         _operation_key: &str,
-    ) -> kura_billing::BoxFuture<'_, Result<Option<kura_billing::UsageReservation>, BillingError>> {
+    ) -> kura_billing::BoxFuture<'_, Result<Option<kura_billing::UsageReservation>, BillingError>>
+    {
         Box::pin(async { Ok(None) })
     }
     fn save_reservation(
@@ -453,7 +531,8 @@ impl kura_billing::Repository for QuotaDenyRepo {
     }
     fn list_pending_reservations(
         &self,
-    ) -> kura_billing::BoxFuture<'_, Result<Vec<kura_billing::UsageReservation>, BillingError>> {
+    ) -> kura_billing::BoxFuture<'_, Result<Vec<kura_billing::UsageReservation>, BillingError>>
+    {
         Box::pin(async { Ok(Vec::new()) })
     }
     fn reserve_usage(

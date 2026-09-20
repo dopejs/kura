@@ -94,9 +94,7 @@ pub fn redaction_status_for(original: &str) -> RedactionStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::projection::{
-        RuntimeBindingEvidenceInput, build_runtime_binding_evidence,
-    };
+    use crate::projection::{RuntimeBindingEvidenceInput, build_runtime_binding_evidence};
     use crate::types::*;
     use chrono::{DateTime, Utc};
 
@@ -107,7 +105,10 @@ mod tests {
         assert_eq!(safe_label(""), "(unnamed)");
         assert_eq!(safe_label("secret=hunter2"), "(redacted)");
         let got = safe_label("line\nbreak\tand   spaces");
-        assert!(!got.contains('\n') && !got.contains('\t'), "control chars not stripped: {got:?}");
+        assert!(
+            !got.contains('\n') && !got.contains('\t'),
+            "control chars not stripped: {got:?}"
+        );
         let long = "a".repeat(500);
         assert!(safe_label(&long).len() <= MAX_SAFE_LABEL_LEN);
     }
@@ -171,7 +172,10 @@ mod tests {
             },
         );
         assert_eq!(ev.classification, Classification::APPLIED);
-        assert_ne!(ev.capability_visibility[0].reason, "token=leak", "denial reason leaked secret");
+        assert_ne!(
+            ev.capability_visibility[0].reason, "token=leak",
+            "denial reason leaked secret"
+        );
         assert_eq!(ev.redaction_status, RedactionStatus::REDACTED);
     }
 

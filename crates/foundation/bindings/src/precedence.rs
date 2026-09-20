@@ -2,7 +2,10 @@
 //! → tenant-default ordering (FR-006) with fail-closed handling of invalid explicit
 //! selections (FR-031).
 
-use crate::types::{BindingRule, BindingRuntimeScope, BindingStatus, EffectiveBindingSelection, RepairStatus, ResolutionOutcome};
+use crate::types::{
+    BindingRule, BindingRuntimeScope, BindingStatus, EffectiveBindingSelection, RepairStatus,
+    ResolutionOutcome,
+};
 
 /// Carries the candidate bindings and tenant defaults needed to resolve an effective
 /// binding selection at work-start. Availability oracles let the resolver fail closed
@@ -32,10 +35,22 @@ impl std::fmt::Debug for ResolutionInput {
             .field("channel_binding", &self.channel_binding)
             .field("account_binding", &self.account_binding)
             .field("tenant_default_profile_id", &self.tenant_default_profile_id)
-            .field("tenant_default_profile_version_id", &self.tenant_default_profile_version_id)
-            .field("tenant_default_workspace_id", &self.tenant_default_workspace_id)
-            .field("profile_available", &self.profile_available.as_ref().map(|_| "<fn>"))
-            .field("workspace_available", &self.workspace_available.as_ref().map(|_| "<fn>"))
+            .field(
+                "tenant_default_profile_version_id",
+                &self.tenant_default_profile_version_id,
+            )
+            .field(
+                "tenant_default_workspace_id",
+                &self.tenant_default_workspace_id,
+            )
+            .field(
+                "profile_available",
+                &self.profile_available.as_ref().map(|_| "<fn>"),
+            )
+            .field(
+                "workspace_available",
+                &self.workspace_available.as_ref().map(|_| "<fn>"),
+            )
             .finish()
     }
 }
@@ -218,7 +233,10 @@ mod tests {
             ..base_input()
         };
         let sel = resolve_selection(&input);
-        assert_eq!(sel.selected_profile_id, "prof_chan", "channel binding must be stable");
+        assert_eq!(
+            sel.selected_profile_id, "prof_chan",
+            "channel binding must be stable"
+        );
     }
 
     // Port of TestResolveSelection_InvalidProfileFailsClosed (B5/FR-031).

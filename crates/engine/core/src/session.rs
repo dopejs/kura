@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use futures::StreamExt;
 use kura_model_provider::ModelProvider;
 use kura_model_provider::Prompt;
 use kura_model_provider::ProviderError;
@@ -9,7 +10,6 @@ use kura_protocol::EventMsg;
 use kura_protocol::ResponseItem;
 use kura_protocol::Role;
 use kura_protocol::ThreadId;
-use futures::StreamExt;
 
 use crate::tools::ToolInvocation;
 use crate::tools::ToolOutput;
@@ -95,7 +95,8 @@ impl Session {
     ) -> Result<TurnOutcome, CoreError> {
         self.history.push(ResponseItem::Message {
             role: Role::User,
-            content: input.to_string(),        });
+            content: input.to_string(),
+        });
         self.publish(emit, EventMsg::TurnStarted);
 
         let mut rounds = 0;
@@ -145,7 +146,8 @@ impl Session {
                 if !text.is_empty() {
                     self.history.push(ResponseItem::Message {
                         role: Role::Assistant,
-                        content: text.clone(),                    });
+                        content: text.clone(),
+                    });
                     self.publish(
                         emit,
                         EventMsg::AgentMessage {
@@ -212,9 +214,9 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kura_model_provider::ToolSpec;
     use futures::stream;
     use futures::stream::BoxStream;
+    use kura_model_provider::ToolSpec;
     use parking_lot::Mutex;
     use std::collections::VecDeque;
     use std::future::Future;
@@ -411,9 +413,11 @@ mod tests {
 
     /// How many rounds the provider was actually asked for.
     fn provider_rounds(session: &Session) -> usize {
-        session.history().iter().filter(|item| {
-            matches!(item, ResponseItem::FunctionCall { .. })
-        }).count()
+        session
+            .history()
+            .iter()
+            .filter(|item| matches!(item, ResponseItem::FunctionCall { .. }))
+            .count()
     }
 
     #[tokio::test]

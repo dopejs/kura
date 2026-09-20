@@ -28,5 +28,8 @@ pub fn redact_evidence(evidence: &HashMap<String, String>) -> RedactionResult {
         }
         safe.insert(key.clone(), value.clone());
     }
-    RedactionResult { status, safe_evidence: safe }
+    RedactionResult {
+        status,
+        safe_evidence: safe,
+    }
 }

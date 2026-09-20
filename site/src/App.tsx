@@ -19,7 +19,7 @@ const DOCS = [
   ["External Plugins", "/docs/external-plugins/"], ["Memory", "/docs/memory/"],
   ["Context & Session", "/docs/context-session/"], ["Skills & Self-Improvement", "/docs/skills-improvement/"],
   ["Channels", "/docs/channels/"], ["API Reference", "/docs/api/"],
-  ["Architecture", "/docs/architecture/"],
+  ["Deployment", "/docs/deployment/"], ["Architecture", "/docs/architecture/"],
 ] as const;
 
 function KuraMark({ className }: { readonly className: string }): ReactNode {

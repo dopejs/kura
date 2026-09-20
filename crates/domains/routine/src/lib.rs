@@ -283,7 +283,7 @@ pub enum RoutineError {
 }
 
 /// Document kind used for durable routines (Go `docKindRoutine`).
-const DOC_KIND_ROUTINE: &str = "routine";
+pub const DOC_KIND_ROUTINE: &str = "routine";
 
 /// The subset of the scheduler the routine builder compiles to (Go `Scheduler` interface). The
 /// concrete `*scheduler.Scheduler` satisfies it; tests use a fake.
@@ -324,7 +324,10 @@ impl Manager {
     }
 
     /// Go `WithStore`: installs durable persistence for routines and returns the manager.
-    pub fn with_store(&mut self, store: Arc<parking_lot::Mutex<kura_store::SQLiteStore>>) -> &mut Self {
+    pub fn with_store(
+        &mut self,
+        store: Arc<parking_lot::Mutex<kura_store::SQLiteStore>>,
+    ) -> &mut Self {
         self.docs = Some(store);
         self
     }
@@ -343,7 +346,9 @@ impl Manager {
     /// Go `LoadFromStore`: reloads persisted routines from the document store on startup.
     /// A no-op when no store is installed.
     pub fn load_from_store(&self) -> Result<(), String> {
-        let Some(docs) = &self.docs else { return Ok(()); };
+        let Some(docs) = &self.docs else {
+            return Ok(());
+        };
         let routines = kura_store::list_documents::<Routine>(&docs.lock(), DOC_KIND_ROUTINE)?;
         self.restore(routines);
         Ok(())
@@ -353,9 +358,17 @@ impl Manager {
     /// delivery/quota expectations to confirm before activation (FR-004) (Go `Preview`).
     pub fn preview(&self, def: &Definition) -> Result<Preview, RoutineError> {
         validate_definition(def)?;
-        let kind = if def.trigger.kind == TriggerKind::Once { "one_time" } else { "recurring" };
+        let kind = if def.trigger.kind == TriggerKind::Once {
+            "one_time"
+        } else {
+            "recurring"
+        };
         let approval = def.approval_expectation.trim();
-        let approval = if approval.is_empty() { "ask".to_string() } else { approval.to_string() };
+        let approval = if approval.is_empty() {
+            "ask".to_string()
+        } else {
+            approval.to_string()
+        };
         Ok(Preview {
             schedule_kind: kind.to_string(),
             trigger_summary: trigger_summary(&def.trigger),
@@ -370,7 +383,10 @@ impl Manager {
     /// (Go `Create`).
     pub fn create(&self, def: Definition) -> Result<Routine, RoutineError> {
         validate_definition(&def)?;
-        let schedule = self.sched.create(&compile(&def)).map_err(RoutineError::CompileSchedule)?;
+        let schedule = self
+            .sched
+            .create(&compile(&def))
+            .map_err(RoutineError::CompileSchedule)?;
         let now = Utc::now();
         let routine = Routine {
             routine_id: new_id("routine"),
@@ -401,7 +417,11 @@ impl Manager {
     /// Go `List` (insertion order, mirroring the `kura-runtime` manager convention).
     pub fn list(&self) -> Vec<Routine> {
         let inner = self.inner.read();
-        inner.ids.iter().filter_map(|id| inner.by_id.get(id).cloned()).collect()
+        inner
+            .ids
+            .iter()
+            .filter_map(|id| inner.by_id.get(id).cloned())
+            .collect()
     }
 
     /// Creates a new routine version: compiles a new schedule and cancels the previous one; the
@@ -413,7 +433,10 @@ impl Manager {
             return Err(RoutineError::RoutineCancelled);
         }
         validate_definition(&def)?;
-        let schedule = self.sched.create(&compile(&def)).map_err(RoutineError::CompileSchedule)?;
+        let schedule = self
+            .sched
+            .create(&compile(&def))
+            .map_err(RoutineError::CompileSchedule)?;
         if !routine.current_schedule_id.is_empty() {
             // Prior schedule + its attempts remain as evidence.
             let _ = self.sched.cancel(&routine.current_schedule_id);
@@ -475,8 +498,10 @@ impl Manager {
                 }
             }
         }
-        let schedule =
-            self.sched.create(&compile(&routine.definition)).map_err(RoutineError::RepairSchedule)?;
+        let schedule = self
+            .sched
+            .create(&compile(&routine.definition))
+            .map_err(RoutineError::RepairSchedule)?;
         if routine.state == State::Paused {
             let _ = self.sched.pause(&schedule.schedule_id);
         }
@@ -521,10 +546,19 @@ impl Manager {
             if !inner.by_id.contains_key(&routine.routine_id) {
                 inner.ids.push(routine.routine_id.clone());
             }
-            inner.by_id.insert(routine.routine_id.clone(), routine.clone());
+            inner
+                .by_id
+                .insert(routine.routine_id.clone(), routine.clone());
         }
         if let Some(docs) = &self.docs {
-            let _ = kura_store::put_document(&docs.lock(), DOC_KIND_ROUTINE, &routine.routine_id, &self.env, "", &routine);
+            let _ = kura_store::put_document(
+                &docs.lock(),
+                DOC_KIND_ROUTINE,
+                &routine.routine_id,
+                &self.env,
+                "",
+                &routine,
+            );
         }
     }
 }
@@ -544,7 +578,11 @@ fn compile(def: &Definition) -> CreateInput {
         trigger.cron_expr = def.trigger.cron_expr.clone();
     }
     let entrypoint = def.workflow.entrypoint.trim();
-    let entrypoint = if entrypoint.is_empty() { "operator".to_string() } else { entrypoint.to_string() };
+    let entrypoint = if entrypoint.is_empty() {
+        "operator".to_string()
+    } else {
+        entrypoint.to_string()
+    };
     CreateInput {
         trigger,
         target: SchedulerTarget {
@@ -591,7 +629,11 @@ fn validate_definition(def: &Definition) -> Result<(), RoutineError> {
 /// Go `maxRetries`: defaults to 1.
 #[must_use]
 fn max_retries(def: &Definition) -> i64 {
-    if def.max_retries > 0 { def.max_retries } else { 1 }
+    if def.max_retries > 0 {
+        def.max_retries
+    } else {
+        1
+    }
 }
 
 /// Go `triggerSummary`.

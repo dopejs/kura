@@ -59,11 +59,16 @@ impl FakeStore {
 }
 
 impl Store for FakeStore {
-    fn create_secret<'a>(&'a self, secret: TenantSecret, version: SecretVersion) -> BoxFuture<'a, Result<()>> {
+    fn create_secret<'a>(
+        &'a self,
+        secret: TenantSecret,
+        version: SecretVersion,
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            self.secrets
-                .lock()
-                .insert((secret.tenant_id.clone(), secret.secret_ref.clone()), secret);
+            self.secrets.lock().insert(
+                (secret.tenant_id.clone(), secret.secret_ref.clone()),
+                secret,
+            );
             self.versions.lock().insert(
                 (version.tenant_id.clone(), version.secret_version_id.clone()),
                 version,
@@ -74,9 +79,10 @@ impl Store for FakeStore {
 
     fn update_secret_metadata<'a>(&'a self, secret: TenantSecret) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            self.secrets
-                .lock()
-                .insert((secret.tenant_id.clone(), secret.secret_ref.clone()), secret);
+            self.secrets.lock().insert(
+                (secret.tenant_id.clone(), secret.secret_ref.clone()),
+                secret,
+            );
             Ok(())
         })
     }
@@ -99,8 +105,8 @@ impl Store for FakeStore {
                 + 1;
             version.version_number = next;
             if !previous_version_id.is_empty() {
-                if let Some(previous) = versions
-                    .get_mut(&(secret.tenant_id.clone(), previous_version_id.to_string()))
+                if let Some(previous) =
+                    versions.get_mut(&(secret.tenant_id.clone(), previous_version_id.to_string()))
                 {
                     previous.status = SecretVersionStatus::Superseded;
                     previous.superseded_at = Some(secret.updated_at);
@@ -111,18 +117,20 @@ impl Store for FakeStore {
                 version,
             );
             drop(versions);
-            self.secrets
-                .lock()
-                .insert((secret.tenant_id.clone(), secret.secret_ref.clone()), secret);
+            self.secrets.lock().insert(
+                (secret.tenant_id.clone(), secret.secret_ref.clone()),
+                secret,
+            );
             Ok(())
         })
     }
 
     fn disable_secret<'a>(&'a self, secret: TenantSecret) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            self.secrets
-                .lock()
-                .insert((secret.tenant_id.clone(), secret.secret_ref.clone()), secret);
+            self.secrets.lock().insert(
+                (secret.tenant_id.clone(), secret.secret_ref.clone()),
+                secret,
+            );
             Ok(())
         })
     }
@@ -238,7 +246,11 @@ impl BridgeProgressStore for FakeProgressStore {
 
     fn complete_migration_step<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            self.steps.lock().entry(name.to_string()).or_default().completed = true;
+            self.steps
+                .lock()
+                .entry(name.to_string())
+                .or_default()
+                .completed = true;
             Ok(())
         })
     }
@@ -250,7 +262,11 @@ impl BridgeProgressStore for FakeProgressStore {
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let _ = cause;
-            self.steps.lock().entry(name.to_string()).or_default().running = false;
+            self.steps
+                .lock()
+                .entry(name.to_string())
+                .or_default()
+                .running = false;
             Ok(())
         })
     }

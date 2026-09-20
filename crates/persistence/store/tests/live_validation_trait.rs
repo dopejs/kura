@@ -8,17 +8,17 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use kura_livevalidation::{
-    AmbiguousCommit, AmbiguousCommitCause, Attempt, AttemptFilter, AttemptStatus,
-    ApprovalStatus, ApprovalTarget, Comparison, ComparisonFilter, ComparisonStatus,
-    FreshApproval, KillSwitch, KillSwitchFilter, KillSwitchScope, LedgerFilter,
-    LedgerOutcome, MatrixRow, ReconciliationResolution, ReconciliationResolutionValue,
-    RetentionAppliesTo, RetentionMode, RetentionPolicy, SafetyClass, SideEffectLedgerEntry,
-    SideEffectScope, Store, ToolClass,
+    AmbiguousCommit, AmbiguousCommitCause, ApprovalStatus, ApprovalTarget, Attempt, AttemptFilter,
+    AttemptStatus, Comparison, ComparisonFilter, ComparisonStatus, FreshApproval, KillSwitch,
+    KillSwitchFilter, KillSwitchScope, LedgerFilter, LedgerOutcome, MatrixRow,
+    ReconciliationResolution, ReconciliationResolutionValue, RetentionAppliesTo, RetentionMode,
+    RetentionPolicy, SafetyClass, SideEffectLedgerEntry, SideEffectScope, Store, ToolClass,
 };
 use kura_store::{LiveValidationStoreHandle, SQLiteStore};
 
 fn temp_dir(name: &str) -> String {
-    let dir = std::env::temp_dir().join(format!("kura_store_lv_trait_{name}_{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("kura_store_lv_trait_{name}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir.to_string_lossy().to_string()
 }
@@ -205,14 +205,31 @@ async fn live_validation_store_trait_attempt_and_scope_round_trip() {
     attempt.status = AttemptStatus::from("running");
     handle.upsert_attempt(attempt).await.unwrap();
 
-    let got = handle.get_attempt("ten_1", "lv_1").await.unwrap().expect("attempt");
+    let got = handle
+        .get_attempt("ten_1", "lv_1")
+        .await
+        .unwrap()
+        .expect("attempt");
     assert_eq!(got.validation_id, "lv_1");
     assert_eq!(got.status.as_str(), "running");
     assert_eq!(handle.get_attempt("ten_other", "lv_1").await.unwrap(), None);
 
-    let by_candidate = AttemptFilter { candidate_id: "cand_1".to_string(), ..Default::default() };
-    assert_eq!(handle.list_attempts(by_candidate.clone()).await.unwrap().len(), 1);
-    let by_status = AttemptFilter { status: AttemptStatus::from("blocked"), ..Default::default() };
+    let by_candidate = AttemptFilter {
+        candidate_id: "cand_1".to_string(),
+        ..Default::default()
+    };
+    assert_eq!(
+        handle
+            .list_attempts(by_candidate.clone())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let by_status = AttemptFilter {
+        status: AttemptStatus::from("blocked"),
+        ..Default::default()
+    };
     assert!(handle.list_attempts(by_status).await.unwrap().is_empty());
 
     handle.upsert_scope(make_scope(), "ten_1").await.unwrap();
@@ -231,27 +248,57 @@ async fn live_validation_store_trait_ledger_and_kill_switch() {
     handle.append_ledger_entry(entry.clone()).await.unwrap();
     // Idempotent re-append (same id) must not duplicate rows.
     handle.append_ledger_entry(entry.clone()).await.unwrap();
-    let all = handle.list_ledger_entries(LedgerFilter::default()).await.unwrap();
+    let all = handle
+        .list_ledger_entries(LedgerFilter::default())
+        .await
+        .unwrap();
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].outcome.as_str(), "attempted");
 
     // Update the outcome through the trait; the persisted document follows.
-    handle.update_ledger_entry_outcome("ledger_1", &LedgerOutcome::from("completed"), "done").await.unwrap();
-    let updated = handle.list_ledger_entries(LedgerFilter { outcome: LedgerOutcome::from("completed"), ..Default::default() }).await.unwrap();
+    handle
+        .update_ledger_entry_outcome("ledger_1", &LedgerOutcome::from("completed"), "done")
+        .await
+        .unwrap();
+    let updated = handle
+        .list_ledger_entries(LedgerFilter {
+            outcome: LedgerOutcome::from("completed"),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     assert_eq!(updated.len(), 1);
     assert_eq!(updated[0].reason_code, "done");
     assert!(updated[0].completed_at.is_some());
     // The old-outcome filter misses after the transition.
-    let old = handle.list_ledger_entries(LedgerFilter { outcome: LedgerOutcome::from("attempted"), ..Default::default() }).await.unwrap();
+    let old = handle
+        .list_ledger_entries(LedgerFilter {
+            outcome: LedgerOutcome::from("attempted"),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     assert!(old.is_empty());
 
-    handle.upsert_kill_switch(make_kill_switch("ks_1")).await.unwrap();
+    handle
+        .upsert_kill_switch(make_kill_switch("ks_1"))
+        .await
+        .unwrap();
     let mut disabled = make_kill_switch("ks_1");
     disabled.enabled = false;
     handle.upsert_kill_switch(disabled).await.unwrap();
-    let enabled = handle.list_kill_switches(KillSwitchFilter { enabled: Some(true), ..Default::default() }).await.unwrap();
+    let enabled = handle
+        .list_kill_switches(KillSwitchFilter {
+            enabled: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     assert!(enabled.is_empty());
-    let all_switches = handle.list_kill_switches(KillSwitchFilter::default()).await.unwrap();
+    let all_switches = handle
+        .list_kill_switches(KillSwitchFilter::default())
+        .await
+        .unwrap();
     assert_eq!(all_switches.len(), 1);
     assert!(!all_switches[0].enabled);
 }
@@ -262,20 +309,38 @@ async fn live_validation_store_trait_matrix_ambiguous_comparison_retention() {
     let store = SQLiteStore::new(&dir).unwrap();
     let handle = Arc::new(LiveValidationStoreHandle::new(store));
 
-    handle.upsert_support_matrix_snapshot("ten_1", "snap_1", vec![make_matrix_row()]).await.unwrap();
+    handle
+        .upsert_support_matrix_snapshot("ten_1", "snap_1", vec![make_matrix_row()])
+        .await
+        .unwrap();
     // The ambiguous commit and reconciliation rows reference the ledger entry
     // via foreign keys, so seed the attempt + ledger entry first.
     handle.upsert_attempt(make_attempt("lv_1")).await.unwrap();
-    handle.append_ledger_entry(make_ledger_entry("ledger_1", "attempted")).await.unwrap();
-    handle.save_ambiguous_commit(make_ambiguous_commit()).await.unwrap();
-    handle.save_reconciliation_resolution(make_reconciliation()).await.unwrap();
+    handle
+        .append_ledger_entry(make_ledger_entry("ledger_1", "attempted"))
+        .await
+        .unwrap();
+    handle
+        .save_ambiguous_commit(make_ambiguous_commit())
+        .await
+        .unwrap();
+    handle
+        .save_reconciliation_resolution(make_reconciliation())
+        .await
+        .unwrap();
 
     let mut comparison = make_comparison();
     handle.save_comparison(comparison.clone()).await.unwrap();
     comparison.terminal_status = ComparisonStatus::from("drifted");
     handle.save_comparison(comparison).await.unwrap();
-    let by_status = ComparisonFilter { terminal_status: ComparisonStatus::from("drifted"), ..Default::default() };
+    let by_status = ComparisonFilter {
+        terminal_status: ComparisonStatus::from("drifted"),
+        ..Default::default()
+    };
     assert_eq!(handle.list_comparisons(by_status).await.unwrap().len(), 1);
 
-    handle.save_retention_policy(make_retention_policy()).await.unwrap();
+    handle
+        .save_retention_policy(make_retention_policy())
+        .await
+        .unwrap();
 }

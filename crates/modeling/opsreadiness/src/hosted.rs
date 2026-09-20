@@ -8,13 +8,13 @@ use kura_integrations::DiagnosticReasonCode;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    join_errors, require_allowed, require_elapsed_at_most, require_items, require_non_empty,
-    validate_representative_tenants, validate_tenant_state_summary, HostedBackupEvidence,
-    HostedDeploymentManifest, HostedEvidenceLink, HostedObservation, HostedObservationReport,
-    HostedOperationalProfile, HostedReleaseEvidenceIndex, HostedRestoreRehearsalResult,
-    HostedRollbackDecisionRecord, HostedRun, HostedSupervisorEvent, HostedUpgradeEvidence,
-    MAX_INSTALL_ELAPSED, MAX_RELEASE_REVIEW_ELAPSED, MAX_RESTART_RECOVERY_ELAPSED,
-    MINIMUM_TENANT_COUNT,
+    HostedBackupEvidence, HostedDeploymentManifest, HostedEvidenceLink, HostedObservation,
+    HostedObservationReport, HostedOperationalProfile, HostedReleaseEvidenceIndex,
+    HostedRestoreRehearsalResult, HostedRollbackDecisionRecord, HostedRun, HostedSupervisorEvent,
+    HostedUpgradeEvidence, MAX_INSTALL_ELAPSED, MAX_RELEASE_REVIEW_ELAPSED,
+    MAX_RESTART_RECOVERY_ELAPSED, MINIMUM_TENANT_COUNT, join_errors, require_allowed,
+    require_elapsed_at_most, require_items, require_non_empty, validate_representative_tenants,
+    validate_tenant_state_summary,
 };
 
 macro_rules! string_enum {
@@ -141,20 +141,36 @@ pub struct SmokeProbeInput {
 }
 
 pub const HOSTED_RAW_CREDENTIAL_MARKERS: &[&str] = &[
-    "raw_secret", "access_token", "refresh_token", "oauth_code", "provider_token",
-    "authorization:", "bearer ", "client_secret", "api_key=", "password=", "do_not_leak",
+    "raw_secret",
+    "access_token",
+    "refresh_token",
+    "oauth_code",
+    "provider_token",
+    "authorization:",
+    "bearer ",
+    "client_secret",
+    "api_key=",
+    "password=",
+    "do_not_leak",
 ];
 
 // ---- hosted identity / run helpers ----
 
-pub fn generate_hosted_run_id(profile_id: &str, started_at: DateTime<Utc>) -> Result<String, String> {
+pub fn generate_hosted_run_id(
+    profile_id: &str,
+    started_at: DateTime<Utc>,
+) -> Result<String, String> {
     if profile_id.trim().is_empty() {
         return Err("profile id is required".to_string());
     }
     if started_at == DateTime::<Utc>::default() {
         return Err("started at is required".to_string());
     }
-    Ok(format!("{}_{}", sanitize_hosted_identity(profile_id), started_at.format("%Y%m%dT%H%M%SZ")))
+    Ok(format!(
+        "{}_{}",
+        sanitize_hosted_identity(profile_id),
+        started_at.format("%Y%m%dT%H%M%SZ")
+    ))
 }
 
 fn sanitize_hosted_identity(value: &str) -> String {
@@ -167,16 +183,30 @@ fn sanitize_hosted_identity(value: &str) -> String {
         .replace(':', "_")
 }
 
-fn require_hosted_run_identity(run: &HostedRun, run_id: &str, profile_id: &str, commit_or_version: &str) -> Result<(), String> {
+fn require_hosted_run_identity(
+    run: &HostedRun,
+    run_id: &str,
+    profile_id: &str,
+    commit_or_version: &str,
+) -> Result<(), String> {
     let mut results = Vec::new();
     if run_id != run.run_id {
-        results.push(Err(format!("evidence identity run {:?} does not match {:?}", run_id, run.run_id)));
+        results.push(Err(format!(
+            "evidence identity run {:?} does not match {:?}",
+            run_id, run.run_id
+        )));
     }
     if !profile_id.is_empty() && profile_id != run.profile_id {
-        results.push(Err(format!("evidence identity profile {:?} does not match {:?}", profile_id, run.profile_id)));
+        results.push(Err(format!(
+            "evidence identity profile {:?} does not match {:?}",
+            profile_id, run.profile_id
+        )));
     }
     if !commit_or_version.is_empty() && commit_or_version != run.commit_or_version {
-        results.push(Err(format!("evidence identity commit {:?} does not match {:?}", commit_or_version, run.commit_or_version)));
+        results.push(Err(format!(
+            "evidence identity commit {:?} does not match {:?}",
+            commit_or_version, run.commit_or_version
+        )));
     }
     join_errors(results)
 }
@@ -197,7 +227,11 @@ fn require_status_pass(label: &str, value: &str) -> Result<(), String> {
     }
 }
 
-fn validate_hosted_retention(label: &str, expires_at: DateTime<Utc>, authorized_policy: &str) -> Result<(), String> {
+fn validate_hosted_retention(
+    label: &str,
+    expires_at: DateTime<Utc>,
+    authorized_policy: &str,
+) -> Result<(), String> {
     if expires_at == DateTime::<Utc>::default() {
         return Err(format!("{label} retention expiry is required"));
     }
@@ -208,21 +242,26 @@ fn validate_hosted_retention(label: &str, expires_at: DateTime<Utc>, authorized_
 }
 
 pub fn validate_hosted_failure_owner(owner: &str) -> Result<(), String> {
-    require_allowed("failure owner", owner, &[
-        crate::FAILURE_OWNER_DAEMON,
-        crate::FAILURE_OWNER_HOST,
-        crate::FAILURE_OWNER_NETWORK,
-        crate::FAILURE_OWNER_PROVIDER,
-        crate::FAILURE_OWNER_CREDENTIAL,
-        crate::FAILURE_OWNER_QUOTA,
-        crate::FAILURE_OWNER_OPERATOR_ACTION,
-        crate::FAILURE_OWNER_UNSUPPORTED_OBSERVATION,
-        crate::FAILURE_OWNER_UNKNOWN,
-    ])
+    require_allowed(
+        "failure owner",
+        owner,
+        &[
+            crate::FAILURE_OWNER_DAEMON,
+            crate::FAILURE_OWNER_HOST,
+            crate::FAILURE_OWNER_NETWORK,
+            crate::FAILURE_OWNER_PROVIDER,
+            crate::FAILURE_OWNER_CREDENTIAL,
+            crate::FAILURE_OWNER_QUOTA,
+            crate::FAILURE_OWNER_OPERATOR_ACTION,
+            crate::FAILURE_OWNER_UNSUPPORTED_OBSERVATION,
+            crate::FAILURE_OWNER_UNKNOWN,
+        ],
+    )
 }
 
 pub fn validate_hosted_redaction<T: Serialize>(label: &str, payload: &T) -> Result<(), String> {
-    let raw = serde_json::to_string(payload).map_err(|e| format!("{label} redaction payload cannot be encoded: {e}"))?;
+    let raw = serde_json::to_string(payload)
+        .map_err(|e| format!("{label} redaction payload cannot be encoded: {e}"))?;
     let body = raw.to_lowercase();
     for marker in HOSTED_RAW_CREDENTIAL_MARKERS {
         if body.contains(&marker.to_lowercase()) {
@@ -238,23 +277,35 @@ pub fn validate_hosted_profile(profile: &HostedOperationalProfile) -> Result<(),
     let mut results = vec![
         require_non_empty("profile id", &profile.profile_id),
         require_non_empty("profile name", &profile.profile_name),
-        require_allowed("environment", &profile.environment, &[crate::ENVIRONMENT_TEST]),
-        require_allowed("host class", &profile.host_class, &[
-            crate::HOSTED_HOST_CLASS_STABLE_TEST_HOST,
-            crate::HOSTED_HOST_CLASS_VPS,
-            crate::HOSTED_HOST_CLASS_DEVELOPER_LAPTOP,
-            crate::HOSTED_HOST_CLASS_UNSUPPORTED,
-        ]),
+        require_allowed(
+            "environment",
+            &profile.environment,
+            &[crate::ENVIRONMENT_TEST],
+        ),
+        require_allowed(
+            "host class",
+            &profile.host_class,
+            &[
+                crate::HOSTED_HOST_CLASS_STABLE_TEST_HOST,
+                crate::HOSTED_HOST_CLASS_VPS,
+                crate::HOSTED_HOST_CLASS_DEVELOPER_LAPTOP,
+                crate::HOSTED_HOST_CLASS_UNSUPPORTED,
+            ],
+        ),
         require_non_empty("data directory", &profile.data_directory),
         require_non_empty("log directory", &profile.log_directory),
         require_non_empty("artifact directory", &profile.artifact_directory),
         require_non_empty("backup directory", &profile.backup_directory),
         require_non_empty("report directory", &profile.report_directory),
         require_non_empty("temporary directory", &profile.temporary_directory),
-        require_allowed("live connector mode", &profile.live_connector_mode, &[
-            crate::HOSTED_LIVE_CONNECTORS_DISABLED,
-            crate::HOSTED_LIVE_CONNECTORS_LIVE,
-        ]),
+        require_allowed(
+            "live connector mode",
+            &profile.live_connector_mode,
+            &[
+                crate::HOSTED_LIVE_CONNECTORS_DISABLED,
+                crate::HOSTED_LIVE_CONNECTORS_LIVE,
+            ],
+        ),
     ];
     if profile.data_directory.trim() == "~/.kura" {
         results.push(Err("hosted profile refuses production data directory without an explicit production recovery opt-in".to_string()));
@@ -271,12 +322,22 @@ pub fn validate_hosted_profile(profile: &HostedOperationalProfile) -> Result<(),
 pub fn validate_hosted_stable_host(profile: &HostedOperationalProfile) -> Result<(), String> {
     match profile.host_class.as_str() {
         crate::HOSTED_HOST_CLASS_STABLE_TEST_HOST | crate::HOSTED_HOST_CLASS_VPS => Ok(()),
-        crate::HOSTED_HOST_CLASS_DEVELOPER_LAPTOP => Err("developer laptop cannot satisfy hosted release-readiness stable-host evidence".to_string()),
-        _ => Err(format!("unsupported host class {:?} cannot satisfy hosted release-readiness evidence", profile.host_class)),
+        crate::HOSTED_HOST_CLASS_DEVELOPER_LAPTOP => Err(
+            "developer laptop cannot satisfy hosted release-readiness stable-host evidence"
+                .to_string(),
+        ),
+        _ => Err(format!(
+            "unsupported host class {:?} cannot satisfy hosted release-readiness evidence",
+            profile.host_class
+        )),
     }
 }
 
-pub fn validate_hosted_run(profile: &HostedOperationalProfile, run: &HostedRun, now: DateTime<Utc>) -> Result<(), String> {
+pub fn validate_hosted_run(
+    profile: &HostedOperationalProfile,
+    run: &HostedRun,
+    now: DateTime<Utc>,
+) -> Result<(), String> {
     let mut results = vec![
         require_non_empty("run id", &run.run_id),
         require_non_empty("run profile id", &run.profile_id),
@@ -284,25 +345,42 @@ pub fn validate_hosted_run(profile: &HostedOperationalProfile, run: &HostedRun, 
         require_non_empty("host", &run.host),
         require_non_empty("operator", &run.operator),
         require_non_empty("artifact root", &run.artifact_root),
-        require_allowed("supervisor mode", &run.supervisor_mode, &[crate::HOSTED_SUPERVISOR_MODE_REPO_FOREGROUND]),
-        require_allowed("run status", &run.status, &[
-            crate::HOSTED_RUN_STATUS_PROVISIONING,
-            crate::HOSTED_RUN_STATUS_RUNNING,
-            crate::HOSTED_RUN_STATUS_STOPPED,
-            crate::HOSTED_RUN_STATUS_FAILED,
-            crate::HOSTED_RUN_STATUS_COMPLETED,
-            crate::HOSTED_RUN_STATUS_EXPIRED,
-        ]),
+        require_allowed(
+            "supervisor mode",
+            &run.supervisor_mode,
+            &[crate::HOSTED_SUPERVISOR_MODE_REPO_FOREGROUND],
+        ),
+        require_allowed(
+            "run status",
+            &run.status,
+            &[
+                crate::HOSTED_RUN_STATUS_PROVISIONING,
+                crate::HOSTED_RUN_STATUS_RUNNING,
+                crate::HOSTED_RUN_STATUS_STOPPED,
+                crate::HOSTED_RUN_STATUS_FAILED,
+                crate::HOSTED_RUN_STATUS_COMPLETED,
+                crate::HOSTED_RUN_STATUS_EXPIRED,
+            ],
+        ),
         validate_hosted_retention("run", run.retention_expires_at, ""),
     ];
     if !profile.profile_id.is_empty() && run.profile_id != profile.profile_id {
-        results.push(Err(format!("run profile identity {:?} does not match hosted profile {:?}", run.profile_id, profile.profile_id)));
+        results.push(Err(format!(
+            "run profile identity {:?} does not match hosted profile {:?}",
+            run.profile_id, profile.profile_id
+        )));
     }
     if run.started_at == DateTime::<Utc>::default() {
         results.push(Err("run started at is required".to_string()));
     }
-    if now != DateTime::<Utc>::default() && run.retention_expires_at != DateTime::<Utc>::default() && run.retention_expires_at <= now {
-        results.push(Err(format!("run evidence expired at {}", run.retention_expires_at)));
+    if now != DateTime::<Utc>::default()
+        && run.retention_expires_at != DateTime::<Utc>::default()
+        && run.retention_expires_at <= now
+    {
+        results.push(Err(format!(
+            "run evidence expired at {}",
+            run.retention_expires_at
+        )));
     }
     join_errors(results)
 }
@@ -313,21 +391,41 @@ pub fn validate_hosted_provisioning_elapsed(elapsed: std::time::Duration) -> Res
 
 // ---- hosted evidence validations ----
 
-pub fn validate_hosted_deployment_manifest(run: &HostedRun, manifest: &HostedDeploymentManifest) -> Result<(), String> {
+pub fn validate_hosted_deployment_manifest(
+    run: &HostedRun,
+    manifest: &HostedDeploymentManifest,
+) -> Result<(), String> {
     let mut results = vec![
         require_non_empty("manifest id", &manifest.manifest_id),
         require_non_empty("commit or version", &manifest.commit_or_version),
-        require_hosted_run_identity(run, &manifest.run_id, &manifest.profile_id, &manifest.commit_or_version),
+        require_hosted_run_identity(
+            run,
+            &manifest.run_id,
+            &manifest.profile_id,
+            &manifest.commit_or_version,
+        ),
         require_non_empty("branch", &manifest.branch),
         require_non_empty("host", &manifest.host),
         require_non_empty("operator", &manifest.operator),
         require_non_empty("configuration profile", &manifest.configuration_profile),
         require_non_empty("data directory", &manifest.data_directory),
         require_non_empty("artifact directory", &manifest.artifact_directory),
-        require_allowed("supervisor mode", &manifest.supervisor_mode, &[crate::HOSTED_SUPERVISOR_MODE_REPO_FOREGROUND]),
+        require_allowed(
+            "supervisor mode",
+            &manifest.supervisor_mode,
+            &[crate::HOSTED_SUPERVISOR_MODE_REPO_FOREGROUND],
+        ),
         require_non_empty("daemon address", &manifest.daemon_address),
-        require_allowed("live connector mode", &manifest.live_connector_mode, &[crate::HOSTED_LIVE_CONNECTORS_DISABLED]),
-        require_allowed("redaction status", &manifest.redaction_status, &[crate::HOSTED_REDACTION_PASSED]),
+        require_allowed(
+            "live connector mode",
+            &manifest.live_connector_mode,
+            &[crate::HOSTED_LIVE_CONNECTORS_DISABLED],
+        ),
+        require_allowed(
+            "redaction status",
+            &manifest.redaction_status,
+            &[crate::HOSTED_REDACTION_PASSED],
+        ),
         validate_hosted_retention("manifest", manifest.retention_expires_at, ""),
         validate_hosted_redaction("manifest", manifest),
     ];
@@ -337,21 +435,41 @@ pub fn validate_hosted_deployment_manifest(run: &HostedRun, manifest: &HostedDep
     join_errors(results)
 }
 
-pub fn validate_hosted_supervisor_event(run: &HostedRun, event: &HostedSupervisorEvent) -> Result<(), String> {
+pub fn validate_hosted_supervisor_event(
+    run: &HostedRun,
+    event: &HostedSupervisorEvent,
+) -> Result<(), String> {
     let mut results = vec![
         require_non_empty("event id", &event.event_id),
         require_hosted_run_identity(run, &event.run_id, "", ""),
-        require_allowed("event type", &event.event_type, &[
-            crate::HOSTED_EVENT_START, crate::HOSTED_EVENT_STOP, crate::HOSTED_EVENT_RESTART,
-            crate::HOSTED_EVENT_STATUS, crate::HOSTED_EVENT_HEALTH_CHECK, crate::HOSTED_EVENT_CRASH_DETECTED,
-            crate::HOSTED_EVENT_REBOOT_RECOVERY, crate::HOSTED_EVENT_MANUAL_STOP, crate::HOSTED_EVENT_FAILED_RESTART,
-            crate::HOSTED_EVENT_REPEATED_CRASH,
-        ]),
+        require_allowed(
+            "event type",
+            &event.event_type,
+            &[
+                crate::HOSTED_EVENT_START,
+                crate::HOSTED_EVENT_STOP,
+                crate::HOSTED_EVENT_RESTART,
+                crate::HOSTED_EVENT_STATUS,
+                crate::HOSTED_EVENT_HEALTH_CHECK,
+                crate::HOSTED_EVENT_CRASH_DETECTED,
+                crate::HOSTED_EVENT_REBOOT_RECOVERY,
+                crate::HOSTED_EVENT_MANUAL_STOP,
+                crate::HOSTED_EVENT_FAILED_RESTART,
+                crate::HOSTED_EVENT_REPEATED_CRASH,
+            ],
+        ),
         require_non_empty("daemon health", &event.daemon_health),
-        require_allowed("result", &event.result, &[
-            crate::HOSTED_RESULT_PASSED, crate::HOSTED_RESULT_FAILED, crate::HOSTED_RESULT_BLOCKED,
-            crate::HOSTED_RESULT_UNSUPPORTED, crate::HOSTED_RESULT_OPERATOR_ACTION_NEEDED,
-        ]),
+        require_allowed(
+            "result",
+            &event.result,
+            &[
+                crate::HOSTED_RESULT_PASSED,
+                crate::HOSTED_RESULT_FAILED,
+                crate::HOSTED_RESULT_BLOCKED,
+                crate::HOSTED_RESULT_UNSUPPORTED,
+                crate::HOSTED_RESULT_OPERATOR_ACTION_NEEDED,
+            ],
+        ),
         require_non_empty("evidence path", &event.evidence_path),
         validate_hosted_redaction("supervisor event", event),
     ];
@@ -370,20 +488,33 @@ pub fn validate_hosted_supervisor_event(run: &HostedRun, event: &HostedSuperviso
     match event.event_type.as_str() {
         crate::HOSTED_EVENT_CRASH_DETECTED | crate::HOSTED_EVENT_REBOOT_RECOVERY => {
             if event.recovery_seconds <= 0 {
-                results.push(Err(format!("{} recovery seconds are required", event.event_type)));
+                results.push(Err(format!(
+                    "{} recovery seconds are required",
+                    event.event_type
+                )));
             }
-            if std::time::Duration::from_secs(event.recovery_seconds as u64) > MAX_RESTART_RECOVERY_ELAPSED {
-                results.push(Err(format!("{} recovery exceeds 5 minutes", event.event_type)));
+            if std::time::Duration::from_secs(event.recovery_seconds as u64)
+                > MAX_RESTART_RECOVERY_ELAPSED
+            {
+                results.push(Err(format!(
+                    "{} recovery exceeds 5 minutes",
+                    event.event_type
+                )));
             }
         }
         crate::HOSTED_EVENT_MANUAL_STOP => {
             if event.recovery_seconds != 0 {
-                results.push(Err("manual stop must not be classified as crash recovery".to_string()));
+                results.push(Err(
+                    "manual stop must not be classified as crash recovery".to_string()
+                ));
             }
         }
         crate::HOSTED_EVENT_REPEATED_CRASH => {
             if event.result == crate::HOSTED_RESULT_PASSED {
-                results.push(Err("repeated crash must surface failed restart or operator action needed".to_string()));
+                results.push(Err(
+                    "repeated crash must surface failed restart or operator action needed"
+                        .to_string(),
+                ));
             }
         }
         crate::HOSTED_EVENT_FAILED_RESTART => {
@@ -397,13 +528,29 @@ pub fn validate_hosted_supervisor_event(run: &HostedRun, event: &HostedSuperviso
 }
 
 fn is_operator_initiated_supervisor_event(event_type: &str) -> bool {
-    matches!(event_type, crate::HOSTED_EVENT_START | crate::HOSTED_EVENT_STOP | crate::HOSTED_EVENT_RESTART | crate::HOSTED_EVENT_STATUS | crate::HOSTED_EVENT_HEALTH_CHECK | crate::HOSTED_EVENT_MANUAL_STOP)
+    matches!(
+        event_type,
+        crate::HOSTED_EVENT_START
+            | crate::HOSTED_EVENT_STOP
+            | crate::HOSTED_EVENT_RESTART
+            | crate::HOSTED_EVENT_STATUS
+            | crate::HOSTED_EVENT_HEALTH_CHECK
+            | crate::HOSTED_EVENT_MANUAL_STOP
+    )
 }
 
-pub fn validate_hosted_backup_evidence(run: &HostedRun, backup: &HostedBackupEvidence) -> Result<(), String> {
+pub fn validate_hosted_backup_evidence(
+    run: &HostedRun,
+    backup: &HostedBackupEvidence,
+) -> Result<(), String> {
     let mut results = vec![
         require_non_empty("backup id", &backup.backup_id),
-        require_hosted_run_identity(run, &backup.run_id, &backup.source_profile_id, &backup.source_commit_or_version),
+        require_hosted_run_identity(
+            run,
+            &backup.run_id,
+            &backup.source_profile_id,
+            &backup.source_commit_or_version,
+        ),
         require_non_empty("artifact path", &backup.artifact_path),
         require_non_empty("checksum", &backup.checksum),
         require_items("included material", &backup.included_material),
@@ -411,7 +558,11 @@ pub fn validate_hosted_backup_evidence(run: &HostedRun, backup: &HostedBackupEvi
         require_items("compatibility notes", &backup.compatibility_notes),
         validate_representative_tenants(backup.tenant_summary.len() as i64, &backup.tenant_summary),
         require_credential_exclusions(&backup.excluded_material),
-        require_allowed("redaction status", &backup.redaction_status, &[crate::HOSTED_REDACTION_PASSED]),
+        require_allowed(
+            "redaction status",
+            &backup.redaction_status,
+            &[crate::HOSTED_REDACTION_PASSED],
+        ),
         require_generated_at("backup", backup.generated_at),
         validate_hosted_redaction("backup", backup),
     ];
@@ -422,18 +573,39 @@ pub fn validate_hosted_backup_evidence(run: &HostedRun, backup: &HostedBackupEvi
 }
 
 fn require_credential_exclusions(values: &[String]) -> Result<(), String> {
-    let required = ["raw secret", "access token", "refresh token", "oauth", "provider token", "derived credential"];
-    let joined = values.join("
-").to_lowercase();
-    let missing: Vec<&str> = required.iter().filter(|item| !joined.contains(**item)).copied().collect();
+    let required = [
+        "raw secret",
+        "access token",
+        "refresh token",
+        "oauth",
+        "provider token",
+        "derived credential",
+    ];
+    let joined = values
+        .join(
+            "
+",
+        )
+        .to_lowercase();
+    let missing: Vec<&str> = required
+        .iter()
+        .filter(|item| !joined.contains(**item))
+        .copied()
+        .collect();
     if missing.is_empty() {
         Ok(())
     } else {
-        Err(format!("excluded material missing credential exclusions: {}", missing.join(", ")))
+        Err(format!(
+            "excluded material missing credential exclusions: {}",
+            missing.join(", ")
+        ))
     }
 }
 
-pub fn validate_hosted_restore_rehearsal(run: &HostedRun, result: &HostedRestoreRehearsalResult) -> Result<(), String> {
+pub fn validate_hosted_restore_rehearsal(
+    run: &HostedRun,
+    result: &HostedRestoreRehearsalResult,
+) -> Result<(), String> {
     let mut results = vec![
         require_non_empty("restore result id", &result.restore_result_id),
         require_hosted_run_identity(run, &result.run_id, "", ""),
@@ -443,22 +615,34 @@ pub fn validate_hosted_restore_rehearsal(run: &HostedRun, result: &HostedRestore
         validate_representative_tenants(result.tenant_count, &result.tenant_states),
         require_status_pass("tenant state result", &result.tenant_state_result),
         require_status_pass("migration state result", &result.migration_state_result),
-        require_status_pass("credential remediation result", &result.credential_remediation_result),
+        require_status_pass(
+            "credential remediation result",
+            &result.credential_remediation_result,
+        ),
         require_status_pass("quota state result", &result.quota_state_result),
         require_status_pass("daemon health result", &result.daemon_health_result),
-        require_status_pass("raw credential scan result", &result.raw_credential_scan_result),
+        require_status_pass(
+            "raw credential scan result",
+            &result.raw_credential_scan_result,
+        ),
         require_status_pass("restore result", &result.result),
         require_generated_at("restore", result.generated_at),
         validate_hosted_redaction("restore", result),
     ];
     if !result.target_is_alternate {
-        results.push(Err("restore rehearsal must use an alternate target".to_string()));
+        results.push(Err(
+            "restore rehearsal must use an alternate target".to_string()
+        ));
     }
     if result.tenant_count < MINIMUM_TENANT_COUNT as i64 {
-        results.push(Err("restore rehearsal must cover at least 3 tenants".to_string()));
+        results.push(Err(
+            "restore rehearsal must cover at least 3 tenants".to_string()
+        ));
     }
     if result.cross_tenant_leakage {
-        results.push(Err("restore rehearsal observed cross-tenant leakage".to_string()));
+        results.push(Err(
+            "restore rehearsal observed cross-tenant leakage".to_string()
+        ));
     }
     for tenant in &result.tenant_states {
         results.push(validate_tenant_state_summary("restore tenant", tenant));
@@ -466,36 +650,62 @@ pub fn validate_hosted_restore_rehearsal(run: &HostedRun, result: &HostedRestore
     join_errors(results)
 }
 
-pub fn validate_hosted_rollback_decision(run: &HostedRun, decision: &HostedRollbackDecisionRecord) -> Result<(), String> {
+pub fn validate_hosted_rollback_decision(
+    run: &HostedRun,
+    decision: &HostedRollbackDecisionRecord,
+) -> Result<(), String> {
     let mut results = vec![
         require_non_empty("rollback decision id", &decision.rollback_decision_id),
         require_hosted_run_identity(run, &decision.run_id, "", ""),
         require_non_empty("trigger", &decision.trigger),
-        require_allowed("rollback decision", &decision.decision, &[
-            crate::HOSTED_ROLLBACK_IN_PLACE,
-            crate::HOSTED_ROLLBACK_RESTORE_FROM_BACKUP_REQUIRED,
-            crate::HOSTED_ROLLBACK_NO_ROLLBACK_NEEDED,
-            crate::HOSTED_ROLLBACK_BLOCKED,
-        ]),
+        require_allowed(
+            "rollback decision",
+            &decision.decision,
+            &[
+                crate::HOSTED_ROLLBACK_IN_PLACE,
+                crate::HOSTED_ROLLBACK_RESTORE_FROM_BACKUP_REQUIRED,
+                crate::HOSTED_ROLLBACK_NO_ROLLBACK_NEEDED,
+                crate::HOSTED_ROLLBACK_BLOCKED,
+            ],
+        ),
         require_non_empty("rationale", &decision.rationale),
-        require_items("supporting evidence links", &decision.supporting_evidence_links),
+        require_items(
+            "supporting evidence links",
+            &decision.supporting_evidence_links,
+        ),
         require_non_empty("operator", &decision.operator),
         validate_hosted_redaction("rollback decision", decision),
     ];
     if decision.decision == crate::HOSTED_ROLLBACK_RESTORE_FROM_BACKUP_REQUIRED {
-        results.push(require_non_empty("required backup id", &decision.required_backup_id));
+        results.push(require_non_empty(
+            "required backup id",
+            &decision.required_backup_id,
+        ));
     }
     if decision.decided_at == DateTime::<Utc>::default() {
-        results.push(require_generated_at("rollback decision", decision.decided_at));
+        results.push(require_generated_at(
+            "rollback decision",
+            decision.decided_at,
+        ));
     }
     join_errors(results)
 }
 
-pub fn validate_hosted_upgrade_evidence(run: &HostedRun, evidence: &HostedUpgradeEvidence) -> Result<(), String> {
+pub fn validate_hosted_upgrade_evidence(
+    run: &HostedRun,
+    evidence: &HostedUpgradeEvidence,
+) -> Result<(), String> {
     let mut results = vec![
         require_non_empty("upgrade evidence id", &evidence.upgrade_evidence_id),
         require_hosted_run_identity(run, &evidence.run_id, &evidence.profile_identity, ""),
-        require_allowed("upgrade phase", &evidence.phase, &[crate::HOSTED_UPGRADE_PHASE_PREFLIGHT, crate::HOSTED_UPGRADE_PHASE_POSTFLIGHT]),
+        require_allowed(
+            "upgrade phase",
+            &evidence.phase,
+            &[
+                crate::HOSTED_UPGRADE_PHASE_PREFLIGHT,
+                crate::HOSTED_UPGRADE_PHASE_POSTFLIGHT,
+            ],
+        ),
         require_generated_at("upgrade", evidence.generated_at),
         validate_hosted_redaction("upgrade", evidence),
     ];
@@ -507,29 +717,68 @@ pub fn validate_hosted_upgrade_evidence(run: &HostedRun, evidence: &HostedUpgrad
     }
     match evidence.phase.as_str() {
         crate::HOSTED_UPGRADE_PHASE_PREFLIGHT => {
-            results.push(require_non_empty("deployment identity", &evidence.deployment_identity));
-            results.push(require_non_empty("profile identity", &evidence.profile_identity));
+            results.push(require_non_empty(
+                "deployment identity",
+                &evidence.deployment_identity,
+            ));
+            results.push(require_non_empty(
+                "profile identity",
+                &evidence.profile_identity,
+            ));
             results.push(require_non_empty("data location", &evidence.data_location));
-            results.push(require_non_empty("artifact location", &evidence.artifact_location));
-            results.push(require_status_pass("required backup state", &evidence.required_backup_state));
-            results.push(require_status_pass("daemon health", &evidence.daemon_health));
-            results.push(require_status_pass("configuration readiness", &evidence.configuration_readiness));
+            results.push(require_non_empty(
+                "artifact location",
+                &evidence.artifact_location,
+            ));
+            results.push(require_status_pass(
+                "required backup state",
+                &evidence.required_backup_state,
+            ));
+            results.push(require_status_pass(
+                "daemon health",
+                &evidence.daemon_health,
+            ));
+            results.push(require_status_pass(
+                "configuration readiness",
+                &evidence.configuration_readiness,
+            ));
         }
         crate::HOSTED_UPGRADE_PHASE_POSTFLIGHT => {
-            results.push(require_status_pass("daemon health", &evidence.daemon_health));
-            results.push(require_status_pass("tenant data verification", &evidence.tenant_data_verification));
-            results.push(require_status_pass("migration state", &evidence.migration_state));
-            results.push(require_status_pass("credential remediation state", &evidence.credential_remediation_state));
+            results.push(require_status_pass(
+                "daemon health",
+                &evidence.daemon_health,
+            ));
+            results.push(require_status_pass(
+                "tenant data verification",
+                &evidence.tenant_data_verification,
+            ));
+            results.push(require_status_pass(
+                "migration state",
+                &evidence.migration_state,
+            ));
+            results.push(require_status_pass(
+                "credential remediation state",
+                &evidence.credential_remediation_state,
+            ));
             results.push(require_status_pass("quota state", &evidence.quota_state));
-            results.push(require_status_pass("operational diagnostics", &evidence.operational_diagnostics));
-            results.push(require_non_empty("rollback guidance", &evidence.rollback_guidance));
+            results.push(require_status_pass(
+                "operational diagnostics",
+                &evidence.operational_diagnostics,
+            ));
+            results.push(require_non_empty(
+                "rollback guidance",
+                &evidence.rollback_guidance,
+            ));
         }
         _ => {}
     }
     join_errors(results)
 }
 
-pub fn validate_hosted_observation_report(run: &HostedRun, report: &HostedObservationReport) -> Result<(), String> {
+pub fn validate_hosted_observation_report(
+    run: &HostedRun,
+    report: &HostedObservationReport,
+) -> Result<(), String> {
     let mut results = vec![
         require_non_empty("observation report id", &report.observation_report_id),
         require_hosted_run_identity(run, &report.run_id, "", ""),
@@ -537,60 +786,124 @@ pub fn validate_hosted_observation_report(run: &HostedRun, report: &HostedObserv
         require_non_empty("daemon health", &report.daemon_health),
         require_generated_at("observation report", report.generated_at),
         validate_hosted_redaction("observation report", report),
-        validate_hosted_observation("databaseSize", &report.database_size, &report.unsupported_fields),
+        validate_hosted_observation(
+            "databaseSize",
+            &report.database_size,
+            &report.unsupported_fields,
+        ),
         validate_hosted_observation("logSize", &report.log_size, &report.unsupported_fields),
         validate_hosted_observation("memory", &report.memory, &report.unsupported_fields),
         validate_hosted_observation("goroutines", &report.goroutines, &report.unsupported_fields),
-        validate_hosted_observation("fileDescriptors", &report.file_descriptors, &report.unsupported_fields),
-        validate_hosted_observation("queueOrBacklog", &report.queue_or_backlog, &report.unsupported_fields),
-        validate_hosted_observation("connectorHealth", &report.connector_health, &report.unsupported_fields),
+        validate_hosted_observation(
+            "fileDescriptors",
+            &report.file_descriptors,
+            &report.unsupported_fields,
+        ),
+        validate_hosted_observation(
+            "queueOrBacklog",
+            &report.queue_or_backlog,
+            &report.unsupported_fields,
+        ),
+        validate_hosted_observation(
+            "connectorHealth",
+            &report.connector_health,
+            &report.unsupported_fields,
+        ),
         validate_hosted_observation("mcpHealth", &report.mcp_health, &report.unsupported_fields),
-        validate_hosted_observation("integrationDiagnosticState", &report.integration_diagnostic_state, &report.unsupported_fields),
+        validate_hosted_observation(
+            "integrationDiagnosticState",
+            &report.integration_diagnostic_state,
+            &report.unsupported_fields,
+        ),
     ];
     if report.daemon_health != crate::STATUS_PASS {
-        results.push(Err("observation report has blocking daemon health finding".to_string()));
+        results.push(Err(
+            "observation report has blocking daemon health finding".to_string()
+        ));
     }
     if report.monotonic_resource_growth {
-        results.push(Err("observation report has blocking resource growth finding".to_string()));
+        results.push(Err(
+            "observation report has blocking resource growth finding".to_string(),
+        ));
     }
-    if report.queue_or_backlog.value.to_lowercase().contains("backlog") {
-        results.push(Err("observation report has blocking backlog finding".to_string()));
+    if report
+        .queue_or_backlog
+        .value
+        .to_lowercase()
+        .contains("backlog")
+    {
+        results.push(Err(
+            "observation report has blocking backlog finding".to_string()
+        ));
     }
-    if !report.blocking_findings.is_empty() || report.daemon_health != crate::STATUS_PASS || report.monotonic_resource_growth {
+    if !report.blocking_findings.is_empty()
+        || report.daemon_health != crate::STATUS_PASS
+        || report.monotonic_resource_growth
+    {
         results.push(validate_hosted_failure_owner(&report.failure_owner));
     }
     join_errors(results)
 }
 
-fn validate_hosted_observation(label: &str, observation: &HostedObservation, unsupported_fields: &[String]) -> Result<(), String> {
+fn validate_hosted_observation(
+    label: &str,
+    observation: &HostedObservation,
+    unsupported_fields: &[String],
+) -> Result<(), String> {
     if !observation.value.trim().is_empty() {
         return Ok(());
     }
     if observation.unsupported && unsupported_fields.iter().any(|f| f == label) {
         return Ok(());
     }
-    Err(format!("{label} is required or must be listed as unsupported"))
+    Err(format!(
+        "{label} is required or must be listed as unsupported"
+    ))
 }
 
-pub fn validate_hosted_release_evidence_index(index: &HostedReleaseEvidenceIndex, now: DateTime<Utc>) -> Result<(), String> {
+pub fn validate_hosted_release_evidence_index(
+    index: &HostedReleaseEvidenceIndex,
+    now: DateTime<Utc>,
+) -> Result<(), String> {
     let mut results = vec![
         require_non_empty("release index id", &index.release_index_id),
         require_non_empty("run id", &index.run_id),
         require_non_empty("profile id", &index.profile_id),
         require_non_empty("commit or version", &index.commit_or_version),
         require_non_empty("review target", &index.review_target),
-        require_elapsed_at_most("release evidence review", index.review_elapsed, MAX_RELEASE_REVIEW_ELAPSED),
-        require_allowed("release decision", &index.decision, &[crate::RESULT_SHIP, crate::RESULT_NO_SHIP, crate::RESULT_SHIP_WITH_RECORDED_SKIPS]),
-        validate_hosted_retention("release index", index.retention_expires_at, &index.authorized_retention_policy),
+        require_elapsed_at_most(
+            "release evidence review",
+            index.review_elapsed,
+            MAX_RELEASE_REVIEW_ELAPSED,
+        ),
+        require_allowed(
+            "release decision",
+            &index.decision,
+            &[
+                crate::RESULT_SHIP,
+                crate::RESULT_NO_SHIP,
+                crate::RESULT_SHIP_WITH_RECORDED_SKIPS,
+            ],
+        ),
+        validate_hosted_retention(
+            "release index",
+            index.retention_expires_at,
+            &index.authorized_retention_policy,
+        ),
         validate_hosted_redaction("release index", index),
     ];
     if index.review_elapsed > MAX_RELEASE_REVIEW_ELAPSED {
-        results.push(Err("release evidence review must complete in 30 minutes or less".to_string()));
+        results.push(Err(
+            "release evidence review must complete in 30 minutes or less".to_string(),
+        ));
     }
     if index.generated_at == DateTime::<Utc>::default() {
         results.push(Err("release index generated at is required".to_string()));
     }
-    if now != DateTime::<Utc>::default() && index.retention_expires_at < now && index.authorized_retention_policy.is_empty() {
+    if now != DateTime::<Utc>::default()
+        && index.retention_expires_at < now
+        && index.authorized_retention_policy.is_empty()
+    {
         results.push(Err("release index evidence expired".to_string()));
     }
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -600,32 +913,51 @@ pub fn validate_hosted_release_evidence_index(index: &HostedReleaseEvidenceIndex
     }
     for evidence_type in crate::REQUIRED_HOSTED_EVIDENCE_TYPES {
         if !seen.contains(*evidence_type) {
-            results.push(Err(format!("missing required evidence link {evidence_type}")));
+            results.push(Err(format!(
+                "missing required evidence link {evidence_type}"
+            )));
         }
     }
     for link in &index.evidence_links {
         if link.status != crate::STATUS_PASS && link.status != crate::HOSTED_RESULT_PASSED {
-            results.push(Err(format!("release evidence {} failed", link.evidence_type)));
+            results.push(Err(format!(
+                "release evidence {} failed",
+                link.evidence_type
+            )));
         }
     }
     join_errors(results)
 }
 
-fn validate_hosted_evidence_link(index: &HostedReleaseEvidenceIndex, i: usize, link: &HostedEvidenceLink) -> Result<(), String> {
+fn validate_hosted_evidence_link(
+    index: &HostedReleaseEvidenceIndex,
+    i: usize,
+    link: &HostedEvidenceLink,
+) -> Result<(), String> {
     let label = format!("evidence link[{i}]");
     let mut results = vec![
         require_non_empty(&format!("{label}.evidence type"), &link.evidence_type),
         require_non_empty(&format!("{label}.path"), &link.path),
         require_non_empty(&format!("{label}.status"), &link.status),
-        validate_hosted_retention(&label, link.retention_expires_at, &index.authorized_retention_policy),
+        validate_hosted_retention(
+            &label,
+            link.retention_expires_at,
+            &index.authorized_retention_policy,
+        ),
     ];
-    if link.run_id != index.run_id || link.profile_id != index.profile_id || link.commit_or_version != index.commit_or_version {
-        results.push(Err(format!("{label} identity does not match release index")));
+    if link.run_id != index.run_id
+        || link.profile_id != index.profile_id
+        || link.commit_or_version != index.commit_or_version
+    {
+        results.push(Err(format!(
+            "{label} identity does not match release index"
+        )));
     }
     if link.generated_at == DateTime::<Utc>::default() {
         results.push(Err(format!("{label} generated at is required")));
     }
-    if !link.redaction_status.is_empty() && link.redaction_status != crate::HOSTED_REDACTION_PASSED {
+    if !link.redaction_status.is_empty() && link.redaction_status != crate::HOSTED_REDACTION_PASSED
+    {
         results.push(Err(format!("{label} redaction failed")));
     }
     if !link.blocking_findings.is_empty() {
@@ -642,7 +974,11 @@ pub fn build_integration_diagnostic_smoke_report(
     probes: &[SmokeProbeInput],
     started_at: DateTime<Utc>,
 ) -> SmokeMatrixReport {
-    let started_at = if started_at == DateTime::<Utc>::default() { Utc::now() } else { started_at };
+    let started_at = if started_at == DateTime::<Utc>::default() {
+        Utc::now()
+    } else {
+        started_at
+    };
     let completed_at = started_at;
     let mut report = SmokeMatrixReport {
         smoke_report_id: report_id.to_string(),
@@ -662,12 +998,19 @@ pub fn build_integration_diagnostic_smoke_report(
             report.tenant_id = probe.tenant_id.clone();
         }
         let outcome = build_smoke_probe_outcome(report_id, index, probe, started_at);
-        report.domain_summary.insert(outcome.domain_kind.clone(), outcome.result.as_str().to_string());
-        report.artifact_refs.extend(outcome.artifact_refs.iter().cloned());
+        report.domain_summary.insert(
+            outcome.domain_kind.clone(),
+            outcome.result.as_str().to_string(),
+        );
+        report
+            .artifact_refs
+            .extend(outcome.artifact_refs.iter().cloned());
         if outcome.result == SmokeProbeResult::Failed {
             report.status = SmokeReportStatus::Failed;
         }
-        if outcome.result == SmokeProbeResult::Blocked && report.status == SmokeReportStatus::Completed {
+        if outcome.result == SmokeProbeResult::Blocked
+            && report.status == SmokeReportStatus::Completed
+        {
             report.status = SmokeReportStatus::Blocked;
         }
         report.probe_outcomes.push(outcome);
@@ -675,7 +1018,12 @@ pub fn build_integration_diagnostic_smoke_report(
     report
 }
 
-pub fn build_smoke_probe_outcome(report_id: &str, index: usize, probe: &SmokeProbeInput, fallback_time: DateTime<Utc>) -> SmokeProbeOutcome {
+pub fn build_smoke_probe_outcome(
+    report_id: &str,
+    index: usize,
+    probe: &SmokeProbeInput,
+    fallback_time: DateTime<Utc>,
+) -> SmokeProbeOutcome {
     let mut checked_at = probe.checked_at;
     if checked_at == DateTime::<Utc>::default() {
         checked_at = fallback_time;
@@ -693,11 +1041,15 @@ pub fn build_smoke_probe_outcome(report_id: &str, index: usize, probe: &SmokePro
         reason_code = DiagnosticReasonCode::UnsupportedDiagnostic;
     } else if !probe.safe_credentials_available {
         result = SmokeProbeResult::Blocked;
-        blocked_reason = SmokeBlockedReason::MissingSafeCredentials.as_str().to_string();
+        blocked_reason = SmokeBlockedReason::MissingSafeCredentials
+            .as_str()
+            .to_string();
         reason_code = DiagnosticReasonCode::TokenMissing;
     } else if !probe.tenant_approval_available {
         result = SmokeProbeResult::Blocked;
-        blocked_reason = SmokeBlockedReason::TenantApprovalUnavailable.as_str().to_string();
+        blocked_reason = SmokeBlockedReason::TenantApprovalUnavailable
+            .as_str()
+            .to_string();
         reason_code = DiagnosticReasonCode::TenantApprovalPending;
     } else if !probe.provider_available {
         result = SmokeProbeResult::Blocked;
@@ -705,11 +1057,15 @@ pub fn build_smoke_probe_outcome(report_id: &str, index: usize, probe: &SmokePro
         reason_code = DiagnosticReasonCode::ProviderUnavailable;
     } else if !probe.read_only_or_reversible && !probe.tenant_admin_approved {
         result = SmokeProbeResult::Blocked;
-        blocked_reason = SmokeBlockedReason::MissingTenantAdminApproval.as_str().to_string();
+        blocked_reason = SmokeBlockedReason::MissingTenantAdminApproval
+            .as_str()
+            .to_string();
         reason_code = DiagnosticReasonCode::UnsafeToRetry;
     } else if !probe.read_only_or_reversible && !probe.operator_approved {
         result = SmokeProbeResult::Blocked;
-        blocked_reason = SmokeBlockedReason::MissingOperatorApproval.as_str().to_string();
+        blocked_reason = SmokeBlockedReason::MissingOperatorApproval
+            .as_str()
+            .to_string();
         reason_code = DiagnosticReasonCode::UnsafeToRetry;
     } else if reason_code != DiagnosticReasonCode::Healthy {
         result = SmokeProbeResult::Failed;
@@ -731,7 +1087,9 @@ pub fn build_smoke_probe_outcome(report_id: &str, index: usize, probe: &SmokePro
         blocked_or_skipped_reason: blocked_reason,
         artifact_refs: probe.artifact_refs.clone(),
         checked_at,
-        redaction_status: kura_integrations::RedactionStatus::Redacted.as_str().to_string(),
+        redaction_status: kura_integrations::RedactionStatus::Redacted
+            .as_str()
+            .to_string(),
         retention_expires_at: kura_integrations::diagnostic_retention_expiry(checked_at),
         ..SmokeProbeOutcome::default()
     }

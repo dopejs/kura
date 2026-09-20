@@ -10,12 +10,13 @@
 //! exactly like the Go unbound-context paths.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
-use crate::crud::{
-    enum_str, now_rfc3339, null_string, opt_time_string, parse_enum, parse_opt_rfc3339, parse_rfc3339,
-};
 use crate::SQLiteStore;
+use crate::crud::{
+    enum_str, now_rfc3339, null_string, opt_time_string, parse_enum, parse_opt_rfc3339,
+    parse_rfc3339,
+};
 
 /// A connector delivery-boundary ledger row. `document` is the JSON-serialized boundary
 /// snapshot (Go `Document []byte`, tagged `json:"-"`).
@@ -166,7 +167,9 @@ fn scan_connector_message(row: &Row) -> Result<kura_imtypes::MessageRecord, Stri
     })
 }
 
-fn scan_connector_conformance_result(row: &Row) -> Result<kura_connectors::ConformanceResult, String> {
+fn scan_connector_conformance_result(
+    row: &Row,
+) -> Result<kura_connectors::ConformanceResult, String> {
     let conformance_result_id: String = row.get(0).map_err(|e| e.to_string())?;
     let tenant_id: String = row.get(1).map_err(|e| e.to_string())?;
     let connector_kind: String = row.get(2).map_err(|e| e.to_string())?;
@@ -241,8 +244,12 @@ fn scan_connector_diagnostic_state(
 
 impl SQLiteStore {
     pub fn upsert_connector(&self, connector: &kura_connectors::Connector) -> Result<(), String> {
-        let secret_refs_json = serde_json::to_string(&connector.secret_refs)
-            .map_err(|e| format!("marshal connector secret refs {}: {e}", connector.connector_id))?;
+        let secret_refs_json = serde_json::to_string(&connector.secret_refs).map_err(|e| {
+            format!(
+                "marshal connector secret refs {}: {e}",
+                connector.connector_id
+            )
+        })?;
 
         self.conn
             .execute(
@@ -382,7 +389,10 @@ impl SQLiteStore {
                     return Ok((existing, false));
                 }
             }
-            return Err(format!("insert connector message {}: {err}", message.delivery_id));
+            return Err(format!(
+                "insert connector message {}: {err}",
+                message.delivery_id
+            ));
         }
 
         if !message.provider_message_id.trim().is_empty() {
@@ -408,10 +418,16 @@ impl SQLiteStore {
             return Ok((existing, created));
         }
 
-        Err(format!("load connector message {} after insert", message.delivery_id))
+        Err(format!(
+            "load connector message {} after insert",
+            message.delivery_id
+        ))
     }
 
-    pub fn upsert_connector_message(&self, message: &kura_imtypes::MessageRecord) -> Result<(), String> {
+    pub fn upsert_connector_message(
+        &self,
+        message: &kura_imtypes::MessageRecord,
+    ) -> Result<(), String> {
         let equivalent_rule_id = connector_message_equivalent_rule_id(message);
 
         self.conn
@@ -586,7 +602,12 @@ impl SQLiteStore {
             )
             .map_err(|e| e.to_string())?;
         let mut rows = stmt
-            .query(params![tenant_id, connector_id, enum_str(&direction), external_message_id])
+            .query(params![
+                tenant_id,
+                connector_id,
+                enum_str(&direction),
+                external_message_id
+            ])
             .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
@@ -654,8 +675,8 @@ impl SQLiteStore {
         }
         // Go defaults an empty RedactionStatus to Redacted; the Rust enum is non-empty by
         // construction (Default is Redacted), so no defaulting is needed here.
-        let document =
-            serde_json::to_string(&result).map_err(|e| format!("marshal connector conformance result: {e}"))?;
+        let document = serde_json::to_string(&result)
+            .map_err(|e| format!("marshal connector conformance result: {e}"))?;
 
         self.conn
             .execute(
@@ -739,7 +760,8 @@ impl SQLiteStore {
         }
         // Go defaults an empty RedactionStatus to Redacted; the Rust enum is non-empty by
         // construction (Default is Redacted), so no defaulting is needed here.
-        let redaction_failure_id = if (state.redaction_status == kura_connectors::RedactionStatus::Suppressed
+        let redaction_failure_id = if (state.redaction_status
+            == kura_connectors::RedactionStatus::Suppressed
             || state.redaction_status == kura_connectors::RedactionStatus::Failed)
             && state.redaction_failure_id.trim().is_empty()
         {
@@ -747,8 +769,8 @@ impl SQLiteStore {
         } else {
             state.redaction_failure_id.clone()
         };
-        let document =
-            serde_json::to_string(&state).map_err(|e| format!("marshal connector diagnostic state: {e}"))?;
+        let document = serde_json::to_string(&state)
+            .map_err(|e| format!("marshal connector diagnostic state: {e}"))?;
         let stale_after = state.evidence_timestamp + chrono::Duration::minutes(15);
 
         self.conn

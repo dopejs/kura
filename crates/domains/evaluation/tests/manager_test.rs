@@ -34,7 +34,9 @@ fn test_manager(store: MemoryStore, fixtures_dir: &str) -> Manager {
 async fn manager_loads_fixture_candidates_and_launches_non_live_replay() {
     let store = MemoryStore::new();
     let manager = test_manager(store, "testdata/fixtures");
-    manager.load_fixtures().expect("LoadFixtures returned error");
+    manager
+        .load_fixtures()
+        .expect("LoadFixtures returned error");
 
     let candidates = manager
         .list_replay_candidates(&CandidateFilter {
@@ -50,7 +52,10 @@ async fn manager_loads_fixture_candidates_and_launches_non_live_replay() {
     );
 
     let attempt = manager
-        .create_replay_attempt(&candidates[0].candidate_id, CreateReplayAttemptInput::default())
+        .create_replay_attempt(
+            &candidates[0].candidate_id,
+            CreateReplayAttemptInput::default(),
+        )
         .await
         .expect("CreateReplayAttempt returned error");
     assert_eq!(attempt.mode, ReplayMode::NonLive, "expected non-live mode");
@@ -207,7 +212,10 @@ async fn manager_blocks_unready_candidate_without_running_side_effects() {
         SideEffectHandling::Blocked,
         "expected blocked side effect handling"
     );
-    assert!(!attempt.blocked_reasons.is_empty(), "expected blocked reasons");
+    assert!(
+        !attempt.blocked_reasons.is_empty(),
+        "expected blocked reasons"
+    );
 }
 
 #[test]
@@ -244,7 +252,9 @@ fn manager_rejects_replay_candidate_without_source_provenance() {
 async fn manager_creates_plane_level_comparison() {
     let store = MemoryStore::new();
     let manager = test_manager(store, "testdata/fixtures");
-    manager.load_fixtures().expect("LoadFixtures returned error");
+    manager
+        .load_fixtures()
+        .expect("LoadFixtures returned error");
     let candidates = manager
         .list_replay_candidates(&CandidateFilter {
             environment_scope: "test".to_string(),
@@ -336,7 +346,9 @@ async fn fixture_replay_uses_captured_evidence_instead_of_expected_summary() {
         clock: Some(Arc::new(fixed_now)),
         ..Default::default()
     });
-    manager.load_fixtures().expect("LoadFixtures returned error");
+    manager
+        .load_fixtures()
+        .expect("LoadFixtures returned error");
     let attempt = manager
         .create_replay_attempt(
             "candidate_fixture_runtime_drift",
@@ -442,7 +454,9 @@ async fn comparison_can_use_baseline_attempt_evidence() {
 async fn live_validation_replay_is_explicitly_blocked_until_executor_exists() {
     let store = MemoryStore::new();
     let manager = test_manager(store, "testdata/fixtures");
-    manager.load_fixtures().expect("LoadFixtures returned error");
+    manager
+        .load_fixtures()
+        .expect("LoadFixtures returned error");
     let candidates = manager
         .list_replay_candidates(&CandidateFilter {
             environment_scope: "test".to_string(),
@@ -475,7 +489,9 @@ async fn live_validation_replay_is_explicitly_blocked_until_executor_exists() {
 async fn non_live_replay_is_unaffected_by_live_validation_kill_switch_concept() {
     let store = MemoryStore::new();
     let manager = test_manager(store, "testdata/fixtures");
-    manager.load_fixtures().expect("LoadFixtures returned error");
+    manager
+        .load_fixtures()
+        .expect("LoadFixtures returned error");
     let candidates = manager
         .list_replay_candidates(&CandidateFilter {
             environment_scope: "test".to_string(),
@@ -504,7 +520,9 @@ async fn non_live_replay_is_unaffected_by_live_validation_kill_switch_concept() 
 async fn manager_replays_and_compares_required_fixture_classes() {
     let store = MemoryStore::new();
     let manager = test_manager(store, "testdata/fixtures");
-    manager.load_fixtures().expect("LoadFixtures returned error");
+    manager
+        .load_fixtures()
+        .expect("LoadFixtures returned error");
     let fixtures = manager
         .list_fixtures(&FixtureFilter {
             environment_scope: "test".to_string(),
@@ -540,7 +558,9 @@ async fn manager_replays_and_compares_required_fixture_classes() {
 
 #[tokio::test]
 async fn replay_evaluation_attempt_quota_denies_before_attempt_and_runtime_work() {
-    let store = SqliteStoreAdapter::new(kura_store::SQLiteStore::new(&temp_dir("quota_deny")).expect("store"));
+    let store = SqliteStoreAdapter::new(
+        kura_store::SQLiteStore::new(&temp_dir("quota_deny")).expect("store"),
+    );
     let billing = BillingManager::with_clock(Arc::new(QuotaDenyRepo), fixed_now);
     let recorder = Arc::new(CountingRecorder::default());
     let manager = Manager::new(Dependencies {
@@ -559,7 +579,10 @@ async fn replay_evaluation_attempt_quota_denies_before_attempt_and_runtime_work(
     let tenant = tenant_context("ten_eval_quota_deny");
     let result = tenantctx::scope(tenant, async {
         manager
-            .create_replay_attempt("candidate_attempt_denied", CreateReplayAttemptInput::default())
+            .create_replay_attempt(
+                "candidate_attempt_denied",
+                CreateReplayAttemptInput::default(),
+            )
             .await
     })
     .await;

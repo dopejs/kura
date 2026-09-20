@@ -280,46 +280,167 @@ pub fn diagnostic_freshness(now: DateTime<Utc>, stale_after: DateTime<Utc>) -> F
 
 #[must_use]
 pub fn diagnostic_retention_expiry(now: DateTime<Utc>) -> DateTime<Utc> {
-    let now = if now == DateTime::<Utc>::default() { Utc::now() } else { now };
+    let now = if now == DateTime::<Utc>::default() {
+        Utc::now()
+    } else {
+        now
+    };
     now + DIAGNOSTIC_DEFAULT_RETENTION
 }
 
 #[must_use]
 pub fn default_diagnostic_reason_code_catalog() -> Vec<DiagnosticReasonCodeDefinition> {
     let defs: &[(DiagnosticReasonCode, &str, RetrySafety, RemediationOwner)] = &[
-        (DiagnosticReasonCode::Healthy, "healthy", RetrySafety::NoActionNeeded, RemediationOwner::NoneRequired),
-        (DiagnosticReasonCode::AppAuthorizationMissing, "authorization", RetrySafety::Blocked, RemediationOwner::Operator),
-        (DiagnosticReasonCode::BotAuthorizationMissing, "authorization", RetrySafety::Blocked, RemediationOwner::Operator),
-        (DiagnosticReasonCode::UserAuthorizationMissing, "authorization", RetrySafety::Blocked, RemediationOwner::ProductUser),
-        (DiagnosticReasonCode::TenantApprovalPending, "tenant_approval", RetrySafety::Blocked, RemediationOwner::TenantAdmin),
-        (DiagnosticReasonCode::ScopeMissing, "scope", RetrySafety::Blocked, RemediationOwner::TenantAdmin),
-        (DiagnosticReasonCode::TokenMissing, "token", RetrySafety::Blocked, RemediationOwner::ProductUser),
-        (DiagnosticReasonCode::TokenExpired, "token", RetrySafety::Blocked, RemediationOwner::ProductUser),
-        (DiagnosticReasonCode::TokenRevoked, "token", RetrySafety::Blocked, RemediationOwner::ProductUser),
-        (DiagnosticReasonCode::RefreshCredentialsMissing, "token", RetrySafety::Blocked, RemediationOwner::Operator),
-        (DiagnosticReasonCode::TokenRefreshFailed, "token", RetrySafety::Blocked, RemediationOwner::Operator),
-        (DiagnosticReasonCode::TenantMismatch, "tenant_mismatch", RetrySafety::Blocked, RemediationOwner::Operator),
-        (DiagnosticReasonCode::RateLimited, "quota", RetrySafety::Retryable, RemediationOwner::Provider),
-        (DiagnosticReasonCode::ProviderUnavailable, "provider", RetrySafety::Retryable, RemediationOwner::Provider),
-        (DiagnosticReasonCode::TransientProviderFailure, "provider", RetrySafety::Retryable, RemediationOwner::Provider),
-        (DiagnosticReasonCode::NetworkFailed, "network", RetrySafety::Retryable, RemediationOwner::Operator),
-        (DiagnosticReasonCode::AmbiguousDownstreamCommit, "retry_safety", RetrySafety::UnsafeToRetry, RemediationOwner::Operator),
-        (DiagnosticReasonCode::UnsafeToRetry, "retry_safety", RetrySafety::UnsafeToRetry, RemediationOwner::Operator),
-        (DiagnosticReasonCode::OperatorActionNeeded, "retry_safety", RetrySafety::OperatorActionNeeded, RemediationOwner::Operator),
-        (DiagnosticReasonCode::LimitedDiagnostic, "unsupported", RetrySafety::NoActionNeeded, RemediationOwner::Operator),
-        (DiagnosticReasonCode::UnsupportedDiagnostic, "unsupported", RetrySafety::NoActionNeeded, RemediationOwner::Operator),
-        (DiagnosticReasonCode::RedactionFailedClosed, "redaction", RetrySafety::Blocked, RemediationOwner::Operator),
-        (DiagnosticReasonCode::UnknownProviderError, "unknown", RetrySafety::OperatorActionNeeded, RemediationOwner::Operator),
+        (
+            DiagnosticReasonCode::Healthy,
+            "healthy",
+            RetrySafety::NoActionNeeded,
+            RemediationOwner::NoneRequired,
+        ),
+        (
+            DiagnosticReasonCode::AppAuthorizationMissing,
+            "authorization",
+            RetrySafety::Blocked,
+            RemediationOwner::Operator,
+        ),
+        (
+            DiagnosticReasonCode::BotAuthorizationMissing,
+            "authorization",
+            RetrySafety::Blocked,
+            RemediationOwner::Operator,
+        ),
+        (
+            DiagnosticReasonCode::UserAuthorizationMissing,
+            "authorization",
+            RetrySafety::Blocked,
+            RemediationOwner::ProductUser,
+        ),
+        (
+            DiagnosticReasonCode::TenantApprovalPending,
+            "tenant_approval",
+            RetrySafety::Blocked,
+            RemediationOwner::TenantAdmin,
+        ),
+        (
+            DiagnosticReasonCode::ScopeMissing,
+            "scope",
+            RetrySafety::Blocked,
+            RemediationOwner::TenantAdmin,
+        ),
+        (
+            DiagnosticReasonCode::TokenMissing,
+            "token",
+            RetrySafety::Blocked,
+            RemediationOwner::ProductUser,
+        ),
+        (
+            DiagnosticReasonCode::TokenExpired,
+            "token",
+            RetrySafety::Blocked,
+            RemediationOwner::ProductUser,
+        ),
+        (
+            DiagnosticReasonCode::TokenRevoked,
+            "token",
+            RetrySafety::Blocked,
+            RemediationOwner::ProductUser,
+        ),
+        (
+            DiagnosticReasonCode::RefreshCredentialsMissing,
+            "token",
+            RetrySafety::Blocked,
+            RemediationOwner::Operator,
+        ),
+        (
+            DiagnosticReasonCode::TokenRefreshFailed,
+            "token",
+            RetrySafety::Blocked,
+            RemediationOwner::Operator,
+        ),
+        (
+            DiagnosticReasonCode::TenantMismatch,
+            "tenant_mismatch",
+            RetrySafety::Blocked,
+            RemediationOwner::Operator,
+        ),
+        (
+            DiagnosticReasonCode::RateLimited,
+            "quota",
+            RetrySafety::Retryable,
+            RemediationOwner::Provider,
+        ),
+        (
+            DiagnosticReasonCode::ProviderUnavailable,
+            "provider",
+            RetrySafety::Retryable,
+            RemediationOwner::Provider,
+        ),
+        (
+            DiagnosticReasonCode::TransientProviderFailure,
+            "provider",
+            RetrySafety::Retryable,
+            RemediationOwner::Provider,
+        ),
+        (
+            DiagnosticReasonCode::NetworkFailed,
+            "network",
+            RetrySafety::Retryable,
+            RemediationOwner::Operator,
+        ),
+        (
+            DiagnosticReasonCode::AmbiguousDownstreamCommit,
+            "retry_safety",
+            RetrySafety::UnsafeToRetry,
+            RemediationOwner::Operator,
+        ),
+        (
+            DiagnosticReasonCode::UnsafeToRetry,
+            "retry_safety",
+            RetrySafety::UnsafeToRetry,
+            RemediationOwner::Operator,
+        ),
+        (
+            DiagnosticReasonCode::OperatorActionNeeded,
+            "retry_safety",
+            RetrySafety::OperatorActionNeeded,
+            RemediationOwner::Operator,
+        ),
+        (
+            DiagnosticReasonCode::LimitedDiagnostic,
+            "unsupported",
+            RetrySafety::NoActionNeeded,
+            RemediationOwner::Operator,
+        ),
+        (
+            DiagnosticReasonCode::UnsupportedDiagnostic,
+            "unsupported",
+            RetrySafety::NoActionNeeded,
+            RemediationOwner::Operator,
+        ),
+        (
+            DiagnosticReasonCode::RedactionFailedClosed,
+            "redaction",
+            RetrySafety::Blocked,
+            RemediationOwner::Operator,
+        ),
+        (
+            DiagnosticReasonCode::UnknownProviderError,
+            "unknown",
+            RetrySafety::OperatorActionNeeded,
+            RemediationOwner::Operator,
+        ),
     ];
     defs.iter()
-        .map(|(reason, category, retry, owner)| DiagnosticReasonCodeDefinition {
-            reason_code: *reason,
-            category: (*category).to_string(),
-            default_retry_safety: *retry,
-            default_remediation_owner: *owner,
-            user_message_key: format!("integration.diagnostic.{}", reason.as_str()),
-            operator_message_key: format!("integration.diagnostic.{}", reason.as_str()),
-            ..DiagnosticReasonCodeDefinition::default()
-        })
+        .map(
+            |(reason, category, retry, owner)| DiagnosticReasonCodeDefinition {
+                reason_code: *reason,
+                category: (*category).to_string(),
+                default_retry_safety: *retry,
+                default_remediation_owner: *owner,
+                user_message_key: format!("integration.diagnostic.{}", reason.as_str()),
+                operator_message_key: format!("integration.diagnostic.{}", reason.as_str()),
+                ..DiagnosticReasonCodeDefinition::default()
+            },
+        )
         .collect()
 }

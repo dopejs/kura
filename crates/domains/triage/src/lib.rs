@@ -216,7 +216,7 @@ pub enum TriageError {
 }
 
 /// Document kind used for durable triage policies (Go `docKindPolicy`).
-const DOC_KIND_POLICY: &str = "triage_policy";
+pub const DOC_KIND_POLICY: &str = "triage_policy";
 
 #[derive(Default)]
 struct ManagerInner {
@@ -245,7 +245,10 @@ impl Manager {
     }
 
     /// Go `WithStore`: installs durable persistence for triage policies and returns the manager.
-    pub fn with_store(&mut self, store: Arc<parking_lot::Mutex<kura_store::SQLiteStore>>) -> &mut Self {
+    pub fn with_store(
+        &mut self,
+        store: Arc<parking_lot::Mutex<kura_store::SQLiteStore>>,
+    ) -> &mut Self {
         self.docs = Some(store);
         self
     }
@@ -265,7 +268,9 @@ impl Manager {
     /// Go `LoadFromStore`: reloads persisted triage policies from the document store on startup.
     /// A no-op when no store is installed.
     pub fn load_from_store(&self) -> Result<(), String> {
-        let Some(docs) = &self.docs else { return Ok(()); };
+        let Some(docs) = &self.docs else {
+            return Ok(());
+        };
         let policies = kura_store::list_documents::<Policy>(&docs.lock(), DOC_KIND_POLICY)?;
         self.restore(policies);
         Ok(())
@@ -301,7 +306,14 @@ impl Manager {
             inner.ids.push(policy.policy_id.clone());
         }
         if let Some(docs) = &self.docs {
-            let _ = kura_store::put_document(&docs.lock(), DOC_KIND_POLICY, &policy.policy_id, &self.env, "", &policy);
+            let _ = kura_store::put_document(
+                &docs.lock(),
+                DOC_KIND_POLICY,
+                &policy.policy_id,
+                &self.env,
+                "",
+                &policy,
+            );
         }
         Ok(policy)
     }
@@ -314,15 +326,24 @@ impl Manager {
     /// Go `ListPolicies` (insertion order, mirroring the `kura-runtime` manager convention).
     pub fn list_policies(&self) -> Vec<Policy> {
         let inner = self.inner.read();
-        inner.ids.iter().filter_map(|id| inner.by_id.get(id).cloned()).collect()
+        inner
+            .ids
+            .iter()
+            .filter_map(|id| inner.by_id.get(id).cloned())
+            .collect()
     }
 
     /// Evaluates messages against a policy and returns a triage run with one decision per message
     /// (Go `Run`).
     pub fn run(&self, policy_id: &str, messages: &[Message]) -> Result<Run, TriageError> {
-        let policy = self.get_policy(policy_id).ok_or(TriageError::PolicyNotFound)?;
+        let policy = self
+            .get_policy(policy_id)
+            .ok_or(TriageError::PolicyNotFound)?;
         let now = Utc::now();
-        let decisions = messages.iter().map(|msg| evaluate(&policy, msg, now)).collect();
+        let decisions = messages
+            .iter()
+            .map(|msg| evaluate(&policy, msg, now))
+            .collect();
         Ok(Run {
             run_id: new_id("triage_run"),
             policy_id: policy.policy_id,
@@ -451,7 +472,10 @@ fn normalize_rules(rules: Vec<Rule>) -> Result<Vec<Rule>, TriageError> {
 fn valid_field(field: ConditionField) -> bool {
     matches!(
         field,
-        ConditionField::Sender | ConditionField::Subject | ConditionField::Body | ConditionField::Recipient
+        ConditionField::Sender
+            | ConditionField::Subject
+            | ConditionField::Body
+            | ConditionField::Recipient
     )
 }
 

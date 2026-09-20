@@ -187,9 +187,13 @@ impl Engine {
         };
 
         let mut inner = self.inner.write();
-        inner.approvals_by_id.insert(approval.approval_id.clone(), approval.clone());
+        inner
+            .approvals_by_id
+            .insert(approval.approval_id.clone(), approval.clone());
         inner.approval_ids.push(approval.approval_id.clone());
-        inner.decisions_by_id.insert(decision.decision_id.clone(), decision.clone());
+        inner
+            .decisions_by_id
+            .insert(decision.decision_id.clone(), decision.clone());
         inner.decision_ids.push(decision.decision_id.clone());
         Ok((approval, decision))
     }
@@ -219,7 +223,11 @@ impl Engine {
     #[must_use]
     pub fn list_decisions(&self) -> Vec<Decision> {
         let inner = self.inner.read();
-        inner.decision_ids.iter().map(|id| inner.decisions_by_id[id].clone()).collect()
+        inner
+            .decision_ids
+            .iter()
+            .map(|id| inner.decisions_by_id[id].clone())
+            .collect()
     }
 
     pub fn resolve_approval(
@@ -249,7 +257,9 @@ impl Engine {
         approval.comment = input.comment;
         approval.updated_at = now;
         approval.resolved_at = Some(now);
-        inner.approvals_by_id.insert(approval.approval_id.clone(), approval.clone());
+        inner
+            .approvals_by_id
+            .insert(approval.approval_id.clone(), approval.clone());
 
         let decision = Decision {
             decision_id: new_decision_id(),
@@ -262,7 +272,9 @@ impl Engine {
             created_at: now,
             ..Decision::default()
         };
-        inner.decisions_by_id.insert(decision.decision_id.clone(), decision.clone());
+        inner
+            .decisions_by_id
+            .insert(decision.decision_id.clone(), decision.clone());
         inner.decision_ids.push(decision.decision_id.clone());
         Ok((approval, decision))
     }
@@ -273,13 +285,17 @@ impl Engine {
         inner.approval_ids = Vec::with_capacity(approvals.len());
         for approval in approvals {
             inner.approval_ids.push(approval.approval_id.clone());
-            inner.approvals_by_id.insert(approval.approval_id.clone(), approval);
+            inner
+                .approvals_by_id
+                .insert(approval.approval_id.clone(), approval);
         }
         inner.decisions_by_id = HashMap::with_capacity(decisions.len());
         inner.decision_ids = Vec::with_capacity(decisions.len());
         for decision in decisions {
             inner.decision_ids.push(decision.decision_id.clone());
-            inner.decisions_by_id.insert(decision.decision_id.clone(), decision);
+            inner
+                .decisions_by_id
+                .insert(decision.decision_id.clone(), decision);
         }
     }
 }

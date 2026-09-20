@@ -9,7 +9,7 @@
 //! kura-store live-validation / evaluation-product CRUD methods that have not landed.
 //! They should be wired here when the underlying store methods exist.
 
-use crate::{emit_denial, require, TenancyError};
+use crate::{TenancyError, emit_denial, require};
 
 /// Tenant-aware accessor for the evaluation family.
 pub struct Evaluation {
@@ -27,7 +27,15 @@ impl Evaluation {
         emit_denial(&self.emitter, surface, resource_kind);
     }
 
-    fn bind_row(&self, table: &str, pk_column: &str, pk: &str, tenant_id: &str, surface: &str, resource_kind: &str) -> Result<(), TenancyError> {
+    fn bind_row(
+        &self,
+        table: &str,
+        pk_column: &str,
+        pk: &str,
+        tenant_id: &str,
+        surface: &str,
+        resource_kind: &str,
+    ) -> Result<(), TenancyError> {
         match self.store.bind_row_tenant(table, pk_column, pk, tenant_id) {
             Err(e) if crate::SQLiteStore::is_cross_tenant_row(&e) => {
                 self.emit(surface, resource_kind);
@@ -42,14 +50,35 @@ impl Evaluation {
         item: &kura_evaluation::ReplayCandidate,
     ) -> Result<(), TenancyError> {
         let tenant_id = require()?;
-        self.store.upsert_replay_candidate(item).map_err(TenancyError::from)?;
-        self.bind_row("evaluation_replay_candidates", "candidate_id", &item.candidate_id, &tenant_id, "store:UpsertReplayCandidateForTenant", "evaluation_replay_candidate")
+        self.store
+            .upsert_replay_candidate(item)
+            .map_err(TenancyError::from)?;
+        self.bind_row(
+            "evaluation_replay_candidates",
+            "candidate_id",
+            &item.candidate_id,
+            &tenant_id,
+            "store:UpsertReplayCandidateForTenant",
+            "evaluation_replay_candidate",
+        )
     }
 
-    pub fn upsert_replay_attempt_for_tenant(&self, item: &kura_evaluation::ReplayAttempt) -> Result<(), TenancyError> {
+    pub fn upsert_replay_attempt_for_tenant(
+        &self,
+        item: &kura_evaluation::ReplayAttempt,
+    ) -> Result<(), TenancyError> {
         let tenant_id = require()?;
-        self.store.upsert_replay_attempt(item).map_err(TenancyError::from)?;
-        self.bind_row("evaluation_replay_attempts", "attempt_id", &item.attempt_id, &tenant_id, "store:UpsertReplayAttemptForTenant", "evaluation_replay_attempt")
+        self.store
+            .upsert_replay_attempt(item)
+            .map_err(TenancyError::from)?;
+        self.bind_row(
+            "evaluation_replay_attempts",
+            "attempt_id",
+            &item.attempt_id,
+            &tenant_id,
+            "store:UpsertReplayAttemptForTenant",
+            "evaluation_replay_attempt",
+        )
     }
 
     pub fn upsert_comparison_result_for_tenant(
@@ -57,8 +86,17 @@ impl Evaluation {
         item: &kura_evaluation::ComparisonResult,
     ) -> Result<(), TenancyError> {
         let tenant_id = require()?;
-        self.store.upsert_comparison_result(item).map_err(TenancyError::from)?;
-        self.bind_row("evaluation_comparisons", "comparison_id", &item.comparison_id, &tenant_id, "store:UpsertComparisonResultForTenant", "evaluation_comparison")
+        self.store
+            .upsert_comparison_result(item)
+            .map_err(TenancyError::from)?;
+        self.bind_row(
+            "evaluation_comparisons",
+            "comparison_id",
+            &item.comparison_id,
+            &tenant_id,
+            "store:UpsertComparisonResultForTenant",
+            "evaluation_comparison",
+        )
     }
 
     pub fn upsert_regression_fixture_for_tenant(
@@ -66,7 +104,16 @@ impl Evaluation {
         item: &kura_evaluation::RegressionFixture,
     ) -> Result<(), TenancyError> {
         let tenant_id = require()?;
-        self.store.upsert_regression_fixture(item).map_err(TenancyError::from)?;
-        self.bind_row("evaluation_regression_fixtures", "fixture_id", &item.fixture_id, &tenant_id, "store:UpsertRegressionFixtureForTenant", "evaluation_regression_fixture")
+        self.store
+            .upsert_regression_fixture(item)
+            .map_err(TenancyError::from)?;
+        self.bind_row(
+            "evaluation_regression_fixtures",
+            "fixture_id",
+            &item.fixture_id,
+            &tenant_id,
+            "store:UpsertRegressionFixtureForTenant",
+            "evaluation_regression_fixture",
+        )
     }
 }

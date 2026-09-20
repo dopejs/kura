@@ -512,7 +512,6 @@ impl kura_api::state::MigrationStatus for NoMigrationInProgress {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // MCP secret resolver (Go mcp.SetSecretManager with the tenant secret
 // manager): kura-mcp's SecretResolver seam is synchronous, while
@@ -547,11 +546,12 @@ impl kura_mcp::SecretResolver for McpSecretResolver {
         if tenant_id.trim().is_empty() {
             return Ok(None);
         }
-        let resolved = futures::executor::block_on(self.secrets.resolve(kura_secrets::ResolveInput {
-            tenant_id,
-            secret_ref: secret_ref.trim().to_string(),
-        }))
-        .map_err(|err| format!("resolve mcp secret {secret_ref}: {err}"))?;
+        let resolved =
+            futures::executor::block_on(self.secrets.resolve(kura_secrets::ResolveInput {
+                tenant_id,
+                secret_ref: secret_ref.trim().to_string(),
+            }))
+            .map_err(|err| format!("resolve mcp secret {secret_ref}: {err}"))?;
         Ok(Some(resolved.value))
     }
 }
@@ -694,8 +694,8 @@ impl kura_webhook::QuotaGate for WebhookQuotaGateImpl {
             "webhook_trigger:{webhook_id}:{}",
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         );
-        let reserve = futures::executor::block_on(self.billing.reserve(
-            kura_billing::ReserveInput {
+        let reserve =
+            futures::executor::block_on(self.billing.reserve(kura_billing::ReserveInput {
                 tenant_id: tenant_id.to_string(),
                 category: kura_billing::Category::WORKFLOW_LAUNCHES.into(),
                 amount: 1,
@@ -704,15 +704,14 @@ impl kura_webhook::QuotaGate for WebhookQuotaGateImpl {
                 guarded_entry_point: "/v1/triggers/webhook".to_string(),
                 actor_principal_id: String::new(),
                 hosted: true,
-            },
-        ));
+            }));
         match reserve {
             Ok(result) if result.allowed => {
                 // The accepted trigger consumes the launch: commit the
                 // reservation immediately (best-effort; a failed commit
                 // resolves through the billing recovery sweep).
-                let _ = futures::executor::block_on(self.billing.commit(
-                    kura_billing::ResolveInput {
+                let _ =
+                    futures::executor::block_on(self.billing.commit(kura_billing::ResolveInput {
                         tenant_id: tenant_id.to_string(),
                         category: kura_billing::Category::WORKFLOW_LAUNCHES.into(),
                         operation_key,
@@ -720,8 +719,7 @@ impl kura_webhook::QuotaGate for WebhookQuotaGateImpl {
                         reason_code: "webhook_trigger_fired".to_string(),
                         reason: "webhook trigger accepted".to_string(),
                         actor_principal_id: String::new(),
-                    },
-                ));
+                    }));
                 (true, String::new())
             }
             Ok(result) => {
@@ -836,9 +834,12 @@ mod hook_wiring_tests {
         ))
     }
 
-    fn test_sandbox(store: &Arc<parking_lot::Mutex<kura_store::SQLiteStore>>) -> Arc<kura_sandbox::Manager> {
+    fn test_sandbox(
+        store: &Arc<parking_lot::Mutex<kura_store::SQLiteStore>>,
+    ) -> Arc<kura_sandbox::Manager> {
         let config = kura_config::Config {
             project_root: String::new(),
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-hook-wiring".to_string(),
@@ -846,6 +847,7 @@ mod hook_wiring_tests {
             version: "0.1.0".to_string(),
             llm: kura_config::LlmConfig::default(),
             connectors: kura_config::ConnectorConfig::default(),
+            egress: Default::default(),
         };
         let _ = store;
         Arc::new(kura_sandbox::Manager::new(
@@ -861,9 +863,18 @@ mod hook_wiring_tests {
         let store = test_store();
         let checker = CatalogSandboxRequirementChecker::new(test_sandbox(&store));
         let requirements = vec![
-            kura_catalog::Requirement { key: "subprocess".to_string(), description: String::new() },
-            kura_catalog::Requirement { key: "backend:subprocess".to_string(), description: String::new() },
-            kura_catalog::Requirement { key: "warp_drive".to_string(), description: String::new() },
+            kura_catalog::Requirement {
+                key: "subprocess".to_string(),
+                description: String::new(),
+            },
+            kura_catalog::Requirement {
+                key: "backend:subprocess".to_string(),
+                description: String::new(),
+            },
+            kura_catalog::Requirement {
+                key: "warp_drive".to_string(),
+                description: String::new(),
+            },
         ];
         let unmet = checker.unmet("ten_a", &requirements);
         assert_eq!(unmet.len(), 1, "{unmet:?}");
@@ -946,7 +957,9 @@ mod hook_wiring_tests {
             })
             .expect("list events");
         assert!(
-            events.iter().any(|event| event.name == "webhook.trigger_quota_denied"),
+            events
+                .iter()
+                .any(|event| event.name == "webhook.trigger_quota_denied"),
             "{events:?}"
         );
     }
@@ -1080,7 +1093,11 @@ impl LlmConsolidator {
                     content: system.to_string(),
                     ..Default::default()
                 },
-                kura_llm::Message { role: kura_llm::MessageRole::User, content: user, ..Default::default() },
+                kura_llm::Message {
+                    role: kura_llm::MessageRole::User,
+                    content: user,
+                    ..Default::default()
+                },
             ],
             ..kura_llm::CreateDispatchInput::default()
         };
@@ -1114,7 +1131,9 @@ fn consolidator_runtime() -> Result<Arc<tokio::runtime::Runtime>, String> {
         .build()
         .map_err(|err| format!("build consolidator runtime: {err}"))?;
     let _ = RUNTIME.set(Arc::new(built));
-    Ok(Arc::clone(RUNTIME.get().expect("consolidator runtime initialized")))
+    Ok(Arc::clone(
+        RUNTIME.get().expect("consolidator runtime initialized"),
+    ))
 }
 
 /// Finds the first JSON array or object embedded in a model reply.
@@ -1189,8 +1208,10 @@ impl kura_memory::Consolidator for LlmConsolidator {
         let Some(items) = value.as_array() else {
             return Err("extraction reply is not a JSON array".to_string());
         };
-        let known: std::collections::HashMap<&str, &kura_memory::SourceLink> =
-            window.iter().map(|item| (item.source.id.as_str(), &item.source)).collect();
+        let known: std::collections::HashMap<&str, &kura_memory::SourceLink> = window
+            .iter()
+            .map(|item| (item.source.id.as_str(), &item.source))
+            .collect();
         let mut drafts = Vec::new();
         for item in items {
             let content = item["content"].as_str().unwrap_or("").trim().to_string();
@@ -1203,9 +1224,7 @@ impl kura_memory::Consolidator for LlmConsolidator {
                     let Some(id) = id.as_str() else { continue };
                     match known.get(id) {
                         Some(link) => source_links.push((*link).clone()),
-                        None => eprintln!(
-                            "memory: consolidator invented citation {id}; dropped"
-                        ),
+                        None => eprintln!("memory: consolidator invented citation {id}; dropped"),
                     }
                 }
             }
@@ -1310,12 +1329,14 @@ mod consolidator_tests {
         fn complete<'a>(
             &'a self,
             _request: kura_llm::ProviderRequest,
-        ) -> futures::future::BoxFuture<'a, Result<kura_llm::ProviderResponse, kura_llm::ProviderError>>
-        {
+        ) -> futures::future::BoxFuture<
+            'a,
+            Result<kura_llm::ProviderResponse, kura_llm::ProviderError>,
+        > {
             let body = self.body.clone();
             Box::pin(async move {
                 Ok(kura_llm::ProviderResponse {
-            tool_calls: Vec::new(),
+                    tool_calls: Vec::new(),
                     output: body,
                     finish_reason: "stop".to_string(),
                     ..kura_llm::ProviderResponse::default()
@@ -1327,15 +1348,19 @@ mod consolidator_tests {
             &'a self,
             request: kura_llm::ProviderRequest,
             _emit: kura_llm::StreamEmitter<'a>,
-        ) -> futures::future::BoxFuture<'a, Result<kura_llm::ProviderResponse, kura_llm::ProviderError>>
-        {
+        ) -> futures::future::BoxFuture<
+            'a,
+            Result<kura_llm::ProviderResponse, kura_llm::ProviderError>,
+        > {
             self.complete(request)
         }
     }
 
     fn consolidator_with(body: &str) -> LlmConsolidator {
         let dispatcher = kura_llm::Dispatcher::new();
-        dispatcher.register_provider(Arc::new(StaticProvider { body: body.to_string() }));
+        dispatcher.register_provider(Arc::new(StaticProvider {
+            body: body.to_string(),
+        }));
         let _ = dispatcher.set_default_provider("static");
         dispatcher.set_default_model("static-1");
         LlmConsolidator::new(Arc::new(dispatcher))
@@ -1393,7 +1418,246 @@ mod consolidator_tests {
     #[test]
     fn non_json_reply_is_an_error_not_a_panic() {
         let consolidator = consolidator_with("I could not comply.");
-        let err = consolidator.extract_l1("", &window()).expect_err("must error");
+        let err = consolidator
+            .extract_l1("", &window())
+            .expect_err("must error");
         assert!(err.contains("no JSON"), "{err}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool-call quota gate (Stage 4.1 for the tool plane): every tool call
+// reserves one RUNTIME_TOOL_CALLS unit before the vendor is reached and
+// commits it only when an answer came back.
+// ---------------------------------------------------------------------------
+
+/// Binds the tool plane to the billing plane.
+///
+/// `RUNTIME_TOOL_CALLS` already exists in the billing catalog (daily, one unit
+/// per call, reserved "before invocation"), so this needs no new category and
+/// no contract change — the tool plane spends an existing budget rather than
+/// inventing a parallel one.
+pub struct ToolQuotaGateImpl {
+    billing: Arc<kura_billing::Manager>,
+}
+
+impl ToolQuotaGateImpl {
+    #[must_use]
+    pub fn new(billing: Arc<kura_billing::Manager>) -> Self {
+        Self { billing }
+    }
+}
+
+impl kura_tools::QuotaGate for ToolQuotaGateImpl {
+    fn reserve(
+        &self,
+        tenant_id: &str,
+        profile: &kura_tools::ToolProfile,
+    ) -> kura_tools::QuotaDecision {
+        let tenant_id = tenant_id.trim();
+        if tenant_id.is_empty() {
+            // The single-user assembly has no tenant to meter. Recorded
+            // decision, mirroring the webhook gate: quota is a hosted
+            // per-tenant bound, and a local operator is not billed.
+            return kura_tools::QuotaDecision::Allowed {
+                operation_key: String::new(),
+            };
+        }
+        let operation_key = format!(
+            "tool_call:{}:{}",
+            profile.profile_id,
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let reserve =
+            futures::executor::block_on(self.billing.reserve(kura_billing::ReserveInput {
+                tenant_id: tenant_id.to_string(),
+                category: kura_billing::Category::RUNTIME_TOOL_CALLS.into(),
+                amount: 1,
+                operation_key: operation_key.clone(),
+                reservation_point: "tool_call".to_string(),
+                guarded_entry_point: format!("tool:{}", profile.capability.as_str()),
+                actor_principal_id: String::new(),
+                hosted: true,
+            }));
+        match reserve {
+            Ok(result) if result.allowed => kura_tools::QuotaDecision::Allowed { operation_key },
+            Ok(result) => kura_tools::QuotaDecision::Denied {
+                reason_code: result
+                    .denial
+                    .map(|denial| denial.reason_code)
+                    .filter(|reason| !reason.is_empty())
+                    .unwrap_or_else(|| "quota_denied".to_string()),
+                detail: String::new(),
+            },
+            // Fail closed: an unavailable quota plane must not grant unbounded
+            // third-party spend.
+            Err(err) => kura_tools::QuotaDecision::Denied {
+                reason_code: "quota_state_unavailable".to_string(),
+                detail: err.to_string(),
+            },
+        }
+    }
+
+    fn commit(&self, tenant_id: &str, operation_key: &str) {
+        if tenant_id.trim().is_empty() || operation_key.is_empty() {
+            return;
+        }
+        let _ = futures::executor::block_on(self.billing.commit(kura_billing::ResolveInput {
+            tenant_id: tenant_id.trim().to_string(),
+            category: kura_billing::Category::RUNTIME_TOOL_CALLS.into(),
+            operation_key: operation_key.to_string(),
+            amount: 1,
+            reason_code: "tool_call_completed".to_string(),
+            reason: "tool call returned a result".to_string(),
+            actor_principal_id: String::new(),
+        }));
+    }
+
+    fn release(&self, tenant_id: &str, operation_key: &str, reason: &str) {
+        if tenant_id.trim().is_empty() || operation_key.is_empty() {
+            return;
+        }
+        // A call that produced no answer must not consume the tenant's budget.
+        let _ = futures::executor::block_on(self.billing.release(kura_billing::ResolveInput {
+            tenant_id: tenant_id.trim().to_string(),
+            category: kura_billing::Category::RUNTIME_TOOL_CALLS.into(),
+            operation_key: operation_key.to_string(),
+            amount: 1,
+            reason_code: format!("tool_call_{reason}"),
+            reason: "tool call did not produce a result".to_string(),
+            actor_principal_id: String::new(),
+        }));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Swarm child quota gate (Stage 4.1, concurrency half): every child of a
+// fan-out reserves one RUN_LAUNCHES unit before it is spawned.
+// ---------------------------------------------------------------------------
+
+pub struct SwarmQuotaGateImpl {
+    billing: Arc<kura_billing::Manager>,
+}
+
+impl SwarmQuotaGateImpl {
+    #[must_use]
+    pub fn new(billing: Arc<kura_billing::Manager>) -> Self {
+        Self { billing }
+    }
+}
+
+impl kura_swarm::ChildQuotaGate for SwarmQuotaGateImpl {
+    fn reserve(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+        index: usize,
+    ) -> kura_swarm::ChildQuotaDecision {
+        let tenant_id = tenant_id.trim();
+        if tenant_id.is_empty() {
+            // Single-user assembly: nothing to meter (recorded decision,
+            // mirroring the webhook and tool gates).
+            return kura_swarm::ChildQuotaDecision::Allowed {
+                operation_key: String::new(),
+            };
+        }
+        let operation_key = format!("swarm_child:{run_id}:{index}");
+        let reserve =
+            futures::executor::block_on(self.billing.reserve(kura_billing::ReserveInput {
+                tenant_id: tenant_id.to_string(),
+                category: kura_billing::Category::RUN_LAUNCHES.into(),
+                amount: 1,
+                operation_key: operation_key.clone(),
+                reservation_point: "swarm_child".to_string(),
+                guarded_entry_point: "/v1/swarm/runs".to_string(),
+                actor_principal_id: String::new(),
+                hosted: true,
+            }));
+        match reserve {
+            Ok(result) if result.allowed => {
+                kura_swarm::ChildQuotaDecision::Allowed { operation_key }
+            }
+            Ok(result) => kura_swarm::ChildQuotaDecision::Denied {
+                reason_code: result
+                    .denial
+                    .map(|d| d.reason_code)
+                    .filter(|r| !r.is_empty())
+                    .unwrap_or_else(|| "quota_denied".into()),
+            },
+            // Fail closed: an unavailable quota plane must not grant an
+            // unbounded fan-out.
+            Err(_) => kura_swarm::ChildQuotaDecision::Denied {
+                reason_code: "quota_state_unavailable".into(),
+            },
+        }
+    }
+    fn commit(&self, tenant_id: &str, operation_key: &str) {
+        if tenant_id.trim().is_empty() || operation_key.is_empty() {
+            return;
+        }
+        let _ = futures::executor::block_on(self.billing.commit(kura_billing::ResolveInput {
+            tenant_id: tenant_id.trim().to_string(),
+            category: kura_billing::Category::RUN_LAUNCHES.into(),
+            operation_key: operation_key.to_string(),
+            amount: 1,
+            reason_code: "swarm_child_completed".into(),
+            reason: "swarm child produced a result".into(),
+            actor_principal_id: String::new(),
+        }));
+    }
+    fn release(&self, tenant_id: &str, operation_key: &str, reason: &str) {
+        if tenant_id.trim().is_empty() || operation_key.is_empty() {
+            return;
+        }
+        let _ = futures::executor::block_on(self.billing.release(kura_billing::ResolveInput {
+            tenant_id: tenant_id.trim().to_string(),
+            category: kura_billing::Category::RUN_LAUNCHES.into(),
+            operation_key: operation_key.to_string(),
+            amount: 1,
+            reason_code: format!("swarm_child_{reason}"),
+            reason: "swarm child produced no result".into(),
+            actor_principal_id: String::new(),
+        }));
+    }
+}
+
+/// Stage 9.4: routes the browser worker's health into the capability
+/// supervisor, so a crashing or hung worker shows up (with backoff and
+/// circuit-break) at `/v1/capabilities` like any other supervised process.
+pub struct BrowserWorkerSupervisor(pub Arc<kura_capabilities::Supervisor>);
+
+impl BrowserWorkerSupervisor {
+    /// Boot-time restore replaces the supervisor registry wholesale, so the
+    /// build-time registration may be gone by the first call; re-register
+    /// on demand so a report never lands on an unknown capability.
+    fn ensure_registered(&self, capability_id: &str) {
+        if self.0.get(capability_id).is_none() {
+            let _ = self.0.register(kura_capabilities::RegisterInput {
+                capability_id: capability_id.to_string(),
+                kind: kura_computeruse::subprocess_driver::KIND_BROWSER_WORKER.to_string(),
+                display_name: "browser worker".to_string(),
+            });
+        }
+    }
+}
+
+impl kura_computeruse::WorkerSupervisor for BrowserWorkerSupervisor {
+    fn report_healthy(&self, capability_id: &str) {
+        self.ensure_registered(capability_id);
+        let _ = self.0.report_health(
+            capability_id,
+            kura_capabilities::ReportHealthInput {
+                status: kura_capabilities::Status::Healthy,
+            },
+        );
+    }
+    fn report_failure(&self, capability_id: &str, reason: &str) {
+        self.ensure_registered(capability_id);
+        let _ = self.0.report_failure(
+            capability_id,
+            kura_capabilities::ReportFailureInput {
+                reason: reason.to_string(),
+            },
+        );
     }
 }

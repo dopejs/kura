@@ -29,8 +29,14 @@ pub fn connector_diagnostic_state_changed(input: ConnectorDiagnosticStateChanged
         tenant_id: input.tenant_id.clone(),
         category: "connector".to_string(),
         name: "connector.diagnostic_state_changed".to_string(),
-        scope: Scope { connector_id: input.connector_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "connector_diagnostic_state".to_string(), id: input.diagnostic_state_id.clone() },
+        scope: Scope {
+            connector_id: input.connector_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "connector_diagnostic_state".to_string(),
+            id: input.diagnostic_state_id.clone(),
+        },
         payload: payload![
             "tenantId" => input.tenant_id,
             "diagnosticStateId" => input.diagnostic_state_id,
@@ -62,13 +68,21 @@ pub struct ConnectorDiagnosticRedactionFailedInput {
 
 /// Go: `ConnectorDiagnosticRedactionFailed`.
 #[must_use]
-pub fn connector_diagnostic_redaction_failed(input: ConnectorDiagnosticRedactionFailedInput) -> Event {
+pub fn connector_diagnostic_redaction_failed(
+    input: ConnectorDiagnosticRedactionFailedInput,
+) -> Event {
     Event {
         tenant_id: input.tenant_id.clone(),
         category: "connector".to_string(),
         name: "connector.diagnostic_redaction_failed".to_string(),
-        scope: Scope { connector_id: input.connector_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "connector_diagnostic_redaction_failure".to_string(), id: input.redaction_failure_id.clone() },
+        scope: Scope {
+            connector_id: input.connector_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "connector_diagnostic_redaction_failure".to_string(),
+            id: input.redaction_failure_id.clone(),
+        },
         payload: payload![
             "tenantId" => input.tenant_id,
             "connectorId" => input.connector_id,

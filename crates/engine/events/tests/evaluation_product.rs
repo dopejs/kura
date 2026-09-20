@@ -9,7 +9,11 @@ fn now() -> chrono::DateTime<Utc> {
 }
 
 fn payload_str<'a>(event: &'a Event, key: &str) -> &'a str {
-    event.payload.get(key).and_then(|v| v.as_str()).unwrap_or_default()
+    event
+        .payload
+        .get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
 }
 
 // ---- evaluation_product_test.go ports ----
@@ -39,7 +43,10 @@ fn evaluation_product_audit_event_construction() {
     assert_eq!(event.resource.id, "candidate_1");
     assert_eq!(payload_str(&event, "retentionApplicationId"), "retention_1");
     assert_eq!(payload_str(&event, "targetKind"), "discovered_candidate");
-    assert_eq!(payload_str(&event, "createdAt"), now.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true));
+    assert_eq!(
+        payload_str(&event, "createdAt"),
+        now.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    );
 }
 
 #[test]
@@ -96,7 +103,10 @@ fn evaluation_fixture_event_construction() {
     assert_eq!(payload_str(&event, "revisionId"), "revision_1");
     assert_eq!(payload_str(&event, "reviewState"), "draft");
     assert_eq!(payload_str(&event, "redactionStatus"), "redacted");
-    assert_eq!(event.payload["sourceEvidenceRefs"], serde_json::json!(["evidence_1"]));
+    assert_eq!(
+        event.payload["sourceEvidenceRefs"],
+        serde_json::json!(["evidence_1"])
+    );
 }
 
 #[test]
@@ -137,14 +147,20 @@ fn evaluation_campaign_dashboard_and_inspection_event_construction() {
             ..Default::default()
         },
     );
-    assert_eq!(dashboard.name, EVALUATION_DASHBOARD_PROJECTION_GENERATED_NAME);
+    assert_eq!(
+        dashboard.name,
+        EVALUATION_DASHBOARD_PROJECTION_GENERATED_NAME
+    );
     assert_eq!(dashboard.resource.kind, "dashboard_projection");
     assert_eq!(payload_str(&dashboard, "projectionId"), "projection_1");
     assert_eq!(
         dashboard.payload["windowStart"],
         (now - chrono::Duration::hours(1)).to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
     );
-    assert_eq!(dashboard.payload["generatedAt"], now.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true));
+    assert_eq!(
+        dashboard.payload["generatedAt"],
+        now.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    );
 
     let inspection = evaluation_tool_call_inspection_event(
         EVALUATION_TOOL_CALL_INSPECTION_GENERATED_NAME,
@@ -160,11 +176,20 @@ fn evaluation_campaign_dashboard_and_inspection_event_construction() {
             ..Default::default()
         },
     );
-    assert_eq!(inspection.name, EVALUATION_TOOL_CALL_INSPECTION_GENERATED_NAME);
+    assert_eq!(
+        inspection.name,
+        EVALUATION_TOOL_CALL_INSPECTION_GENERATED_NAME
+    );
     assert_eq!(inspection.resource.kind, "tool_call_inspection");
-    assert_eq!(payload_str(&inspection, "classification"), kura_evaluation::INSPECTION_MATCHED);
+    assert_eq!(
+        payload_str(&inspection, "classification"),
+        kura_evaluation::INSPECTION_MATCHED
+    );
     assert_eq!(payload_str(&inspection, "redactionStatus"), "clean");
-    assert_eq!(payload_str(&inspection, "campaignItemId"), "campaign_item_1");
+    assert_eq!(
+        payload_str(&inspection, "campaignItemId"),
+        "campaign_item_1"
+    );
 }
 
 // ---- additional behavioral coverage ----
@@ -267,7 +292,10 @@ fn evaluation_events_omit_empty_optional_payload_fields() {
     );
     assert!(dashboard.payload.get("windowStart").is_none());
     assert!(dashboard.payload.get("windowEnd").is_none());
-    assert_eq!(dashboard.payload["generatedAt"], now.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true));
+    assert_eq!(
+        dashboard.payload["generatedAt"],
+        now.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    );
 }
 
 // ---- serde round-trip coverage ----

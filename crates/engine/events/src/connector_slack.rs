@@ -46,8 +46,14 @@ pub fn connector_slack_setup_validated(input: ConnectorSlackSetupValidatedInput)
     Event {
         category: "connector".to_string(),
         name: "connector.slack_setup_validated".to_string(),
-        scope: Scope { connector_id: input.connector_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "slack_hosted_setup".to_string(), id: input.connector_id.clone() },
+        scope: Scope {
+            connector_id: input.connector_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "slack_hosted_setup".to_string(),
+            id: input.connector_id.clone(),
+        },
         payload: payload![
             "tenantId" => input.tenant_id,
             "connectorId" => input.connector_id,
@@ -68,12 +74,20 @@ pub fn connector_slack_setup_validated(input: ConnectorSlackSetupValidatedInput)
 /// Go: `ConnectorSlackRouteOutcomeRecorded` — shares the connector
 /// route-outcome contract with Matrix.
 #[must_use]
-pub fn connector_slack_route_outcome_recorded(input: ConnectorSlackRouteOutcomeRecordedInput) -> Event {
+pub fn connector_slack_route_outcome_recorded(
+    input: ConnectorSlackRouteOutcomeRecordedInput,
+) -> Event {
     Event {
         category: "connector".to_string(),
         name: "connector.route_outcome_recorded".to_string(),
-        scope: Scope { connector_id: input.connector_id.clone(), ..Scope::default() },
-        resource: Resource { kind: "connector_route_outcome".to_string(), id: input.message_id.clone() },
+        scope: Scope {
+            connector_id: input.connector_id.clone(),
+            ..Scope::default()
+        },
+        resource: Resource {
+            kind: "connector_route_outcome".to_string(),
+            id: input.message_id.clone(),
+        },
         payload: payload![
             "tenantId" => input.tenant_id,
             "connectorId" => input.connector_id,

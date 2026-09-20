@@ -104,7 +104,12 @@ impl FixtureRepo {
         at: DateTime<Utc>,
     ) -> QuotaPeriod {
         let (start, end) = period_for(&definition.period_kind, at);
-        let key = format!("{}:{}:{}", tenant_id, definition.category, start.to_rfc3339());
+        let key = format!(
+            "{}:{}:{}",
+            tenant_id,
+            definition.category,
+            start.to_rfc3339()
+        );
         let mut state = self.state.lock();
         state
             .periods
@@ -124,7 +129,11 @@ impl FixtureRepo {
 
     pub(crate) fn save_counter(&self, counter: UsageCounter) {
         self.state.lock().counters.insert(
-            counter_key(&counter.tenant_id, &counter.category, &counter.quota_period_id),
+            counter_key(
+                &counter.tenant_id,
+                &counter.category,
+                &counter.quota_period_id,
+            ),
             counter,
         );
     }
@@ -350,10 +359,7 @@ impl Repository for FixtureRepo {
     }
 
     fn save_plan(&self, plan: TenantPlan) -> BoxFuture<'_, Result<()>> {
-        self.state
-            .lock()
-            .plans
-            .insert(plan.tenant_id.clone(), plan);
+        self.state.lock().plans.insert(plan.tenant_id.clone(), plan);
         Box::pin(async { Ok(()) })
     }
 

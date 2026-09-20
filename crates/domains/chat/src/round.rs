@@ -72,8 +72,16 @@ pub(crate) struct DispatcherProvider {
 }
 
 impl DispatcherProvider {
-    pub fn new(context: RoundContext, log: Arc<Mutex<RoundLog>>, on_first_round: OnFirstRound) -> Self {
-        Self { context, log, on_first_round }
+    pub fn new(
+        context: RoundContext,
+        log: Arc<Mutex<RoundLog>>,
+        on_first_round: OnFirstRound,
+    ) -> Self {
+        Self {
+            context,
+            log,
+            on_first_round,
+        }
     }
 }
 
@@ -109,16 +117,18 @@ pub(crate) fn to_messages(prompt: &Prompt) -> Vec<Message> {
                 content: content.clone(),
                 ..Default::default()
             }),
-            ResponseItem::FunctionCall { call_id, name, arguments } => {
+            ResponseItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+            } => {
                 let call = ToolCall {
                     call_id: call_id.clone(),
                     name: name.clone(),
                     arguments: arguments.clone(),
                 };
                 match messages.last_mut() {
-                    Some(last) if last.role == MessageRole::Assistant => {
-                        last.tool_calls.push(call)
-                    }
+                    Some(last) if last.role == MessageRole::Assistant => last.tool_calls.push(call),
                     _ => messages.push(Message {
                         role: MessageRole::Assistant,
                         content: String::new(),
@@ -170,7 +180,11 @@ impl DispatcherProvider {
         // would persist every later round unhooked.
         context
             .service
-            .run_pre_dispatch_hooks(&context.input, &context.agent_profile_id, &mut dispatch_input)
+            .run_pre_dispatch_hooks(
+                &context.input,
+                &context.agent_profile_id,
+                &mut dispatch_input,
+            )
             .map_err(round_error)?;
 
         let dispatch = context
@@ -189,7 +203,10 @@ impl DispatcherProvider {
             first
         };
 
-        context.service.record_round_requested(context, &dispatch).map_err(round_error)?;
+        context
+            .service
+            .record_round_requested(context, &dispatch)
+            .map_err(round_error)?;
         if first {
             (self.on_first_round)(&dispatch).map_err(round_error)?;
         }
@@ -206,7 +223,10 @@ impl DispatcherProvider {
                 (failed.dispatch, Some(message))
             }
         };
-        context.service.record_round_settled(context, &settled).map_err(round_error)?;
+        context
+            .service
+            .record_round_settled(context, &settled)
+            .map_err(round_error)?;
 
         // The loop reads these: text it accumulates, calls it runs, and
         // `Completed` to end the round. A settled-but-failed round yields no

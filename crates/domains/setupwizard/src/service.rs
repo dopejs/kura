@@ -15,8 +15,8 @@ use crate::catalog::{catalog_targets, target_by_id};
 use crate::helpers::*;
 use crate::permissions::{require_inspection, require_mutation};
 use crate::probe::{
-    diagnostic_for_session, diagnostic_stage_for_operation,
     default_diagnostic_result_id, default_diagnostic_run_id, default_diagnostic_source_kind,
+    diagnostic_for_session, diagnostic_stage_for_operation,
 };
 use crate::types::*;
 
@@ -33,7 +33,10 @@ pub trait Store: Send + Sync {
         tenant_id: &str,
         session_id: &str,
     ) -> BoxFuture<'_, Result<Option<SetupSession>, SetupError>>;
-    fn list_setup_sessions(&self, tenant_id: &str) -> BoxFuture<'_, Result<Vec<SetupSession>, SetupError>>;
+    fn list_setup_sessions(
+        &self,
+        tenant_id: &str,
+    ) -> BoxFuture<'_, Result<Vec<SetupSession>, SetupError>>;
     fn append_setup_attempt(&self, attempt: SetupAttempt) -> BoxFuture<'_, Result<(), SetupError>>;
     fn list_setup_attempts(
         &self,
@@ -43,29 +46,51 @@ pub trait Store: Send + Sync {
 }
 
 pub trait SecretManager: Send + Sync {
-    fn create(&self, input: kura_secrets::CreateInput)
-    -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>>;
-    fn rotate(&self, input: kura_secrets::RotateInput)
-    -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>>;
-    fn get(&self, tenant_id: &str, secret_ref: &str)
-    -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>>;
-    fn disable(&self, input: kura_secrets::DisableInput)
-    -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>>;
+    fn create(
+        &self,
+        input: kura_secrets::CreateInput,
+    ) -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>>;
+    fn rotate(
+        &self,
+        input: kura_secrets::RotateInput,
+    ) -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>>;
+    fn get(
+        &self,
+        tenant_id: &str,
+        secret_ref: &str,
+    ) -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>>;
+    fn disable(
+        &self,
+        input: kura_secrets::DisableInput,
+    ) -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>>;
 }
 
 impl SecretManager for kura_secrets::Manager {
-    fn create(&self, input: kura_secrets::CreateInput) -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>> {
+    fn create(
+        &self,
+        input: kura_secrets::CreateInput,
+    ) -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>> {
         Box::pin(async move { Ok(self.create(input).await?) })
     }
-    fn rotate(&self, input: kura_secrets::RotateInput) -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>> {
+    fn rotate(
+        &self,
+        input: kura_secrets::RotateInput,
+    ) -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>> {
         Box::pin(async move { Ok(self.rotate(input).await?) })
     }
-    fn get(&self, tenant_id: &str, secret_ref: &str) -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>> {
+    fn get(
+        &self,
+        tenant_id: &str,
+        secret_ref: &str,
+    ) -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>> {
         let tenant_id = tenant_id.to_string();
         let secret_ref = secret_ref.to_string();
         Box::pin(async move { Ok(self.get(&tenant_id, &secret_ref).await?) })
     }
-    fn disable(&self, input: kura_secrets::DisableInput) -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>> {
+    fn disable(
+        &self,
+        input: kura_secrets::DisableInput,
+    ) -> BoxFuture<'_, Result<kura_secrets::TenantSecret, SetupError>> {
         Box::pin(async move { Ok(self.disable(input).await?) })
     }
 }
@@ -79,7 +104,10 @@ pub trait DiagnosticProbe: Send + Sync {
 }
 
 pub trait AuditRecorder: Send + Sync {
-    fn record_setup_audit(&self, record: SetupAuditRecord) -> BoxFuture<'_, Result<String, SetupError>>;
+    fn record_setup_audit(
+        &self,
+        record: SetupAuditRecord,
+    ) -> BoxFuture<'_, Result<String, SetupError>>;
 }
 
 pub trait SubmittedSecretRecorder: Send + Sync {
@@ -91,7 +119,11 @@ pub trait SubmittedSecretRecorder: Send + Sync {
 }
 
 pub trait OAuthCallbackRecorder: Send + Sync {
-    fn record_oauth_setup(&self, session: SetupSession, input: OAuthCallbackInput) -> BoxFuture<'_, Result<(), SetupError>>;
+    fn record_oauth_setup(
+        &self,
+        session: SetupSession,
+        input: OAuthCallbackInput,
+    ) -> BoxFuture<'_, Result<(), SetupError>>;
 }
 
 pub trait OAuthStartURLProvider: Send + Sync {
@@ -210,11 +242,14 @@ pub struct Service {
 #[must_use]
 pub fn new_service(deps: ServiceDependencies) -> Service {
     let now = deps.now.unwrap_or_else(|| Arc::new(Utc::now));
-    let store = deps.store.unwrap_or_else(|| Arc::new(MemoryStore::default()));
+    let store = deps
+        .store
+        .unwrap_or_else(|| Arc::new(MemoryStore::default()));
     let diagnostics = deps.diagnostics.or_else(|| {
         deps.secrets.as_ref().map(|secrets| {
-            Arc::new(crate::probe::DefaultDiagnosticProbe::new(Some(secrets.clone())))
-                as Arc<dyn DiagnosticProbe>
+            Arc::new(crate::probe::DefaultDiagnosticProbe::new(Some(
+                secrets.clone(),
+            ))) as Arc<dyn DiagnosticProbe>
         })
     });
     Service {
@@ -234,10 +269,16 @@ impl Service {
         (self.now)()
     }
 
-    pub async fn list_targets(&self, tenant_context: &TenantContext) -> Result<Vec<SetupTarget>, SetupError> {
+    pub async fn list_targets(
+        &self,
+        tenant_context: &TenantContext,
+    ) -> Result<Vec<SetupTarget>, SetupError> {
         require_inspection(tenant_context)?;
         let mut targets = catalog_targets(&tenant_context.tenant_id);
-        let sessions = self.store.list_setup_sessions(&tenant_context.tenant_id).await?;
+        let sessions = self
+            .store
+            .list_setup_sessions(&tenant_context.tenant_id)
+            .await?;
         let by_target: std::collections::HashMap<String, SetupSession> = sessions
             .into_iter()
             .map(|s| (s.target_id.clone(), s))
@@ -252,12 +293,21 @@ impl Service {
         Ok(targets)
     }
 
-    pub async fn list_sessions(&self, tenant_context: &TenantContext) -> Result<Vec<SetupSession>, SetupError> {
+    pub async fn list_sessions(
+        &self,
+        tenant_context: &TenantContext,
+    ) -> Result<Vec<SetupSession>, SetupError> {
         require_inspection(tenant_context)?;
-        self.store.list_setup_sessions(&tenant_context.tenant_id).await
+        self.store
+            .list_setup_sessions(&tenant_context.tenant_id)
+            .await
     }
 
-    pub async fn get(&self, tenant_context: &TenantContext, session_id: &str) -> Result<SetupSession, SetupError> {
+    pub async fn get(
+        &self,
+        tenant_context: &TenantContext,
+        session_id: &str,
+    ) -> Result<SetupSession, SetupError> {
         require_inspection(tenant_context)?;
         let session = self
             .store
@@ -280,7 +330,11 @@ impl Service {
         }
         let now = self.now();
         let mut session = SetupSession {
-            setup_session_id: session_id(&input.tenant_context.tenant_id, &target.target_id, target.setup_style),
+            setup_session_id: session_id(
+                &input.tenant_context.tenant_id,
+                &target.target_id,
+                target.setup_style,
+            ),
             tenant_id: input.tenant_context.tenant_id.clone(),
             actor_principal_id: input.tenant_context.principal_id.clone(),
             target_id: target.target_id.clone(),
@@ -319,8 +373,14 @@ impl Service {
             session.created_at = existing.created_at;
             session.resource_refs = existing.resource_refs;
         }
-        self.transition(session, SetupOperation::Start, SetupState::InProgress, "", None)
-            .await
+        self.transition(
+            session,
+            SetupOperation::Start,
+            SetupState::InProgress,
+            "",
+            None,
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -365,7 +425,8 @@ impl Service {
             created_at: now,
         };
         session.current_attempt_id = attempt.attempt_id.clone();
-        if contains_forbidden_evidence(&session, &[]) || contains_forbidden_evidence(&attempt, &[]) {
+        if contains_forbidden_evidence(&session, &[]) || contains_forbidden_evidence(&attempt, &[])
+        {
             session = fail_closed(session, REASON_REDACTION_FAILED_CLOSED);
             attempt.to_state = session.state;
             attempt.reason_code = session.reason_code.clone();
@@ -398,12 +459,18 @@ impl Service {
             .get_setup_session(&tc.tenant_id, session_id_value.trim())
             .await?
             .ok_or(SetupError::SessionNotFound)?;
-        session.actor_principal_id = first_non_empty(&[&tc.principal_id, &session.actor_principal_id]);
+        session.actor_principal_id =
+            first_non_empty(&[&tc.principal_id, &session.actor_principal_id]);
         Ok(session)
     }
 
-    pub async fn submit_secret(&self, input: SubmitSecretInput) -> Result<SetupSession, SetupError> {
-        let mut session = self.load_for_mutation(&input.tenant_context, &input.session_id).await?;
+    pub async fn submit_secret(
+        &self,
+        input: SubmitSecretInput,
+    ) -> Result<SetupSession, SetupError> {
+        let mut session = self
+            .load_for_mutation(&input.tenant_context, &input.session_id)
+            .await?;
         if session.setup_style != SetupStyle::SubmittedSecret {
             return Err(SetupError::UnsupportedTarget);
         }
@@ -423,7 +490,13 @@ impl Service {
             let reason = session.reason_code.clone();
             let evidence = session.redacted_evidence.clone();
             return self
-                .transition(session, SetupOperation::SubmitSecret, state, &reason, Some(evidence))
+                .transition(
+                    session,
+                    SetupOperation::SubmitSecret,
+                    state,
+                    &reason,
+                    Some(evidence),
+                )
                 .await;
         }
         let mut version_id = "redacted_version".to_string();
@@ -475,16 +548,29 @@ impl Service {
             .await?;
         let evidence = session.redacted_evidence.clone();
         let session = self
-            .transition(session, SetupOperation::SubmitSecret, state, &reason, Some(evidence))
+            .transition(
+                session,
+                SetupOperation::SubmitSecret,
+                state,
+                &reason,
+                Some(evidence),
+            )
             .await?;
         if let Some(recorder) = &self.submitted_secret_recorder {
-            recorder.record_submitted_secret_setup(session.clone(), input).await?;
+            recorder
+                .record_submitted_secret_setup(session.clone(), input)
+                .await?;
         }
         Ok(session)
     }
 
-    pub async fn start_oauth(&self, input: OAuthStartInput) -> Result<OAuthStartResult, SetupError> {
-        let mut session = self.load_for_mutation(&input.tenant_context, &input.session_id).await?;
+    pub async fn start_oauth(
+        &self,
+        input: OAuthStartInput,
+    ) -> Result<OAuthStartResult, SetupError> {
+        let mut session = self
+            .load_for_mutation(&input.tenant_context, &input.session_id)
+            .await?;
         if session.setup_style != SetupStyle::OAuth {
             return Err(SetupError::UnsupportedTarget);
         }
@@ -497,8 +583,14 @@ impl Service {
                 .await?;
         }
         let mut evidence = std::collections::HashMap::new();
-        evidence.insert("redactionRule".to_string(), "oauth_start_metadata_only".to_string());
-        evidence.insert("redirectRoute".to_string(), input.redirect_route.trim().to_string());
+        evidence.insert(
+            "redactionRule".to_string(),
+            "oauth_start_metadata_only".to_string(),
+        );
+        evidence.insert(
+            "redirectRoute".to_string(),
+            input.redirect_route.trim().to_string(),
+        );
         let updated = self
             .transition(
                 session,
@@ -515,8 +607,13 @@ impl Service {
         })
     }
 
-    pub async fn complete_oauth(&self, mut input: OAuthCallbackInput) -> Result<SetupSession, SetupError> {
-        let mut session = self.load_for_mutation(&input.tenant_context, &input.session_id).await?;
+    pub async fn complete_oauth(
+        &self,
+        mut input: OAuthCallbackInput,
+    ) -> Result<SetupSession, SetupError> {
+        let mut session = self
+            .load_for_mutation(&input.tenant_context, &input.session_id)
+            .await?;
         if session.setup_style != SetupStyle::OAuth {
             return Err(SetupError::UnsupportedTarget);
         }
@@ -537,13 +634,21 @@ impl Service {
                 route: String::new(),
             },
         );
-        let (session, state, reason) = if state == SetupState::Ready || state == SetupState::Degraded {
-            self.probe_readiness(session, SetupOperation::OAuthCallback).await?
-        } else {
-            (session, state, reason)
-        };
+        let (session, state, reason) =
+            if state == SetupState::Ready || state == SetupState::Degraded {
+                self.probe_readiness(session, SetupOperation::OAuthCallback)
+                    .await?
+            } else {
+                (session, state, reason)
+            };
         let updated = self
-            .transition(session, SetupOperation::OAuthCallback, state, &reason, Some(evidence))
+            .transition(
+                session,
+                SetupOperation::OAuthCallback,
+                state,
+                &reason,
+                Some(evidence),
+            )
             .await?;
         if let Some(recorder) = &self.oauth_callback_recorder {
             recorder.record_oauth_setup(updated.clone(), input).await?;
@@ -552,31 +657,66 @@ impl Service {
     }
 
     pub async fn retry(&self, input: ReplaceInput) -> Result<SetupSession, SetupError> {
-        let session = self.load_for_mutation(&input.tenant_context, &input.session_id).await?;
+        let session = self
+            .load_for_mutation(&input.tenant_context, &input.session_id)
+            .await?;
         let mut evidence = std::collections::HashMap::new();
-        evidence.insert("redactionRule".to_string(), "retry_metadata_only".to_string());
-        self.transition(session, SetupOperation::Retry, SetupState::InProgress, "", Some(evidence))
-            .await
+        evidence.insert(
+            "redactionRule".to_string(),
+            "retry_metadata_only".to_string(),
+        );
+        self.transition(
+            session,
+            SetupOperation::Retry,
+            SetupState::InProgress,
+            "",
+            Some(evidence),
+        )
+        .await
     }
 
     pub async fn replace(&self, input: ReplaceInput) -> Result<SetupSession, SetupError> {
-        let session = self.load_for_mutation(&input.tenant_context, &input.session_id).await?;
+        let session = self
+            .load_for_mutation(&input.tenant_context, &input.session_id)
+            .await?;
         let mut evidence = std::collections::HashMap::new();
-        evidence.insert("redactionRule".to_string(), "replace_metadata_only".to_string());
-        self.transition(session, SetupOperation::Replace, SetupState::InProgress, "", Some(evidence))
-            .await
+        evidence.insert(
+            "redactionRule".to_string(),
+            "replace_metadata_only".to_string(),
+        );
+        self.transition(
+            session,
+            SetupOperation::Replace,
+            SetupState::InProgress,
+            "",
+            Some(evidence),
+        )
+        .await
     }
 
     pub async fn cancel(&self, input: ReplaceInput) -> Result<SetupSession, SetupError> {
-        let session = self.load_for_mutation(&input.tenant_context, &input.session_id).await?;
+        let session = self
+            .load_for_mutation(&input.tenant_context, &input.session_id)
+            .await?;
         let mut evidence = std::collections::HashMap::new();
-        evidence.insert("redactionRule".to_string(), "cancel_metadata_only".to_string());
-        self.transition(session, SetupOperation::Cancel, SetupState::Cancelled, REASON_USER_CANCELLED, Some(evidence))
-            .await
+        evidence.insert(
+            "redactionRule".to_string(),
+            "cancel_metadata_only".to_string(),
+        );
+        self.transition(
+            session,
+            SetupOperation::Cancel,
+            SetupState::Cancelled,
+            REASON_USER_CANCELLED,
+            Some(evidence),
+        )
+        .await
     }
 
     pub async fn disable(&self, input: DisableInput) -> Result<SetupSession, SetupError> {
-        let session = self.load_for_mutation(&input.tenant_context, &input.session_id).await?;
+        let session = self
+            .load_for_mutation(&input.tenant_context, &input.session_id)
+            .await?;
         if let Some(secrets) = &self.secrets {
             if session.setup_style == SetupStyle::SubmittedSecret {
                 for reference in &session.resource_refs {
@@ -593,14 +733,27 @@ impl Service {
             }
         }
         let mut evidence = std::collections::HashMap::new();
-        evidence.insert("redactionRule".to_string(), "disable_metadata_only".to_string());
+        evidence.insert(
+            "redactionRule".to_string(),
+            "disable_metadata_only".to_string(),
+        );
         evidence.insert("disabledReason".to_string(), input.disabled_reason.clone());
-        self.transition(session, SetupOperation::Disable, SetupState::Disabled, REASON_DISABLED_BY_USER, Some(evidence))
-            .await
+        self.transition(
+            session,
+            SetupOperation::Disable,
+            SetupState::Disabled,
+            REASON_DISABLED_BY_USER,
+            Some(evidence),
+        )
+        .await
     }
 
     #[must_use]
-    pub fn dependent_use_decision(&self, session: &SetupSession, capability: &str) -> DependentUseDecision {
+    pub fn dependent_use_decision(
+        &self,
+        session: &SetupSession,
+        capability: &str,
+    ) -> DependentUseDecision {
         let mut mode = SafeUseMode::Blocked;
         let mut allowed: Vec<String> = Vec::new();
         let mut reason = session.reason_code.clone();
@@ -634,7 +787,11 @@ impl Service {
         }
     }
 
-    pub async fn diagnostics(&self, tenant_context: &TenantContext, session_id: &str) -> Result<Vec<SetupDiagnostic>, SetupError> {
+    pub async fn diagnostics(
+        &self,
+        tenant_context: &TenantContext,
+        session_id: &str,
+    ) -> Result<Vec<SetupDiagnostic>, SetupError> {
         let session = self.get(tenant_context, session_id).await?;
         Ok(vec![diagnostic_for_session(&session, self.now())])
     }
@@ -677,8 +834,14 @@ fn map_oauth_result(result: OAuthResult) -> (SetupState, String) {
         OAuthResult::Abandoned => (SetupState::Cancelled, REASON_OAUTH_ABANDONED.to_string()),
         OAuthResult::Expired => (SetupState::ActionRequired, REASON_OAUTH_EXPIRED.to_string()),
         OAuthResult::Replay => (SetupState::ActionRequired, REASON_OAUTH_REPLAY.to_string()),
-        OAuthResult::TenantMismatch => (SetupState::ActionRequired, REASON_TENANT_MISMATCH.to_string()),
-        OAuthResult::ProviderError => (SetupState::Unavailable, REASON_PROVIDER_UNAVAILABLE.to_string()),
+        OAuthResult::TenantMismatch => (
+            SetupState::ActionRequired,
+            REASON_TENANT_MISMATCH.to_string(),
+        ),
+        OAuthResult::ProviderError => (
+            SetupState::Unavailable,
+            REASON_PROVIDER_UNAVAILABLE.to_string(),
+        ),
     }
 }
 
@@ -735,13 +898,20 @@ impl Store for MemoryStore {
         Box::pin(async { Ok(()) })
     }
 
-    fn get_setup_session(&self, tenant_id: &str, session_id: &str) -> BoxFuture<'_, Result<Option<SetupSession>, SetupError>> {
+    fn get_setup_session(
+        &self,
+        tenant_id: &str,
+        session_id: &str,
+    ) -> BoxFuture<'_, Result<Option<SetupSession>, SetupError>> {
         let key = format!("{}::{}", tenant_id.trim(), session_id.trim());
         let result = self.inner.read().sessions.get(&key).cloned();
         Box::pin(async move { Ok(result) })
     }
 
-    fn list_setup_sessions(&self, tenant_id: &str) -> BoxFuture<'_, Result<Vec<SetupSession>, SetupError>> {
+    fn list_setup_sessions(
+        &self,
+        tenant_id: &str,
+    ) -> BoxFuture<'_, Result<Vec<SetupSession>, SetupError>> {
         let tenant_id = tenant_id.trim().to_string();
         let inner = self.inner.read();
         let mut items: Vec<SetupSession> = inner
@@ -756,13 +926,28 @@ impl Store for MemoryStore {
 
     fn append_setup_attempt(&self, attempt: SetupAttempt) -> BoxFuture<'_, Result<(), SetupError>> {
         let key = format!("{}::{}", attempt.tenant_id, attempt.setup_session_id);
-        self.inner.write().attempts.entry(key).or_default().push(attempt);
+        self.inner
+            .write()
+            .attempts
+            .entry(key)
+            .or_default()
+            .push(attempt);
         Box::pin(async { Ok(()) })
     }
 
-    fn list_setup_attempts(&self, tenant_id: &str, session_id: &str) -> BoxFuture<'_, Result<Vec<SetupAttempt>, SetupError>> {
+    fn list_setup_attempts(
+        &self,
+        tenant_id: &str,
+        session_id: &str,
+    ) -> BoxFuture<'_, Result<Vec<SetupAttempt>, SetupError>> {
         let key = format!("{}::{}", tenant_id.trim(), session_id.trim());
-        let result = self.inner.read().attempts.get(&key).cloned().unwrap_or_default();
+        let result = self
+            .inner
+            .read()
+            .attempts
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
         Box::pin(async move { Ok(result) })
     }
 }

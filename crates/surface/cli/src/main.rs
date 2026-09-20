@@ -70,6 +70,14 @@ enum DaemonCommand {
     Stop,
     /// Show daemon status (pid + /healthz + /version)
     Status,
+    /// Rehearse an upgrade: run this binary against an isolated snapshot of
+    /// the data directory (migrations, plugin profile, every manager) without
+    /// touching the real state. Prints a JSON report; exit 1 on findings.
+    RehearseUpgrade {
+        /// Keep the scratch directory even when the rehearsal passes
+        #[arg(long)]
+        keep: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -93,6 +101,7 @@ fn main() -> ExitCode {
         Command::Daemon(DaemonCommand::Start) => daemon_start(),
         Command::Daemon(DaemonCommand::Stop) => daemon_stop(),
         Command::Daemon(DaemonCommand::Status) => daemon_status(),
+        Command::Daemon(DaemonCommand::RehearseUpgrade { keep }) => daemon_rehearse_upgrade(keep),
         Command::Tui { args } => launch_tui(&args),
         Command::Web { port, dir, no_open } => serve_web(port, dir, no_open),
         Command::Config(ConfigCommand::Show) => config_show(),
@@ -123,6 +132,17 @@ fn daemon_run() -> Result<(), AnyError> {
         app.serve().await?;
         Ok::<(), AnyError>(())
     })
+}
+
+fn daemon_rehearse_upgrade(keep: bool) -> Result<(), AnyError> {
+    let config = kura_config::load()?;
+    let report = kura_app::rehearse_upgrade(&config, keep)?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    if report.passed {
+        Ok(())
+    } else {
+        Err(format!("rehearsal failed with {} finding(s)", report.findings.len()).into())
+    }
 }
 
 fn pid_file(data_dir: &str) -> PathBuf {

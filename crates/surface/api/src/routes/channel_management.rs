@@ -40,8 +40,8 @@ use kura_connectors::{
     ConnectorsError, EnablementMutationResult, EnablementState, FreshnessState,
     ManagementActionKind, ManagementState, ProjectionInput, RedactionStatus, RemediationOwner,
     RepairAction, Status, build_connector_page, build_connector_projection,
-    build_support_evidence_bundle, capability_profile_for_kind, default_route_policy,
-    freshness_at, latest_diagnostic, management_state_for_connector, normalize_route_policy,
+    build_support_evidence_bundle, capability_profile_for_kind, default_route_policy, freshness_at,
+    latest_diagnostic, management_state_for_connector, normalize_route_policy,
     retry_safety_for_repair_action, terminal_state_for_repair_action,
 };
 use kura_events::{
@@ -235,13 +235,16 @@ async fn connector_diagnostics(
         tenant.as_ref().map(|e| &e.0.0),
         &connector_id,
         "channel_management.diagnostics",
-        &[Permission::CredentialsInspect, Permission::IntegrationDiagnosticsRead],
+        &[
+            Permission::CredentialsInspect,
+            Permission::IntegrationDiagnosticsRead,
+        ],
     ) else {
         return Ok(channel_management_denial());
     };
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_connector_diagnostic_states(&tc.tenant_id, &connector_id, Utc::now())
         .map_err(ApiError::from_store)?;
     Ok((StatusCode::OK, AxumJson(json!({ "items": items }))))
@@ -270,7 +273,10 @@ async fn connector_disable(
     let mut result: Option<EnablementMutationResult> = None;
     let mut persistence_error: Option<String> = None;
     let mutation = supervisor.with_connector_mutation(&connector_id, || {
-        if supervisor.get_for_tenant(&connector_id, &tc.tenant_id).is_none() {
+        if supervisor
+            .get_for_tenant(&connector_id, &tc.tenant_id)
+            .is_none()
+        {
             return Err(ConnectorsError::ConnectorNotFound);
         }
         let now = Utc::now();
@@ -303,7 +309,11 @@ async fn connector_disable(
             audit_event_id: audit.audit_event_id.clone(),
             ..Default::default()
         };
-        if let Err(err) = state.store.lock().save_channel_connector_enablement_state(&enablement) {
+        if let Err(err) = state
+            .store
+            .lock()
+            .save_channel_connector_enablement_state(&enablement)
+        {
             persistence_error = Some(err);
             return Err(ConnectorsError::CoreInvariantFailed);
         }
@@ -349,8 +359,8 @@ async fn connector_re_enable(
     let supervisor = connectors_supervisor(&state)?;
     let now = Utc::now();
     let diagnostics = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_connector_diagnostic_states(&tc.tenant_id, &connector_id, now)
         .map_err(ApiError::from_store)?;
     if let Some(latest) = diagnostics.first() {
@@ -362,12 +372,13 @@ async fn connector_re_enable(
             ..Default::default()
         };
         if management_state_for_connector(&registered, Some(latest)) != ManagementState::Ready {
-            return Err(ApiError::Conflict("diagnostic state is not ready".to_string()));
+            return Err(ApiError::Conflict(
+                "diagnostic state is not ready".to_string(),
+            ));
         }
     }
-    let (policy, found) =
-        get_or_default_channel_route_policy(&state, &tc.tenant_id, &connector_id)
-            .map_err(ApiError::from_store)?;
+    let (policy, found) = get_or_default_channel_route_policy(&state, &tc.tenant_id, &connector_id)
+        .map_err(ApiError::from_store)?;
     if found && policy.validation_state != "valid" {
         return Err(ApiError::Conflict("route policy is not valid".to_string()));
     }
@@ -404,7 +415,11 @@ async fn connector_re_enable(
             validated_at: Some(now),
             audit_event_id: audit.audit_event_id.clone(),
         };
-        if let Err(err) = state.store.lock().save_channel_connector_enablement_state(&enablement) {
+        if let Err(err) = state
+            .store
+            .lock()
+            .save_channel_connector_enablement_state(&enablement)
+        {
             persistence_error = Some(err);
             return Err(ConnectorsError::CoreInvariantFailed);
         }
@@ -484,10 +499,7 @@ async fn connector_repair(
         actor_principal_id: tc.principal_id.clone(),
         action_kind,
         source_diagnostic_state_id: input.source_diagnostic_state_id,
-        status: terminal_state_for_repair_action(
-            action_kind,
-            connector.status == Status::Disabled,
-        ),
+        status: terminal_state_for_repair_action(action_kind, connector.status == Status::Disabled),
         retry_safety: Some(retry_safety_for_repair_action(action_kind)),
         remediation_owner: Some(RemediationOwner::Admin),
         started_at: now,
@@ -617,8 +629,8 @@ async fn route_policy_put(
         return Err(ApiError::from_store(err));
     }
     let stored = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_channel_route_policy(&tc.tenant_id, &connector_id)
         .map_err(ApiError::from_store)?
         .unwrap_or_else(|| saved_policy.unwrap_or_default());
@@ -645,8 +657,8 @@ async fn reply_outcomes(
         return Ok(channel_management_denial());
     };
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_channel_foreground_reply_outcomes(&tc.tenant_id, &connector_id, Utc::now())
         .map_err(ApiError::from_store)?;
     Ok((StatusCode::OK, AxumJson(json!({ "items": items }))))
@@ -669,8 +681,8 @@ async fn delivery_outcomes(
         return Ok(channel_management_denial());
     };
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_channel_background_delivery_outcomes(&tc.tenant_id, &connector_id, Utc::now())
         .map_err(ApiError::from_store)?;
     Ok((StatusCode::OK, AxumJson(json!({ "items": items }))))
@@ -698,8 +710,8 @@ async fn support_evidence(
     };
     let now = Utc::now();
     if let Some(existing) = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_latest_channel_support_evidence(&tc.tenant_id, &connector_id, now)
         .map_err(ApiError::from_store)?
     {
@@ -730,18 +742,20 @@ async fn support_evidence(
         .lock()
         .save_channel_support_evidence(&bundle)
         .map_err(ApiError::from_store)?;
-    state.event_bus.publish(connector_management_support_evidence_generated(
-        ConnectorManagementEventInput {
-            tenant_id: tc.tenant_id.clone(),
-            connector_id: connector_id.clone(),
-            evidence_id: bundle.support_evidence_id.clone(),
-            action: "channel_management.support_evidence.generated".to_string(),
-            outcome: "succeeded".to_string(),
-            reason_code: "support_evidence_generated".to_string(),
-            redaction_status: bundle.redaction_status.as_str().to_string(),
-            occurred_at: bundle.generated_at,
-        },
-    ));
+    state
+        .event_bus
+        .publish(connector_management_support_evidence_generated(
+            ConnectorManagementEventInput {
+                tenant_id: tc.tenant_id.clone(),
+                connector_id: connector_id.clone(),
+                evidence_id: bundle.support_evidence_id.clone(),
+                action: "channel_management.support_evidence.generated".to_string(),
+                outcome: "succeeded".to_string(),
+                reason_code: "support_evidence_generated".to_string(),
+                redaction_status: bundle.redaction_status.as_str().to_string(),
+                occurred_at: bundle.generated_at,
+            },
+        ));
     Ok((
         StatusCode::OK,
         AxumJson(serde_json::to_value(bundle).map_err(ApiError::from)?),
@@ -761,29 +775,31 @@ fn build_channel_connector_detail(
     connector: Connector,
 ) -> Result<ChannelConnectorDetail, String> {
     let now = Utc::now();
-    let diagnostics = state
-        .store
-        .lock()
-        .list_connector_diagnostic_states(&tc.tenant_id, &connector.connector_id, now)?;
+    let diagnostics = state.store_pool.read().list_connector_diagnostic_states(
+        &tc.tenant_id,
+        &connector.connector_id,
+        now,
+    )?;
     let projection =
         build_connector_projection(connector.clone(), latest_diagnostic(&diagnostics), now);
     let (route_policy, _found) =
         get_or_default_channel_route_policy(state, &tc.tenant_id, &connector.connector_id)?;
-    let recent_route_decisions = state
-        .store
-        .lock()
-        .list_channel_routing_decisions(&tc.tenant_id, &connector.connector_id, now)?;
+    let recent_route_decisions = state.store_pool.read().list_channel_routing_decisions(
+        &tc.tenant_id,
+        &connector.connector_id,
+        now,
+    )?;
     let foreground_reply_outcomes = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_channel_foreground_reply_outcomes(&tc.tenant_id, &connector.connector_id, now)?;
     let background_delivery = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_channel_background_delivery_outcomes(&tc.tenant_id, &connector.connector_id, now)?;
     let repair_actions = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_channel_repair_actions(&tc.tenant_id, &connector.connector_id)?;
     Ok(ChannelConnectorDetail {
         projection,
@@ -807,8 +823,8 @@ fn get_or_default_channel_route_policy(
     connector_id: &str,
 ) -> Result<(kura_connectors::RoutePolicy, bool), String> {
     if let Some(policy) = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_channel_route_policy(tenant_id, connector_id)?
     {
         return Ok((policy, true));
@@ -831,24 +847,28 @@ fn enrich_channel_support_evidence_bundle(
     let store = state.store.lock();
     let diagnostics = store.list_connector_diagnostic_states(tenant_id, connector_id, now)?;
     for item in diagnostics {
-        bundle.diagnostic_refs.push(item.diagnostic_state_id.clone());
+        bundle
+            .diagnostic_refs
+            .push(item.diagnostic_state_id.clone());
         if item.redaction_status == RedactionStatus::Failed
             || item.redaction_status == RedactionStatus::Suppressed
         {
             bundle.redaction_status = RedactionStatus::Suppressed;
             bundle.redactions.push("diagnostic_evidence".to_string());
-            state.event_bus.publish(connector_management_redaction_failed(
-                ConnectorManagementEventInput {
-                    tenant_id: tenant_id.to_string(),
-                    connector_id: connector_id.to_string(),
-                    evidence_id: item.diagnostic_state_id.clone(),
-                    action: "channel_management.support_evidence.redaction".to_string(),
-                    outcome: "suppressed".to_string(),
-                    reason_code: item.reason_code.as_str().to_string(),
-                    redaction_status: item.redaction_status.as_str().to_string(),
-                    occurred_at: now,
-                },
-            ));
+            state
+                .event_bus
+                .publish(connector_management_redaction_failed(
+                    ConnectorManagementEventInput {
+                        tenant_id: tenant_id.to_string(),
+                        connector_id: connector_id.to_string(),
+                        evidence_id: item.diagnostic_state_id.clone(),
+                        action: "channel_management.support_evidence.redaction".to_string(),
+                        outcome: "suppressed".to_string(),
+                        reason_code: item.reason_code.as_str().to_string(),
+                        redaction_status: item.redaction_status.as_str().to_string(),
+                        occurred_at: now,
+                    },
+                ));
         }
     }
     let repairs = store.list_channel_repair_actions(tenant_id, connector_id)?;
@@ -863,8 +883,8 @@ fn enrich_channel_support_evidence_bundle(
     for item in replies {
         bundle.reply_outcome_refs.push(item.reply_outcome_id);
     }
-    let deliveries = store
-        .list_channel_background_delivery_outcomes(tenant_id, connector_id, now)?;
+    let deliveries =
+        store.list_channel_background_delivery_outcomes(tenant_id, connector_id, now)?;
     for item in deliveries {
         bundle.delivery_outcome_refs.push(item.delivery_outcome_id);
     }
@@ -874,18 +894,20 @@ fn enrich_channel_support_evidence_bundle(
     }
     let expired = store.list_expired_channel_support_evidence(tenant_id, connector_id, now)?;
     for item in expired {
-        state.event_bus.publish(connector_management_retention_applied(
-            ConnectorManagementEventInput {
-                tenant_id: tenant_id.to_string(),
-                connector_id: connector_id.to_string(),
-                evidence_id: item.support_evidence_id.clone(),
-                action: "channel_management.support_evidence.retention".to_string(),
-                outcome: "expired".to_string(),
-                reason_code: "retention_expired".to_string(),
-                redaction_status: item.redaction_status.as_str().to_string(),
-                occurred_at: now,
-            },
-        ));
+        state
+            .event_bus
+            .publish(connector_management_retention_applied(
+                ConnectorManagementEventInput {
+                    tenant_id: tenant_id.to_string(),
+                    connector_id: connector_id.to_string(),
+                    evidence_id: item.support_evidence_id.clone(),
+                    action: "channel_management.support_evidence.retention".to_string(),
+                    outcome: "expired".to_string(),
+                    reason_code: "retention_expired".to_string(),
+                    redaction_status: item.redaction_status.as_str().to_string(),
+                    occurred_at: now,
+                },
+            ));
     }
     Ok(())
 }
@@ -920,7 +942,10 @@ fn require_channel_management_permission(
         created_at: Utc::now(),
         redaction_status: RedactionStatus::Redacted,
     };
-    let _ = state.store.lock().save_channel_management_audit_record(&record);
+    let _ = state
+        .store
+        .lock()
+        .save_channel_management_audit_record(&record);
     None
 }
 
@@ -979,7 +1004,10 @@ fn record_channel_management_audit(
         created_at: Utc::now(),
         redaction_status: RedactionStatus::Redacted,
     };
-    state.store.lock().save_channel_management_audit_record(&record)?;
+    state
+        .store
+        .lock()
+        .save_channel_management_audit_record(&record)?;
     Ok(record)
 }
 
@@ -1068,7 +1096,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use chrono::{Duration, Utc};
     use kura_connectors::{
@@ -1091,19 +1119,31 @@ mod tests {
             version: "0.1.0".to_string(),
             llm: kura_config::LlmConfig::default(),
             connectors: kura_config::ConnectorConfig {
-                discord: kura_config::DiscordConnectorConfig { enabled: false, ..Default::default() },
-                telegram: kura_config::TelegramConnectorConfig { enabled: false, ..Default::default() },
-                slack: kura_config::SlackConnectorConfig { enabled: false, ..Default::default() },
-                matrix: kura_config::MatrixConnectorConfig { enabled: false, ..Default::default() },
+                discord: kura_config::DiscordConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                telegram: kura_config::TelegramConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                slack: kura_config::SlackConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                matrix: kura_config::MatrixConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
             },
+            egress: Default::default(),
+            store: Default::default(),
         }
     }
 
     fn test_state() -> AppState {
-        let dir = std::env::temp_dir().join(format!(
-            "kura-api-channel-management-{}",
-            Uuid::now_v7()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("kura-api-channel-management-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let store = Arc::new(Mutex::new(
             SQLiteStore::new(dir.to_str().expect("path")).expect("store"),
@@ -1128,19 +1168,22 @@ mod tests {
             None => builder.body(Body::empty()).expect("request"),
         };
         let mut req = req;
-        req.extensions_mut().insert(TenantContext(kura_identity::TenantContext {
-            tenant_id: "ten_channels".to_string(),
-            principal_id: "prn_channels".to_string(),
-            permissions,
-            ..Default::default()
-        }));
+        req.extensions_mut()
+            .insert(TenantContext(kura_identity::TenantContext {
+                tenant_id: "ten_channels".to_string(),
+                principal_id: "prn_channels".to_string(),
+                permissions,
+                ..Default::default()
+            }));
         req
     }
 
     async fn send(app: &axum::Router, req: Request<Body>) -> (StatusCode, serde_json::Value) {
         let response = app.clone().oneshot(req).await.expect("oneshot");
         let status = response.status();
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let json = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -1173,7 +1216,13 @@ mod tests {
         let mut state = test_state();
         let supervisor = Arc::new(kura_connectors::Supervisor::new());
         state.connectors = Some(supervisor.clone());
-        register_connector(&supervisor, "ten_channels", "matrix-main", "matrix", "Matrix Main");
+        register_connector(
+            &supervisor,
+            "ten_channels",
+            "matrix-main",
+            "matrix",
+            "Matrix Main",
+        );
         let app = router().with_state(state.clone());
 
         let req = channel_tenant_request(
@@ -1191,7 +1240,10 @@ mod tests {
         );
         assert_eq!(json["eligibleRooms"], serde_json::json!(["room_redacted"]));
         let audit_event_id = json["auditEventId"].as_str().expect("auditEventId");
-        assert!(!audit_event_id.is_empty(), "expected audit event id, got {json}");
+        assert!(
+            !audit_event_id.is_empty(),
+            "expected audit event id, got {json}"
+        );
 
         // Recent timestamps so the seeded decision/outcome rows are not expired
         // (retention is 90 days from occurred_at; the real clock is well past
@@ -1262,7 +1314,13 @@ mod tests {
         let mut state = test_state();
         let supervisor = Arc::new(kura_connectors::Supervisor::new());
         state.connectors = Some(supervisor.clone());
-        register_connector(&supervisor, "ten_channels", "legacy-main", "legacy", "Legacy Main");
+        register_connector(
+            &supervisor,
+            "ten_channels",
+            "legacy-main",
+            "legacy",
+            "Legacy Main",
+        );
         let app = router().with_state(state.clone());
 
         let req = channel_tenant_request(
@@ -1285,10 +1343,34 @@ mod tests {
         let mut state = test_state();
         let supervisor = Arc::new(kura_connectors::Supervisor::new());
         state.connectors = Some(supervisor.clone());
-        register_connector(&supervisor, "ten_channels", "ready-main", "discord", "Ready Main");
-        register_connector(&supervisor, "ten_channels", "broken-main", "slack", "Broken Main");
-        register_connector(&supervisor, "ten_channels", "disabled-main", "telegram", "Disabled Main");
-        register_connector(&supervisor, "ten_other", "other-main", "matrix", "Other Main");
+        register_connector(
+            &supervisor,
+            "ten_channels",
+            "ready-main",
+            "discord",
+            "Ready Main",
+        );
+        register_connector(
+            &supervisor,
+            "ten_channels",
+            "broken-main",
+            "slack",
+            "Broken Main",
+        );
+        register_connector(
+            &supervisor,
+            "ten_channels",
+            "disabled-main",
+            "telegram",
+            "Disabled Main",
+        );
+        register_connector(
+            &supervisor,
+            "ten_other",
+            "other-main",
+            "matrix",
+            "Other Main",
+        );
         supervisor
             .disable("disabled-main", "tenant_disabled")
             .expect("disable");
@@ -1303,7 +1385,10 @@ mod tests {
             reason_code: Some(DiagnosticReasonCode::PermissionMissing),
             evidence_timestamp: Some(now),
             redaction_reliable: true,
-            safe_evidence: HashMap::from([("workspace".to_string(), "workspace_redacted".to_string())]),
+            safe_evidence: HashMap::from([(
+                "workspace".to_string(),
+                "workspace_redacted".to_string(),
+            )]),
             ..Default::default()
         })
         .expect("classify");
@@ -1338,7 +1423,10 @@ mod tests {
         );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::OK, "detail body: {json}");
-        assert_eq!(json["diagnosticSummary"]["diagnosticStateId"], "diag_broken");
+        assert_eq!(
+            json["diagnosticSummary"]["diagnosticStateId"],
+            "diag_broken"
+        );
         assert_eq!(
             json["routePolicy"]["backgroundDeliveryEligible"],
             serde_json::Value::Bool(true),
@@ -1353,7 +1441,11 @@ mod tests {
             vec![Permission::CredentialsInspect],
         );
         let (status, json) = send(&app, req).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "diagnostics denial body: {json}");
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "diagnostics denial body: {json}"
+        );
         assert_eq!(json["error"], "credential_access_denied");
         assert_eq!(json["reasonCode"], "permission_missing");
     }
@@ -1364,7 +1456,13 @@ mod tests {
         let mut state = test_state();
         let supervisor = Arc::new(kura_connectors::Supervisor::new());
         state.connectors = Some(supervisor.clone());
-        register_connector(&supervisor, "ten_channels", "discord-main", "discord", "Discord Main");
+        register_connector(
+            &supervisor,
+            "ten_channels",
+            "discord-main",
+            "discord",
+            "Discord Main",
+        );
         let app = router().with_state(state.clone());
 
         let req = channel_tenant_request(
@@ -1378,7 +1476,10 @@ mod tests {
         assert_eq!(json["enablementState"], "disabled");
         assert_eq!(json["deliveryEligible"], serde_json::Value::Bool(false));
         let audit_event_id = json["auditEventId"].as_str().expect("auditEventId");
-        assert!(!audit_event_id.is_empty(), "expected audit event id, got {json}");
+        assert!(
+            !audit_event_id.is_empty(),
+            "expected audit event id, got {json}"
+        );
 
         // The disabled enablement state and the audit row are persisted (Go
         // SaveChannelConnectorEnablementState + recordChannelManagementAudit).
@@ -1398,7 +1499,8 @@ mod tests {
             .expect("list audits");
         assert!(
             audits.iter().any(|record| {
-                record.action == "channel_management.disable" && record.audit_event_id == audit_event_id
+                record.action == "channel_management.disable"
+                    && record.audit_event_id == audit_event_id
             }),
             "expected disable audit, got: {audits:?}"
         );
@@ -1437,8 +1539,16 @@ mod tests {
         let mut state = test_state();
         let supervisor = Arc::new(kura_connectors::Supervisor::new());
         state.connectors = Some(supervisor.clone());
-        register_connector(&supervisor, "ten_channels", "slack-main", "slack", "Slack Main");
-        supervisor.disable("slack-main", "maintenance").expect("disable");
+        register_connector(
+            &supervisor,
+            "ten_channels",
+            "slack-main",
+            "slack",
+            "Slack Main",
+        );
+        supervisor
+            .disable("slack-main", "maintenance")
+            .expect("disable");
         let app = router().with_state(state.clone());
 
         // reconnect without secrets.manage -> 403.
@@ -1449,7 +1559,11 @@ mod tests {
             vec![Permission::ConnectorsManage],
         );
         let (status, json) = send(&app, req).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "reconnect denial body: {json}");
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "reconnect denial body: {json}"
+        );
 
         // reconnect with secrets.manage -> 202, terminal state disabled.
         let req = channel_tenant_request(
@@ -1463,7 +1577,10 @@ mod tests {
         assert_eq!(json["status"], "disabled");
         assert_eq!(json["sourceDiagnosticStateId"], "diag_1");
         let repair_action_id = json["repairActionId"].as_str().expect("repairActionId");
-        assert!(!repair_action_id.is_empty(), "expected repair action id, got {json}");
+        assert!(
+            !repair_action_id.is_empty(),
+            "expected repair action id, got {json}"
+        );
 
         // The repair action and its audit row are persisted (Go
         // SaveChannelRepairAction + recordChannelManagementAudit).
@@ -1483,7 +1600,8 @@ mod tests {
             .expect("list audits");
         assert!(
             audits.iter().any(|record| {
-                record.action == "channel_management.reconnect" && record.reason_code == "repair_started"
+                record.action == "channel_management.reconnect"
+                    && record.reason_code == "repair_started"
             }),
             "expected repair audit, got: {audits:?}"
         );
@@ -1493,10 +1611,7 @@ mod tests {
     #[tokio::test]
     async fn support_evidence_is_permissioned_and_metadata_only() {
         let bus = Arc::new(kura_events::Bus::new());
-        let dir = std::env::temp_dir().join(format!(
-            "kura-api-channel-support-{}",
-            Uuid::now_v7()
-        ));
+        let dir = std::env::temp_dir().join(format!("kura-api-channel-support-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let store = Arc::new(Mutex::new(
             SQLiteStore::new(dir.to_str().expect("path")).expect("store"),
@@ -1504,7 +1619,13 @@ mod tests {
         let mut state = AppState::new(test_config(), bus.clone(), store);
         let supervisor = Arc::new(kura_connectors::Supervisor::new());
         state.connectors = Some(supervisor.clone());
-        register_connector(&supervisor, "ten_channels", "telegram-main", "telegram", "Telegram Main");
+        register_connector(
+            &supervisor,
+            "ten_channels",
+            "telegram-main",
+            "telegram",
+            "Telegram Main",
+        );
         let app = router().with_state(state.clone());
 
         // No permissions -> 403.
@@ -1526,11 +1647,17 @@ mod tests {
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::OK, "support body: {json}");
         assert_eq!(json["redactionStatus"], "redacted");
-        assert_ne!(json["supportEvidenceId"], serde_json::Value::String(String::new()));
+        assert_ne!(
+            json["supportEvidenceId"],
+            serde_json::Value::String(String::new())
+        );
 
         let lower = json.to_string().to_lowercase();
         for forbidden in ["access_token", "bearer ", "message body:", "raw payload:"] {
-            assert!(!lower.contains(forbidden), "support evidence leaked {forbidden:?}: {json}");
+            assert!(
+                !lower.contains(forbidden),
+                "support evidence leaked {forbidden:?}: {json}"
+            );
         }
 
         let published = bus.list(&kura_events::Filter {
@@ -1551,7 +1678,13 @@ mod tests {
         let mut state = test_state();
         let supervisor = Arc::new(kura_connectors::Supervisor::new());
         state.connectors = Some(supervisor.clone());
-        register_connector(&supervisor, "ten_channels", "matrix-main", "matrix", "Matrix Main");
+        register_connector(
+            &supervisor,
+            "ten_channels",
+            "matrix-main",
+            "matrix",
+            "Matrix Main",
+        );
         let now = Utc::now();
         {
             let store = state.store.lock();
@@ -1613,16 +1746,12 @@ mod tests {
             refs.iter().any(|v| v == "route_1"),
             "expected route_1 in routingDecisionRefs: {json}"
         );
-        let repair_refs = json["repairRefs"]
-            .as_array()
-            .expect("repairRefs array");
+        let repair_refs = json["repairRefs"].as_array().expect("repairRefs array");
         assert!(
             repair_refs.iter().any(|v| v == "repair_1"),
             "expected repair_1 in repairRefs: {json}"
         );
-        let audit_refs = json["auditRefs"]
-            .as_array()
-            .expect("auditRefs array");
+        let audit_refs = json["auditRefs"].as_array().expect("auditRefs array");
         assert!(
             audit_refs.iter().any(|v| v == "audit_1"),
             "expected audit_1 in auditRefs: {json}"
@@ -1644,7 +1773,13 @@ mod tests {
         let mut state = AppState::new(test_config(), bus.clone(), store);
         let supervisor = Arc::new(kura_connectors::Supervisor::new());
         state.connectors = Some(supervisor.clone());
-        register_connector(&supervisor, "ten_channels", "slack-main", "slack", "Slack Main");
+        register_connector(
+            &supervisor,
+            "ten_channels",
+            "slack-main",
+            "slack",
+            "Slack Main",
+        );
         let now = Utc::now();
         {
             let store = state.store.lock();

@@ -1285,6 +1285,7 @@ dependencies = [
  "kura-connectors",
  "kura-context",
  "kura-delivery",
+ "kura-egress",
  "kura-evaluation",
  "kura-events",
  "kura-evidence",
@@ -1312,15 +1313,20 @@ dependencies = [
  "kura-sandbox",
  "kura-scheduler",
  "kura-secrets",
+ "kura-session",
  "kura-setupwizard",
  "kura-skills",
  "kura-store",
+ "kura-swarm",
+ "kura-telemetry",
  "kura-threads",
+ "kura-tools",
  "kura-triage",
  "kura-webhook",
  "parking_lot",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.20",
  "tokio",
  "tokio-stream",
@@ -1352,6 +1358,7 @@ dependencies = [
  "kura-core",
  "kura-delivery",
  "kura-discord",
+ "kura-egress",
  "kura-evaluation",
  "kura-events",
  "kura-evidence",
@@ -1384,8 +1391,11 @@ dependencies = [
  "kura-skills",
  "kura-slack",
  "kura-store",
+ "kura-swarm",
  "kura-telegram",
  "kura-telemetry",
+ "kura-threads",
+ "kura-tools",
  "kura-triage",
  "kura-webhook",
  "parking_lot",
@@ -1502,6 +1512,7 @@ dependencies = [
  "kura-setupwizard",
  "kura-skills",
  "kura-store",
+ "kura-telemetry",
  "kura-threads",
  "parking_lot",
  "serde",
@@ -1542,6 +1553,7 @@ dependencies = [
  "kura-policy",
  "kura-runtime",
  "kura-store",
+ "parking_lot",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1554,6 +1566,7 @@ dependencies = [
 name = "kura-config"
 version = "0.2.4"
 dependencies = [
+ "kura-egress",
  "parking_lot",
  "serde",
  "serde_json",
@@ -1652,6 +1665,16 @@ dependencies = [
  "tokio-tungstenite",
  "ureq",
  "uuid",
+]
+
+[[package]]
+name = "kura-egress"
+version = "0.2.4"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "url",
 ]
 
 [[package]]
@@ -1845,6 +1868,7 @@ dependencies = [
  "chrono",
  "futures",
  "kura-protocol",
+ "kura-telemetry",
  "parking_lot",
  "serde",
  "serde_json",
@@ -2017,6 +2041,7 @@ dependencies = [
 name = "kura-plugin"
 version = "0.2.4"
 dependencies = [
+ "kura-telemetry",
  "parking_lot",
  "serde",
  "serde_json",
@@ -2200,6 +2225,7 @@ dependencies = [
 name = "kura-session"
 version = "0.2.4"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
 ]
@@ -2290,12 +2316,26 @@ dependencies = [
  "kura-runtime",
  "kura-secrets",
  "kura-setupwizard",
+ "kura-telemetry",
  "kura-threads",
+ "kura-tools",
  "parking_lot",
  "rusqlite",
  "serde",
  "serde_json",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "kura-swarm"
+version = "0.2.4"
+dependencies = [
+ "chrono",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
  "uuid",
 ]
 
@@ -2371,6 +2411,19 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "kura-tools"
+version = "0.2.4"
+dependencies = [
+ "chrono",
+ "kura-egress",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]

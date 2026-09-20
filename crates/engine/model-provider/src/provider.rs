@@ -1,9 +1,9 @@
 use kura_protocol::ResponseItem;
 // Re-exported: the type moved down to the protocol crate so the dispatcher can
 // carry it, and every caller here already imports it from this module.
-pub use kura_protocol::ToolSpec;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
+pub use kura_protocol::ToolSpec;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -15,7 +15,6 @@ pub struct Prompt {
     pub input: Vec<ResponseItem>,
     pub tools: Vec<ToolSpec>,
 }
-
 
 /// Incremental model output. Function calls are emitted once complete;
 /// providers that stream call fragments must accumulate before emitting.
@@ -115,7 +114,10 @@ pub trait GenerationProvider: Send + Sync {
     /// Poll a queued generation. Providers that never return `Pending` inherit
     /// the default, which reports the job as unknown rather than pretending it
     /// succeeded.
-    fn poll<'a>(&'a self, job_id: &'a str) -> BoxFuture<'a, Result<GenerationStatus, ProviderError>> {
+    fn poll<'a>(
+        &'a self,
+        job_id: &'a str,
+    ) -> BoxFuture<'a, Result<GenerationStatus, ProviderError>> {
         let job_id = job_id.to_string();
         Box::pin(async move {
             Err(ProviderError::Malformed(format!(

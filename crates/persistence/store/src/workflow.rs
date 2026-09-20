@@ -9,12 +9,13 @@
 //! tenancy package is ported.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Row};
+use rusqlite::{Row, params};
 
-use crate::crud::{
-    enum_str, now_rfc3339, null_string, opt_time_string, parse_enum, parse_opt_rfc3339, parse_rfc3339,
-};
 use crate::SQLiteStore;
+use crate::crud::{
+    enum_str, now_rfc3339, null_string, opt_time_string, parse_enum, parse_opt_rfc3339,
+    parse_rfc3339,
+};
 
 /// A workflow ledger row. `document` is the JSON-serialized workflow document.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -137,7 +138,11 @@ fn scan_workflow_dependency_record(row: &Row) -> Result<WorkflowDependencyRecord
     let dependency_id: String = row.get(0).map_err(|e| e.to_string())?;
     let workflow_id: String = row.get(1).map_err(|e| e.to_string())?;
     let document: String = row.get(2).map_err(|e| e.to_string())?;
-    Ok(WorkflowDependencyRecord { dependency_id, workflow_id, document })
+    Ok(WorkflowDependencyRecord {
+        dependency_id,
+        workflow_id,
+        document,
+    })
 }
 
 fn scan_workflow_handoff_record(row: &Row) -> Result<WorkflowHandoffRecord, String> {
@@ -145,13 +150,18 @@ fn scan_workflow_handoff_record(row: &Row) -> Result<WorkflowHandoffRecord, Stri
     let workflow_id: String = row.get(1).map_err(|e| e.to_string())?;
     let status: String = row.get(2).map_err(|e| e.to_string())?;
     let document: String = row.get(3).map_err(|e| e.to_string())?;
-    Ok(WorkflowHandoffRecord { handoff_id, workflow_id, status, document })
+    Ok(WorkflowHandoffRecord {
+        handoff_id,
+        workflow_id,
+        status,
+        document,
+    })
 }
 
 impl SQLiteStore {
     pub fn upsert_workflow(&self, workflow: &kura_orchestration::Workflow) -> Result<(), String> {
-        let document_json =
-            serde_json::to_string(workflow).map_err(|e| format!("marshal workflow {}: {e}", workflow.workflow_id))?;
+        let document_json = serde_json::to_string(workflow)
+            .map_err(|e| format!("marshal workflow {}: {e}", workflow.workflow_id))?;
         self.conn
             .execute(
                 r#"INSERT INTO workflows (
@@ -208,8 +218,11 @@ impl SQLiteStore {
             .unchecked_transaction()
             .map_err(|e| format!("begin replace workflow steps {workflow_id}: {e}"))?;
 
-        tx.execute("DELETE FROM workflow_steps WHERE workflow_id = ?1", params![workflow_id])
-            .map_err(|e| format!("delete workflow steps {workflow_id}: {e}"))?;
+        tx.execute(
+            "DELETE FROM workflow_steps WHERE workflow_id = ?1",
+            params![workflow_id],
+        )
+        .map_err(|e| format!("delete workflow steps {workflow_id}: {e}"))?;
 
         for step in steps {
             let document_json = serde_json::to_string(step)
@@ -252,8 +265,11 @@ impl SQLiteStore {
             .unchecked_transaction()
             .map_err(|e| format!("begin replace workflow dependencies {workflow_id}: {e}"))?;
 
-        tx.execute("DELETE FROM workflow_dependencies WHERE workflow_id = ?1", params![workflow_id])
-            .map_err(|e| format!("delete workflow dependencies {workflow_id}: {e}"))?;
+        tx.execute(
+            "DELETE FROM workflow_dependencies WHERE workflow_id = ?1",
+            params![workflow_id],
+        )
+        .map_err(|e| format!("delete workflow dependencies {workflow_id}: {e}"))?;
 
         for item in items {
             let document_json = serde_json::to_string(item)
@@ -279,8 +295,11 @@ impl SQLiteStore {
             .unchecked_transaction()
             .map_err(|e| format!("begin replace workflow handoffs {workflow_id}: {e}"))?;
 
-        tx.execute("DELETE FROM workflow_handoffs WHERE workflow_id = ?1", params![workflow_id])
-            .map_err(|e| format!("delete workflow handoffs {workflow_id}: {e}"))?;
+        tx.execute(
+            "DELETE FROM workflow_handoffs WHERE workflow_id = ?1",
+            params![workflow_id],
+        )
+        .map_err(|e| format!("delete workflow handoffs {workflow_id}: {e}"))?;
 
         for item in items {
             let document_json = serde_json::to_string(item)
@@ -296,7 +315,11 @@ impl SQLiteStore {
             .map_err(|e| format!("commit replace workflow handoffs {workflow_id}: {e}"))
     }
 
-    pub fn list_workflows(&self, environment_scope: &str, run_id: &str) -> Result<Vec<kura_orchestration::Workflow>, String> {
+    pub fn list_workflows(
+        &self,
+        environment_scope: &str,
+        run_id: &str,
+    ) -> Result<Vec<kura_orchestration::Workflow>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -336,7 +359,11 @@ impl SQLiteStore {
             )
             .map_err(|e| e.to_string())?;
         let mut rows = stmt
-            .query(params![environment_scope.trim(), run_id.trim(), workflow_id.trim()])
+            .query(params![
+                environment_scope.trim(),
+                run_id.trim(),
+                workflow_id.trim()
+            ])
             .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
@@ -407,7 +434,10 @@ impl SQLiteStore {
         Ok(updated)
     }
 
-    fn list_interruptible_workflows(&self, environment_scope: &str) -> Result<Vec<kura_orchestration::Workflow>, String> {
+    fn list_interruptible_workflows(
+        &self,
+        environment_scope: &str,
+    ) -> Result<Vec<kura_orchestration::Workflow>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -436,7 +466,10 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    fn decode_workflow_record(&self, record: WorkflowRecord) -> Result<kura_orchestration::Workflow, String> {
+    fn decode_workflow_record(
+        &self,
+        record: WorkflowRecord,
+    ) -> Result<kura_orchestration::Workflow, String> {
         let mut workflow: kura_orchestration::Workflow = if record.document.is_empty() {
             kura_orchestration::Workflow::default()
         } else {
@@ -480,7 +513,10 @@ impl SQLiteStore {
         Ok(workflow)
     }
 
-    fn list_workflow_steps(&self, workflow_id: &str) -> Result<Vec<kura_orchestration::WorkflowStep>, String> {
+    fn list_workflow_steps(
+        &self,
+        workflow_id: &str,
+    ) -> Result<Vec<kura_orchestration::WorkflowStep>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -492,7 +528,9 @@ impl SQLiteStore {
                 ORDER BY position ASC, workflow_step_id ASC"#,
             )
             .map_err(|e| format!("list workflow steps {workflow_id}: {e}"))?;
-        let mut rows = stmt.query(params![workflow_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![workflow_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let record = scan_workflow_step_record(row)?;
@@ -517,7 +555,10 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    fn list_workflow_dependencies(&self, workflow_id: &str) -> Result<Vec<kura_orchestration::Dependency>, String> {
+    fn list_workflow_dependencies(
+        &self,
+        workflow_id: &str,
+    ) -> Result<Vec<kura_orchestration::Dependency>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -527,7 +568,9 @@ impl SQLiteStore {
                 ORDER BY dependency_id ASC"#,
             )
             .map_err(|e| format!("list workflow dependencies {workflow_id}: {e}"))?;
-        let mut rows = stmt.query(params![workflow_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![workflow_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let record = scan_workflow_dependency_record(row)?;
@@ -538,7 +581,10 @@ impl SQLiteStore {
         Ok(items)
     }
 
-    fn list_workflow_handoffs(&self, workflow_id: &str) -> Result<Vec<kura_orchestration::Handoff>, String> {
+    fn list_workflow_handoffs(
+        &self,
+        workflow_id: &str,
+    ) -> Result<Vec<kura_orchestration::Handoff>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -548,7 +594,9 @@ impl SQLiteStore {
                 ORDER BY handoff_id ASC"#,
             )
             .map_err(|e| format!("list workflow handoffs {workflow_id}: {e}"))?;
-        let mut rows = stmt.query(params![workflow_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![workflow_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let record = scan_workflow_handoff_record(row)?;

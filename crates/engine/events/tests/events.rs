@@ -17,7 +17,10 @@ fn event_round_trips_camel_case() {
             run_id: "run_1".to_string(),
             ..Scope::default()
         },
-        resource: Resource { kind: "run".to_string(), id: "run_1".to_string() },
+        resource: Resource {
+            kind: "run".to_string(),
+            id: "run_1".to_string(),
+        },
         payload: payload.clone(),
     };
 
@@ -72,11 +75,36 @@ fn bus_publishes_and_filters_history_and_live_subscribers() {
     assert_eq!(got.event_id, "evt_1");
 
     // History list filters by category.
-    assert_eq!(bus.list(&Filter { category: "audit".to_string(), ..Filter::default() }).len(), 1);
-    assert_eq!(bus.list(&Filter { category: "other".to_string(), ..Filter::default() }).len(), 0);
+    assert_eq!(
+        bus.list(&Filter {
+            category: "audit".to_string(),
+            ..Filter::default()
+        })
+        .len(),
+        1
+    );
+    assert_eq!(
+        bus.list(&Filter {
+            category: "other".to_string(),
+            ..Filter::default()
+        })
+        .len(),
+        0
+    );
 
     drop(sub);
     // After unsubscribe, a new publish has no live subscriber; history still grows.
-    bus.publish(Event { event_id: "evt_2".to_string(), category: "audit".to_string(), ..Event::default() });
-    assert_eq!(bus.list(&Filter { category: "audit".to_string(), ..Filter::default() }).len(), 2);
+    bus.publish(Event {
+        event_id: "evt_2".to_string(),
+        category: "audit".to_string(),
+        ..Event::default()
+    });
+    assert_eq!(
+        bus.list(&Filter {
+            category: "audit".to_string(),
+            ..Filter::default()
+        })
+        .len(),
+        2
+    );
 }

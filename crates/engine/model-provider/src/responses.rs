@@ -17,12 +17,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_stream::try_stream;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use kura_protocol::{ResponseItem, Role};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::openai::{checked_bytes_stream, Credential};
+use crate::openai::{Credential, checked_bytes_stream};
 use crate::provider::{ModelProvider, Prompt, ProviderError, ResponseEvent};
 
 /// Streaming client for `/responses`.
@@ -146,8 +146,8 @@ fn accumulate_event(
     pending: &mut BTreeMap<i64, CallAcc>,
     done: &mut bool,
 ) -> Result<Vec<ResponseEvent>, ProviderError> {
-    let value: Value = serde_json::from_str(data)
-        .map_err(|error| ProviderError::Malformed(error.to_string()))?;
+    let value: Value =
+        serde_json::from_str(data).map_err(|error| ProviderError::Malformed(error.to_string()))?;
     let mut events = Vec::new();
     let index = value["output_index"].as_i64().unwrap_or(0);
 
@@ -180,7 +180,11 @@ fn accumulate_event(
         // Arguments arrive as JSON fragments that parse as nothing alone.
         "response.function_call_arguments.delta" => {
             if let Some(fragment) = value["delta"].as_str() {
-                pending.entry(index).or_default().arguments.push_str(fragment);
+                pending
+                    .entry(index)
+                    .or_default()
+                    .arguments
+                    .push_str(fragment);
             }
         }
         "response.function_call_arguments.done" => {
@@ -232,14 +236,22 @@ fn build_request(model: &str, prompt: &Prompt) -> Value {
                 };
                 // Input text is `input_text`; the assistant's own output is
                 // `output_text`, and swapping them is rejected.
-                let part = if role == "assistant" { "output_text" } else { "input_text" };
+                let part = if role == "assistant" {
+                    "output_text"
+                } else {
+                    "input_text"
+                };
                 input.push(json!({
                     "type": "message",
                     "role": role,
                     "content": [{"type": part, "text": content}],
                 }));
             }
-            ResponseItem::FunctionCall { call_id, name, arguments } => {
+            ResponseItem::FunctionCall {
+                call_id,
+                name,
+                arguments,
+            } => {
                 input.push(json!({
                     "type": "function_call",
                     "call_id": call_id,
@@ -311,22 +323,32 @@ mod tests {
                 let mut buffer = [0u8; 8192];
                 loop {
                     let read = stream.read(&mut buffer).unwrap_or(0);
-                    if read == 0 { break; }
+                    if read == 0 {
+                        break;
+                    }
                     received.extend_from_slice(&buffer[..read]);
                     let text = String::from_utf8_lossy(&received);
-                    let Some(head_end) = text.find("\r\n\r\n") else { continue };
+                    let Some(head_end) = text.find("\r\n\r\n") else {
+                        continue;
+                    };
                     let length: usize = text
                         .lines()
-                        .find_map(|line| line.strip_prefix("content-length: ")
-                            .or_else(|| line.strip_prefix("Content-Length: ")))
+                        .find_map(|line| {
+                            line.strip_prefix("content-length: ")
+                                .or_else(|| line.strip_prefix("Content-Length: "))
+                        })
                         .and_then(|value| value.trim().parse().ok())
                         .unwrap_or(0);
-                    if received.len() >= head_end + 4 + length { break; }
+                    if received.len() >= head_end + 4 + length {
+                        break;
+                    }
                 }
                 *recorded.lock().expect("lock") = String::from_utf8_lossy(&received).to_string();
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(), body);
+                    body.len(),
+                    body
+                );
                 let _ = stream.write_all(response.as_bytes());
             }
         });
@@ -344,7 +366,10 @@ mod tests {
 
     fn user(text: &str) -> Prompt {
         Prompt {
-            input: vec![ResponseItem::Message { role: Role::User, content: text.to_string() }],
+            input: vec![ResponseItem::Message {
+                role: Role::User,
+                content: text.to_string(),
+            }],
             ..Prompt::default()
         }
     }
@@ -357,11 +382,14 @@ mod tests {
 
         let events = collect(&client, &user("hi")).await;
 
-        assert_eq!(events, vec![
-            ResponseEvent::OutputTextDelta("Hel".into()),
-            ResponseEvent::OutputTextDelta("lo".into()),
-            ResponseEvent::Completed,
-        ]);
+        assert_eq!(
+            events,
+            vec![
+                ResponseEvent::OutputTextDelta("Hel".into()),
+                ResponseEvent::OutputTextDelta("lo".into()),
+                ResponseEvent::Completed,
+            ]
+        );
     }
 
     #[tokio::test]
@@ -372,14 +400,17 @@ mod tests {
 
         let events = collect(&client, &user("hi")).await;
 
-        assert_eq!(events, vec![
-            ResponseEvent::FunctionCall {
-                call_id: "fc_1".into(),
-                name: "read_file".into(),
-                arguments: "{\"path\":\"a.rs\"}".into(),
-            },
-            ResponseEvent::Completed,
-        ]);
+        assert_eq!(
+            events,
+            vec![
+                ResponseEvent::FunctionCall {
+                    call_id: "fc_1".into(),
+                    name: "read_file".into(),
+                    arguments: "{\"path\":\"a.rs\"}".into(),
+                },
+                ResponseEvent::Completed,
+            ]
+        );
     }
 
     #[tokio::test]
@@ -392,11 +423,14 @@ mod tests {
 
         let events = collect(&client, &user("hi")).await;
 
-        assert_eq!(events[0], ResponseEvent::FunctionCall {
-            call_id: "fc_1".into(),
-            name: "f".into(),
-            arguments: "{\"whole\":true}".into(),
-        });
+        assert_eq!(
+            events[0],
+            ResponseEvent::FunctionCall {
+                call_id: "fc_1".into(),
+                name: "f".into(),
+                arguments: "{\"whole\":true}".into(),
+            }
+        );
     }
 
     #[tokio::test]
@@ -410,19 +444,22 @@ mod tests {
 
         let events = collect(&client, &user("hi")).await;
 
-        assert_eq!(events, vec![
-            ResponseEvent::FunctionCall {
-                call_id: "a".into(),
-                name: "one".into(),
-                arguments: "{\"x\":1}".into(),
-            },
-            ResponseEvent::FunctionCall {
-                call_id: "b".into(),
-                name: "two".into(),
-                arguments: "{\"x\":2}".into(),
-            },
-            ResponseEvent::Completed,
-        ]);
+        assert_eq!(
+            events,
+            vec![
+                ResponseEvent::FunctionCall {
+                    call_id: "a".into(),
+                    name: "one".into(),
+                    arguments: "{\"x\":1}".into(),
+                },
+                ResponseEvent::FunctionCall {
+                    call_id: "b".into(),
+                    name: "two".into(),
+                    arguments: "{\"x\":2}".into(),
+                },
+                ResponseEvent::Completed,
+            ]
+        );
     }
 
     #[tokio::test]
@@ -445,7 +482,10 @@ mod tests {
         let client = ResponsesClient::new(base, "gpt-5-codex", Some("oauth-token".into()));
         let prompt = Prompt {
             instructions: Some("be brief".into()),
-            input: vec![ResponseItem::Message { role: Role::User, content: "hi".into() }],
+            input: vec![ResponseItem::Message {
+                role: Role::User,
+                content: "hi".into(),
+            }],
             tools: vec![ToolSpec {
                 name: "read_file".into(),
                 description: "read".into(),

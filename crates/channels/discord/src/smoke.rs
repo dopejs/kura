@@ -112,7 +112,11 @@ pub fn build_smoke_evidence(input: SmokeInput) -> SmokeEvidence {
         id
     };
     let owner = input.owner.trim().to_string();
-    let owner = if owner.is_empty() { "operator".to_string() } else { owner };
+    let owner = if owner.is_empty() {
+        "operator".to_string()
+    } else {
+        owner
+    };
     let mut evidence = SmokeEvidence {
         smoke_evidence_id: id,
         tenant_id: input.tenant_id.trim().to_string(),
@@ -159,7 +163,6 @@ pub(crate) fn first_non_empty(value: &str, fallback: &str) -> String {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,9 +186,18 @@ mod tests {
         });
         assert_eq!(evidence.status, SmokeStatus::Skipped);
         assert_eq!(evidence.credential_mode, CredentialMode::Unavailable);
-        assert!(!evidence.owner.is_empty(), "skip evidence must include owner");
-        assert!(!evidence.reason.is_empty(), "skip evidence must include reason");
-        assert!(!evidence.remaining_risk.is_empty(), "skip evidence must include remaining risk");
+        assert!(
+            !evidence.owner.is_empty(),
+            "skip evidence must include owner"
+        );
+        assert!(
+            !evidence.reason.is_empty(),
+            "skip evidence must include reason"
+        );
+        assert!(
+            !evidence.remaining_risk.is_empty(),
+            "skip evidence must include remaining risk"
+        );
         assert_eq!(evidence.retention_expires_at - now, Duration::days(90));
         assert_eq!(evidence.redaction_status, RedactionStatus::Redacted);
     }
@@ -218,8 +230,14 @@ mod tests {
         });
         assert_eq!(failed.status, SmokeStatus::Failed);
         assert_eq!(failed.credential_mode, CredentialMode::SafeLive);
-        assert_eq!(failed.reason, DiagnosticReasonCode::UnknownConnectorFailure.as_str());
-        assert_eq!(failed.remaining_risk, "Live Discord hosted smoke was not run.");
+        assert_eq!(
+            failed.reason,
+            DiagnosticReasonCode::UnknownConnectorFailure.as_str()
+        );
+        assert_eq!(
+            failed.remaining_risk,
+            "Live Discord hosted smoke was not run."
+        );
     }
 
     #[test]

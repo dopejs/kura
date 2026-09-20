@@ -1,7 +1,7 @@
 use chrono::{TimeZone, Utc};
 use kura_opsreadiness::{
-    BackupArtifact, HostedDeploymentManifest, TenantStateSummary, REQUIRED_FAULT_TYPES,
-    REQUIRED_WORKLOAD_AREAS,
+    BackupArtifact, HostedDeploymentManifest, REQUIRED_FAULT_TYPES, REQUIRED_WORKLOAD_AREAS,
+    TenantStateSummary,
 };
 
 #[test]
@@ -38,7 +38,10 @@ fn backup_artifact_roundtrips() {
         source_version: "1.2.3".to_string(),
         source_environment: "test".to_string(),
         tenant_count: 2,
-        tenant_state_summary: vec![TenantStateSummary { tenant_id: "t1".to_string(), ..TenantStateSummary::default() }],
+        tenant_state_summary: vec![TenantStateSummary {
+            tenant_id: "t1".to_string(),
+            ..TenantStateSummary::default()
+        }],
         ..BackupArtifact::default()
     };
     let json = serde_json::to_string(&artifact).unwrap();

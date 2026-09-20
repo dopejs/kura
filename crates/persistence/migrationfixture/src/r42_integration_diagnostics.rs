@@ -8,8 +8,8 @@ use rusqlite::params;
 
 use kura_store::SQLiteStore;
 
-use crate::seeds::exec_insert;
 use crate::FIXTURE_TIMESTAMP;
+use crate::seeds::exec_insert;
 
 /// Table names expected from the Roadmap 42 storage migration (migration v39).
 pub static R42_INTEGRATION_DIAGNOSTIC_TABLE_NAMES: [&str; 6] = [
@@ -61,32 +61,121 @@ pub fn seed_r42_integration_diagnostic_rows(
         exec_insert(
             &conn,
             "INSERT INTO integration_diagnostic_runs (diagnostic_run_id, tenant_id, integration_id, integration_account_id, domain_kind, provider_kind, requested_by, trigger, status, started_at, completed_at, failure_reason_code, redaction_status, retention_expires_at, idempotency_key, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![run_id, tenant_id, integration_id, format!("acct_{suffix}"), "calendar", "feishu_lark", format!("operator_{suffix}"), "operator_inspection", "completed", ts, None::<String>, None::<String>, "redacted", ts, format!("idem_{suffix}"), "{\"status\":\"completed\"}"],
+            params![
+                run_id,
+                tenant_id,
+                integration_id,
+                format!("acct_{suffix}"),
+                "calendar",
+                "feishu_lark",
+                format!("operator_{suffix}"),
+                "operator_inspection",
+                "completed",
+                ts,
+                None::<String>,
+                None::<String>,
+                "redacted",
+                ts,
+                format!("idem_{suffix}"),
+                "{\"status\":\"completed\"}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO integration_diagnostic_results (diagnostic_result_id, tenant_id, integration_id, integration_account_id, domain_kind, provider_kind, capability, status, reason_code, remediation_owner, retry_safety, checked_at, stale_after, freshness_state, run_id, redaction_status, retention_expires_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![result_id, tenant_id, integration_id, format!("acct_{suffix}"), "calendar", "feishu_lark", "calendar.read", "healthy", "healthy", "none_required", "no_action_needed", ts, ts, "fresh", run_id, "redacted", ts, "{\"reasonCode\":\"healthy\"}"],
+            params![
+                result_id,
+                tenant_id,
+                integration_id,
+                format!("acct_{suffix}"),
+                "calendar",
+                "feishu_lark",
+                "calendar.read",
+                "healthy",
+                "healthy",
+                "none_required",
+                "no_action_needed",
+                ts,
+                ts,
+                "fresh",
+                run_id,
+                "redacted",
+                ts,
+                "{\"reasonCode\":\"healthy\"}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO integration_provider_classifications (classification_id, tenant_id, provider_kind, domain_kind, integration_id, operation_class, reason_code, retry_safety, remediation_owner, redaction_status, created_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![classification_id, tenant_id, "feishu_lark", "calendar", integration_id, "calendar.read", "healthy", "no_action_needed", "none_required", "redacted", ts, "{\"reasonCode\":\"healthy\"}"],
+            params![
+                classification_id,
+                tenant_id,
+                "feishu_lark",
+                "calendar",
+                integration_id,
+                "calendar.read",
+                "healthy",
+                "no_action_needed",
+                "none_required",
+                "redacted",
+                ts,
+                "{\"reasonCode\":\"healthy\"}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO integration_smoke_reports (smoke_report_id, tenant_id, report_kind, requested_by, status, started_at, completed_at, published_at, retention_expires_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            params![smoke_id, tenant_id, "diagnostic", format!("operator_{suffix}"), "completed", ts, None::<String>, None::<String>, ts, "{\"status\":\"completed\"}"],
+            params![
+                smoke_id,
+                tenant_id,
+                "diagnostic",
+                format!("operator_{suffix}"),
+                "completed",
+                ts,
+                None::<String>,
+                None::<String>,
+                ts,
+                "{\"status\":\"completed\"}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO integration_smoke_probe_outcomes (probe_outcome_id, tenant_id, smoke_report_id, integration_id, integration_account_id, domain_kind, provider_kind, probe_action, result, reason_code, retry_safety, checked_at, redaction_status, retention_expires_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![outcome_id, tenant_id, smoke_id, integration_id, format!("acct_{suffix}"), "calendar", "feishu_lark", "calendar.read", "passed", "healthy", "no_action_needed", ts, "redacted", ts, "{\"result\":\"passed\"}"],
+            params![
+                outcome_id,
+                tenant_id,
+                smoke_id,
+                integration_id,
+                format!("acct_{suffix}"),
+                "calendar",
+                "feishu_lark",
+                "calendar.read",
+                "passed",
+                "healthy",
+                "no_action_needed",
+                ts,
+                "redacted",
+                ts,
+                "{\"result\":\"passed\"}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO integration_diagnostic_retention (retention_record_id, tenant_id, target_kind, target_id, policy_ref, default_expires_at, effective_expires_at, retention_state, applied_at, created_at, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![retention_id, tenant_id, "diagnostic_run", run_id, None::<String>, ts, ts, "active", None::<String>, ts, ts, "{\"retentionState\":\"active\"}"],
+            params![
+                retention_id,
+                tenant_id,
+                "diagnostic_run",
+                run_id,
+                None::<String>,
+                ts,
+                ts,
+                "active",
+                None::<String>,
+                ts,
+                ts,
+                "{\"retentionState\":\"active\"}"
+            ],
         )?;
     }
     Ok(fixture)
@@ -100,7 +189,9 @@ pub fn count_r42_integration_diagnostic_rows(
     let mut counts = HashMap::new();
     for table in R42_INTEGRATION_DIAGNOSTIC_TABLE_NAMES {
         let count: i64 = conn
-            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
             .map_err(|e| format!("count {table}: {e}"))?;
         counts.insert(table.to_string(), count);
     }

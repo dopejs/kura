@@ -19,6 +19,6 @@ pnpm --dir site build
 pnpm --dir site preview
 ```
 
-The build emits 12 canonical pages plus a `/docs/` redirect into `site/dist`. GitHub Pages deploys that directory after changes reach `main`.
+The build emits 13 canonical pages plus a `/docs/` redirect into `site/dist`. GitHub Pages deploys that directory after changes reach `main`.
 
 The previous hash routes (`/#/docs/...`) are redirected in the client to their canonical `/docs/.../` equivalents. Rollback is a normal Git revert; there is no persistent data migration.

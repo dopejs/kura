@@ -473,8 +473,14 @@ mod tests {
         assert_eq!(Status::ACTIVE, "active");
         assert_eq!(ChangeKind::ROLLED_BACK, "rolled_back");
         assert_eq!(RollbackEligibility::INVALID_OVERLAY, "invalid_overlay");
-        assert_eq!(OverlayValidationState::PERMISSION_DENIED, "permission_denied");
-        assert_eq!(RuntimeResourceKind::HANDOFF_DESTINATION, "handoff_destination");
+        assert_eq!(
+            OverlayValidationState::PERMISSION_DENIED,
+            "permission_denied"
+        );
+        assert_eq!(
+            RuntimeResourceKind::HANDOFF_DESTINATION,
+            "handoff_destination"
+        );
     }
 
     #[test]
@@ -482,7 +488,10 @@ mod tests {
         let state: OverlayValidationState =
             serde_json::from_str("\"future_state\"").expect("unknown state must decode");
         assert_eq!(state.as_str(), "future_state");
-        assert_eq!(serde_json::to_string(&state).expect("encode"), "\"future_state\"");
+        assert_eq!(
+            serde_json::to_string(&state).expect("encode"),
+            "\"future_state\""
+        );
         assert!(OverlayValidationState::default().is_empty());
     }
 }

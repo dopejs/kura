@@ -22,8 +22,14 @@ pub fn redacted_tool_call_diff(input: ToolCallDiffInput) -> (String, RedactionSt
         status = RedactionStatus::Redacted;
     }
     if serde_json::Value::Object(original.payload) == serde_json::Value::Object(replay.payload) {
-        ("tool call evidence matched after redaction".to_string(), status)
+        (
+            "tool call evidence matched after redaction".to_string(),
+            status,
+        )
     } else {
-        ("tool call evidence drifted after redaction".to_string(), status)
+        (
+            "tool call evidence drifted after redaction".to_string(),
+            status,
+        )
     }
 }

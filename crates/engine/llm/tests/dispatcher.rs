@@ -5,16 +5,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use futures::future::BoxFuture;
+use kura_llm::EchoProvider;
 use kura_llm::{
     CancelToken, CreateDispatchInput, Dispatch, DispatchStatus, Dispatcher, FailedDispatch,
     Message, MessageRole, PrepareError, Provider, ProviderError, ProviderRequest, ProviderResponse,
     StreamChunk, StreamEmitter, Usage,
 };
-use kura_llm::EchoProvider;
-use futures::future::BoxFuture;
 
-type CompleteFn =
-    Box<dyn Fn(ProviderRequest) -> BoxFuture<'static, Result<ProviderResponse, ProviderError>> + Send + Sync>;
+type CompleteFn = Box<
+    dyn Fn(ProviderRequest) -> BoxFuture<'static, Result<ProviderResponse, ProviderError>>
+        + Send
+        + Sync,
+>;
 type StreamFn = Box<
     dyn for<'a> Fn(
             ProviderRequest,
@@ -76,7 +79,11 @@ fn unused_complete() -> CompleteFn {
 }
 
 fn user_message(content: &str) -> Message {
-    Message { role: MessageRole::User, content: content.into(), ..Default::default() }
+    Message {
+        role: MessageRole::User,
+        content: content.into(),
+        ..Default::default()
+    }
 }
 
 fn failed(result: Result<Dispatch, FailedDispatch>) -> FailedDispatch {
@@ -97,7 +104,11 @@ async fn dispatches_successfully() {
                     tool_calls: Vec::new(),
                     output: "done".into(),
                     finish_reason: "stop".into(),
-                    usage: Usage { input_tokens: 3, output_tokens: 1, total_tokens: 0 },
+                    usage: Usage {
+                        input_tokens: 3,
+                        output_tokens: 1,
+                        total_tokens: 0,
+                    },
                 })
             })
         }),
@@ -117,7 +128,10 @@ async fn dispatches_successfully() {
         )
         .unwrap();
 
-    let final_dispatch = dispatcher.dispatch(dispatch, &CancelToken::new()).await.unwrap();
+    let final_dispatch = dispatcher
+        .dispatch(dispatch, &CancelToken::new())
+        .await
+        .unwrap();
     assert_eq!(final_dispatch.status, DispatchStatus::Completed);
     assert_eq!(final_dispatch.output, "done");
     assert_eq!(final_dispatch.usage.total_tokens, 4);
@@ -144,7 +158,11 @@ async fn retries_retryable_failure() {
                     tool_calls: Vec::new(),
                     output: "recovered".into(),
                     finish_reason: "stop".into(),
-                    usage: Usage { input_tokens: 2, output_tokens: 1, total_tokens: 0 },
+                    usage: Usage {
+                        input_tokens: 2,
+                        output_tokens: 1,
+                        total_tokens: 0,
+                    },
                 })
             })
         }),
@@ -166,7 +184,10 @@ async fn retries_retryable_failure() {
         )
         .unwrap();
 
-    let final_dispatch = dispatcher.dispatch(dispatch, &CancelToken::new()).await.unwrap();
+    let final_dispatch = dispatcher
+        .dispatch(dispatch, &CancelToken::new())
+        .await
+        .unwrap();
     assert_eq!(final_dispatch.status, DispatchStatus::Completed);
     assert_eq!(final_dispatch.output, "recovered");
     assert_eq!(final_dispatch.attempt_count, 2);
@@ -182,7 +203,10 @@ async fn times_out_slow_complete() {
             Box::pin(async {
                 tokio::time::sleep(Duration::from_millis(200)).await;
                 Ok(ProviderResponse {
-                    tool_calls: Vec::new(), output: "too slow".into(), ..ProviderResponse::default() })
+                    tool_calls: Vec::new(),
+                    output: "too slow".into(),
+                    ..ProviderResponse::default()
+                })
             })
         }),
         unused_stream(),
@@ -218,13 +242,23 @@ async fn streams_successfully() {
         unused_complete(),
         Box::new(|_request, emit| {
             Box::pin(async move {
-                emit(StreamChunk { delta: "hello".into(), ..StreamChunk::default() })?;
-                emit(StreamChunk { delta: " world".into(), ..StreamChunk::default() })?;
+                emit(StreamChunk {
+                    delta: "hello".into(),
+                    ..StreamChunk::default()
+                })?;
+                emit(StreamChunk {
+                    delta: " world".into(),
+                    ..StreamChunk::default()
+                })?;
                 Ok(ProviderResponse {
                     tool_calls: Vec::new(),
                     output: "hello world".into(),
                     finish_reason: "stop".into(),
-                    usage: Usage { input_tokens: 2, output_tokens: 2, total_tokens: 0 },
+                    usage: Usage {
+                        input_tokens: 2,
+                        output_tokens: 2,
+                        total_tokens: 0,
+                    },
                 })
             })
         }),
@@ -264,7 +298,10 @@ async fn cancels_interrupted_stream() {
         unused_complete(),
         Box::new(|_request, emit| {
             Box::pin(async move {
-                emit(StreamChunk { delta: "partial".into(), ..StreamChunk::default() })?;
+                emit(StreamChunk {
+                    delta: "partial".into(),
+                    ..StreamChunk::default()
+                })?;
                 Err(ProviderError::Cancelled)
             })
         }),
@@ -343,8 +380,15 @@ async fn marks_partial_failed_after_visible_stream_output() {
         unused_complete(),
         Box::new(|_request, emit| {
             Box::pin(async move {
-                emit(StreamChunk { delta: "hello".into(), ..StreamChunk::default() })?;
-                Err(ProviderError::provider("idle_timeout", "stream stalled", true))
+                emit(StreamChunk {
+                    delta: "hello".into(),
+                    ..StreamChunk::default()
+                })?;
+                Err(ProviderError::provider(
+                    "idle_timeout",
+                    "stream stalled",
+                    true,
+                ))
             })
         }),
     );
@@ -363,7 +407,9 @@ async fn marks_partial_failed_after_visible_stream_output() {
         .unwrap();
 
     let failure = failed(
-        dispatcher.dispatch_stream(dispatch, &CancelToken::new(), &mut |_chunk| Ok(())).await,
+        dispatcher
+            .dispatch_stream(dispatch, &CancelToken::new(), &mut |_chunk| Ok(()))
+            .await,
     );
     assert_eq!(failure.dispatch.status, DispatchStatus::PartialFailed);
     assert!(failure.dispatch.partial);
@@ -530,10 +576,12 @@ fn dispatch_unknown_provider_fails_prepared_dispatch() {
         .unwrap();
     dispatch.provider = "ghost".into();
 
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-    let failure = runtime.block_on(async {
-        failed(dispatcher.dispatch(dispatch, &CancelToken::new()).await)
-    });
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let failure = runtime
+        .block_on(async { failed(dispatcher.dispatch(dispatch, &CancelToken::new()).await) });
     assert_eq!(failure.dispatch.status, DispatchStatus::Failed);
     assert_eq!(failure.dispatch.error_code, "provider_not_found");
     assert_eq!(failure.dispatch.error, "provider not found: ghost");
@@ -555,7 +603,10 @@ async fn echo_provider_round_trips_through_dispatcher() {
         )
         .unwrap();
 
-    let final_dispatch = dispatcher.dispatch(dispatch, &CancelToken::new()).await.unwrap();
+    let final_dispatch = dispatcher
+        .dispatch(dispatch, &CancelToken::new())
+        .await
+        .unwrap();
     assert_eq!(final_dispatch.status, DispatchStatus::Completed);
     assert_eq!(final_dispatch.output, "hello there world");
     assert_eq!(final_dispatch.finish_reason, "stop");
@@ -578,7 +629,11 @@ async fn a_message_may_carry_a_call_instead_of_text() {
             provider: "echo".to_string(),
             model: "echo-v1".to_string(),
             messages: vec![
-                Message { role: MessageRole::User, content: "where am i".into(), ..Default::default() },
+                Message {
+                    role: MessageRole::User,
+                    content: "where am i".into(),
+                    ..Default::default()
+                },
                 Message {
                     role: MessageRole::Assistant,
                     content: String::new(),

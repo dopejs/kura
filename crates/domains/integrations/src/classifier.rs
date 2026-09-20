@@ -7,9 +7,9 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    default_diagnostic_reason_code_catalog, first_non_empty, DiagnosticFailureProjection,
-    DiagnosticReasonCode, DiagnosticStatus, FreshnessState, ProviderErrorClassification,
-    RedactionStatus, RemediationOwner, RetrySafety,
+    DiagnosticFailureProjection, DiagnosticReasonCode, DiagnosticStatus, FreshnessState,
+    ProviderErrorClassification, RedactionStatus, RemediationOwner, RetrySafety,
+    default_diagnostic_reason_code_catalog, first_non_empty,
 };
 
 /// Evidence the classifier consumes. Mirrors `ProviderDiagnosticEvidence`: it carries only
@@ -46,15 +46,26 @@ pub fn diagnostic_id(prefix: &str, parts: &[&str]) -> String {
 #[must_use]
 fn classify_feishu_lark_reason(combined: &str) -> Option<DiagnosticReasonCode> {
     let c = combined;
-    let reason = if c.contains("99991663") || (c.contains("tenant_access_token_invalid") && c.contains("approval")) {
+    let reason = if c.contains("99991663")
+        || (c.contains("tenant_access_token_invalid") && c.contains("approval"))
+    {
         DiagnosticReasonCode::TenantApprovalPending
-    } else if c.contains("99991664") || c.contains("app_access_token_invalid") || c.contains("app_ticket_invalid") {
+    } else if c.contains("99991664")
+        || c.contains("app_access_token_invalid")
+        || c.contains("app_ticket_invalid")
+    {
         DiagnosticReasonCode::AppAuthorizationMissing
     } else if c.contains("99991665") || c.contains("bot_not_installed") || c.contains("bot_auth") {
         DiagnosticReasonCode::BotAuthorizationMissing
-    } else if c.contains("99991668") || c.contains("user_access_token_invalid") || c.contains("user_auth") {
+    } else if c.contains("99991668")
+        || c.contains("user_access_token_invalid")
+        || c.contains("user_auth")
+    {
         DiagnosticReasonCode::UserAuthorizationMissing
-    } else if c.contains("99991669") || c.contains("scope_not_granted") || c.contains("missing_scope") {
+    } else if c.contains("99991669")
+        || c.contains("scope_not_granted")
+        || c.contains("missing_scope")
+    {
         DiagnosticReasonCode::ScopeMissing
     } else if c.contains("refresh_token_missing") || c.contains("refresh_credentials_missing") {
         DiagnosticReasonCode::RefreshCredentialsMissing
@@ -72,7 +83,10 @@ fn classify_feishu_lark_reason(combined: &str) -> Option<DiagnosticReasonCode> {
         DiagnosticReasonCode::RateLimited
     } else if c.contains("provider_unavailable") || c.contains("service_unavailable") {
         DiagnosticReasonCode::ProviderUnavailable
-    } else if c.contains("network_failed") || c.contains("dns_failed") || c.contains("connect_timeout") {
+    } else if c.contains("network_failed")
+        || c.contains("dns_failed")
+        || c.contains("connect_timeout")
+    {
         DiagnosticReasonCode::NetworkFailed
     } else if c.contains("transient_provider_failure") || c.contains("temporary_failure") {
         DiagnosticReasonCode::TransientProviderFailure
@@ -92,7 +106,11 @@ fn classify_reason(evidence: &ProviderDiagnosticEvidence) -> DiagnosticReasonCod
         evidence.redacted_provider_code,
         evidence.message
     );
-    let combined: String = raw.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    let combined: String = raw
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
 
     let provider_lc = evidence.provider_kind.to_lowercase();
     if provider_lc.contains("feishu") || provider_lc.contains("lark") {
@@ -109,10 +127,16 @@ fn classify_reason(evidence: &ProviderDiagnosticEvidence) -> DiagnosticReasonCod
     if evidence.side_effecting && combined.contains("retry") && combined.contains("unsafe") {
         return DiagnosticReasonCode::UnsafeToRetry;
     }
-    if combined.is_empty() || combined == "ok" || combined == "healthy" || combined.contains("status:ok") {
+    if combined.is_empty()
+        || combined == "ok"
+        || combined == "healthy"
+        || combined.contains("status:ok")
+    {
         DiagnosticReasonCode::Healthy
     } else if combined.contains("ambiguous")
-        && (combined.contains("permission") || combined.contains("authorization") || combined.contains("scope"))
+        && (combined.contains("permission")
+            || combined.contains("authorization")
+            || combined.contains("scope"))
     {
         DiagnosticReasonCode::UnknownProviderError
     } else if combined.contains("transient") {
@@ -121,7 +145,10 @@ fn classify_reason(evidence: &ProviderDiagnosticEvidence) -> DiagnosticReasonCod
         DiagnosticReasonCode::AppAuthorizationMissing
     } else if combined.contains("bot_auth") || combined.contains("bot authorization") {
         DiagnosticReasonCode::BotAuthorizationMissing
-    } else if combined.contains("user_auth") || combined.contains("user authorization") || combined.contains("auth missing") {
+    } else if combined.contains("user_auth")
+        || combined.contains("user authorization")
+        || combined.contains("auth missing")
+    {
         DiagnosticReasonCode::UserAuthorizationMissing
     } else if combined.contains("tenant") && combined.contains("approval") {
         DiagnosticReasonCode::TenantApprovalPending
@@ -133,7 +160,10 @@ fn classify_reason(evidence: &ProviderDiagnosticEvidence) -> DiagnosticReasonCod
         DiagnosticReasonCode::TokenRefreshFailed
     } else if combined.contains("token") && combined.contains("missing") {
         DiagnosticReasonCode::TokenMissing
-    } else if combined.contains("expired") || combined.contains("expiry") || combined.contains("auth_expiry") {
+    } else if combined.contains("expired")
+        || combined.contains("expiry")
+        || combined.contains("auth_expiry")
+    {
         DiagnosticReasonCode::TokenExpired
     } else if combined.contains("revoked") {
         DiagnosticReasonCode::TokenRevoked
@@ -141,7 +171,10 @@ fn classify_reason(evidence: &ProviderDiagnosticEvidence) -> DiagnosticReasonCod
         DiagnosticReasonCode::TenantMismatch
     } else if combined.contains("rate") || combined.contains("429") {
         DiagnosticReasonCode::RateLimited
-    } else if combined.contains("network") || combined.contains("timeout") || combined.contains("slow_response") {
+    } else if combined.contains("network")
+        || combined.contains("timeout")
+        || combined.contains("slow_response")
+    {
         DiagnosticReasonCode::NetworkFailed
     } else if combined.contains("5xx") || combined.contains("unavailable") {
         DiagnosticReasonCode::ProviderUnavailable
@@ -156,7 +189,9 @@ fn classify_reason(evidence: &ProviderDiagnosticEvidence) -> DiagnosticReasonCod
 
 /// Classify provider evidence into a typed classification (mirrors `ClassifyProviderEvidence`).
 #[must_use]
-pub fn classify_provider_evidence(evidence: &ProviderDiagnosticEvidence) -> ProviderErrorClassification {
+pub fn classify_provider_evidence(
+    evidence: &ProviderDiagnosticEvidence,
+) -> ProviderErrorClassification {
     let mut now = evidence.created_at;
     if now == DateTime::<Utc>::default() {
         now = Utc::now();
@@ -165,7 +200,10 @@ pub fn classify_provider_evidence(evidence: &ProviderDiagnosticEvidence) -> Prov
     let (_, mut owner, mut retry_safety) = diagnostic_defaults(reason);
     let mut redaction_status = RedactionStatus::Redacted;
     let mut ambiguous = false;
-    if evidence.redaction_confidence.eq_ignore_ascii_case("uncertain") {
+    if evidence
+        .redaction_confidence
+        .eq_ignore_ascii_case("uncertain")
+    {
         reason = DiagnosticReasonCode::RedactionFailedClosed;
         let (_, o, r) = diagnostic_defaults(reason);
         owner = o;
@@ -211,7 +249,9 @@ pub fn classify_provider_evidence(evidence: &ProviderDiagnosticEvidence) -> Prov
 /// Default (status, remediation owner, retry safety) for a reason code, falling back to
 /// operator-action-needed for an unmapped reason (mirrors `DiagnosticDefaults`).
 #[must_use]
-pub fn diagnostic_defaults(reason: DiagnosticReasonCode) -> (DiagnosticStatus, RemediationOwner, RetrySafety) {
+pub fn diagnostic_defaults(
+    reason: DiagnosticReasonCode,
+) -> (DiagnosticStatus, RemediationOwner, RetrySafety) {
     for def in default_diagnostic_reason_code_catalog() {
         if def.reason_code == reason {
             let status = match reason {
@@ -227,7 +267,11 @@ pub fn diagnostic_defaults(reason: DiagnosticReasonCode) -> (DiagnosticStatus, R
                 | DiagnosticReasonCode::RedactionFailedClosed => DiagnosticStatus::Unknown,
                 _ => DiagnosticStatus::Blocked,
             };
-            return (status, def.default_remediation_owner, def.default_retry_safety);
+            return (
+                status,
+                def.default_remediation_owner,
+                def.default_retry_safety,
+            );
         }
     }
     (
@@ -242,35 +286,53 @@ pub fn diagnostic_defaults(reason: DiagnosticReasonCode) -> (DiagnosticStatus, R
 pub fn diagnostic_remediation_hint(reason: DiagnosticReasonCode) -> String {
     let hint = match reason {
         DiagnosticReasonCode::Healthy => "No operator action is required.",
-        DiagnosticReasonCode::AppAuthorizationMissing | DiagnosticReasonCode::BotAuthorizationMissing => {
+        DiagnosticReasonCode::AppAuthorizationMissing
+        | DiagnosticReasonCode::BotAuthorizationMissing => {
             "Reconnect the provider application or bot credentials."
         }
         DiagnosticReasonCode::UserAuthorizationMissing
         | DiagnosticReasonCode::TokenMissing
         | DiagnosticReasonCode::TokenExpired
-        | DiagnosticReasonCode::TokenRevoked => "Ask the affected user to reauthorize the integration account.",
-        DiagnosticReasonCode::TenantApprovalPending => "Ask a tenant administrator to approve the provider application.",
-        DiagnosticReasonCode::ScopeMissing => "Ask a tenant administrator to grant the missing provider scope.",
+        | DiagnosticReasonCode::TokenRevoked => {
+            "Ask the affected user to reauthorize the integration account."
+        }
+        DiagnosticReasonCode::TenantApprovalPending => {
+            "Ask a tenant administrator to approve the provider application."
+        }
+        DiagnosticReasonCode::ScopeMissing => {
+            "Ask a tenant administrator to grant the missing provider scope."
+        }
         DiagnosticReasonCode::RefreshCredentialsMissing
         | DiagnosticReasonCode::TokenRefreshFailed
         | DiagnosticReasonCode::TenantMismatch => {
             "Review integration credential binding and reconnect the account if needed."
         }
-        DiagnosticReasonCode::RateLimited => "Wait for the provider quota window to recover before retrying.",
-        DiagnosticReasonCode::ProviderUnavailable | DiagnosticReasonCode::TransientProviderFailure => {
-            "Retry after provider health recovers."
+        DiagnosticReasonCode::RateLimited => {
+            "Wait for the provider quota window to recover before retrying."
         }
-        DiagnosticReasonCode::NetworkFailed => "Check local network reachability from the daemon environment.",
+        DiagnosticReasonCode::ProviderUnavailable
+        | DiagnosticReasonCode::TransientProviderFailure => "Retry after provider health recovers.",
+        DiagnosticReasonCode::NetworkFailed => {
+            "Check local network reachability from the daemon environment."
+        }
         DiagnosticReasonCode::AmbiguousDownstreamCommit | DiagnosticReasonCode::UnsafeToRetry => {
             "Do not retry automatically; review downstream commit evidence."
         }
-        DiagnosticReasonCode::OperatorActionNeeded => "An operator must inspect the integration before retrying.",
-        DiagnosticReasonCode::LimitedDiagnostic => "Only limited diagnostic dimensions are available for this domain.",
-        DiagnosticReasonCode::UnsupportedDiagnostic => "Diagnostics are not yet supported for this domain.",
+        DiagnosticReasonCode::OperatorActionNeeded => {
+            "An operator must inspect the integration before retrying."
+        }
+        DiagnosticReasonCode::LimitedDiagnostic => {
+            "Only limited diagnostic dimensions are available for this domain."
+        }
+        DiagnosticReasonCode::UnsupportedDiagnostic => {
+            "Diagnostics are not yet supported for this domain."
+        }
         DiagnosticReasonCode::RedactionFailedClosed => {
             "Diagnostic evidence was suppressed because redaction could not be proven."
         }
-        DiagnosticReasonCode::UnknownProviderError => "Inspect provider evidence and integration configuration.",
+        DiagnosticReasonCode::UnknownProviderError => {
+            "Inspect provider evidence and integration configuration."
+        }
     };
     hint.to_string()
 }

@@ -192,7 +192,10 @@ fn load_reads_config_file_from_kura_dir() {
     assert_eq!(cfg.llm.default_provider, "openai_compatible");
     assert_eq!(cfg.llm.default_model, "gpt-test");
     assert_eq!(cfg.llm.default_timeout_ms, 45000);
-    assert_eq!(cfg.llm.openai_compatible.base_url, "https://api.example.com/v1");
+    assert_eq!(
+        cfg.llm.openai_compatible.base_url,
+        "https://api.example.com/v1"
+    );
     assert_eq!(cfg.llm.openai_compatible.api_key, "secret-from-env");
 }
 
@@ -207,6 +210,8 @@ fn managed_provider_home_dir_uses_isolated_test_root() {
         version: String::new(),
         llm: Default::default(),
         connectors: Default::default(),
+        egress: Default::default(),
+        store: Default::default(),
     };
     let expected = Path::new("/tmp/kura-test").join("managed-provider-home");
     assert_eq!(managed_provider_home_dir(&cfg), expected.to_string_lossy());
@@ -224,6 +229,8 @@ fn managed_provider_home_dir_isolates_embedded_like_test() {
         log_level: String::new(),
         version: String::new(),
         llm: Default::default(),
+        egress: Default::default(),
+        store: Default::default(),
         connectors: Default::default(),
     };
     let expected = Path::new("/tmp/dope-embedded").join("managed-provider-home");
@@ -282,7 +289,10 @@ fn model_roles_default_to_unrouted() {
         ModelRole::Video,
         ModelRole::Embed,
     ] {
-        assert!(!cfg.llm.roles.get(role).is_routed(), "{role:?} should be unrouted");
+        assert!(
+            !cfg.llm.roles.get(role).is_routed(),
+            "{role:?} should be unrouted"
+        );
     }
 }
 
@@ -367,7 +377,10 @@ fn load_environment_overrides_config_file() {
     set_env("KURA_LOG_LEVEL", "warn");
     set_env("KURA_VERSION", "test");
     set_env("KURA_LLM_DEFAULT_MODEL", "gpt-env");
-    set_env("KURA_LLM_OPENAI_COMPATIBLE_BASE_URL", "https://api.env.example/v1");
+    set_env(
+        "KURA_LLM_OPENAI_COMPATIBLE_BASE_URL",
+        "https://api.env.example/v1",
+    );
     set_env("KURA_LLM_OPENAI_COMPATIBLE_API_KEY", "env-secret");
     set_env("KURA_LLM_OPENAI_COMPATIBLE_MODEL", "gpt-env-provider");
 
@@ -378,9 +391,15 @@ fn load_environment_overrides_config_file() {
     assert_eq!(cfg.log_level, "warn");
     assert_eq!(cfg.version, "test");
     assert_eq!(cfg.llm.default_model, "gpt-env");
-    assert_eq!(cfg.llm.openai_compatible.base_url, "https://api.env.example/v1");
+    assert_eq!(
+        cfg.llm.openai_compatible.base_url,
+        "https://api.env.example/v1"
+    );
     assert_eq!(cfg.llm.openai_compatible.api_key, "env-secret");
-    assert!(override_dir.is_dir(), "expected overridden data dir to exist");
+    assert!(
+        override_dir.is_dir(),
+        "expected overridden data dir to exist"
+    );
 }
 
 #[test]
@@ -444,7 +463,10 @@ fn load_discord_connector_config() {
 
     set_base_env(home.path());
     set_env("DISCORD_TEST_TOKEN", "discord-secret");
-    set_env("KURA_CONNECTORS_DISCORD_ALLOWED_CHANNEL_IDS", "channel_3,channel_4");
+    set_env(
+        "KURA_CONNECTORS_DISCORD_ALLOWED_CHANNEL_IDS",
+        "channel_3,channel_4",
+    );
 
     let cfg = load().expect("load");
 
@@ -485,7 +507,10 @@ fn load_telegram_connector_config() {
 
     set_base_env(home.path());
     set_env("TELEGRAM_TEST_TOKEN", "telegram-secret");
-    set_env("KURA_CONNECTORS_TELEGRAM_ALLOWED_GROUP_IDS", "group_2,group_3");
+    set_env(
+        "KURA_CONNECTORS_TELEGRAM_ALLOWED_GROUP_IDS",
+        "group_2,group_3",
+    );
 
     let cfg = load().expect("load");
 
@@ -541,13 +566,22 @@ fn load_slack_connector_config() {
 
     assert!(cfg.connectors.slack.enabled);
     assert_eq!(cfg.connectors.slack.connector_id, "slack-bot");
-    assert_eq!(cfg.connectors.slack.workspace_binding_id, "workspace_binding_file");
+    assert_eq!(
+        cfg.connectors.slack.workspace_binding_id,
+        "workspace_binding_file"
+    );
     assert_eq!(cfg.connectors.slack.workspace_id, "workspace_file");
     assert_eq!(cfg.connectors.slack.api_base_url, "https://slack.test");
-    assert_eq!(cfg.connectors.slack.bot_token_secret_ref, "slack/slack-bot/bot_token");
+    assert_eq!(
+        cfg.connectors.slack.bot_token_secret_ref,
+        "slack/slack-bot/bot_token"
+    );
     assert_eq!(cfg.connectors.slack.oauth_client_id, "client_file");
     assert_eq!(cfg.connectors.slack.oauth_client_secret, "secret-from-env");
-    assert_eq!(cfg.connectors.slack.oauth_api_base_url, "https://slack-oauth.test");
+    assert_eq!(
+        cfg.connectors.slack.oauth_api_base_url,
+        "https://slack-oauth.test"
+    );
     assert_eq!(cfg.connectors.slack.bot_user_id, "bot_env");
     assert_eq!(
         cfg.connectors.slack.allowed_channel_ids,
@@ -593,7 +627,10 @@ fn load_matrix_connector_config() {
     assert!(cfg.connectors.matrix.enabled);
     assert_eq!(cfg.connectors.matrix.connector_id, "matrix-bot");
     assert_eq!(cfg.connectors.matrix.display_name, "Matrix Bot");
-    assert_eq!(cfg.connectors.matrix.homeserver_url, "https://matrix.example.org");
+    assert_eq!(
+        cfg.connectors.matrix.homeserver_url,
+        "https://matrix.example.org"
+    );
     assert_eq!(cfg.connectors.matrix.homeserver_id, "example.org");
     assert_eq!(cfg.connectors.matrix.bot_access_token, "matrix-secret");
     assert_eq!(

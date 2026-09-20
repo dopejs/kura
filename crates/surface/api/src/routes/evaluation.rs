@@ -72,25 +72,26 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use axum::Json as AxumJson;
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::Router;
-use axum::Json as AxumJson;
 use chrono::{DateTime, Utc};
 use kura_evaluation::{
     CandidateFilter, ComparisonFilter, ComparisonResult, CreateComparisonInput,
-    CreateReplayAttemptInput, EvaluationError, FixtureFilter, ReplayAttempt, ReplayAttemptStatus,
-    ReplayCandidate, ReplayMode, RegressionFixture,
+    CreateReplayAttemptInput, EvaluationError, FixtureFilter, RegressionFixture, ReplayAttempt,
+    ReplayAttemptStatus, ReplayCandidate, ReplayMode,
 };
-use kura_identity::{has_permission, Permission};
+use kura_identity::{Permission, has_permission};
 use kura_livevalidation::{
-    ApprovalMode, ApprovalStatus, ApprovalTarget, Attempt, AttemptFilter, AttemptStatus, Comparison,
-    FreshApproval, KillSwitch, KillSwitchFilter, KillSwitchScope, LiveValidationError, MatrixRow,
-    ReconciliationResolution, ReconciliationResolutionValue, RetentionPolicy, SafetyClass,
-    SideEffectLedgerEntry, SideEffectScope, StartFailure, StartInput, StartResult, ToolClass,
+    ApprovalMode, ApprovalStatus, ApprovalTarget, Attempt, AttemptFilter, AttemptStatus,
+    Comparison, FreshApproval, KillSwitch, KillSwitchFilter, KillSwitchScope, LiveValidationError,
+    MatrixRow, ReconciliationResolution, ReconciliationResolutionValue, RetentionPolicy,
+    SafetyClass, SideEffectLedgerEntry, SideEffectScope, StartFailure, StartInput, StartResult,
+    ToolClass,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -112,8 +113,13 @@ use crate::state::AppState;
 enum EvaluationApiError {
     Api(ApiError),
     ServiceUnavailable(String),
-    CredentialDenial { reason_code: String },
-    BillingDenial { status: StatusCode, body: serde_json::Value },
+    CredentialDenial {
+        reason_code: String,
+    },
+    BillingDenial {
+        status: StatusCode,
+        body: serde_json::Value,
+    },
 }
 
 impl From<ApiError> for EvaluationApiError {
@@ -432,16 +438,20 @@ struct RecordMatrixSmokeRequest {
 
 /// Go manager == nil check for the evaluation manager (500).
 fn evaluation_manager(state: &AppState) -> Result<Arc<kura_evaluation::Manager>, ApiError> {
-    state.evaluation.clone().ok_or_else(|| {
-        ApiError::Internal("evaluation manager is not configured".to_string())
-    })
+    state
+        .evaluation
+        .clone()
+        .ok_or_else(|| ApiError::Internal("evaluation manager is not configured".to_string()))
 }
 
 /// Go manager == nil check for the live-validation manager (500).
-fn live_validation_manager(state: &AppState) -> Result<Arc<kura_livevalidation::Manager>, ApiError> {
-    state.live_validation.clone().ok_or_else(|| {
-        ApiError::Internal("live validation manager is not configured".to_string())
-    })
+fn live_validation_manager(
+    state: &AppState,
+) -> Result<Arc<kura_livevalidation::Manager>, ApiError> {
+    state
+        .live_validation
+        .clone()
+        .ok_or_else(|| ApiError::Internal("live validation manager is not configured".to_string()))
 }
 
 /// Go queryInt: an absent or unparseable value is 0.
@@ -595,9 +605,15 @@ fn publish_evaluation_replay_event(state: &AppState, name: &str, attempt: &Repla
     payload.insert("attemptId".to_string(), json!(attempt.attempt_id));
     payload.insert("mode".to_string(), json!(attempt.mode.as_str()));
     payload.insert("status".to_string(), json!(attempt.status.as_str()));
-    payload.insert("environmentScope".to_string(), json!(attempt.environment_scope));
+    payload.insert(
+        "environmentScope".to_string(),
+        json!(attempt.environment_scope),
+    );
     payload.insert("resultRunId".to_string(), json!(attempt.result_run_id));
-    payload.insert("resultWorkflowId".to_string(), json!(attempt.result_workflow_id));
+    payload.insert(
+        "resultWorkflowId".to_string(),
+        json!(attempt.result_workflow_id),
+    );
     payload.insert("blockedReasons".to_string(), json!(attempt.blocked_reasons));
     let event = kura_events::Event {
         category: "evaluation".to_string(),
@@ -627,8 +643,14 @@ fn publish_evaluation_comparison_event(state: &AppState, comparison: &Comparison
     payload.insert("candidateId".to_string(), json!(comparison.candidate_id));
     payload.insert("attemptId".to_string(), json!(comparison.attempt_id));
     payload.insert("comparisonId".to_string(), json!(comparison.comparison_id));
-    payload.insert("terminalStatus".to_string(), json!(comparison.terminal_status.as_str()));
-    payload.insert("environmentScope".to_string(), json!(comparison.environment_scope));
+    payload.insert(
+        "terminalStatus".to_string(),
+        json!(comparison.terminal_status.as_str()),
+    );
+    payload.insert(
+        "environmentScope".to_string(),
+        json!(comparison.environment_scope),
+    );
     payload.insert("driftPlanes".to_string(), json!(planes));
     let event = kura_events::Event {
         category: "evaluation".to_string(),
@@ -651,11 +673,8 @@ fn publish_live_validation_start_event(state: &AppState, result: &StartResult) {
         AttemptStatus::AWAITING_APPROVAL => kura_events::LIVE_VALIDATION_AWAITING_APPROVAL_NAME,
         _ => kura_events::LIVE_VALIDATION_STARTED_NAME,
     };
-    let event = kura_events::live_validation_attempt_event(
-        name,
-        result.attempt.clone(),
-        &result.denials,
-    );
+    let event =
+        kura_events::live_validation_attempt_event(name, result.attempt.clone(), &result.denials);
     state.event_bus.publish(event);
 }
 
@@ -699,10 +718,18 @@ async fn list_replay_candidates(
 ) -> Result<Json<ReplayCandidateListResponse>, ApiError> {
     let manager = evaluation_manager(&state)?;
     let filter = CandidateFilter {
-        candidate_kind: parse_enum(params.get("candidateKind").map(String::as_str).unwrap_or("")),
+        candidate_kind: parse_enum(
+            params
+                .get("candidateKind")
+                .map(String::as_str)
+                .unwrap_or(""),
+        ),
         source_kind: parse_enum(params.get("sourceKind").map(String::as_str).unwrap_or("")),
         readiness_status: parse_enum(
-            params.get("readinessStatus").map(String::as_str).unwrap_or(""),
+            params
+                .get("readinessStatus")
+                .map(String::as_str)
+                .unwrap_or(""),
         ),
         limit: query_int(&params, "limit"),
         ..CandidateFilter::default()
@@ -729,8 +756,8 @@ async fn create_replay_candidate(
         // Go decodes the body straight into the resource and the manager fills
         // zero timestamps; the Rust serde shape requires them, so inject the
         // manager's effective "now" when the client omitted them.
-        let mut value: serde_json::Value = serde_json::from_slice(&body)
-            .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&body).map_err(|err| ApiError::BadRequest(err.to_string()))?;
         if value.get("createdAt").is_none() {
             value["createdAt"] = serde_json::json!(Utc::now());
         }
@@ -839,7 +866,9 @@ async fn replay_candidate_live_validations(
             .map_err(|err| EvaluationApiError::Api(ApiError::BadRequest(err.to_string())))?
     };
     if !input.candidate_id.is_empty() && input.candidate_id != candidate_id {
-        return Err(bad_request("candidateId must match the replay candidate route"));
+        return Err(bad_request(
+            "candidateId must match the replay candidate route",
+        ));
     }
     input.candidate_id = candidate_id;
     if input.candidate_tool_classes.is_empty() {
@@ -931,7 +960,10 @@ async fn list_comparisons(
         candidate_id: params.get("candidateId").cloned().unwrap_or_default(),
         attempt_id: params.get("attemptId").cloned().unwrap_or_default(),
         terminal_status: parse_enum(
-            params.get("terminalStatus").map(String::as_str).unwrap_or(""),
+            params
+                .get("terminalStatus")
+                .map(String::as_str)
+                .unwrap_or(""),
         ),
         limit: query_int(&params, "limit"),
         ..ComparisonFilter::default()
@@ -999,7 +1031,10 @@ async fn list_live_validations(
         limit: query_int(&params, "limit"),
         ..AttemptFilter::default()
     };
-    let items = manager.list_attempts(filter).await.map_err(ApiError::internal)?;
+    let items = manager
+        .list_attempts(filter)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(LiveValidationAttemptListResponse {
         tenant_id,
         environment_scope: manager.environment_scope().to_string(),
@@ -1035,9 +1070,12 @@ async fn get_live_validation(
     tenant: Option<Extension<TenantContext>>,
 ) -> Result<Json<Attempt>, ApiError> {
     let manager = live_validation_manager(&state)?;
-    let item = with_tenant_context(tenant.as_ref().map(|t| &t.0), manager.get_attempt(&validation_id))
-        .await
-        .map_err(ApiError::internal)?;
+    let item = with_tenant_context(
+        tenant.as_ref().map(|t| &t.0),
+        manager.get_attempt(&validation_id),
+    )
+    .await
+    .map_err(ApiError::internal)?;
     match item {
         Some(item) => Ok(Json(item)),
         None => Err(ApiError::NotFound("live validation not found".to_string())),
@@ -1062,7 +1100,10 @@ async fn live_validation_ledger(
         limit: query_int(&params, "limit"),
         ..kura_livevalidation::LedgerFilter::default()
     };
-    let items = manager.list_ledger_entries(filter).await.map_err(ApiError::internal)?;
+    let items = manager
+        .list_ledger_entries(filter)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(LiveValidationLedgerResponse {
         validation_id,
         tenant_id,
@@ -1106,9 +1147,12 @@ async fn live_validation_compare(
     tenant: Option<Extension<TenantContext>>,
 ) -> Result<(StatusCode, AxumJson<Comparison>), ApiError> {
     let manager = live_validation_manager(&state)?;
-    let comparison = with_tenant_context(tenant.as_ref().map(|t| &t.0), manager.create_comparison(&validation_id))
-        .await
-        .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+    let comparison = with_tenant_context(
+        tenant.as_ref().map(|t| &t.0),
+        manager.create_comparison(&validation_id),
+    )
+    .await
+    .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     let event = kura_events::live_validation_comparison_event(comparison.clone());
     state.event_bus.publish(event);
     Ok((StatusCode::ACCEPTED, AxumJson(comparison)))
@@ -1140,11 +1184,9 @@ async fn live_validation_reconcile(
     )
     .await
     .map_err(|err| match err {
-            LiveValidationError::ReconciliationPermissionDenied => {
-                ApiError::Forbidden(err.to_string())
-            }
-            other => ApiError::BadRequest(other.to_string()),
-        })?;
+        LiveValidationError::ReconciliationPermissionDenied => ApiError::Forbidden(err.to_string()),
+        other => ApiError::BadRequest(other.to_string()),
+    })?;
     let event = kura_events::live_validation_reconciliation_event(resolution.clone());
     state.event_bus.publish(event);
     Ok(Json(resolution))
@@ -1176,7 +1218,10 @@ async fn list_kill_switches(
         limit: query_int(&params, "limit"),
         ..KillSwitchFilter::default()
     };
-    let items = manager.list_kill_switches(filter).await.map_err(ApiError::internal)?;
+    let items = manager
+        .list_kill_switches(filter)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "tenantId": tenant_id, "items": items })))
 }
 
@@ -1206,11 +1251,9 @@ async fn set_kill_switch(
     )
     .await
     .map_err(|err| match err {
-            LiveValidationError::KillSwitchPermissionDenied => {
-                ApiError::Forbidden(err.to_string())
-            }
-            other => ApiError::BadRequest(other.to_string()),
-        })?;
+        LiveValidationError::KillSwitchPermissionDenied => ApiError::Forbidden(err.to_string()),
+        other => ApiError::BadRequest(other.to_string()),
+    })?;
     let event = kura_events::live_validation_attempt_event(
         kura_events::LIVE_VALIDATION_KILL_SWITCH_CHANGED_NAME,
         Attempt {
@@ -1256,7 +1299,10 @@ async fn live_validation_connector_conformance(
         tenant.as_ref().map(|t| &t.0),
         &[kura_identity::Permission::ConnectorsManage],
     )?;
-    let tenant_id = tenant.as_ref().map(|t| t.0.0.tenant_id.clone()).unwrap_or_default();
+    let tenant_id = tenant
+        .as_ref()
+        .map(|t| t.0.0.tenant_id.clone())
+        .unwrap_or_default();
     let connector_id = params
         .get("connectorId")
         .map(|value| value.trim().to_string())
@@ -1265,14 +1311,16 @@ async fn live_validation_connector_conformance(
         return Err(bad_request("connectorId is required"));
     }
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_connector_conformance_results(&tenant_id, &connector_id, Utc::now())
         .map_err(ApiError::from_store)?;
     if items.is_empty() {
         // Go: http.NotFound (plain-text 404); the JSON body is the crate's
         // standard not-found shape.
-        return Err(EvaluationApiError::Api(ApiError::NotFound("not found".to_string())));
+        return Err(EvaluationApiError::Api(ApiError::NotFound(
+            "not found".to_string(),
+        )));
     }
     Ok(Json(LiveValidationDiscordConformanceResponse {
         tenant_id,
@@ -1292,7 +1340,10 @@ async fn live_validation_discord_smoke(
         tenant.as_ref().map(|t| &t.0),
         &[kura_identity::Permission::ConnectorsManage],
     )?;
-    let tenant_id = tenant.as_ref().map(|t| t.0.0.tenant_id.clone()).unwrap_or_default();
+    let tenant_id = tenant
+        .as_ref()
+        .map(|t| t.0.0.tenant_id.clone())
+        .unwrap_or_default();
     let connector_id = params
         .get("connectorId")
         .map(|value| value.trim().to_string())
@@ -1301,13 +1352,15 @@ async fn live_validation_discord_smoke(
         return Err(bad_request("connectorId is required"));
     }
     let evidence = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .latest_discord_smoke_evidence(&tenant_id, &connector_id, Utc::now())
         .map_err(ApiError::from_store)?;
     match evidence {
         Some(evidence) => Ok(Json(evidence)),
-        None => Err(EvaluationApiError::Api(ApiError::NotFound("not found".to_string()))),
+        None => Err(EvaluationApiError::Api(ApiError::NotFound(
+            "not found".to_string(),
+        ))),
     }
 }
 
@@ -1322,7 +1375,10 @@ async fn live_validation_telegram_smoke(
         tenant.as_ref().map(|t| &t.0),
         &[kura_identity::Permission::ConnectorsManage],
     )?;
-    let tenant_id = tenant.as_ref().map(|t| t.0.0.tenant_id.clone()).unwrap_or_default();
+    let tenant_id = tenant
+        .as_ref()
+        .map(|t| t.0.0.tenant_id.clone())
+        .unwrap_or_default();
     let connector_id = params
         .get("connectorId")
         .map(|value| value.trim().to_string())
@@ -1331,13 +1387,15 @@ async fn live_validation_telegram_smoke(
         return Err(bad_request("connectorId is required"));
     }
     let evidence = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .latest_telegram_smoke_evidence(&tenant_id, &connector_id, Utc::now())
         .map_err(ApiError::from_store)?;
     match evidence {
         Some(evidence) => Ok(Json(evidence)),
-        None => Err(EvaluationApiError::Api(ApiError::NotFound("not found".to_string()))),
+        None => Err(EvaluationApiError::Api(ApiError::NotFound(
+            "not found".to_string(),
+        ))),
     }
 }
 
@@ -1353,7 +1411,10 @@ async fn live_validation_slack_smoke(
         tenant.as_ref().map(|t| &t.0),
         &[kura_identity::Permission::ConnectorsManage],
     )?;
-    let tenant_id = tenant.as_ref().map(|t| t.0.0.tenant_id.clone()).unwrap_or_default();
+    let tenant_id = tenant
+        .as_ref()
+        .map(|t| t.0.0.tenant_id.clone())
+        .unwrap_or_default();
     let connector_id = params
         .get("connectorId")
         .map(|value| value.trim().to_string())
@@ -1362,13 +1423,15 @@ async fn live_validation_slack_smoke(
         return Err(bad_request("connectorId is required"));
     }
     let evidence = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .latest_slack_smoke_evidence(&tenant_id, &connector_id, Utc::now())
         .map_err(ApiError::from_store)?;
     match evidence {
         Some(evidence) => Ok(Json(project_slack_smoke_evidence_resource(&evidence))),
-        None => Err(EvaluationApiError::Api(ApiError::NotFound("not found".to_string()))),
+        None => Err(EvaluationApiError::Api(ApiError::NotFound(
+            "not found".to_string(),
+        ))),
     }
 }
 
@@ -1383,7 +1446,10 @@ async fn live_validation_matrix_smoke(
         tenant.as_ref().map(|t| &t.0),
         &[kura_identity::Permission::ConnectorsManage],
     )?;
-    let tenant_id = tenant.as_ref().map(|t| t.0.0.tenant_id.clone()).unwrap_or_default();
+    let tenant_id = tenant
+        .as_ref()
+        .map(|t| t.0.0.tenant_id.clone())
+        .unwrap_or_default();
     let connector_id = params
         .get("connectorId")
         .map(|value| value.trim().to_string())
@@ -1392,13 +1458,15 @@ async fn live_validation_matrix_smoke(
         return Err(bad_request("connectorId is required"));
     }
     let evidence = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .latest_matrix_smoke_evidence(&tenant_id, &connector_id, Utc::now())
         .map_err(ApiError::from_store)?;
     match evidence {
         Some(evidence) => Ok(Json(evidence)),
-        None => Err(EvaluationApiError::Api(ApiError::NotFound("not found".to_string()))),
+        None => Err(EvaluationApiError::Api(ApiError::NotFound(
+            "not found".to_string(),
+        ))),
     }
 }
 
@@ -1413,7 +1481,10 @@ async fn record_matrix_smoke(
 ) -> Result<(StatusCode, AxumJson<kura_store::MatrixSmokeEvidenceRecord>), EvaluationApiError> {
     let _manager = live_validation_manager(&state)?;
     require_live_validation_execute(tenant.as_ref().map(|t| &t.0))?;
-    let tenant_id = tenant.as_ref().map(|t| t.0.0.tenant_id.clone()).unwrap_or_default();
+    let tenant_id = tenant
+        .as_ref()
+        .map(|t| t.0.0.tenant_id.clone())
+        .unwrap_or_default();
     let mut request: RecordMatrixSmokeRequest = if body.is_empty() {
         RecordMatrixSmokeRequest::default()
     } else {
@@ -1427,7 +1498,9 @@ async fn record_matrix_smoke(
         return Err(bad_request("connectorId is required"));
     }
     if request.authorization_mode.trim() == "safe_live" {
-        return Err(bad_request("matrix safe-live smoke executor is not configured"));
+        return Err(bad_request(
+            "matrix safe-live smoke executor is not configured",
+        ));
     }
     let record = matrix_smoke_record_from_request(&tenant_id, &request)?;
     state
@@ -1465,7 +1538,10 @@ fn matrix_smoke_record_from_request(
         }
         _ => return Err(bad_request("status must be passed, failed, or skipped")),
     }
-    let validated_at = input.validated_at.unwrap_or_else(Utc::now).with_timezone(&Utc);
+    let validated_at = input
+        .validated_at
+        .unwrap_or_else(Utc::now)
+        .with_timezone(&Utc);
     let connector_id = input.connector_id.trim().to_string();
     let binding_id = first_non_empty_string(
         &input.homeserver_binding_id,
@@ -1538,7 +1614,6 @@ fn project_slack_smoke_evidence_resource(
 // DAOs; mutation routes requiring a capability check it with the
 // evaluation.manage wildcard (Go evaluationProductRequestHasPermission).
 // ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EvaluationProductListResponse<T> {
@@ -1723,7 +1798,9 @@ async fn list_discovery_policies(
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     let enabled = match params.get("enabled") {
         Some(raw) if !raw.trim().is_empty() => Some(
-            raw.trim().parse::<bool>().map_err(|_| ApiError::BadRequest("enabled must be a boolean".to_string()))?,
+            raw.trim()
+                .parse::<bool>()
+                .map_err(|_| ApiError::BadRequest("enabled must be a boolean".to_string()))?,
         ),
         _ => None,
     };
@@ -1735,7 +1812,11 @@ async fn list_discovery_policies(
         },
         enabled,
     };
-    let items = state.store.lock().list_discovery_policies(&filter).map_err(ApiError::from_store)?;
+    let items = state
+        .store_pool
+        .read()
+        .list_discovery_policies(&filter)
+        .map_err(ApiError::from_store)?;
     Ok(Json(EvaluationProductListResponse {
         tenant_id: tc.tenant_id.clone(),
         page: product_page(&params),
@@ -1751,8 +1832,8 @@ async fn get_discovery_policy(
 ) -> Result<Json<kura_evaluation::DiscoveryPolicy>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     let item = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_discovery_policy(&tc.tenant_id, &policy_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("discovery policy not found".to_string()))?;
@@ -1808,10 +1889,22 @@ async fn list_discovery_runs(
             cursor: params.get("cursor").cloned().unwrap_or_default(),
             limit: query_int(&params, "limit"),
         },
-        status: parse_enum::<kura_evaluation::ProductLifecycleStatus>(params.get("status").cloned().unwrap_or_default().as_str()),
-        source_kind: parse_enum::<kura_evaluation::SourceKind>(params.get("sourceKind").cloned().unwrap_or_default().as_str()),
+        status: parse_enum::<kura_evaluation::ProductLifecycleStatus>(
+            params.get("status").cloned().unwrap_or_default().as_str(),
+        ),
+        source_kind: parse_enum::<kura_evaluation::SourceKind>(
+            params
+                .get("sourceKind")
+                .cloned()
+                .unwrap_or_default()
+                .as_str(),
+        ),
     };
-    let items = state.store.lock().list_discovery_runs(&filter).map_err(ApiError::from_store)?;
+    let items = state
+        .store_pool
+        .read()
+        .list_discovery_runs(&filter)
+        .map_err(ApiError::from_store)?;
     Ok(Json(EvaluationProductListResponse {
         tenant_id: tc.tenant_id.clone(),
         page: product_page(&params),
@@ -1844,8 +1937,8 @@ async fn start_discovery_run(
         }
     } else {
         let existing = state
-            .store
-            .lock()
+            .store_pool
+            .read()
             .get_discovery_policy(&tc.tenant_id, &input.policy_id)
             .map_err(ApiError::from_store)?
             .ok_or_else(|| ApiError::NotFound("discovery policy not found".to_string()))?;
@@ -1867,7 +1960,11 @@ async fn start_discovery_run(
         now,
     )
     .map_err(|err| ApiError::BadRequest(err.to_string()))?;
-    state.store.lock().save_discovery_run(run.clone()).map_err(ApiError::from_store)?;
+    state
+        .store
+        .lock()
+        .save_discovery_run(run.clone())
+        .map_err(ApiError::from_store)?;
     Ok((StatusCode::ACCEPTED, AxumJson(run)))
 }
 
@@ -1880,8 +1977,8 @@ async fn get_discovery_run(
 ) -> Result<Json<kura_evaluation::DiscoveryRun>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     let item = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_discovery_run(&tc.tenant_id, &discovery_run_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("discovery run not found".to_string()))?;
@@ -1903,12 +2000,40 @@ async fn list_discovered_candidates(
             limit: query_int(&params, "limit"),
         },
         discovery_run_id: params.get("discoveryRunId").cloned().unwrap_or_default(),
-        source_kind: parse_enum::<kura_evaluation::SourceKind>(params.get("sourceKind").cloned().unwrap_or_default().as_str()),
-        readiness_status: parse_enum::<kura_evaluation::ReadinessStatus>(params.get("readinessStatus").cloned().unwrap_or_default().as_str()),
-        suppression_state: parse_enum::<kura_evaluation::SuppressionState>(params.get("suppressionState").cloned().unwrap_or_default().as_str()),
-        score_band: parse_enum::<kura_evaluation::ScoreBand>(params.get("scoreBand").cloned().unwrap_or_default().as_str()),
+        source_kind: parse_enum::<kura_evaluation::SourceKind>(
+            params
+                .get("sourceKind")
+                .cloned()
+                .unwrap_or_default()
+                .as_str(),
+        ),
+        readiness_status: parse_enum::<kura_evaluation::ReadinessStatus>(
+            params
+                .get("readinessStatus")
+                .cloned()
+                .unwrap_or_default()
+                .as_str(),
+        ),
+        suppression_state: parse_enum::<kura_evaluation::SuppressionState>(
+            params
+                .get("suppressionState")
+                .cloned()
+                .unwrap_or_default()
+                .as_str(),
+        ),
+        score_band: parse_enum::<kura_evaluation::ScoreBand>(
+            params
+                .get("scoreBand")
+                .cloned()
+                .unwrap_or_default()
+                .as_str(),
+        ),
     };
-    let items = state.store.lock().list_discovered_candidates(&filter).map_err(ApiError::from_store)?;
+    let items = state
+        .store_pool
+        .read()
+        .list_discovered_candidates(&filter)
+        .map_err(ApiError::from_store)?;
     Ok(Json(EvaluationProductListResponse {
         tenant_id: tc.tenant_id.clone(),
         page: product_page(&params),
@@ -1925,8 +2050,8 @@ async fn get_discovered_candidate(
 ) -> Result<Json<kura_evaluation::DiscoveredCandidate>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     let item = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_discovered_candidate(&tc.tenant_id, &discovered_candidate_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("discovered candidate not found".to_string()))?;
@@ -1945,18 +2070,20 @@ async fn materialize_product_fixture(
 ) -> Result<(StatusCode, AxumJson<ProductFixtureMutationResponse>), ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationFixtureManage) {
-        return Err(ApiError::Forbidden("evaluation.fixture.manage is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.fixture.manage is required".to_string(),
+        ));
     }
     let input: MaterializeProductFixtureRequest = decode_optional_json_body(&body)?;
     let candidate = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_discovered_candidate(&tc.tenant_id, &discovered_candidate_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("discovered candidate not found".to_string()))?;
     let evidence = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_latest_candidate_evidence(&tc.tenant_id, &discovered_candidate_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::BadRequest("candidate evidence not found".to_string()))?;
@@ -1986,10 +2113,13 @@ async fn materialize_product_fixture(
         .lock()
         .save_fixture_revision(revision.clone())
         .map_err(ApiError::from_store)?;
-    Ok((StatusCode::CREATED, AxumJson(ProductFixtureMutationResponse {
-        fixture,
-        revision: Some(revision),
-    })))
+    Ok((
+        StatusCode::CREATED,
+        AxumJson(ProductFixtureMutationResponse {
+            fixture,
+            revision: Some(revision),
+        }),
+    ))
 }
 
 /// GET /v1/evaluation/product-fixtures (Go handleEvaluationProductFixtures).
@@ -2001,14 +2131,20 @@ async fn list_product_fixtures(
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::ProductManagedFixture>>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationFixtureRead) {
-        return Err(ApiError::Forbidden("evaluation.fixture.read is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.fixture.read is required".to_string(),
+        ));
     }
     let filter = kura_evaluation::ProductListFilter {
         tenant_id: tc.tenant_id.clone(),
         cursor: params.get("cursor").cloned().unwrap_or_default(),
         limit: query_int(&params, "limit"),
     };
-    let items = state.store.lock().list_product_fixtures(&filter).map_err(ApiError::from_store)?;
+    let items = state
+        .store_pool
+        .read()
+        .list_product_fixtures(&filter)
+        .map_err(ApiError::from_store)?;
     Ok(Json(EvaluationProductListResponse {
         tenant_id: tc.tenant_id.clone(),
         page: product_page(&params),
@@ -2025,11 +2161,13 @@ async fn get_product_fixture(
 ) -> Result<Json<kura_evaluation::ProductManagedFixture>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationFixtureRead) {
-        return Err(ApiError::Forbidden("evaluation.fixture.read is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.fixture.read is required".to_string(),
+        ));
     }
     let item = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_product_fixture(&tc.tenant_id, &fixture_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("product fixture not found".to_string()))?;
@@ -2046,11 +2184,13 @@ async fn list_fixture_revisions(
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::FixtureRevision>>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationFixtureRead) {
-        return Err(ApiError::Forbidden("evaluation.fixture.read is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.fixture.read is required".to_string(),
+        ));
     }
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_fixture_revisions(&tc.tenant_id, &fixture_id, query_int(&params, "limit"))
         .map_err(ApiError::from_store)?;
     Ok(Json(EvaluationProductListResponse {
@@ -2071,21 +2211,26 @@ async fn create_fixture_revision(
 ) -> Result<(StatusCode, AxumJson<ProductFixtureMutationResponse>), ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationFixtureManage) {
-        return Err(ApiError::Forbidden("evaluation.fixture.manage is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.fixture.manage is required".to_string(),
+        ));
     }
     let input: CreateFixtureRevisionRequest = decode_optional_json_body(&body)?;
     let fixture = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_product_fixture(&tc.tenant_id, &fixture_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("product fixture not found".to_string()))?;
     let revisions = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_fixture_revisions(&tc.tenant_id, &fixture_id, 1)
         .map_err(ApiError::from_store)?;
-    let next_revision_number = revisions.first().map(|r| r.revision_number + 1).unwrap_or(1);
+    let next_revision_number = revisions
+        .first()
+        .map(|r| r.revision_number + 1)
+        .unwrap_or(1);
     let (updated, revision) = kura_evaluation::create_product_fixture_revision(
         fixture,
         kura_evaluation::FixtureRevisionInput {
@@ -2111,10 +2256,13 @@ async fn create_fixture_revision(
         .lock()
         .save_fixture_revision(revision.clone())
         .map_err(ApiError::from_store)?;
-    Ok((StatusCode::CREATED, AxumJson(ProductFixtureMutationResponse {
-        fixture: updated,
-        revision: Some(revision),
-    })))
+    Ok((
+        StatusCode::CREATED,
+        AxumJson(ProductFixtureMutationResponse {
+            fixture: updated,
+            revision: Some(revision),
+        }),
+    ))
 }
 
 /// POST /v1/evaluation/product-fixtures/{fixture_id}/review (Go
@@ -2127,12 +2275,14 @@ async fn review_product_fixture_route(
 ) -> Result<Json<ProductFixtureMutationResponse>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationFixtureReview) {
-        return Err(ApiError::Forbidden("evaluation.fixture.review is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.fixture.review is required".to_string(),
+        ));
     }
     let input: ReviewProductFixtureRequest = decode_optional_json_body(&body)?;
     let fixture = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_product_fixture(&tc.tenant_id, &fixture_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("product fixture not found".to_string()))?;
@@ -2140,21 +2290,24 @@ async fn review_product_fixture_route(
         "approved" => kura_evaluation::FixtureReviewDecision::Approved,
         "rejected" => kura_evaluation::FixtureReviewDecision::Rejected,
         "needs_changes" => kura_evaluation::FixtureReviewDecision::NeedsChanges,
-        _ => return Err(ApiError::BadRequest("invalid fixture review decision".to_string())),
+        _ => {
+            return Err(ApiError::BadRequest(
+                "invalid fixture review decision".to_string(),
+            ));
+        }
     };
-    let updated = kura_evaluation::review_product_fixture(
-        fixture,
-        &input.revision_id,
-        decision,
-        Utc::now(),
-    )
-    .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+    let updated =
+        kura_evaluation::review_product_fixture(fixture, &input.revision_id, decision, Utc::now())
+            .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     state
         .store
         .lock()
         .upsert_product_fixture(updated.clone())
         .map_err(ApiError::from_store)?;
-    Ok(Json(ProductFixtureMutationResponse { fixture: updated, revision: None }))
+    Ok(Json(ProductFixtureMutationResponse {
+        fixture: updated,
+        revision: None,
+    }))
 }
 
 /// POST /v1/evaluation/product-fixtures/{fixture_id}/suppress (Go
@@ -2166,11 +2319,13 @@ async fn suppress_product_fixture_route(
 ) -> Result<Json<ProductFixtureMutationResponse>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationFixtureSuppress) {
-        return Err(ApiError::Forbidden("evaluation.fixture.suppress is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.fixture.suppress is required".to_string(),
+        ));
     }
     let fixture = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_product_fixture(&tc.tenant_id, &fixture_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("product fixture not found".to_string()))?;
@@ -2181,7 +2336,10 @@ async fn suppress_product_fixture_route(
         .lock()
         .upsert_product_fixture(updated.clone())
         .map_err(ApiError::from_store)?;
-    Ok(Json(ProductFixtureMutationResponse { fixture: updated, revision: None }))
+    Ok(Json(ProductFixtureMutationResponse {
+        fixture: updated,
+        revision: None,
+    }))
 }
 
 /// POST /v1/evaluation/suppressions — create a suppression (201; Go
@@ -2196,7 +2354,10 @@ async fn create_suppression(
     let now = Utc::now();
     let item = kura_evaluation::SuppressionRecord {
         suppression_id: if input.suppression_id.is_empty() {
-            format!("suppression_{}", now.timestamp_nanos_opt().unwrap_or_default())
+            format!(
+                "suppression_{}",
+                now.timestamp_nanos_opt().unwrap_or_default()
+            )
         } else {
             input.suppression_id
         },
@@ -2215,7 +2376,11 @@ async fn create_suppression(
         expires_at: input.expires_at,
         active: true,
     };
-    state.store.lock().create_suppression(item.clone()).map_err(ApiError::BadRequest)?;
+    state
+        .store
+        .lock()
+        .create_suppression(item.clone())
+        .map_err(ApiError::BadRequest)?;
     Ok((StatusCode::CREATED, AxumJson(item)))
 }
 
@@ -2228,14 +2393,20 @@ async fn list_replay_campaigns(
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::ReplayCampaign>>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationCampaignRead) {
-        return Err(ApiError::Forbidden("evaluation.campaign.read is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.campaign.read is required".to_string(),
+        ));
     }
     let filter = kura_evaluation::ProductListFilter {
         tenant_id: tc.tenant_id.clone(),
         cursor: params.get("cursor").cloned().unwrap_or_default(),
         limit: query_int(&params, "limit"),
     };
-    let items = state.store.lock().list_replay_campaigns(&filter).map_err(ApiError::from_store)?;
+    let items = state
+        .store_pool
+        .read()
+        .list_replay_campaigns(&filter)
+        .map_err(ApiError::from_store)?;
     Ok(Json(EvaluationProductListResponse {
         tenant_id: tc.tenant_id.clone(),
         page: product_page(&params),
@@ -2253,7 +2424,9 @@ async fn create_replay_campaign_route(
 ) -> Result<(StatusCode, AxumJson<kura_evaluation::ReplayCampaign>), ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationCampaignManage) {
-        return Err(ApiError::Forbidden("evaluation.campaign.manage is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.campaign.manage is required".to_string(),
+        ));
     }
     let input: CreateCampaignRequest = decode_optional_json_body(&body)?;
     let selections = campaign_source_selections(&state, tc, &input.source_selections)?;
@@ -2277,7 +2450,11 @@ async fn create_replay_campaign_route(
         .save_replay_campaign(campaign.clone())
         .map_err(ApiError::from_store)?;
     for item in items {
-        state.store.lock().save_campaign_item(item).map_err(ApiError::from_store)?;
+        state
+            .store
+            .lock()
+            .save_campaign_item(item)
+            .map_err(ApiError::from_store)?;
     }
     Ok((StatusCode::CREATED, AxumJson(campaign)))
 }
@@ -2291,11 +2468,13 @@ async fn get_replay_campaign(
 ) -> Result<Json<kura_evaluation::ReplayCampaign>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationCampaignRead) {
-        return Err(ApiError::Forbidden("evaluation.campaign.read is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.campaign.read is required".to_string(),
+        ));
     }
     let item = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_replay_campaign(&tc.tenant_id, &campaign_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("campaign not found".to_string()))?;
@@ -2312,7 +2491,9 @@ async fn list_campaign_items(
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::CampaignItem>>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationCampaignRead) {
-        return Err(ApiError::Forbidden("evaluation.campaign.read is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.campaign.read is required".to_string(),
+        ));
     }
     let filter = kura_evaluation::ProductListFilter {
         tenant_id: tc.tenant_id.clone(),
@@ -2320,8 +2501,8 @@ async fn list_campaign_items(
         limit: query_int(&params, "limit"),
     };
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_campaign_items(&filter, &campaign_id)
         .map_err(ApiError::from_store)?;
     Ok(Json(EvaluationProductListResponse {
@@ -2341,7 +2522,9 @@ async fn list_campaign_attempt_groups(
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::CampaignAttemptGroup>>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationCampaignRead) {
-        return Err(ApiError::Forbidden("evaluation.campaign.read is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.campaign.read is required".to_string(),
+        ));
     }
     let filter = kura_evaluation::ProductListFilter {
         tenant_id: tc.tenant_id.clone(),
@@ -2349,8 +2532,8 @@ async fn list_campaign_attempt_groups(
         limit: query_int(&params, "limit"),
     };
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_campaign_attempt_groups(&filter, &campaign_id)
         .map_err(ApiError::from_store)?;
     Ok(Json(EvaluationProductListResponse {
@@ -2370,11 +2553,13 @@ async fn campaign_transition_route(
 ) -> Result<Json<kura_evaluation::ReplayCampaign>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationCampaignManage) {
-        return Err(ApiError::Forbidden("evaluation.campaign.manage is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.campaign.manage is required".to_string(),
+        ));
     }
     let campaign = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_replay_campaign(&tc.tenant_id, &campaign_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("campaign not found".to_string()))?;
@@ -2405,7 +2590,9 @@ async fn list_campaign_tool_call_inspections(
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::ToolCallInspection>>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationInspectionRead) {
-        return Err(ApiError::Forbidden("evaluation.inspection.read is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.inspection.read is required".to_string(),
+        ));
     }
     let filter = kura_evaluation::ProductListFilter {
         tenant_id: tc.tenant_id.clone(),
@@ -2413,8 +2600,8 @@ async fn list_campaign_tool_call_inspections(
         limit: query_int(&params, "limit"),
     };
     let items = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_tool_call_inspections(&filter, &campaign_id)
         .map_err(ApiError::from_store)?;
     Ok(Json(EvaluationProductListResponse {
@@ -2433,14 +2620,20 @@ async fn list_dashboard_projections(
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::DashboardProjection>>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationDashboardRead) {
-        return Err(ApiError::Forbidden("evaluation.dashboard.read is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.dashboard.read is required".to_string(),
+        ));
     }
     let filter = kura_evaluation::ProductListFilter {
         tenant_id: tc.tenant_id.clone(),
         cursor: params.get("cursor").cloned().unwrap_or_default(),
         limit: query_int(&params, "limit"),
     };
-    let items = state.store.lock().list_dashboard_projections(&filter).map_err(ApiError::from_store)?;
+    let items = state
+        .store_pool
+        .read()
+        .list_dashboard_projections(&filter)
+        .map_err(ApiError::from_store)?;
     Ok(Json(EvaluationProductListResponse {
         tenant_id: tc.tenant_id.clone(),
         page: product_page(&params),
@@ -2458,11 +2651,13 @@ async fn get_tool_call_inspection(
 ) -> Result<Json<kura_evaluation::ToolCallInspection>, ApiError> {
     let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
     if !evaluation_product_permission(tc, Permission::EvaluationInspectionRead) {
-        return Err(ApiError::Forbidden("evaluation.inspection.read is required".to_string()));
+        return Err(ApiError::Forbidden(
+            "evaluation.inspection.read is required".to_string(),
+        ));
     }
     let item = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .get_tool_call_inspection(&tc.tenant_id, &inspection_id)
         .map_err(ApiError::from_store)?
         .ok_or_else(|| ApiError::NotFound("tool-call inspection not found".to_string()))?;
@@ -2489,12 +2684,19 @@ async fn apply_evaluation_retention(
         resource_kinds: input.resource_kinds,
         dry_run: input.dry_run,
     };
-    let application_ids = state.store.lock().apply_retention(&filter).map_err(ApiError::from_store)?;
-    Ok((StatusCode::OK, AxumJson(serde_json::json!({
-        "tenantId": tc.tenant_id,
-        "dryRun": input.dry_run,
-        "applicationIds": application_ids,
-    }))))
+    let application_ids = state
+        .store
+        .lock()
+        .apply_retention(&filter)
+        .map_err(ApiError::from_store)?;
+    Ok((
+        StatusCode::OK,
+        AxumJson(serde_json::json!({
+            "tenantId": tc.tenant_id,
+            "dryRun": input.dry_run,
+            "applicationIds": application_ids,
+        })),
+    ))
 }
 
 /// Go campaignSourceSelectionsFromRequest: resolves each selection against
@@ -2517,12 +2719,14 @@ fn campaign_source_selections(
         match input.source_type {
             kura_evaluation::ProductResourceKind::ProductFixture => {
                 let fixture = state
-                    .store
-                    .lock()
+                    .store_pool
+                    .read()
                     .get_product_fixture(&tc.tenant_id, &input.source_id)
                     .map_err(ApiError::from_store)?
                     .ok_or_else(|| {
-                        ApiError::BadRequest(kura_evaluation::EvaluationError::CampaignSelectionInvalid.to_string())
+                        ApiError::BadRequest(
+                            kura_evaluation::EvaluationError::CampaignSelectionInvalid.to_string(),
+                        )
                     })?;
                 selection.suppression_state = fixture.suppression_state.clone();
                 selection.retention_state = fixture.retention_state.clone();
@@ -2541,12 +2745,14 @@ fn campaign_source_selections(
             }
             kura_evaluation::ProductResourceKind::DiscoveredCandidate => {
                 let candidate = state
-                    .store
-                    .lock()
+                    .store_pool
+                    .read()
                     .get_discovered_candidate(&tc.tenant_id, &input.source_id)
                     .map_err(ApiError::from_store)?
                     .ok_or_else(|| {
-                        ApiError::BadRequest(kura_evaluation::EvaluationError::CampaignSelectionInvalid.to_string())
+                        ApiError::BadRequest(
+                            kura_evaluation::EvaluationError::CampaignSelectionInvalid.to_string(),
+                        )
                     })?;
                 selection.suppression_state = candidate.suppression_state.clone();
                 selection.retention_state = candidate.retention_state.clone();
@@ -2655,7 +2861,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/v1/evaluation/fixtures", get(list_fixtures))
         // Evaluation product family (Go evaluation_product.go).
-        .route("/v1/evaluation/discovery-policies", get(list_discovery_policies))
+        .route(
+            "/v1/evaluation/discovery-policies",
+            get(list_discovery_policies),
+        )
         .route(
             "/v1/evaluation/discovery-policies/{policy_id}",
             get(get_discovery_policy).put(upsert_discovery_policy),
@@ -2680,7 +2889,10 @@ pub fn router() -> Router<AppState> {
             "/v1/evaluation/discovered-candidates/{discovered_candidate_id}/product-fixtures",
             post(materialize_product_fixture),
         )
-        .route("/v1/evaluation/product-fixtures", get(list_product_fixtures))
+        .route(
+            "/v1/evaluation/product-fixtures",
+            get(list_product_fixtures),
+        )
         .route(
             "/v1/evaluation/product-fixtures/{fixture_id}",
             get(get_product_fixture),
@@ -2731,7 +2943,6 @@ pub fn router() -> Router<AppState> {
             "/v1/evaluation/retention/apply",
             post(apply_evaluation_retention),
         )
-
         // Live validation collection + items.
         .route(
             "/v1/live-validations",
@@ -2828,6 +3039,7 @@ mod tests {
     fn test_config() -> kura_config::Config {
         kura_config::Config {
             project_root: String::new(),
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-test".to_string(),
@@ -2852,6 +3064,7 @@ mod tests {
                     ..Default::default()
                 },
             },
+            egress: Default::default(),
         }
     }
 
@@ -2895,13 +3108,19 @@ mod tests {
 
     impl kura_evaluation::manager::Store for SqliteEvaluationStore {
         fn upsert_replay_candidate(&self, item: ReplayCandidate) -> Result<(), EvaluationError> {
-            self.store.lock().upsert_replay_candidate(&item).map_err(store_err)
+            self.store
+                .lock()
+                .upsert_replay_candidate(&item)
+                .map_err(store_err)
         }
         fn list_replay_candidates(
             &self,
             filter: &CandidateFilter,
         ) -> Result<Vec<ReplayCandidate>, EvaluationError> {
-            self.store.lock().list_replay_candidates(filter).map_err(store_err)
+            self.store
+                .lock()
+                .list_replay_candidates(filter)
+                .map_err(store_err)
         }
         fn get_replay_candidate(
             &self,
@@ -2914,13 +3133,19 @@ mod tests {
                 .map_err(store_err)
         }
         fn upsert_replay_attempt(&self, item: ReplayAttempt) -> Result<(), EvaluationError> {
-            self.store.lock().upsert_replay_attempt(&item).map_err(store_err)
+            self.store
+                .lock()
+                .upsert_replay_attempt(&item)
+                .map_err(store_err)
         }
         fn list_replay_attempts(
             &self,
             filter: &kura_evaluation::AttemptFilter,
         ) -> Result<Vec<ReplayAttempt>, EvaluationError> {
-            self.store.lock().list_replay_attempts(filter).map_err(store_err)
+            self.store
+                .lock()
+                .list_replay_attempts(filter)
+                .map_err(store_err)
         }
         fn get_replay_attempt(
             &self,
@@ -2933,13 +3158,19 @@ mod tests {
                 .map_err(store_err)
         }
         fn upsert_comparison_result(&self, item: ComparisonResult) -> Result<(), EvaluationError> {
-            self.store.lock().upsert_comparison_result(&item).map_err(store_err)
+            self.store
+                .lock()
+                .upsert_comparison_result(&item)
+                .map_err(store_err)
         }
         fn list_comparison_results(
             &self,
             filter: &ComparisonFilter,
         ) -> Result<Vec<ComparisonResult>, EvaluationError> {
-            self.store.lock().list_comparison_results(filter).map_err(store_err)
+            self.store
+                .lock()
+                .list_comparison_results(filter)
+                .map_err(store_err)
         }
         fn get_comparison_result(
             &self,
@@ -2951,7 +3182,10 @@ mod tests {
                 .get_comparison_result(environment_scope, comparison_id)
                 .map_err(store_err)
         }
-        fn upsert_regression_fixture(&self, item: RegressionFixture) -> Result<(), EvaluationError> {
+        fn upsert_regression_fixture(
+            &self,
+            item: RegressionFixture,
+        ) -> Result<(), EvaluationError> {
             self.store
                 .lock()
                 .upsert_regression_fixture(&item)
@@ -2961,20 +3195,25 @@ mod tests {
             &self,
             filter: &FixtureFilter,
         ) -> Result<Vec<RegressionFixture>, EvaluationError> {
-            self.store.lock().list_regression_fixtures(filter).map_err(store_err)
+            self.store
+                .lock()
+                .list_regression_fixtures(filter)
+                .map_err(store_err)
         }
     }
 
     fn evaluation_manager(store: Arc<Mutex<SQLiteStore>>) -> Arc<kura_evaluation::Manager> {
-        Arc::new(kura_evaluation::Manager::new(kura_evaluation::Dependencies {
-            environment_scope: "test".to_string(),
-            store: Some(Arc::new(SqliteEvaluationStore { store })),
-            fixtures_dir: String::new(),
-            runtime_recorder: None,
-            billing: None,
-            hosted_billing: false,
-            clock: Some(Arc::new(fixed_now) as Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>),
-        }))
+        Arc::new(kura_evaluation::Manager::new(
+            kura_evaluation::Dependencies {
+                environment_scope: "test".to_string(),
+                store: Some(Arc::new(SqliteEvaluationStore { store })),
+                fixtures_dir: String::new(),
+                runtime_recorder: None,
+                billing: None,
+                hosted_billing: false,
+                clock: Some(Arc::new(fixed_now) as Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>),
+            },
+        ))
     }
 
     fn live_validation_manager(hosted_billing: bool) -> Arc<kura_livevalidation::Manager> {
@@ -3012,7 +3251,9 @@ mod tests {
     ) -> (StatusCode, serde_json::Value) {
         let response = app.clone().oneshot(req).await.expect("oneshot");
         let status = response.status();
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
         (status, json)
     }
@@ -3028,7 +3269,9 @@ mod tests {
             .await
             .expect("oneshot");
         let status = response.status();
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
         (status, json)
     }
@@ -3038,7 +3281,8 @@ mod tests {
         mut req: HttpRequest<axum::body::Body>,
         tenant: IdentityTenantContext,
     ) -> HttpRequest<axum::body::Body> {
-        req.extensions_mut().insert(crate::middleware::TenantContext(tenant));
+        req.extensions_mut()
+            .insert(crate::middleware::TenantContext(tenant));
         req
     }
 
@@ -3087,7 +3331,10 @@ mod tests {
     }
 
     fn seed_candidate(store: &Arc<Mutex<SQLiteStore>>, candidate: &ReplayCandidate) {
-        store.lock().upsert_replay_candidate(candidate).expect("seed candidate");
+        store
+            .lock()
+            .upsert_replay_candidate(candidate)
+            .expect("seed candidate");
     }
 
     fn curated_candidate(candidate_id: &str, tool_classes: Vec<String>) -> ReplayCandidate {
@@ -3157,7 +3404,11 @@ mod tests {
         let app = crate::routes::router(h.state.clone());
 
         // GET list -> the seeded candidate, with the environment scope.
-        let (status, json) = send(&app, request("GET", "/v1/evaluation/replay-candidates", None)).await;
+        let (status, json) = send(
+            &app,
+            request("GET", "/v1/evaluation/replay-candidates", None),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
         assert_eq!(json["environmentScope"], "test");
         assert_eq!(json["items"].as_array().map(|a| a.len()).unwrap_or(0), 1);
@@ -3206,7 +3457,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "body: {json}");
-        assert_eq!(json["message"], "fixture replay candidates are managed by repo fixtures");
+        assert_eq!(
+            json["message"],
+            "fixture replay candidates are managed by repo fixtures"
+        );
 
         // GET fixtures -> the seeded fixture.
         let (status, json) = send(&app, request("GET", "/v1/evaluation/fixtures", None)).await;
@@ -3218,14 +3472,22 @@ mod tests {
         // GET candidate detail + 404 for a missing one.
         let (status, json) = send(
             &app,
-            request("GET", "/v1/evaluation/replay-candidates/candidate_curated", None),
+            request(
+                "GET",
+                "/v1/evaluation/replay-candidates/candidate_curated",
+                None,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
         assert_eq!(json["candidateId"], "candidate_curated");
         let (status, json) = send(
             &app,
-            request("GET", "/v1/evaluation/replay-candidates/does-not-exist", None),
+            request(
+                "GET",
+                "/v1/evaluation/replay-candidates/does-not-exist",
+                None,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "body: {json}");
@@ -3234,7 +3496,11 @@ mod tests {
         // POST attempt (empty body) -> 202 completed non-live.
         let (status, json) = send(
             &app,
-            request("POST", "/v1/evaluation/replay-candidates/candidate_curated/attempts", None),
+            request(
+                "POST",
+                "/v1/evaluation/replay-candidates/candidate_curated/attempts",
+                None,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::ACCEPTED, "attempt body: {json}");
@@ -3253,10 +3519,14 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "body: {json}");
-        assert_eq!(json["message"], "live validation attempts must use /v1/live-validations");
+        assert_eq!(
+            json["message"],
+            "live validation attempts must use /v1/live-validations"
+        );
 
         // GET attempts list + 404 for a missing attempt.
-        let (status, json) = send(&app, request("GET", "/v1/evaluation/replay-attempts", None)).await;
+        let (status, json) =
+            send(&app, request("GET", "/v1/evaluation/replay-attempts", None)).await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
         assert_eq!(json["items"].as_array().map(|a| a.len()).unwrap_or(0), 1);
         let (status, json) = send(
@@ -3270,12 +3540,19 @@ mod tests {
         // POST compare -> 201 matched.
         let (status, json) = send(
             &app,
-            request("POST", &format!("/v1/evaluation/replay-attempts/{attempt_id}/compare"), None),
+            request(
+                "POST",
+                &format!("/v1/evaluation/replay-attempts/{attempt_id}/compare"),
+                None,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "compare body: {json}");
         assert_eq!(json["terminalStatus"], "matched");
-        let comparison_id = json["comparisonId"].as_str().expect("comparisonId").to_string();
+        let comparison_id = json["comparisonId"]
+            .as_str()
+            .expect("comparisonId")
+            .to_string();
 
         // GET comparisons list + detail.
         let (status, json) = send(&app, request("GET", "/v1/evaluation/comparisons", None)).await;
@@ -3284,7 +3561,11 @@ mod tests {
         assert_eq!(json["items"].as_array().map(|a| a.len()).unwrap_or(0), 1);
         let (status, json) = send(
             &app,
-            request("GET", &format!("/v1/evaluation/comparisons/{comparison_id}"), None),
+            request(
+                "GET",
+                &format!("/v1/evaluation/comparisons/{comparison_id}"),
+                None,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
@@ -3298,12 +3579,10 @@ mod tests {
         assert_eq!(json["message"], "comparison not found");
 
         // The replay_started / replay_completed / comparison_completed events fired.
-        let events = h
-            .bus
-            .list(&kura_events::Filter {
-                category: "evaluation".to_string(),
-                ..Default::default()
-            });
+        let events = h.bus.list(&kura_events::Filter {
+            category: "evaluation".to_string(),
+            ..Default::default()
+        });
         let names: Vec<String> = events.iter().map(|event| event.name.clone()).collect();
         for expected in [
             "evaluation.replay_started",
@@ -3321,7 +3600,11 @@ mod tests {
     async fn unconfigured_managers_return_500() {
         let h = harness(None, None);
         let app = crate::routes::router(h.state.clone());
-        let (status, json) = send(&app, request("GET", "/v1/evaluation/replay-candidates", None)).await;
+        let (status, json) = send(
+            &app,
+            request("GET", "/v1/evaluation/replay-candidates", None),
+        )
+        .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {json}");
         assert_eq!(json["message"], "evaluation manager is not configured");
         let (status, json) = send(&app, request("GET", "/v1/live-validations", None)).await;
@@ -3602,7 +3885,11 @@ mod tests {
         // No tenant context -> 403 missing_tenant.
         let (status, json) = send(
             &app,
-            request("GET", "/v1/live-validations/discord-smoke?connectorId=discord-main", None),
+            request(
+                "GET",
+                "/v1/live-validations/discord-smoke?connectorId=discord-main",
+                None,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "body: {json}");
@@ -3612,7 +3899,11 @@ mod tests {
         let (status, json) = send(
             &app,
             with_tenant_extension(
-                request("GET", "/v1/live-validations/discord-smoke?connectorId=discord-main", None),
+                request(
+                    "GET",
+                    "/v1/live-validations/discord-smoke?connectorId=discord-main",
+                    None,
+                ),
                 viewer_context(),
             ),
         )
@@ -3623,7 +3914,11 @@ mod tests {
         let (status, json) = send(
             &app,
             with_tenant_extension(
-                request("GET", "/v1/live-validations/discord-smoke?connectorId=discord-main", None),
+                request(
+                    "GET",
+                    "/v1/live-validations/discord-smoke?connectorId=discord-main",
+                    None,
+                ),
                 smoke_tenant_context("ten_discord", "prn_operator"),
             ),
         )
@@ -3641,7 +3936,10 @@ mod tests {
         let post_body = r#"{"connectorId":"matrix-main","homeserverBindingId":"matrix_hs_1","status":"skipped","authorizationMode":"unavailable","owner":"operator","reason":"safe Matrix credentials unavailable","validatedAt":"2026-09-01T14:00:00Z","safeEvidence":{"policy":"structured_skip"}}"#;
         let (status, json) = send(
             &app,
-            with_tenant_extension(request("POST", "/v1/live-validations/matrix-smoke", Some(post_body)), tenant.clone()),
+            with_tenant_extension(
+                request("POST", "/v1/live-validations/matrix-smoke", Some(post_body)),
+                tenant.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "post body: {json}");
@@ -3651,7 +3949,11 @@ mod tests {
         let (status, json) = send(
             &app,
             with_tenant_extension(
-                request("GET", "/v1/live-validations/matrix-smoke?connectorId=matrix-main", None),
+                request(
+                    "GET",
+                    "/v1/live-validations/matrix-smoke?connectorId=matrix-main",
+                    None,
+                ),
                 tenant,
             ),
         )
@@ -3692,7 +3994,11 @@ mod tests {
         let (status, json) = send(
             &app,
             with_tenant_extension(
-                request("GET", "/v1/live-validations/slack-smoke?connectorId=slack-main", None),
+                request(
+                    "GET",
+                    "/v1/live-validations/slack-smoke?connectorId=slack-main",
+                    None,
+                ),
                 tenant,
             ),
         )
@@ -3705,8 +4011,10 @@ mod tests {
         assert!(!raw.contains("secret"), "leaked secret evidence: {raw}");
     }
 
-
-    fn product_tenant_context(tenant_id: &str, permissions: Vec<Permission>) -> IdentityTenantContext {
+    fn product_tenant_context(
+        tenant_id: &str,
+        permissions: Vec<Permission>,
+    ) -> IdentityTenantContext {
         IdentityTenantContext {
             tenant_id: tenant_id.to_string(),
             principal_id: format!("prn_{tenant_id}"),
@@ -3746,7 +4054,10 @@ mod tests {
         // List tenant-scoped policies (no permission gate in Go).
         let (status, json) = send(
             &app,
-            with_tenant_extension(request("GET", "/v1/evaluation/discovery-policies", None), tenant.clone()),
+            with_tenant_extension(
+                request("GET", "/v1/evaluation/discovery-policies", None),
+                tenant.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "list policies: {json}");
@@ -3767,7 +4078,11 @@ mod tests {
         let (status, json) = send(
             &app,
             with_tenant_extension(
-                request("PUT", "/v1/evaluation/discovery-policies/policy_api_1", Some(&put_body)),
+                request(
+                    "PUT",
+                    "/v1/evaluation/discovery-policies/policy_api_1",
+                    Some(&put_body),
+                ),
                 tenant.clone(),
             ),
         )
@@ -3779,7 +4094,11 @@ mod tests {
         let (status, json) = send(
             &app,
             with_tenant_extension(
-                request("GET", "/v1/evaluation/discovery-policies/policy_api_1", None),
+                request(
+                    "GET",
+                    "/v1/evaluation/discovery-policies/policy_api_1",
+                    None,
+                ),
                 tenant.clone(),
             ),
         )
@@ -3839,7 +4158,11 @@ mod tests {
         let (status, json) = send(
             &app,
             with_tenant_extension(
-                request("GET", "/v1/evaluation/discovered-candidates/candidate_api_1", None),
+                request(
+                    "GET",
+                    "/v1/evaluation/discovered-candidates/candidate_api_1",
+                    None,
+                ),
                 tenant.clone(),
             ),
         )
@@ -3880,7 +4203,8 @@ mod tests {
                 Permission::EvaluationFixtureSuppress,
             ],
         );
-        let viewer = product_tenant_context("ten_fixture_api", vec![Permission::EvaluationFixtureRead]);
+        let viewer =
+            product_tenant_context("ten_fixture_api", vec![Permission::EvaluationFixtureRead]);
         {
             let store = h.store.lock();
             store
@@ -3921,7 +4245,10 @@ mod tests {
                         evidence_id: "evidence_fixture_api".to_string(),
                         tenant_id: "ten_fixture_api".to_string(),
                         discovered_candidate_id: "candidate_fixture_api".to_string(),
-                        redacted_payload: serde_json::json!({ "goal": "safe" }).as_object().cloned().unwrap_or_default(),
+                        redacted_payload: serde_json::json!({ "goal": "safe" })
+                            .as_object()
+                            .cloned()
+                            .unwrap_or_default(),
                         materialization_allowed: true,
                         retention_state: kura_evaluation::RetentionState::Active,
                         created_at: now,
@@ -3962,7 +4289,10 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::CREATED, "create fixture: {json}");
         assert_eq!(json["fixture"]["fixtureId"], "product_fixture_api");
-        let revision_id = json["revision"]["revisionId"].as_str().expect("revision id").to_string();
+        let revision_id = json["revision"]["revisionId"]
+            .as_str()
+            .expect("revision id")
+            .to_string();
 
         // Viewer without fixture.manage cannot create a revision (403).
         let (status, json) = send(
@@ -4017,7 +4347,11 @@ mod tests {
         let (status, json) = send(
             &app,
             with_tenant_extension(
-                request("POST", "/v1/evaluation/product-fixtures/product_fixture_api/suppress", None),
+                request(
+                    "POST",
+                    "/v1/evaluation/product-fixtures/product_fixture_api/suppress",
+                    None,
+                ),
                 viewer.clone(),
             ),
         )
@@ -4027,7 +4361,11 @@ mod tests {
         let (status, json) = send(
             &app,
             with_tenant_extension(
-                request("POST", "/v1/evaluation/product-fixtures/product_fixture_api/suppress", None),
+                request(
+                    "POST",
+                    "/v1/evaluation/product-fixtures/product_fixture_api/suppress",
+                    None,
+                ),
                 admin.clone(),
             ),
         )
@@ -4045,7 +4383,11 @@ mod tests {
         let (status, json) = send(
             &app,
             with_tenant_extension(
-                request("POST", "/v1/evaluation/retention/apply", Some(r#"{"dryRun":true}"#)),
+                request(
+                    "POST",
+                    "/v1/evaluation/retention/apply",
+                    Some(r#"{"dryRun":true}"#),
+                ),
                 tenant.clone(),
             ),
         )
@@ -4053,12 +4395,21 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "retention: {json}");
         assert_eq!(json["tenantId"], "ten_api");
         assert_eq!(json["dryRun"], true);
-        assert!(!json["applicationIds"].as_array().map(|v| v.is_empty()).unwrap_or(true));
+        assert!(
+            !json["applicationIds"]
+                .as_array()
+                .map(|v| v.is_empty())
+                .unwrap_or(true)
+        );
 
         // Missing tenant answers the stable 400.
         let (status, json) = send(
             &app,
-            request("POST", "/v1/evaluation/retention/apply", Some(r#"{"dryRun":true}"#)),
+            request(
+                "POST",
+                "/v1/evaluation/retention/apply",
+                Some(r#"{"dryRun":true}"#),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "no tenant: {json}");
@@ -4073,13 +4424,19 @@ mod tests {
         let viewer = product_tenant_context("ten_api", Vec::new());
         let admin = product_tenant_context(
             "ten_api",
-            vec![Permission::EvaluationCampaignRead, Permission::EvaluationCampaignManage],
+            vec![
+                Permission::EvaluationCampaignRead,
+                Permission::EvaluationCampaignManage,
+            ],
         );
 
         // List denied without campaign.read.
         let (status, json) = send(
             &app,
-            with_tenant_extension(request("GET", "/v1/evaluation/campaigns", None), viewer.clone()),
+            with_tenant_extension(
+                request("GET", "/v1/evaluation/campaigns", None),
+                viewer.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "denied list: {json}");
@@ -4089,7 +4446,11 @@ mod tests {
         let (status, json) = send(
             &app,
             with_tenant_extension(
-                request("POST", "/v1/evaluation/campaigns", Some(r#"{"displayName":"Campaign One"}"#)),
+                request(
+                    "POST",
+                    "/v1/evaluation/campaigns",
+                    Some(r#"{"displayName":"Campaign One"}"#),
+                ),
                 viewer.clone(),
             ),
         )
@@ -4126,18 +4487,28 @@ mod tests {
         .to_string();
         let (status, json) = send(
             &app,
-            with_tenant_extension(request("POST", "/v1/evaluation/campaigns", Some(&campaign_body)), admin.clone()),
+            with_tenant_extension(
+                request("POST", "/v1/evaluation/campaigns", Some(&campaign_body)),
+                admin.clone(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "create campaign: {json}");
         assert_eq!(json["displayName"], "Campaign One");
-        let campaign_id = json["campaignId"].as_str().expect("campaign id").to_string();
+        let campaign_id = json["campaignId"]
+            .as_str()
+            .expect("campaign id")
+            .to_string();
 
         // Campaign items were persisted.
         let (status, json) = send(
             &app,
             with_tenant_extension(
-                request("GET", &format!("/v1/evaluation/campaigns/{campaign_id}/items"), None),
+                request(
+                    "GET",
+                    &format!("/v1/evaluation/campaigns/{campaign_id}/items"),
+                    None,
+                ),
                 admin.clone(),
             ),
         )

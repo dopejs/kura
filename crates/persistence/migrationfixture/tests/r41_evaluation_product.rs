@@ -4,7 +4,7 @@ mod common;
 
 use common::{open_conn, temp_dir};
 use kura_migrationfixture::{
-    build_pre_tenant_v21_fixture, count_r41_evaluation_product_rows, apply_head_migrations,
+    apply_head_migrations, build_pre_tenant_v21_fixture, count_r41_evaluation_product_rows,
     seed_r41_evaluation_product_rows,
 };
 

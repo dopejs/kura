@@ -6,31 +6,31 @@
 //! AppState field) is Send + Sync; the workflow launcher seam carries Send + Sync
 //! supertraits for the same reason.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use kura_delivery::{Manager as DeliveryManager, OutcomeInput, ResultClass};
 use kura_events::{Bus, Event, Resource, Scope};
-use kura_identity::tenantctx;
 use kura_identity::TenantContext;
-use kura_livevalidation::{fake_outcome_result_for, FakeOutcome, FakeOutcomeResult, SafetyClass};
-use kura_scheduler::{next_due_after, Trigger, TriggerKind};
+use kura_identity::tenantctx;
+use kura_livevalidation::{FakeOutcome, FakeOutcomeResult, SafetyClass, fake_outcome_result_for};
+use kura_scheduler::{Trigger, TriggerKind, next_due_after};
+use kura_store::SQLiteStore;
 use kura_store::reminders::{
     ReminderActionRecord, ReminderOccurrenceFilter, ReminderOccurrenceRecord, ReminderRecord,
 };
-use kura_store::SQLiteStore;
 use parking_lot::Mutex;
-use serde_json::{json, Map};
+use serde_json::{Map, json};
 use uuid::Uuid;
 
 use crate::follow_up::refresh_follow_up_link;
 use crate::types::{
-    is_unresolved_state, ActionKind, ActionRecord, ActorKind, BehaviorMode, CreateInput,
-    Occurrence, OccurrenceFilter, Reminder, ReminderError, State, TransitionInput,
-    WorkflowLaunchResult, WorkflowLauncher,
+    ActionKind, ActionRecord, ActorKind, BehaviorMode, CreateInput, Occurrence, OccurrenceFilter,
+    Reminder, ReminderError, State, TransitionInput, WorkflowLaunchResult, WorkflowLauncher,
+    is_unresolved_state,
 };
 
 /// Go Clock interface: injectable now source.
@@ -115,7 +115,10 @@ impl Manager {
     /// (reminder lifecycle transitions are safe to retry).
     #[must_use]
     pub fn run_live_validation_outcome(&self, outcome: &FakeOutcome) -> FakeOutcomeResult {
-        fake_outcome_result_for(outcome, &SafetyClass::from(SafetyClass::IDEMPOTENT_MUTATION))
+        fake_outcome_result_for(
+            outcome,
+            &SafetyClass::from(SafetyClass::IDEMPOTENT_MUTATION),
+        )
     }
 
     /// Go Start: launches the catch-up + tick loop on a detached std thread. A no-op once
@@ -166,7 +169,10 @@ impl Manager {
     }
 
     /// Go ListOccurrences.
-    pub fn list_occurrences(&self, filter: &OccurrenceFilter) -> Result<Vec<Occurrence>, ReminderError> {
+    pub fn list_occurrences(
+        &self,
+        filter: &OccurrenceFilter,
+    ) -> Result<Vec<Occurrence>, ReminderError> {
         self.inner.list_occurrences(filter)
     }
 
@@ -191,8 +197,12 @@ impl Manager {
         reminder_id: &str,
         input: &TransitionInput,
     ) -> Result<(Reminder, Occurrence, ActionRecord), ReminderError> {
-        self.inner
-            .transition_occurrence(reminder_id, input, ActionKind::Acknowledged, State::Acknowledged)
+        self.inner.transition_occurrence(
+            reminder_id,
+            input,
+            ActionKind::Acknowledged,
+            State::Acknowledged,
+        )
     }
 
     /// Go Complete.
@@ -201,8 +211,12 @@ impl Manager {
         reminder_id: &str,
         input: &TransitionInput,
     ) -> Result<(Reminder, Occurrence, ActionRecord), ReminderError> {
-        self.inner
-            .transition_occurrence(reminder_id, input, ActionKind::Completed, State::Completed)
+        self.inner.transition_occurrence(
+            reminder_id,
+            input,
+            ActionKind::Completed,
+            State::Completed,
+        )
     }
 
     /// Go Dismiss.
@@ -211,8 +225,12 @@ impl Manager {
         reminder_id: &str,
         input: &TransitionInput,
     ) -> Result<(Reminder, Occurrence, ActionRecord), ReminderError> {
-        self.inner
-            .transition_occurrence(reminder_id, input, ActionKind::Dismissed, State::Dismissed)
+        self.inner.transition_occurrence(
+            reminder_id,
+            input,
+            ActionKind::Dismissed,
+            State::Dismissed,
+        )
     }
 
     /// Go Cancel.
@@ -270,15 +288,24 @@ impl ManagerInner {
         Ok((self.refresh_reminder_projection(&item)?, true))
     }
 
-    pub(crate) fn list_occurrences(&self, filter: &OccurrenceFilter) -> Result<Vec<Occurrence>, ReminderError> {
+    pub(crate) fn list_occurrences(
+        &self,
+        filter: &OccurrenceFilter,
+    ) -> Result<Vec<Occurrence>, ReminderError> {
         self.list_occurrence_docs(filter)
     }
 
-    pub(crate) fn get_occurrence(&self, occurrence_id: &str) -> Result<(Occurrence, bool), ReminderError> {
+    pub(crate) fn get_occurrence(
+        &self,
+        occurrence_id: &str,
+    ) -> Result<(Occurrence, bool), ReminderError> {
         self.get_occurrence_doc(occurrence_id)
     }
 
-    pub(crate) fn list_actions(&self, reminder_id: &str) -> Result<Vec<ActionRecord>, ReminderError> {
+    pub(crate) fn list_actions(
+        &self,
+        reminder_id: &str,
+    ) -> Result<Vec<ActionRecord>, ReminderError> {
         self.list_action_docs(reminder_id)
     }
 
@@ -286,7 +313,9 @@ impl ManagerInner {
         if input.title.trim().is_empty() {
             return Err(ReminderError::TitleRequired);
         }
-        if input.behavior_mode == BehaviorMode::LaunchWorkflow && input.workflow_launch_config.is_none() {
+        if input.behavior_mode == BehaviorMode::LaunchWorkflow
+            && input.workflow_launch_config.is_none()
+        {
             return Err(ReminderError::WorkflowConfigRequired);
         }
         let now = self.clock.now();
@@ -332,7 +361,8 @@ impl ManagerInner {
         action_kind: ActionKind,
         target: State,
     ) -> Result<(Reminder, Occurrence, ActionRecord), ReminderError> {
-        let (mut reminder, mut occurrence) = self.get_actionable_occurrence(reminder_id, &input.occurrence_id)?;
+        let (mut reminder, mut occurrence) =
+            self.get_actionable_occurrence(reminder_id, &input.occurrence_id)?;
         let now = self.clock.now();
         let prev = occurrence.state;
         occurrence.state = target;
@@ -361,7 +391,12 @@ impl ManagerInner {
             "",
             now,
         )?;
-        self.publish_reminder_event("reminder.occurrence_transitioned", &reminder, Some(&occurrence), Some(&action))?;
+        self.publish_reminder_event(
+            "reminder.occurrence_transitioned",
+            &reminder,
+            Some(&occurrence),
+            Some(&action),
+        )?;
         Ok((reminder, occurrence, action))
     }
 
@@ -405,7 +440,12 @@ impl ManagerInner {
             "",
             now,
         )?;
-        self.publish_reminder_event("reminder.updated", &reminder, Some(&occurrence), Some(&action))?;
+        self.publish_reminder_event(
+            "reminder.updated",
+            &reminder,
+            Some(&occurrence),
+            Some(&action),
+        )?;
         Ok((reminder, occurrence, action))
     }
 
@@ -417,7 +457,8 @@ impl ManagerInner {
         let Some(snoozed_until) = input.snoozed_until else {
             return Err(ReminderError::SnoozeRequired);
         };
-        let (mut reminder, mut occurrence) = self.get_actionable_occurrence(reminder_id, &input.occurrence_id)?;
+        let (mut reminder, mut occurrence) =
+            self.get_actionable_occurrence(reminder_id, &input.occurrence_id)?;
         let now = self.clock.now();
         occurrence.state = State::Snoozed;
         occurrence.snoozed_until = Some(snoozed_until);
@@ -444,7 +485,12 @@ impl ManagerInner {
             "",
             now,
         )?;
-        self.publish_reminder_event("reminder.occurrence_transitioned", &reminder, Some(&occurrence), Some(&action))?;
+        self.publish_reminder_event(
+            "reminder.occurrence_transitioned",
+            &reminder,
+            Some(&occurrence),
+            Some(&action),
+        )?;
         Ok((reminder, occurrence, action))
     }
 
@@ -490,11 +536,20 @@ impl ManagerInner {
             "",
             now,
         )?;
-        self.publish_reminder_event("reminder.updated", &reminder, Some(&occurrence), Some(&action))?;
+        self.publish_reminder_event(
+            "reminder.updated",
+            &reminder,
+            Some(&occurrence),
+            Some(&action),
+        )?;
         Ok((reminder, occurrence, action))
     }
 
-    fn process_reminder(&self, reminder: &Reminder, now: DateTime<Utc>) -> Result<(), ReminderError> {
+    fn process_reminder(
+        &self,
+        reminder: &Reminder,
+        now: DateTime<Utc>,
+    ) -> Result<(), ReminderError> {
         let reminder = self.refresh_reminder_projection(reminder)?;
         if reminder.current_state == State::Cancelled {
             return Ok(());
@@ -510,7 +565,8 @@ impl ManagerInner {
                         }
                     }
                     State::Due => {
-                        if now.signed_duration_since(occurrence.scheduled_for) >= self.overdue_after {
+                        if now.signed_duration_since(occurrence.scheduled_for) >= self.overdue_after
+                        {
                             return self.mark_occurrence_overdue(&reminder, &occurrence, now);
                         }
                     }
@@ -527,7 +583,11 @@ impl ManagerInner {
         Ok(())
     }
 
-    fn create_due_occurrence(&self, reminder: &Reminder, now: DateTime<Utc>) -> Result<(), ReminderError> {
+    fn create_due_occurrence(
+        &self,
+        reminder: &Reminder,
+        now: DateTime<Utc>,
+    ) -> Result<(), ReminderError> {
         let (previous, ok) = self.current_occurrence(reminder)?;
         if ok && is_unresolved_state(previous.state) {
             self.mark_occurrence_missed(reminder, &previous, now)?;
@@ -566,7 +626,12 @@ impl ManagerInner {
             "",
             now,
         )?;
-        self.publish_reminder_event("reminder.occurrence_created", &updated, Some(&occurrence), Some(&action))?;
+        self.publish_reminder_event(
+            "reminder.occurrence_created",
+            &updated,
+            Some(&occurrence),
+            Some(&action),
+        )?;
         self.handle_due_occurrence(&updated, &occurrence, now)
     }
 
@@ -598,11 +663,22 @@ impl ManagerInner {
                         "workflow launcher is not configured",
                     );
                 }
-                let cfg = reminder.workflow_launch_config.as_ref().expect("checked above");
+                let cfg = reminder
+                    .workflow_launch_config
+                    .as_ref()
+                    .expect("checked above");
                 let launcher = self.workflow.as_ref().expect("checked above");
-                match launcher.launch_reminder_workflow(cfg, &reminder.reminder_id, &occurrence.occurrence_id) {
-                    Ok(result) => self.apply_workflow_launch_success(reminder, occurrence, now, &result),
-                    Err(err) => self.record_workflow_launch_failure(reminder, occurrence, now, &err),
+                match launcher.launch_reminder_workflow(
+                    cfg,
+                    &reminder.reminder_id,
+                    &occurrence.occurrence_id,
+                ) {
+                    Ok(result) => {
+                        self.apply_workflow_launch_success(reminder, occurrence, now, &result)
+                    }
+                    Err(err) => {
+                        self.record_workflow_launch_failure(reminder, occurrence, now, &err)
+                    }
                 }
             }
         }
@@ -639,14 +715,15 @@ impl ManagerInner {
             "",
             now,
         )?;
-        self.publish_reminder_event("reminder.workflow_launch_started", &rem, Some(&occ), Some(&action))
+        self.publish_reminder_event(
+            "reminder.workflow_launch_started",
+            &rem,
+            Some(&occ),
+            Some(&action),
+        )
     }
 
-    fn with_reminder_tenant_context<R>(
-        &self,
-        reminder: &Reminder,
-        run: impl FnOnce() -> R,
-    ) -> R {
+    fn with_reminder_tenant_context<R>(&self, reminder: &Reminder, run: impl FnOnce() -> R) -> R {
         if tenantctx::from_context().is_some() {
             return run();
         }
@@ -699,7 +776,12 @@ impl ManagerInner {
             &outcome.delivery_id,
             now,
         )?;
-        self.publish_reminder_event("reminder.delivery_linked", reminder, Some(&occ), Some(&action))
+        self.publish_reminder_event(
+            "reminder.delivery_linked",
+            reminder,
+            Some(&occ),
+            Some(&action),
+        )
     }
 
     fn mark_occurrence_overdue(
@@ -733,7 +815,12 @@ impl ManagerInner {
             "",
             now,
         )?;
-        self.publish_reminder_event("reminder.occurrence_transitioned", &rem, Some(&occ), Some(&action))
+        self.publish_reminder_event(
+            "reminder.occurrence_transitioned",
+            &rem,
+            Some(&occ),
+            Some(&action),
+        )
     }
 
     fn mark_occurrence_missed(
@@ -760,7 +847,12 @@ impl ManagerInner {
             "",
             now,
         )?;
-        self.publish_reminder_event("reminder.occurrence_transitioned", reminder, Some(&occ), Some(&action))
+        self.publish_reminder_event(
+            "reminder.occurrence_transitioned",
+            reminder,
+            Some(&occ),
+            Some(&action),
+        )
     }
 
     fn make_occurrence_due(
@@ -791,7 +883,12 @@ impl ManagerInner {
             "",
             now,
         )?;
-        self.publish_reminder_event("reminder.occurrence_transitioned", &rem, Some(&occ), Some(&action))?;
+        self.publish_reminder_event(
+            "reminder.occurrence_transitioned",
+            &rem,
+            Some(&occ),
+            Some(&action),
+        )?;
         self.handle_due_occurrence(&rem, &occ, now)
     }
 
@@ -815,7 +912,12 @@ impl ManagerInner {
             "",
             now,
         )?;
-        self.publish_reminder_event("reminder.workflow_launch_failed", reminder, Some(occurrence), Some(&action))
+        self.publish_reminder_event(
+            "reminder.workflow_launch_failed",
+            reminder,
+            Some(occurrence),
+            Some(&action),
+        )
     }
 
     fn get_actionable_occurrence(
@@ -842,7 +944,10 @@ impl ManagerInner {
         if !ok || occurrence.reminder_id != reminder_id {
             return Err(ReminderError::OccurrenceNotFound);
         }
-        if !matches!(occurrence.state, State::Due | State::Overdue | State::Snoozed) {
+        if !matches!(
+            occurrence.state,
+            State::Due | State::Overdue | State::Snoozed
+        ) {
             return Err(ReminderError::InvalidState);
         }
         Ok((reminder, occurrence))
@@ -928,10 +1033,19 @@ impl ManagerInner {
         };
         let mut payload = Map::new();
         payload.insert("reminderId".to_string(), json!(reminder.reminder_id));
-        payload.insert("behaviorMode".to_string(), json!(reminder.behavior_mode.as_str()));
+        payload.insert(
+            "behaviorMode".to_string(),
+            json!(reminder.behavior_mode.as_str()),
+        );
         payload.insert("nextDueAt".to_string(), json!(reminder.next_due_at));
-        payload.insert("currentState".to_string(), json!(reminder.current_state.as_str()));
-        payload.insert("activeOccurrenceId".to_string(), json!(reminder.active_occurrence_id));
+        payload.insert(
+            "currentState".to_string(),
+            json!(reminder.current_state.as_str()),
+        );
+        payload.insert(
+            "activeOccurrenceId".to_string(),
+            json!(reminder.active_occurrence_id),
+        );
         let mut scope = Scope::default();
         if let Some(occurrence) = occurrence {
             payload.insert("occurrenceId".to_string(), json!(occurrence.occurrence_id));
@@ -997,10 +1111,16 @@ impl ManagerInner {
 
     fn put_reminder(&self, reminder: &Reminder) -> Result<(), ReminderError> {
         let record = encode_reminder_record(reminder)?;
-        self.store.lock().upsert_reminder(&record).map_err(ReminderError::Store)
+        self.store
+            .lock()
+            .upsert_reminder(&record)
+            .map_err(ReminderError::Store)
     }
 
-    fn list_occurrence_docs(&self, filter: &OccurrenceFilter) -> Result<Vec<Occurrence>, ReminderError> {
+    fn list_occurrence_docs(
+        &self,
+        filter: &OccurrenceFilter,
+    ) -> Result<Vec<Occurrence>, ReminderError> {
         let records = self
             .store
             .lock()
@@ -1008,7 +1128,10 @@ impl ManagerInner {
                 &self.env,
                 &ReminderOccurrenceFilter {
                     reminder_id: filter.reminder_id.clone(),
-                    state: filter.state.map(|s| s.as_str().to_string()).unwrap_or_default(),
+                    state: filter
+                        .state
+                        .map(|s| s.as_str().to_string())
+                        .unwrap_or_default(),
                     run_id: filter.run_id.clone(),
                     workflow_id: filter.workflow_id.clone(),
                     delivery_id: filter.delivery_id.clone(),
@@ -1067,8 +1190,9 @@ impl ManagerInner {
 }
 
 fn encode_reminder_record(item: &Reminder) -> Result<ReminderRecord, ReminderError> {
-    let document = serde_json::to_string(item)
-        .map_err(|e| ReminderError::Encode(format!("marshal reminder {}: {e}", item.reminder_id)))?;
+    let document = serde_json::to_string(item).map_err(|e| {
+        ReminderError::Encode(format!("marshal reminder {}: {e}", item.reminder_id))
+    })?;
     Ok(ReminderRecord {
         reminder_id: item.reminder_id.clone(),
         environment_scope: item.environment_scope.clone(),
@@ -1083,16 +1207,21 @@ fn encode_reminder_record(item: &Reminder) -> Result<ReminderRecord, ReminderErr
 }
 
 fn decode_reminder_record(record: &ReminderRecord) -> Result<Reminder, ReminderError> {
-    let mut item: Reminder = serde_json::from_str(&record.document)
-        .map_err(|e| ReminderError::Decode(format!("decode reminder {}: {e}", record.reminder_id)))?;
+    let mut item: Reminder = serde_json::from_str(&record.document).map_err(|e| {
+        ReminderError::Decode(format!("decode reminder {}: {e}", record.reminder_id))
+    })?;
     // The tenant column is authoritative (Go overrides it after unmarshal).
     item.tenant_id = record.tenant_id.clone();
     Ok(item)
 }
 
 fn encode_occurrence_record(item: &Occurrence) -> Result<ReminderOccurrenceRecord, ReminderError> {
-    let document = serde_json::to_string(item)
-        .map_err(|e| ReminderError::Encode(format!("marshal reminder occurrence {}: {e}", item.occurrence_id)))?;
+    let document = serde_json::to_string(item).map_err(|e| {
+        ReminderError::Encode(format!(
+            "marshal reminder occurrence {}: {e}",
+            item.occurrence_id
+        ))
+    })?;
     Ok(ReminderOccurrenceRecord {
         occurrence_id: item.occurrence_id.clone(),
         reminder_id: item.reminder_id.clone(),
@@ -1108,14 +1237,21 @@ fn encode_occurrence_record(item: &Occurrence) -> Result<ReminderOccurrenceRecor
     })
 }
 
-fn decode_occurrence_record(record: &ReminderOccurrenceRecord) -> Result<Occurrence, ReminderError> {
-    serde_json::from_str(&record.document)
-        .map_err(|e| ReminderError::Decode(format!("decode reminder occurrence {}: {e}", record.occurrence_id)))
+fn decode_occurrence_record(
+    record: &ReminderOccurrenceRecord,
+) -> Result<Occurrence, ReminderError> {
+    serde_json::from_str(&record.document).map_err(|e| {
+        ReminderError::Decode(format!(
+            "decode reminder occurrence {}: {e}",
+            record.occurrence_id
+        ))
+    })
 }
 
 fn encode_action_record(item: &ActionRecord) -> Result<ReminderActionRecord, ReminderError> {
-    let document = serde_json::to_string(item)
-        .map_err(|e| ReminderError::Encode(format!("marshal reminder action {}: {e}", item.action_id)))?;
+    let document = serde_json::to_string(item).map_err(|e| {
+        ReminderError::Encode(format!("marshal reminder action {}: {e}", item.action_id))
+    })?;
     Ok(ReminderActionRecord {
         action_id: item.action_id.clone(),
         reminder_id: item.reminder_id.clone(),
@@ -1131,8 +1267,9 @@ fn encode_action_record(item: &ActionRecord) -> Result<ReminderActionRecord, Rem
 }
 
 fn decode_action_record(record: &ReminderActionRecord) -> Result<ActionRecord, ReminderError> {
-    serde_json::from_str(&record.document)
-        .map_err(|e| ReminderError::Decode(format!("decode reminder action {}: {e}", record.action_id)))
+    serde_json::from_str(&record.document).map_err(|e| {
+        ReminderError::Decode(format!("decode reminder action {}: {e}", record.action_id))
+    })
 }
 
 /// Go nextReminderDueAfter: one-time triggers never produce another due time.
@@ -1147,7 +1284,9 @@ fn next_reminder_due_after(
 }
 
 /// Go cloneWorkflowLaunchConfig: shallow copy.
-fn clone_workflow_launch_config(item: &Option<crate::types::WorkflowLaunchConfig>) -> Option<crate::types::WorkflowLaunchConfig> {
+fn clone_workflow_launch_config(
+    item: &Option<crate::types::WorkflowLaunchConfig>,
+) -> Option<crate::types::WorkflowLaunchConfig> {
     item.clone()
 }
 

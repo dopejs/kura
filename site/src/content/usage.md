@@ -29,6 +29,40 @@ plugin** shapes the window under budget — and whatever the model sees is
 exactly what is persisted on the dispatch record
 (*model-visible = logged*).
 
+## Tools
+
+A turn can call tools. What the model is offered is resolved per turn and
+per tenant:
+
+- **MCP tools** — everything the servers you connected publish, authorized
+  under the `chat` surface's exposure rules; a tool marked
+  `approval_required` waits for a person to answer instead of failing.
+- **`memory.lookup`** — recall over your own Ready memory, the same fused
+  ranking as `POST /v1/retrieval/queries`; hits cite `Memory[<layer> <id>]`.
+- **`web.search` / `image.generate` / `video.generate`** — one tool per
+  configured tool profile. Kura does not pick a vendor: the `mcp_backed`
+  family forwards to an MCP server you chose (the model sees that tool's
+  real argument schema), and every call runs through the quota and egress
+  gates. `builtin_stub` proves the path without a vendor account.
+
+```bash
+curl -s http://127.0.0.1:19192/v1/tools/profiles -H 'content-type: application/json' -d '{
+  "title": "my search", "capability": "web.search", "family": "mcp_backed",
+  "authMode": "none", "mcpServerId": "mcp_search", "mcpToolName": "search", "isDefault": true
+}'
+```
+
+Every call is a `chat.tool.called` event and a `kura_chat_tool_calls_total`
+metric, and the `chat/tool-call` hook can rewrite or veto it.
+
+## Browser
+
+`computer-use` sessions drive a real browser when the plugin is configured
+with `driver: "subprocess"`: a supervised Node worker
+(`capabilities/browser/worker.mjs`, Playwright + Chromium) speaks a
+line-JSON protocol to the daemon; hangs and crashes are reported to the
+capability supervisor and the worker is respawned.
+
 ## TypeScript SDK
 
 ```ts

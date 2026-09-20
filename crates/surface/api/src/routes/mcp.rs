@@ -2,15 +2,15 @@
 //! /v1/skills*, and /v1/webhooks* registrations and handlers in
 //! daemon/internal/api/server.go and webhook.go).
 
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::http::header::HeaderMap;
 use axum::routing::{get, patch, post};
-use axum::Router;
 use serde::{Deserialize, Serialize};
 
-use kura_identity::{has_permission, Permission};
+use kura_identity::{Permission, has_permission};
 use kura_mcp as mcp;
 use kura_webhook as webhook;
 
@@ -75,13 +75,19 @@ struct WebhookListQuery {
 pub fn router() -> Router<AppState> {
     Router::new()
         // MCP servers / transports / catalog
-        .route("/v1/mcp/servers", get(list_mcp_servers).post(create_mcp_server))
+        .route(
+            "/v1/mcp/servers",
+            get(list_mcp_servers).post(create_mcp_server),
+        )
         .route(
             "/v1/mcp/servers/{server_id}",
             get(get_mcp_server).patch(update_mcp_server),
         )
         .route("/v1/mcp/servers/{server_id}/start", post(mcp_server_start))
-        .route("/v1/mcp/servers/{server_id}/refresh", post(mcp_server_refresh))
+        .route(
+            "/v1/mcp/servers/{server_id}/refresh",
+            post(mcp_server_refresh),
+        )
         .route(
             "/v1/mcp/servers/{server_id}/reinstall",
             post(mcp_server_reinstall),
@@ -95,8 +101,14 @@ pub fn router() -> Router<AppState> {
             post(mcp_server_revalidate),
         )
         .route("/v1/mcp/servers/{server_id}/stop", post(mcp_server_stop))
-        .route("/v1/mcp/servers/{server_id}/restart", post(mcp_server_restart))
-        .route("/v1/mcp/servers/{server_id}/cancel", post(mcp_server_cancel))
+        .route(
+            "/v1/mcp/servers/{server_id}/restart",
+            post(mcp_server_restart),
+        )
+        .route(
+            "/v1/mcp/servers/{server_id}/cancel",
+            post(mcp_server_cancel),
+        )
         .route("/v1/mcp/servers/{server_id}/tools", get(mcp_server_tools))
         .route(
             "/v1/mcp/servers/{server_id}/tools/{tool_name}",
@@ -143,7 +155,9 @@ async fn list_mcp_servers(
 ) -> Result<Json<ListResponse<mcp::ServerResource>>, ApiError> {
     let manager = mcp_manager(&state)?;
     let items = match tenant.as_ref().map(|e| &e.0.0) {
-        Some(tc) if !tc.tenant_id.trim().is_empty() => manager.list_servers_for_tenant(&tc.tenant_id),
+        Some(tc) if !tc.tenant_id.trim().is_empty() => {
+            manager.list_servers_for_tenant(&tc.tenant_id)
+        }
         _ => manager.list_servers(),
     };
     Ok(Json(ListResponse { items }))
@@ -181,8 +195,9 @@ async fn get_mcp_server(
     Path(server_id): Path<String>,
 ) -> Result<Json<mcp::ServerResource>, ApiError> {
     let manager = mcp_manager(&state)?;
-    let resource = mcp_server_resource_for_request(manager, tenant.as_ref().map(|e| &e.0.0), &server_id)
-        .ok_or_else(|| ApiError::NotFound("not found".to_string()))?;
+    let resource =
+        mcp_server_resource_for_request(manager, tenant.as_ref().map(|e| &e.0.0), &server_id)
+            .ok_or_else(|| ApiError::NotFound("not found".to_string()))?;
     Ok(Json(resource))
 }
 
@@ -194,7 +209,9 @@ async fn update_mcp_server(
     body: Bytes,
 ) -> Result<Json<mcp::ServerResource>, ApiError> {
     let manager = mcp_manager(&state)?;
-    if mcp_server_resource_for_request(manager, tenant.as_ref().map(|e| &e.0.0), &server_id).is_none() {
+    if mcp_server_resource_for_request(manager, tenant.as_ref().map(|e| &e.0.0), &server_id)
+        .is_none()
+    {
         return Err(ApiError::NotFound("not found".to_string()));
     }
     require_mcp_manage(tenant.as_ref().map(|e| &e.0.0))?;
@@ -591,7 +608,8 @@ async fn trigger_webhook(
     }
     let signature = header_value(&headers, "x-webhook-signature");
     let idempotency_key = header_value(&headers, "x-webhook-idempotency-key");
-    let (record, result) = manager.trigger_signed(&webhook_id, &signature, &idempotency_key, body.to_vec());
+    let (record, result) =
+        manager.trigger_signed(&webhook_id, &signature, &idempotency_key, body.to_vec());
     let status = match result {
         Ok(()) => StatusCode::ACCEPTED,
         Err(err) => webhook_trigger_status(&err),
@@ -812,7 +830,11 @@ fn build_skill_detail_response(skill: &kura_skills::Skill) -> SkillDetailRespons
 fn build_skill_registry_response(snapshot: &kura_skills::Snapshot) -> SkillRegistryResponse {
     SkillRegistryResponse {
         loaded_at: snapshot.loaded_at,
-        items: snapshot.skills.iter().map(build_skill_summary_response).collect(),
+        items: snapshot
+            .skills
+            .iter()
+            .map(build_skill_summary_response)
+            .collect(),
         overlays: snapshot
             .overlays
             .iter()
@@ -833,7 +855,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use axum::http::header::CONTENT_TYPE;
     use parking_lot::Mutex;
@@ -843,6 +865,7 @@ mod tests {
     fn test_config() -> kura_config::Config {
         kura_config::Config {
             project_root: String::new(),
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-mcp".to_string(),
@@ -850,11 +873,24 @@ mod tests {
             version: "0.1.0".to_string(),
             llm: kura_config::LlmConfig::default(),
             connectors: kura_config::ConnectorConfig {
-                discord: kura_config::DiscordConnectorConfig { enabled: false, ..Default::default() },
-                telegram: kura_config::TelegramConnectorConfig { enabled: false, ..Default::default() },
-                slack: kura_config::SlackConnectorConfig { enabled: false, ..Default::default() },
-                matrix: kura_config::MatrixConnectorConfig { enabled: false, ..Default::default() },
+                discord: kura_config::DiscordConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                telegram: kura_config::TelegramConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                slack: kura_config::SlackConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                matrix: kura_config::MatrixConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
             },
+            egress: Default::default(),
         }
     }
 
@@ -873,7 +909,9 @@ mod tests {
             .uri(uri)
             .header(CONTENT_TYPE, "application/json");
         let req = match body {
-            Some(payload) => builder.body(Body::from(payload.to_string())).expect("request"),
+            Some(payload) => builder
+                .body(Body::from(payload.to_string()))
+                .expect("request"),
             None => builder.body(Body::empty()).expect("request"),
         };
         req
@@ -888,19 +926,22 @@ mod tests {
         permissions: Vec<Permission>,
     ) -> Request<Body> {
         let mut req = request(method, uri, body);
-        req.extensions_mut().insert(TenantContext(kura_identity::TenantContext {
-            tenant_id: tenant_id.to_string(),
-            principal_id: format!("prn_{tenant_id}"),
-            permissions,
-            ..Default::default()
-        }));
+        req.extensions_mut()
+            .insert(TenantContext(kura_identity::TenantContext {
+                tenant_id: tenant_id.to_string(),
+                principal_id: format!("prn_{tenant_id}"),
+                permissions,
+                ..Default::default()
+            }));
         req
     }
 
     async fn send(app: &axum::Router, req: Request<Body>) -> (StatusCode, serde_json::Value) {
         let response = app.clone().oneshot(req).await.expect("oneshot");
         let status = response.status();
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let json = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -965,7 +1006,10 @@ mod tests {
         let (status, json) = send(&app, request("GET", "/v1/mcp/transports", None)).await;
         assert_eq!(status, StatusCode::OK);
         let transports = json["items"].as_array().expect("transports array");
-        assert!(transports.len() >= 3, "expected additive transport capability records: {json}");
+        assert!(
+            transports.len() >= 3,
+            "expected additive transport capability records: {json}"
+        );
 
         let (status, json) = send(&app, request("GET", "/v1/mcp/catalog", None)).await;
         assert_eq!(status, StatusCode::OK);
@@ -991,46 +1035,99 @@ mod tests {
         with_mcp(&mut state);
         let app = app(state);
 
-        let install_body = r#"{"serverId":"filesystem-test","command":"/bin/echo","workingDir":"/tmp"}"#;
-        let (status, json) = send(&app, request("POST", "/v1/mcp/catalog/filesystem/install", Some(install_body))).await;
+        let install_body =
+            r#"{"serverId":"filesystem-test","command":"/bin/echo","workingDir":"/tmp"}"#;
+        let (status, json) = send(
+            &app,
+            request(
+                "POST",
+                "/v1/mcp/catalog/filesystem/install",
+                Some(install_body),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::CREATED, "install should be 201: {json}");
         assert_eq!(json["status"], "installed");
         assert_eq!(json["server"]["serverId"], "filesystem-test");
         assert_eq!(json["server"]["originKind"], "catalog");
         assert_eq!(json["server"]["catalogEntryId"], "filesystem");
 
-        let (status, json) = send(&app, request("POST", "/v1/mcp/servers/filesystem-test/refresh", None)).await;
+        let (status, json) = send(
+            &app,
+            request("POST", "/v1/mcp/servers/filesystem-test/refresh", None),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "refresh should be 200: {json}");
         assert_eq!(json["status"], "completed");
 
         // Local modification flips refresh to a 409 conflict (Go drift guard).
-        let (status, _) = send(&app, request("PATCH", "/v1/mcp/servers/filesystem-test", Some(r#"{"displayName":"Filesystem Modified"}"#))).await;
+        let (status, _) = send(
+            &app,
+            request(
+                "PATCH",
+                "/v1/mcp/servers/filesystem-test",
+                Some(r#"{"displayName":"Filesystem Modified"}"#),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
 
-        let (status, json) = send(&app, request("POST", "/v1/mcp/servers/filesystem-test/refresh", None)).await;
-        assert_eq!(status, StatusCode::CONFLICT, "modified refresh should be 409: {json}");
+        let (status, json) = send(
+            &app,
+            request("POST", "/v1/mcp/servers/filesystem-test/refresh", None),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CONFLICT,
+            "modified refresh should be 409: {json}"
+        );
         assert_eq!(json["failureClass"], "conflict");
 
         // Reinstall after local modification is also drift-blocked (Go
         // fail_on_modified for refresh/reinstall), so uninstall is the way out.
-        let (status, json) = send(&app, request("POST", "/v1/mcp/servers/filesystem-test/reinstall", None)).await;
-        assert_eq!(status, StatusCode::CONFLICT, "modified reinstall should be 409: {json}");
+        let (status, json) = send(
+            &app,
+            request("POST", "/v1/mcp/servers/filesystem-test/reinstall", None),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CONFLICT,
+            "modified reinstall should be 409: {json}"
+        );
         assert_eq!(json["failureClass"], "conflict");
 
         // Stop is idempotent for a never-started server (Go stop_or_cancel).
-        let (status, _) = send(&app, request("POST", "/v1/mcp/servers/filesystem-test/stop", None)).await;
+        let (status, _) = send(
+            &app,
+            request("POST", "/v1/mcp/servers/filesystem-test/stop", None),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
 
-        let (status, json) = send(&app, request("POST", "/v1/mcp/servers/filesystem-test/uninstall", None)).await;
+        let (status, json) = send(
+            &app,
+            request("POST", "/v1/mcp/servers/filesystem-test/uninstall", None),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "uninstall should be 200: {json}");
         assert_eq!(json["status"], "completed");
         assert_eq!(json["removed"], true);
 
-        let (status, _) = send(&app, request("GET", "/v1/mcp/servers/filesystem-test", None)).await;
+        let (status, _) = send(
+            &app,
+            request("GET", "/v1/mcp/servers/filesystem-test", None),
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "uninstalled server must 404");
 
         // Uninstalling again -> 404 (server no longer resolves).
-        let (status, _) = send(&app, request("POST", "/v1/mcp/servers/filesystem-test/uninstall", None)).await;
+        let (status, _) = send(
+            &app,
+            request("POST", "/v1/mcp/servers/filesystem-test/uninstall", None),
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
@@ -1043,11 +1140,33 @@ mod tests {
         let app = app(state);
 
         let body = create_server_body("tenant-mcp", "/bin/echo");
-        let (status, _) = send(&app, tenant_request("POST", "/v1/mcp/servers", Some(&body), "ten_mcp", vec![])).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "tenant without mcp.manage must be denied");
+        let (status, _) = send(
+            &app,
+            tenant_request("POST", "/v1/mcp/servers", Some(&body), "ten_mcp", vec![]),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "tenant without mcp.manage must be denied"
+        );
 
-        let (status, _) = send(&app, tenant_request("POST", "/v1/mcp/servers", Some(&body), "ten_mcp", vec![Permission::McpManage])).await;
-        assert_eq!(status, StatusCode::CREATED, "tenant with mcp.manage may create");
+        let (status, _) = send(
+            &app,
+            tenant_request(
+                "POST",
+                "/v1/mcp/servers",
+                Some(&body),
+                "ten_mcp",
+                vec![Permission::McpManage],
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "tenant with mcp.manage may create"
+        );
     }
 
     /// Go handleMCPServers' nil-manager guard: 500 when unconfigured.
@@ -1073,9 +1192,11 @@ mod tests {
         )
         .expect("write skill");
         let home = root.join("home");
-        let registry =
-            kura_skills::Registry::with_roots(&home.to_string_lossy(), root.to_str().expect("path"))
-                .expect("registry");
+        let registry = kura_skills::Registry::with_roots(
+            &home.to_string_lossy(),
+            root.to_str().expect("path"),
+        )
+        .expect("registry");
         state.skills = Some(Arc::new(registry));
         state
     }
@@ -1137,39 +1258,73 @@ mod tests {
         let body = create_webhook_body("Ship");
         let (status, json) = send(&app, request("POST", "/v1/webhooks", Some(&body))).await;
         assert_eq!(status, StatusCode::CREATED, "create should be 201: {json}");
-        let webhook_id = json["endpoint"]["webhookId"].as_str().expect("webhook id").to_string();
+        let webhook_id = json["endpoint"]["webhookId"]
+            .as_str()
+            .expect("webhook id")
+            .to_string();
         let secret = json["secret"].as_str().expect("secret").to_string();
-        assert!(!secret.is_empty(), "the plaintext secret is returned exactly once");
+        assert!(
+            !secret.is_empty(),
+            "the plaintext secret is returned exactly once"
+        );
 
-        let (status, json) = send(&app, request("GET", "/v1/webhooks?tenantId=ten_webhook", None)).await;
+        let (status, json) = send(
+            &app,
+            request("GET", "/v1/webhooks?tenantId=ten_webhook", None),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["items"][0]["webhookId"], webhook_id);
 
         let (status, json) = send(
             &app,
-            request("GET", &format!("/v1/webhooks/{webhook_id}?tenantId=ten_webhook"), None),
-        ).await;
+            request(
+                "GET",
+                &format!("/v1/webhooks/{webhook_id}?tenantId=ten_webhook"),
+                None,
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["webhookId"], webhook_id);
 
         let (status, _) = send(
             &app,
-            request("GET", &format!("/v1/webhooks/{webhook_id}?tenantId=ten_other"), None),
-        ).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "cross-tenant get must hide the endpoint");
+            request(
+                "GET",
+                &format!("/v1/webhooks/{webhook_id}?tenantId=ten_other"),
+                None,
+            ),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "cross-tenant get must hide the endpoint"
+        );
 
         let (status, json) = send(
             &app,
-            request("POST", &format!("/v1/webhooks/{webhook_id}/rotate?tenantId=ten_webhook"), None),
-        ).await;
+            request(
+                "POST",
+                &format!("/v1/webhooks/{webhook_id}/rotate?tenantId=ten_webhook"),
+                None,
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         let rotated = json["secret"].as_str().expect("rotated secret").to_string();
         assert_ne!(rotated, secret, "rotation issues a new signing secret");
 
         let (status, json) = send(
             &app,
-            request("POST", &format!("/v1/webhooks/{webhook_id}/disable?tenantId=ten_webhook"), None),
-        ).await;
+            request(
+                "POST",
+                &format!("/v1/webhooks/{webhook_id}/disable?tenantId=ten_webhook"),
+                None,
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json["status"], "disabled");
 
@@ -1194,7 +1349,10 @@ mod tests {
         let body = create_webhook_body("Trigger");
         let (status, json) = send(&app, request("POST", "/v1/webhooks", Some(&body))).await;
         assert_eq!(status, StatusCode::CREATED);
-        let webhook_id = json["endpoint"]["webhookId"].as_str().expect("webhook id").to_string();
+        let webhook_id = json["endpoint"]["webhookId"]
+            .as_str()
+            .expect("webhook id")
+            .to_string();
         let secret = json["secret"].as_str().expect("secret").to_string();
 
         let payload = r#"{"event":"deploy"}"#;
@@ -1208,11 +1366,19 @@ mod tests {
             .body(Body::from(payload.to_string()))
             .expect("request");
         let (status, json) = send(&app, signed).await;
-        assert_eq!(status, StatusCode::ACCEPTED, "signed trigger should be 202: {json}");
+        assert_eq!(
+            status,
+            StatusCode::ACCEPTED,
+            "signed trigger should be 202: {json}"
+        );
         assert_eq!(json["status"], "fired");
 
         // Missing signature -> 401.
-        let unsigned = request("POST", &format!("/v1/triggers/webhook/{webhook_id}"), Some(payload));
+        let unsigned = request(
+            "POST",
+            &format!("/v1/triggers/webhook/{webhook_id}"),
+            Some(payload),
+        );
         let (status, _) = send(&app, unsigned).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
 
@@ -1240,8 +1406,13 @@ mod tests {
         // Disabled endpoint -> 403.
         let (status, _) = send(
             &app,
-            request("POST", &format!("/v1/webhooks/{webhook_id}/disable?tenantId=ten_webhook"), None),
-        ).await;
+            request(
+                "POST",
+                &format!("/v1/webhooks/{webhook_id}/disable?tenantId=ten_webhook"),
+                None,
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         let disabled = Request::builder()
             .method("POST")
@@ -1256,7 +1427,10 @@ mod tests {
         let body = create_webhook_body("Big");
         let (status, json) = send(&app, request("POST", "/v1/webhooks", Some(&body))).await;
         assert_eq!(status, StatusCode::CREATED);
-        let big_id = json["endpoint"]["webhookId"].as_str().expect("webhook id").to_string();
+        let big_id = json["endpoint"]["webhookId"]
+            .as_str()
+            .expect("webhook id")
+            .to_string();
         let big_secret = json["secret"].as_str().expect("secret").to_string();
         let big_payload = "a".repeat(webhook::MAX_PAYLOAD_BYTES + 1);
         let big_signature = webhook::sign(&big_secret, big_payload.as_bytes());

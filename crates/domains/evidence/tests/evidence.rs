@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use kura_evidence::{
-    redact_sections, Bundle, Collector, EvidenceError, Manager, PermissionGate,
-    RedactionStatus, Scope, ScopeKind, Section, DEFAULT_RETENTION,
+    Bundle, Collector, DEFAULT_RETENTION, EvidenceError, Manager, PermissionGate, RedactionStatus,
+    Scope, ScopeKind, Section, redact_sections,
 };
 use kura_store::SQLiteStore;
 use serde_json::json;
@@ -51,7 +51,9 @@ fn run_scope(ref_value: &str) -> Scope {
 #[test]
 fn generate_creates_redacted_audited_bundle() {
     let manager = Manager::new("test", None, None);
-    let bundle = manager.generate("  tenant-a  ", "  alice  ", run_scope("run_1")).unwrap();
+    let bundle = manager
+        .generate("  tenant-a  ", "  alice  ", run_scope("run_1"))
+        .unwrap();
     assert!(bundle.bundle_id.starts_with("evidence_bundle_"));
     assert_eq!(bundle.tenant_id, "tenant-a"); // trimmed
     assert_eq!(bundle.actor, "alice"); // trimmed
@@ -59,9 +61,15 @@ fn generate_creates_redacted_audited_bundle() {
     assert_eq!(bundle.scope.r#ref, "run_1");
     assert!(bundle.sections.is_empty());
     assert_eq!(bundle.redaction_status, RedactionStatus::Redacted);
-    assert_eq!(bundle.retention_expires_at - bundle.created_at, DEFAULT_RETENTION);
+    assert_eq!(
+        bundle.retention_expires_at - bundle.created_at,
+        DEFAULT_RETENTION
+    );
     assert_eq!(manager.audit_trail(&bundle.bundle_id).len(), 1);
-    assert_eq!(manager.audit_trail(&bundle.bundle_id)[0].action, "generated");
+    assert_eq!(
+        manager.audit_trail(&bundle.bundle_id)[0].action,
+        "generated"
+    );
 }
 
 #[test]
@@ -69,7 +77,9 @@ fn generate_rejects_invalid_scope_or_tenant() {
     let manager = Manager::new("test", None, None);
     // Empty ref for a run scope.
     assert!(matches!(
-        manager.generate("tenant-a", "alice", run_scope("  ")).unwrap_err(),
+        manager
+            .generate("tenant-a", "alice", run_scope("  "))
+            .unwrap_err(),
         EvidenceError::InvalidScope
     ));
     // Time window requires both bounds.
@@ -85,7 +95,9 @@ fn generate_rejects_invalid_scope_or_tenant() {
     ));
     // Empty tenant.
     assert!(matches!(
-        manager.generate("  ", "alice", run_scope("run_1")).unwrap_err(),
+        manager
+            .generate("  ", "alice", run_scope("run_1"))
+            .unwrap_err(),
         EvidenceError::InvalidScope
     ));
 }
@@ -93,7 +105,9 @@ fn generate_rejects_invalid_scope_or_tenant() {
 #[test]
 fn generate_is_permission_gated() {
     let manager = Manager::new("test", None, Some(Box::new(DenyAll)));
-    let err = manager.generate("tenant-a", "alice", run_scope("run_1")).unwrap_err();
+    let err = manager
+        .generate("tenant-a", "alice", run_scope("run_1"))
+        .unwrap_err();
     assert!(matches!(err, EvidenceError::PermissionDenied));
 
     // Get and ListForTenant are permission-gated once a bundle exists: generate with an
@@ -102,12 +116,16 @@ fn generate_is_permission_gated() {
     let store = Arc::new(parking_lot::Mutex::new(SQLiteStore::new(&dir).unwrap()));
     let mut producer = Manager::new("test", None, None);
     producer.with_store(Arc::clone(&store));
-    let bundle = producer.generate("tenant-a", "alice", run_scope("run_1")).unwrap();
+    let bundle = producer
+        .generate("tenant-a", "alice", run_scope("run_1"))
+        .unwrap();
     let mut consumer = Manager::new("test", None, Some(Box::new(DenyAll)));
     consumer.with_store(Arc::clone(&store));
     consumer.load_from_store().unwrap();
     assert!(matches!(
-        consumer.get("tenant-a", "alice", &bundle.bundle_id).unwrap_err(),
+        consumer
+            .get("tenant-a", "alice", &bundle.bundle_id)
+            .unwrap_err(),
         EvidenceError::PermissionDenied
     ));
     assert!(matches!(
@@ -119,7 +137,9 @@ fn generate_is_permission_gated() {
 #[test]
 fn generate_surfaces_collector_errors() {
     let manager = Manager::new("test", Some(Box::new(FailingCollector)), None);
-    let err = manager.generate("tenant-a", "alice", run_scope("run_1")).unwrap_err();
+    let err = manager
+        .generate("tenant-a", "alice", run_scope("run_1"))
+        .unwrap_err();
     assert!(matches!(err, EvidenceError::Collect(ref msg) if msg == "collector exploded"));
 }
 
@@ -135,25 +155,38 @@ fn generate_fails_closed_on_secret_material() {
         links: vec![],
     }]);
     let manager = Manager::new("test", Some(Box::new(collector)), None);
-    let err = manager.generate("tenant-a", "alice", run_scope("run_1")).unwrap_err();
+    let err = manager
+        .generate("tenant-a", "alice", run_scope("run_1"))
+        .unwrap_err();
     assert!(matches!(err, EvidenceError::RedactionFailed));
     // Nothing was stored for the failed bundle.
-    assert!(manager.list_for_tenant("tenant-a", "alice").unwrap().is_empty());
+    assert!(
+        manager
+            .list_for_tenant("tenant-a", "alice")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
 fn get_enforces_tenant_boundary_and_audits_access() {
     let manager = Manager::new("test", None, None);
-    let bundle = manager.generate("tenant-a", "alice", run_scope("run_1")).unwrap();
+    let bundle = manager
+        .generate("tenant-a", "alice", run_scope("run_1"))
+        .unwrap();
 
     // Unknown bundle.
     assert!(matches!(
-        manager.get("tenant-a", "alice", "evidence_bundle_nope").unwrap_err(),
+        manager
+            .get("tenant-a", "alice", "evidence_bundle_nope")
+            .unwrap_err(),
         EvidenceError::BundleNotFound
     ));
     // Cross-tenant access denied.
     assert!(matches!(
-        manager.get("tenant-b", "alice", &bundle.bundle_id).unwrap_err(),
+        manager
+            .get("tenant-b", "alice", &bundle.bundle_id)
+            .unwrap_err(),
         EvidenceError::CrossTenantAccess
     ));
     // Authorized access returns the bundle and records an audit event.
@@ -167,8 +200,12 @@ fn get_enforces_tenant_boundary_and_audits_access() {
 #[test]
 fn list_for_tenant_is_tenant_scoped() {
     let manager = Manager::new("test", None, None);
-    let a = manager.generate("tenant-a", "alice", run_scope("run_a")).unwrap();
-    let _b = manager.generate("tenant-b", "bob", run_scope("run_b")).unwrap();
+    let a = manager
+        .generate("tenant-a", "alice", run_scope("run_a"))
+        .unwrap();
+    let _b = manager
+        .generate("tenant-b", "bob", run_scope("run_b"))
+        .unwrap();
     let listed = manager.list_for_tenant("tenant-a", "alice").unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].bundle_id, a.bundle_id);
@@ -237,7 +274,10 @@ fn wire_round_trip() {
     assert_eq!(ScopeKind::QuotaDenial.as_str(), "quota_denial");
     assert_eq!(ScopeKind::TimeWindow.as_str(), "time_window");
     assert_eq!(RedactionStatus::FailedClosed.as_str(), "failed_closed");
-    assert_eq!(serde_json::to_value(ScopeKind::TimeWindow).unwrap(), json!("time_window"));
+    assert_eq!(
+        serde_json::to_value(ScopeKind::TimeWindow).unwrap(),
+        json!("time_window")
+    );
 
     let back: Bundle = serde_json::from_value(value).unwrap();
     assert_eq!(back, bundle);
@@ -249,7 +289,9 @@ fn persistence_round_trip() {
     let store = Arc::new(parking_lot::Mutex::new(SQLiteStore::new(&dir).unwrap()));
     let mut manager = Manager::new("test", None, None);
     manager.with_store(Arc::clone(&store));
-    let bundle = manager.generate("tenant-a", "alice", run_scope("run_1")).unwrap();
+    let bundle = manager
+        .generate("tenant-a", "alice", run_scope("run_1"))
+        .unwrap();
 
     // A fresh manager recovers bundles from the store; audit events are not persisted.
     let mut fresh = Manager::new("test", None, None);
@@ -257,7 +299,10 @@ fn persistence_round_trip() {
     fresh.load_from_store().unwrap();
     assert!(fresh.audit_trail(&bundle.bundle_id).is_empty()); // generation audit is not persisted
     assert_eq!(fresh.list_for_tenant("tenant-a", "alice").unwrap().len(), 1);
-    assert_eq!(fresh.get("tenant-a", "alice", &bundle.bundle_id).unwrap(), bundle);
+    assert_eq!(
+        fresh.get("tenant-a", "alice", &bundle.bundle_id).unwrap(),
+        bundle
+    );
     assert_eq!(fresh.audit_trail(&bundle.bundle_id).len(), 1); // only the access event just recorded
 }
 /// Compile-time guard: this manager must be usable from axum `AppState` (Send + Sync).
@@ -266,4 +311,3 @@ fn manager_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<kura_evidence::Manager>();
 }
-

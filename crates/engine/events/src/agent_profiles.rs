@@ -38,7 +38,10 @@ pub fn agent_profile_lifecycle_event(input: AgentProfileLifecycleInput) -> Event
         name: input.event_name.clone(),
         tenant_id: input.tenant_id.clone(),
         occurred_at: now_utc(),
-        resource: Resource { kind: "agent_profile".to_string(), id: input.profile_id.clone() },
+        resource: Resource {
+            kind: "agent_profile".to_string(),
+            id: input.profile_id.clone(),
+        },
         payload: payload![
             "profileId" => input.profile_id,
             "profileVersionId" => input.profile_version_id,
@@ -80,7 +83,10 @@ pub fn agent_profile_version_created_event(input: AgentProfileVersionInput) -> E
         name: "agent_profile.version_created".to_string(),
         tenant_id: input.tenant_id.clone(),
         occurred_at: now_utc(),
-        resource: Resource { kind: "agent_profile_version".to_string(), id: input.profile_version_id.clone() },
+        resource: Resource {
+            kind: "agent_profile_version".to_string(),
+            id: input.profile_version_id.clone(),
+        },
         payload: payload![
             "profileId" => input.profile_id,
             "profileVersionId" => input.profile_version_id,
@@ -102,7 +108,10 @@ pub fn agent_profile_runtime_projected_event(projection: RuntimeProjection) -> E
         name: "agent_profile.runtime_projected".to_string(),
         tenant_id: projection.tenant_id.clone(),
         occurred_at: projection.occurred_at,
-        resource: Resource { kind: projection.resource_kind.as_str().to_string(), id: projection.resource_id.clone() },
+        resource: Resource {
+            kind: projection.resource_kind.as_str().to_string(),
+            id: projection.resource_id.clone(),
+        },
         payload: payload![
             "runtimeProfileProjectionId" => projection.runtime_profile_projection_id,
             "profileId" => projection.profile_id,

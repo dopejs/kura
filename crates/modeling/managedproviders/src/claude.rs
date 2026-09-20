@@ -3,13 +3,13 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use futures::future::BoxFuture;
 use kura_llm::{CancelToken, ProviderError, ProviderRequest, ProviderResponse, StreamChunk, Usage};
 use kura_providers::{AuthMode, AuthState, AuthStatus, Family, Model};
 use kura_sandbox::{
     AccessRequest, DecisionResolution, LocalStateAccessMode, ManagedProviderActionKind,
     NetworkMode, SensitiveLocalStateAccessSummary,
 };
-use futures::future::BoxFuture;
 
 use crate::bridge::{Bridge, RunError, Runner, SandboxManager};
 use crate::codex::classify_cli_error;
@@ -137,7 +137,10 @@ impl ClaudeBridge {
                 }
             }
         }
-        items.first().map(|item| item.model_id.clone()).unwrap_or_default()
+        items
+            .first()
+            .map(|item| item.model_id.clone())
+            .unwrap_or_default()
     }
 
     /// Go `baseState`.
@@ -203,13 +206,15 @@ impl ClaudeBridge {
         };
         let evaluation = evaluate_managed_provider_operation(self.sandboxes.as_deref(), &plan)?;
         if evaluation.operation.decision != DecisionResolution::Allow {
-            return Ok(SettingsEvaluation::Denied(ManagedProviderOperationEvaluation {
-                metadata: crate::evaluate::finalize_managed_provider_metadata(
-                    &evaluation.metadata,
-                    kura_sandbox::ErrorClass::PolicyDenied.as_str(),
-                ),
-                ..evaluation
-            }));
+            return Ok(SettingsEvaluation::Denied(
+                ManagedProviderOperationEvaluation {
+                    metadata: crate::evaluate::finalize_managed_provider_metadata(
+                        &evaluation.metadata,
+                        kura_sandbox::ErrorClass::PolicyDenied.as_str(),
+                    ),
+                    ..evaluation
+                },
+            ));
         }
         Ok(SettingsEvaluation::Allowed(evaluation))
     }
@@ -341,11 +346,7 @@ impl Bridge for ClaudeBridge {
                 finalize_managed_provider_execution_failure(
                     self.sandboxes.as_deref(),
                     &result,
-                    &ProviderError::provider(
-                        "provider_error",
-                        parse_err.to_string(),
-                        false,
-                    ),
+                    &ProviderError::provider("provider_error", parse_err.to_string(), false),
                 );
                 state.status = AuthStatus::Error;
                 state.last_error = parse_err.to_string();
@@ -518,7 +519,10 @@ impl kura_llm::Provider for ClaudeCLIProvider {
 }
 
 /// Go `claudeCLIProvider.Complete` body (sync, shared by complete/stream).
-fn claude_complete(bridge: &ClaudeBridge, request: ProviderRequest) -> Result<ProviderResponse, ProviderError> {
+fn claude_complete(
+    bridge: &ClaudeBridge,
+    request: ProviderRequest,
+) -> Result<ProviderResponse, ProviderError> {
     let mut model = request.model.trim().to_string();
     let mut local_state: Vec<SensitiveLocalStateAccessSummary> = Vec::new();
     if model.is_empty() {
@@ -565,8 +569,13 @@ fn claude_complete(bridge: &ClaudeBridge, request: ProviderRequest) -> Result<Pr
         "dontAsk".to_string(),
         latest_user_message(&request.messages),
     ];
-    let (result, run_err) =
-        bridge.runner.run(&request.cancel, &bridge.cli_path, &args, &bridge.work_dir, Some(&operation));
+    let (result, run_err) = bridge.runner.run(
+        &request.cancel,
+        &bridge.cli_path,
+        &args,
+        &bridge.work_dir,
+        Some(&operation),
+    );
     let response = parse_claude_result(&result, run_err.as_ref());
     match response {
         Ok(response) => {
@@ -612,9 +621,9 @@ pub fn parse_claude_result(
             return Err(ProviderError::provider(code, payload.result, false));
         }
         return Ok(ProviderResponse {
-        // A borrowed CLI runs its own tool loop internally and reports only
-        // the finished text; there is nothing for a caller to dispatch.
-        tool_calls: Vec::new(),
+            // A borrowed CLI runs its own tool loop internally and reports only
+            // the finished text; there is nothing for a caller to dispatch.
+            tool_calls: Vec::new(),
             output: payload.result,
             finish_reason: "stop".to_string(),
             usage: Usage {

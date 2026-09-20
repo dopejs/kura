@@ -95,22 +95,34 @@ string_enum!(SourceKind {
 });
 
 impl Default for AssetKind {
-    fn default() -> Self { AssetKind::ChatMemory }
+    fn default() -> Self {
+        AssetKind::ChatMemory
+    }
 }
 impl Default for MemoryLayer {
-    fn default() -> Self { MemoryLayer::L1 }
+    fn default() -> Self {
+        MemoryLayer::L1
+    }
 }
 impl Default for Visibility {
-    fn default() -> Self { Visibility::Private }
+    fn default() -> Self {
+        Visibility::Private
+    }
 }
 impl Default for AssetStatus {
-    fn default() -> Self { AssetStatus::Pending }
+    fn default() -> Self {
+        AssetStatus::Pending
+    }
 }
 impl Default for ActorKind {
-    fn default() -> Self { ActorKind::Operator }
+    fn default() -> Self {
+        ActorKind::Operator
+    }
 }
 impl Default for SourceKind {
-    fn default() -> Self { SourceKind::Thread }
+    fn default() -> Self {
+        SourceKind::Thread
+    }
 }
 
 /// The acting identity behind a write (attribution is mandatory).
@@ -560,7 +572,10 @@ impl Manager {
         let mut inner = self.inner.write();
         let now = Utc::now();
         let supersedes = {
-            let asset = inner.by_id.get_mut(asset_id.trim()).ok_or(MemoryError::AssetNotFound)?;
+            let asset = inner
+                .by_id
+                .get_mut(asset_id.trim())
+                .ok_or(MemoryError::AssetNotFound)?;
             if asset.status != AssetStatus::Pending {
                 return Err(MemoryError::NotPending);
             }
@@ -578,14 +593,21 @@ impl Manager {
                 previous = Some(prior.clone());
             }
         }
-        let asset = inner.by_id.get(asset_id.trim()).cloned().ok_or(MemoryError::AssetNotFound)?;
+        let asset = inner
+            .by_id
+            .get(asset_id.trim())
+            .cloned()
+            .ok_or(MemoryError::AssetNotFound)?;
         Ok((asset, previous))
     }
 
     /// Rejects a pending asset (tombstoned as revoked with the reason).
     pub fn reject(&self, asset_id: &str, reason: &str) -> Result<MemoryAsset, MemoryError> {
         let mut inner = self.inner.write();
-        let asset = inner.by_id.get_mut(asset_id.trim()).ok_or(MemoryError::AssetNotFound)?;
+        let asset = inner
+            .by_id
+            .get_mut(asset_id.trim())
+            .ok_or(MemoryError::AssetNotFound)?;
         if asset.status != AssetStatus::Pending {
             return Err(MemoryError::NotPending);
         }
@@ -600,7 +622,10 @@ impl Manager {
     /// Revokes an active asset (reversibility: tombstone, never delete).
     pub fn revoke(&self, asset_id: &str, reason: &str) -> Result<MemoryAsset, MemoryError> {
         let mut inner = self.inner.write();
-        let asset = inner.by_id.get_mut(asset_id.trim()).ok_or(MemoryError::AssetNotFound)?;
+        let asset = inner
+            .by_id
+            .get_mut(asset_id.trim())
+            .ok_or(MemoryError::AssetNotFound)?;
         if asset.status != AssetStatus::Ready && asset.status != AssetStatus::Pending {
             return Err(MemoryError::NotActive);
         }
@@ -621,7 +646,10 @@ impl Manager {
         visibility: Visibility,
     ) -> Result<(MemoryAsset, WriteDecision), MemoryError> {
         let mut inner = self.inner.write();
-        let asset = inner.by_id.get_mut(asset_id.trim()).ok_or(MemoryError::AssetNotFound)?;
+        let asset = inner
+            .by_id
+            .get_mut(asset_id.trim())
+            .ok_or(MemoryError::AssetNotFound)?;
         if asset.status != AssetStatus::Ready {
             return Err(MemoryError::NotActive);
         }
@@ -679,7 +707,10 @@ impl Manager {
             asset_id: &str,
             depth: usize,
         ) -> Result<DrilldownNode, MemoryError> {
-            let asset = inner.by_id.get(asset_id).ok_or(MemoryError::AssetNotFound)?;
+            let asset = inner
+                .by_id
+                .get(asset_id)
+                .ok_or(MemoryError::AssetNotFound)?;
             let mut members = Vec::new();
             if depth < 4 {
                 for member_id in &asset.member_asset_ids {
@@ -752,7 +783,10 @@ impl Manager {
         };
         let mut written = Vec::new();
 
-        let extractor_owner = Actor { kind: ActorKind::System, id: "consolidator".to_string() };
+        let extractor_owner = Actor {
+            kind: ActorKind::System,
+            id: "consolidator".to_string(),
+        };
 
         match self.consolidator.extract_l1(tenant_id, window) {
             Ok(drafts) => {
@@ -902,16 +936,20 @@ impl Manager {
             .consolidation
             .get(tenant_id.trim())
             .and_then(|s| s.last_extract_at);
-        self.list(tenant_id, Some(MemoryLayer::L0Ref), Some(AssetStatus::Ready))
-            .into_iter()
-            .filter(|asset| since.map_or(true, |t| asset.created_at > t))
-            .map(|asset| L0Item {
-                source: asset.source_links.first().cloned().unwrap_or_default(),
-                role: asset.title.clone(),
-                text: asset.content.clone(),
-                occurred_at: asset.created_at,
-            })
-            .collect()
+        self.list(
+            tenant_id,
+            Some(MemoryLayer::L0Ref),
+            Some(AssetStatus::Ready),
+        )
+        .into_iter()
+        .filter(|asset| since.map_or(true, |t| asset.created_at > t))
+        .map(|asset| L0Item {
+            source: asset.source_links.first().cloned().unwrap_or_default(),
+            role: asset.title.clone(),
+            text: asset.content.clone(),
+            occurred_at: asset.created_at,
+        })
+        .collect()
     }
 
     /// Applies retention expiry at `now`; returns the expired assets (for
@@ -940,7 +978,14 @@ impl Manager {
     #[must_use]
     pub fn render_markdown(&self, asset: &MemoryAsset) -> String {
         let mut out = String::new();
-        out.push_str(&format!("# {}\n\n", if asset.title.is_empty() { &asset.asset_id } else { &asset.title }));
+        out.push_str(&format!(
+            "# {}\n\n",
+            if asset.title.is_empty() {
+                &asset.asset_id
+            } else {
+                &asset.title
+            }
+        ));
         out.push_str(&format!(
             "- asset: `{}` (layer {}, v{}, {})\n- owner: {}:{}\n- visibility: {}\n- updated: {}\n\n",
             asset.asset_id,

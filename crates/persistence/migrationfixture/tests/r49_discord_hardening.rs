@@ -20,7 +20,10 @@ fn head_store() -> (kura_store::SQLiteStore, String) {
 fn r49_seeds_two_tenants_per_table() {
     let (store, _dir) = head_store();
     let fixture = seed_r49_discord_hardening_rows(&store).unwrap();
-    assert_eq!(fixture.tenant_ids, vec!["ten_discord_alpha", "ten_discord_beta"]);
+    assert_eq!(
+        fixture.tenant_ids,
+        vec!["ten_discord_alpha", "ten_discord_beta"]
+    );
 
     let counts = count_r49_discord_hardening_rows(&store).unwrap();
     for (table, expected) in &fixture.expected_row_count {

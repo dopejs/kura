@@ -120,7 +120,10 @@ pub async fn bridge_local_credential_files(
 
     if let Some(progress) = progress {
         progress.register_migration_step(&input.step_name).await?;
-        if progress.is_migration_step_completed(&input.step_name).await? {
+        if progress
+            .is_migration_step_completed(&input.step_name)
+            .await?
+        {
             result.already_completed = true;
             return Ok(result);
         }
@@ -162,10 +165,10 @@ async fn bridge_files(
     for secret_ref in refs {
         let candidate = &candidates[secret_ref];
         if candidate.conflict {
-            let secret = match input.manager.get(&result.tenant_id, secret_ref).await {
-                Ok(secret) => secret,
-                Err(SecretsError::SecretNotFound) => {
-                    input
+            let secret =
+                match input.manager.get(&result.tenant_id, secret_ref).await {
+                    Ok(secret) => secret,
+                    Err(SecretsError::SecretNotFound) => input
                         .manager
                         .create_disabled_metadata(CreateDisabledMetadataInput {
                             tenant_id: result.tenant_id.clone(),
@@ -177,10 +180,9 @@ async fn bridge_files(
                                     .to_string(),
                             document: Some(bridge_document(&candidate.sources)),
                         })
-                        .await?
-                }
-                Err(err) => return Err(err),
-            };
+                        .await?,
+                    Err(err) => return Err(err),
+                };
             result.disabled.push(DisabledResource {
                 tenant_id: result.tenant_id.clone(),
                 resource_kind: ResourceKind::DisabledCredential,
@@ -401,7 +403,11 @@ mod tests {
         let backend_dir = TestDir::new(&format!("bridge-backend-{suffix}"));
         let store = Arc::new(FakeStore::new());
         let backend = Arc::new(LocalBackend::new(backend_dir.path()).expect("local backend"));
-        (Arc::new(Manager::new(store, backend)), store_dir, backend_dir)
+        (
+            Arc::new(Manager::new(store, backend)),
+            store_dir,
+            backend_dir,
+        )
     }
 
     #[tokio::test]
@@ -492,7 +498,10 @@ mod tests {
         let result = bridge_local_credential_files(&input).await.expect("bridge");
         assert_eq!(result.disabled.len(), 1, "result {result:?}");
         assert_eq!(result.disabled[0].status, SecretStatus::PendingRemediation);
-        assert_eq!(result.disabled[0].secret_refs, vec!["DUP_TOKEN".to_string()]);
+        assert_eq!(
+            result.disabled[0].secret_refs,
+            vec!["DUP_TOKEN".to_string()]
+        );
         assert!(result.created.is_empty());
 
         let secret = manager
@@ -502,13 +511,15 @@ mod tests {
         assert_eq!(secret.status, SecretStatus::PendingRemediation);
         assert!(!secret.disabled_reason.is_empty());
         assert!(!secret.remediation_reason.is_empty());
-        assert!(manager
-            .resolve(ResolveInput {
-                tenant_id: "ten_bridge".to_string(),
-                secret_ref: "DUP_TOKEN".to_string(),
-            })
-            .await
-            .is_err());
+        assert!(
+            manager
+                .resolve(ResolveInput {
+                    tenant_id: "ten_bridge".to_string(),
+                    secret_ref: "DUP_TOKEN".to_string(),
+                })
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -575,7 +586,11 @@ mod tests {
         assert_eq!(resolved.value, "pre-existing-value");
 
         // Resource store received the sorted active refs.
-        let seen = resource_store.seen.lock().clone().expect("resource store input");
+        let seen = resource_store
+            .seen
+            .lock()
+            .clone()
+            .expect("resource store input");
         assert_eq!(seen.tenant_id, "ten_bridge");
         assert_eq!(
             seen.active_secret_refs,

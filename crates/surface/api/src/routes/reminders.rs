@@ -26,11 +26,11 @@
 
 use std::collections::HashMap;
 
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::{Method, StatusCode, Uri};
 use axum::routing::{get, post};
-use axum::Router;
 use chrono::{DateTime, Utc};
 use kura_reminders::{
     ActionRecord, ActorKind, BehaviorMode, CreateInput, Occurrence, OccurrenceFilter, Reminder,
@@ -41,12 +41,12 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::error::ApiError;
-use crate::middleware::{guard_resource_for_tenant, TenantContext};
+use crate::middleware::{TenantContext, guard_resource_for_tenant};
 use crate::response::Json;
 use crate::state::AppState;
 use crate::types::{
-    CalendarWorkflowActionRequest, ListResponse, MailAttachmentRefRequest, MailWorkflowActionRequest,
-    ReminderWorkflowLaunchRequest, ScheduleTriggerRequest,
+    CalendarWorkflowActionRequest, ListResponse, MailAttachmentRefRequest,
+    MailWorkflowActionRequest, ReminderWorkflowLaunchRequest, ScheduleTriggerRequest,
 };
 
 // ---------------------------------------------------------------------------
@@ -127,8 +127,8 @@ pub async fn handle_reminders_create(
     body: Bytes,
 ) -> Result<(StatusCode, axum::Json<Reminder>), ApiError> {
     let manager = reminders_manager(&state)?;
-    let request: CreateReminderRequest = serde_json::from_slice(body.as_ref())
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let request: CreateReminderRequest =
+        serde_json::from_slice(body.as_ref()).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let input = build_create_reminder_input(request)?;
     // Go maps every manager.Create failure to 400.
     let item = manager
@@ -146,8 +146,14 @@ pub async fn handle_reminder_by_id(
     method: Method,
     uri: Uri,
 ) -> Result<Json<Reminder>, ApiError> {
-    guard_reminder_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), &reminder_id)
-        .await?;
+    guard_reminder_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        &reminder_id,
+    )
+    .await?;
     let manager = reminders_manager(&state)?;
     let (item, ok) = manager.get(&reminder_id).map_err(ApiError::internal)?;
     if !ok {
@@ -165,10 +171,18 @@ pub async fn handle_reminder_actions(
     method: Method,
     uri: Uri,
 ) -> Result<Json<ListResponse<ActionRecord>>, ApiError> {
-    guard_reminder_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), &reminder_id)
-        .await?;
+    guard_reminder_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        &reminder_id,
+    )
+    .await?;
     let manager = reminders_manager(&state)?;
-    let items = manager.list_actions(&reminder_id).map_err(ApiError::internal)?;
+    let items = manager
+        .list_actions(&reminder_id)
+        .map_err(ApiError::internal)?;
     Ok(Json(ListResponse { items }))
 }
 
@@ -184,11 +198,19 @@ pub async fn handle_reminder_occurrences(
 ) -> Result<Json<ListResponse<Occurrence>>, ApiError> {
     // Go's withByIDTenantGuard extracts "occurrences" as the id segment here;
     // the lookup misses (no reminder row keyed "occurrences") and passes.
-    guard_reminder_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), "occurrences")
-        .await?;
+    guard_reminder_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        "occurrences",
+    )
+    .await?;
     let manager = reminders_manager(&state)?;
     let filter = reminder_occurrence_filter_from_request(&params)?;
-    let items = manager.list_occurrences(&filter).map_err(ApiError::internal)?;
+    let items = manager
+        .list_occurrences(&filter)
+        .map_err(ApiError::internal)?;
     Ok(Json(ListResponse { items }))
 }
 
@@ -202,10 +224,18 @@ pub async fn handle_reminder_occurrence_by_id(
     method: Method,
     uri: Uri,
 ) -> Result<Json<Occurrence>, ApiError> {
-    guard_reminder_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), "occurrences")
-        .await?;
+    guard_reminder_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        "occurrences",
+    )
+    .await?;
     let manager = reminders_manager(&state)?;
-    let (item, ok) = manager.get_occurrence(&occurrence_id).map_err(ApiError::internal)?;
+    let (item, ok) = manager
+        .get_occurrence(&occurrence_id)
+        .map_err(ApiError::internal)?;
     if !ok {
         return Err(ApiError::NotFound("not found".to_string()));
     }
@@ -240,12 +270,18 @@ macro_rules! reminder_transition_handler {
     };
 }
 
-reminder_transition_handler!(handle_reminder_acknowledge, ReminderTransitionKind::Acknowledge);
+reminder_transition_handler!(
+    handle_reminder_acknowledge,
+    ReminderTransitionKind::Acknowledge
+);
 reminder_transition_handler!(handle_reminder_snooze, ReminderTransitionKind::Snooze);
 reminder_transition_handler!(handle_reminder_complete, ReminderTransitionKind::Complete);
 reminder_transition_handler!(handle_reminder_dismiss, ReminderTransitionKind::Dismiss);
 reminder_transition_handler!(handle_reminder_cancel, ReminderTransitionKind::Cancel);
-reminder_transition_handler!(handle_reminder_reschedule, ReminderTransitionKind::Reschedule);
+reminder_transition_handler!(
+    handle_reminder_reschedule,
+    ReminderTransitionKind::Reschedule
+);
 
 async fn handle_reminder_transition(
     state: AppState,
@@ -256,11 +292,17 @@ async fn handle_reminder_transition(
     body: Bytes,
     kind: ReminderTransitionKind,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    guard_reminder_for_tenant(&state, &method, &uri, tenant.as_ref().map(|e| &e.0), &reminder_id)
-        .await?;
+    guard_reminder_for_tenant(
+        &state,
+        &method,
+        &uri,
+        tenant.as_ref().map(|e| &e.0),
+        &reminder_id,
+    )
+    .await?;
     let manager = reminders_manager(&state)?;
-    let request: ReminderTransitionRequest = serde_json::from_slice(body.as_ref())
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let request: ReminderTransitionRequest =
+        serde_json::from_slice(body.as_ref()).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let input = build_reminder_transition_input(request)?;
     let (reminder, occurrence, action) = match kind {
         ReminderTransitionKind::Acknowledge => manager.acknowledge(&reminder_id, &input),
@@ -328,14 +370,16 @@ fn build_create_reminder_input(request: CreateReminderRequest) -> Result<CreateI
             })
         }
     };
-    let follow_up_link = request.follow_up_link.map(|link| kura_reminders::FollowUpLink {
-        link_kind: link.link_kind,
-        source_id: link.source_id.trim().to_string(),
-        environment_scope: link.environment_scope.trim().to_string(),
-        source_summary: link.source_summary.trim().to_string(),
-        source_display_state: link.source_display_state.trim().to_string(),
-        ..kura_reminders::FollowUpLink::default()
-    });
+    let follow_up_link = request
+        .follow_up_link
+        .map(|link| kura_reminders::FollowUpLink {
+            link_kind: link.link_kind,
+            source_id: link.source_id.trim().to_string(),
+            environment_scope: link.environment_scope.trim().to_string(),
+            source_summary: link.source_summary.trim().to_string(),
+            source_display_state: link.source_display_state.trim().to_string(),
+            ..kura_reminders::FollowUpLink::default()
+        });
     Ok(CreateInput {
         title: request.title.trim().to_string(),
         details: request.details.trim().to_string(),
@@ -462,7 +506,9 @@ fn build_mail_action(
 }
 
 /// Go `mailAttachmentInputs` (daemon/internal/api/mail_execution.go).
-fn mail_attachment_inputs(items: Vec<MailAttachmentRefRequest>) -> Vec<kura_mail::AttachmentRefInput> {
+fn mail_attachment_inputs(
+    items: Vec<MailAttachmentRefRequest>,
+) -> Vec<kura_mail::AttachmentRefInput> {
     if items.is_empty() {
         return Vec::new();
     }
@@ -569,7 +615,10 @@ pub fn router() -> Router<AppState> {
             post(handle_reminder_acknowledge),
         )
         .route("/v1/reminders/{id}/snooze", post(handle_reminder_snooze))
-        .route("/v1/reminders/{id}/complete", post(handle_reminder_complete))
+        .route(
+            "/v1/reminders/{id}/complete",
+            post(handle_reminder_complete),
+        )
         .route("/v1/reminders/{id}/dismiss", post(handle_reminder_dismiss))
         .route("/v1/reminders/{id}/cancel", post(handle_reminder_cancel))
         .route(
@@ -585,7 +634,6 @@ pub fn router() -> Router<AppState> {
             get(handle_reminder_occurrence_by_id),
         )
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -615,7 +663,9 @@ mod tests {
 
     impl TestClock {
         fn new(now: DateTime<Utc>) -> Self {
-            TestClock { now: Mutex::new(now) }
+            TestClock {
+                now: Mutex::new(now),
+            }
         }
 
         fn set(&self, now: DateTime<Utc>) {
@@ -668,6 +718,7 @@ mod tests {
     fn test_config() -> kura_config::Config {
         kura_config::Config {
             project_root: String::new(),
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-test".to_string(),
@@ -692,6 +743,7 @@ mod tests {
                     ..Default::default()
                 },
             },
+            egress: Default::default(),
         }
     }
 
@@ -858,7 +910,10 @@ mod tests {
             &crate::routes::router(h.state.clone()),
             request(
                 "GET",
-                &format!("/v1/reminders/occurrences?reminderId={}", created.reminder_id),
+                &format!(
+                    "/v1/reminders/occurrences?reminderId={}",
+                    created.reminder_id
+                ),
                 None,
             ),
         )
@@ -919,7 +974,10 @@ mod tests {
         let lifecycle: Reminder = serde_json::from_value(json).expect("lifecycle reminder");
         h.clock.set(base);
         h.manager.tick().expect("tick lifecycle due");
-        let (lifecycle_current, ok) = h.manager.get(&lifecycle.reminder_id).expect("get lifecycle");
+        let (lifecycle_current, ok) = h
+            .manager
+            .get(&lifecycle.reminder_id)
+            .expect("get lifecycle");
         assert!(ok);
 
         let (status, json) = send(
@@ -969,7 +1027,10 @@ mod tests {
         let snooze_reminder: Reminder = serde_json::from_value(json).expect("snooze reminder");
         h.clock.set(base + chrono::Duration::minutes(1));
         h.manager.tick().expect("tick snooze due");
-        let (snooze_current, ok) = h.manager.get(&snooze_reminder.reminder_id).expect("get snooze");
+        let (snooze_current, ok) = h
+            .manager
+            .get(&snooze_reminder.reminder_id)
+            .expect("get snooze");
         assert!(ok);
         let (status, json) = send(
             &app(),
@@ -1019,7 +1080,10 @@ mod tests {
         let dismiss_reminder: Reminder = serde_json::from_value(json).expect("dismiss reminder");
         h.clock.set(base + chrono::Duration::minutes(2));
         h.manager.tick().expect("tick dismiss due");
-        let (dismiss_current, ok) = h.manager.get(&dismiss_reminder.reminder_id).expect("get dismiss");
+        let (dismiss_current, ok) = h
+            .manager
+            .get(&dismiss_reminder.reminder_id)
+            .expect("get dismiss");
         assert!(ok);
         let (status, json) = send(
             &app(),
@@ -1066,8 +1130,11 @@ mod tests {
         // workflow-launch linkage
         h.clock.set(base - chrono::Duration::minutes(1));
         let workflow_body = r#"{"title":"Workflow reminder","behaviorMode":"launch_workflow","trigger":{"kind":"once","fireAt":"2026-04-23T12:03:00Z"},"workflowLaunchConfig":{"entrypoint":"operator","workflowGoal":"follow up"}}"#;
-        let (status, json) = send(&app(), request("POST", "/v1/reminders", Some(workflow_body)))
-            .await;
+        let (status, json) = send(
+            &app(),
+            request("POST", "/v1/reminders", Some(workflow_body)),
+        )
+        .await;
         assert_eq!(status, StatusCode::CREATED, "workflow create body: {json}");
         let workflow_reminder: Reminder = serde_json::from_value(json).expect("workflow reminder");
         h.clock.set(base + chrono::Duration::minutes(3));
@@ -1242,7 +1309,12 @@ mod tests {
         {
             let store = h.state.store.lock();
             store
-                .bind_row_tenant("reminders", "reminder_id", &reminder.reminder_id, "tenant-a")
+                .bind_row_tenant(
+                    "reminders",
+                    "reminder_id",
+                    &reminder.reminder_id,
+                    "tenant-a",
+                )
                 .expect("bind row tenant");
         }
 
@@ -1251,12 +1323,12 @@ mod tests {
             .uri(&uri)
             .body(axum::body::Body::empty())
             .expect("request");
-        owner_req.extensions_mut().insert(TenantContext(
-            kura_identity::TenantContext {
+        owner_req
+            .extensions_mut()
+            .insert(TenantContext(kura_identity::TenantContext {
                 tenant_id: "tenant-a".to_string(),
                 ..Default::default()
-            },
-        ));
+            }));
         let (status, _) = send(&crate::routes::router(h.state.clone()), owner_req).await;
         assert_eq!(status, StatusCode::OK);
 
@@ -1264,12 +1336,12 @@ mod tests {
             .uri(&uri)
             .body(axum::body::Body::empty())
             .expect("request");
-        other_req.extensions_mut().insert(TenantContext(
-            kura_identity::TenantContext {
+        other_req
+            .extensions_mut()
+            .insert(TenantContext(kura_identity::TenantContext {
                 tenant_id: "tenant-b".to_string(),
                 ..Default::default()
-            },
-        ));
+            }));
         let (status, json) = send(&crate::routes::router(h.state.clone()), other_req).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "body: {json}");
     }

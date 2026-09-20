@@ -87,8 +87,9 @@ fn map_evidence_error(err: evidence::EvidenceError) -> ApiError {
     let message = err.to_string();
     match err {
         evidence::EvidenceError::BundleNotFound => ApiError::NotFound(message),
-        evidence::EvidenceError::PermissionDenied
-        | evidence::EvidenceError::CrossTenantAccess => ApiError::Forbidden(message),
+        evidence::EvidenceError::PermissionDenied | evidence::EvidenceError::CrossTenantAccess => {
+            ApiError::Forbidden(message)
+        }
         evidence::EvidenceError::InvalidScope => ApiError::BadRequest(message),
         // Fail closed: redaction could not guarantee secret removal.
         evidence::EvidenceError::RedactionFailed => ApiError::Unprocessable(message),
@@ -173,7 +174,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "{generated}");
-        let bundle_id = generated["bundleId"].as_str().expect("bundleId").to_string();
+        let bundle_id = generated["bundleId"]
+            .as_str()
+            .expect("bundleId")
+            .to_string();
 
         let (status, listed) = request_json(
             state.clone(),

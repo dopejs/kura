@@ -19,6 +19,7 @@ const DOCUMENTS = [
   ["skills-improvement", "Skills & Self-Improvement", "Govern agent-authored skills and configuration improvements.", "site/src/content/skills-improvement.md"],
   ["channels", "Channels", "Connect Kura to supported messaging channels safely.", "site/src/content/channels.md"],
   ["api", "API Reference", "Use Kura's local HTTP API.", "site/src/content/api.md"],
+  ["deployment", "Deployment", "Run Kura for a team: TLS, tokens, metrics, backups.", "site/src/content/deployment.md"],
   ["architecture", "Architecture", "Read the source-of-truth plugin architecture design.", "docs/harness/plugin-architecture.md"],
 ];
 

@@ -5,6 +5,6 @@ mod manager;
 mod types;
 
 pub use manager::{
-    new_manager, Check, CheckInput, Manager, new_check_id, ResolvedDispatch, SyncResult,
+    Check, CheckInput, Manager, ResolvedDispatch, SyncResult, new_check_id, new_manager,
 };
 pub use types::*;

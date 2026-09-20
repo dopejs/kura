@@ -7,13 +7,13 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::value::RawValue;
 
 use crate::error::{AdapterError, Error};
 use crate::transport::Transport;
-use crate::types::{Request, Status, CONTRACT_VERSION};
+use crate::types::{CONTRACT_VERSION, Request, Status};
 
 /// Applied when a dispatch carries no explicit deadline (spec clarification Q1 / FR-007b).
 /// Plan research R3 proposes 30s.
@@ -26,8 +26,9 @@ pub type ResolverError = Box<dyn std::error::Error + Send + Sync>;
 /// path). It receives the marshaled resource so it can scope to the integration/tenant.
 /// Returning an error fails the operation closed. `None` material means the operation
 /// needs no provider credentials (e.g. the reference adapter / fake path).
-pub type CredentialResolver =
-    Box<dyn Fn(&str, Option<&RawValue>) -> Result<Option<Box<RawValue>>, ResolverError> + Send + Sync>;
+pub type CredentialResolver = Box<
+    dyn Fn(&str, Option<&RawValue>) -> Result<Option<Box<RawValue>>, ResolverError> + Send + Sync,
+>;
 
 /// Dispatches Backend operations to an out-of-process adapter over the RPC contract. It is
 /// domain-agnostic: payloads are opaque JSON shaped by the calling domain shim.
@@ -62,21 +63,18 @@ impl Client {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
-            .map_err(|source| Error::Process { what: "start", source })?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| Error::Process {
-                what: "stdin",
-                source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdin not piped"),
+            .map_err(|source| Error::Process {
+                what: "start",
+                source,
             })?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| Error::Process {
-                what: "stdout",
-                source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdout not piped"),
-            })?;
+        let stdin = child.stdin.take().ok_or_else(|| Error::Process {
+            what: "stdin",
+            source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdin not piped"),
+        })?;
+        let stdout = child.stdout.take().ok_or_else(|| Error::Process {
+            what: "stdout",
+            source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdout not piped"),
+        })?;
         let client = Client::new(stdin, stdout);
         *client.cmd.lock() = Some(child);
         Ok(client)
@@ -100,11 +98,14 @@ impl Client {
     /// Terminate a spawned adapter process. Safe to call when the client does not own one.
     pub fn close(&self) -> Result<(), Error> {
         let mut guard = self.cmd.lock();
-        let Some(child) = guard.as_mut() else { return Ok(()) };
+        let Some(child) = guard.as_mut() else {
+            return Ok(());
+        };
         let _ = child.kill();
-        child
-            .wait()
-            .map_err(|source| Error::Process { what: "wait", source })?;
+        child.wait().map_err(|source| Error::Process {
+            what: "wait",
+            source,
+        })?;
         *guard = None;
         Ok(())
     }
@@ -143,7 +144,14 @@ impl Client {
         P: Serialize + ?Sized,
         O: DeserializeOwned,
     {
-        self.dispatch_with_timeout(self.default_deadline, domain, operation, resource, payload, out)
+        self.dispatch_with_timeout(
+            self.default_deadline,
+            domain,
+            operation,
+            resource,
+            payload,
+            out,
+        )
     }
 
     /// Send one operation bounded by `timeout` (Go: dispatch with a context deadline). It
@@ -180,13 +188,12 @@ impl Client {
 
         let mut credential = None;
         if let Some(resolve) = &self.credentials {
-            credential = resolve(domain, raw_resource.as_deref()).map_err(|source| {
-                Error::Credential {
+            credential =
+                resolve(domain, raw_resource.as_deref()).map_err(|source| Error::Credential {
                     domain: domain.to_owned(),
                     operation: operation.to_owned(),
                     source,
-                }
-            })?;
+                })?;
         }
 
         let req = Request {
@@ -228,7 +235,9 @@ impl Client {
     }
 }
 
-fn marshal_raw<T: Serialize + ?Sized>(v: Option<&T>) -> Result<Option<Box<RawValue>>, serde_json::Error> {
+fn marshal_raw<T: Serialize + ?Sized>(
+    v: Option<&T>,
+) -> Result<Option<Box<RawValue>>, serde_json::Error> {
     match v {
         None => Ok(None),
         Some(v) => serde_json::value::to_raw_value(v).map(Some),

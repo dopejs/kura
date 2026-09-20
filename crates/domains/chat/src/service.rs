@@ -29,8 +29,8 @@ use kura_profiles::{
     DEFERRED_BINDING_CLASSIFICATION_MARKER, RuntimeProjectionInput, RuntimeResourceKind,
     build_runtime_projection, safe_profile_summary,
 };
-use kura_setupwizard::{SafeUseMode, ServiceDependencies, TARGET_OPENAI_COMPATIBLE, new_service};
 use kura_protocol::{ResponseItem, Role};
+use kura_setupwizard::{SafeUseMode, ServiceDependencies, TARGET_OPENAI_COMPATIBLE, new_service};
 use kura_skills::{Overlay, Registry, Skill};
 use kura_threads::{
     ContinuityDecision, ContinuityItemKind, ContinuityMode, ContinuityPreview,
@@ -52,7 +52,7 @@ use crate::events::{
 };
 use crate::store::{BindingResolutionParams, ChatStore, ContinuityLookupQuery};
 use crate::types::{
-    ContinuityAssembly, QueryExecution, QueryInput, QueryResult, Service, StreamChunk,
+    ContinuityAssembly, QueryExecution, QueryInput, QueryResult, Service, StreamChunk, ToolTurn,
 };
 
 /// Go `llm.OpenAICompatibleProviderName`.
@@ -110,8 +110,11 @@ impl Service {
         }
         self.enforce_provider_setup_gate(&input.tenant_id, &dispatch_input.provider, "chat")?;
         let mut continuity = self.prepare_continuity(&input, &mut dispatch_input)?;
-        let agent_profile_id =
-            if has_active_profile { active_profile.profile_id.clone() } else { String::new() };
+        let agent_profile_id = if has_active_profile {
+            active_profile.profile_id.clone()
+        } else {
+            String::new()
+        };
         // The turn runs as an agent loop, and a round of that loop is a
         // dispatch. `kura-core` owns the looping; what this supplies is what a
         // round means here -- hooked, prepared, persisted, evented.
@@ -144,7 +147,11 @@ impl Service {
                         )?;
                     }
                     if has_binding {
-                        service.record_runtime_binding_evidence(&input, &binding_selection, false)?;
+                        service.record_runtime_binding_evidence(
+                            &input,
+                            &binding_selection,
+                            false,
+                        )?;
                     }
                     let _ = dispatch;
                     Ok(())
@@ -221,8 +228,11 @@ impl Service {
         }
         self.enforce_provider_setup_gate(&input.tenant_id, &dispatch_input.provider, "chat")?;
         let mut continuity = self.prepare_continuity(&input, &mut dispatch_input)?;
-        let agent_profile_id =
-            if has_active_profile { active_profile.profile_id.clone() } else { String::new() };
+        let agent_profile_id = if has_active_profile {
+            active_profile.profile_id.clone()
+        } else {
+            String::new()
+        };
         self.run_pre_dispatch_hooks(&input, &agent_profile_id, &mut dispatch_input)?;
 
         let dispatch = self
@@ -232,7 +242,7 @@ impl Service {
         let dispatch_id = dispatch.dispatch_id.clone();
         let dispatch_provider = dispatch.provider.clone();
         let dispatch_model = dispatch.model.clone();
-        persist_dispatch(self.store.as_deref(), &dispatch)?;
+        persist_dispatch(self.store.as_deref(), &input.tenant_id, &dispatch)?;
         if has_active_profile {
             self.record_active_profile_projection(
                 &input,
@@ -294,7 +304,7 @@ impl Service {
             Ok(d) => d.clone(),
             Err(failed) => failed.dispatch.clone(),
         };
-        persist_dispatch(self.store.as_deref(), &final_dispatch)?;
+        persist_dispatch(self.store.as_deref(), &input.tenant_id, &final_dispatch)?;
         publish_dispatch_event(
             self.event_bus.as_ref(),
             self.store.as_deref(),
@@ -416,7 +426,12 @@ impl Service {
         // for none, and the loop takes exactly one round -- the single
         // dispatch a turn was before any of this.
         let tools = match &self.tools {
-            Some(source) => source.registry(),
+            Some(source) => source.registry(&ToolTurn {
+                tenant_id: input.tenant_id.clone(),
+                thread_id: input.thread_id.clone(),
+                agent_profile_id: agent_profile_id.to_string(),
+                scope: input.scope.clone(),
+            }),
             None => Arc::new(kura_core::ToolRegistry::new()),
         };
         let mut session = kura_core::Session::new(provider, tools)
@@ -454,7 +469,7 @@ impl Service {
         context: &crate::round::RoundContext,
         dispatch: &Dispatch,
     ) -> Result<(), ChatError> {
-        persist_dispatch(self.store.as_deref(), dispatch)?;
+        persist_dispatch(self.store.as_deref(), &context.input.tenant_id, dispatch)?;
         publish_dispatch_event(
             self.event_bus.as_ref(),
             self.store.as_deref(),
@@ -472,7 +487,7 @@ impl Service {
         context: &crate::round::RoundContext,
         dispatch: &Dispatch,
     ) -> Result<(), ChatError> {
-        persist_dispatch(self.store.as_deref(), dispatch)?;
+        persist_dispatch(self.store.as_deref(), &context.input.tenant_id, dispatch)?;
         publish_dispatch_event(
             self.event_bus.as_ref(),
             self.store.as_deref(),
@@ -493,6 +508,10 @@ impl Service {
             "threadId": input.thread_id,
             "query": input.query,
             "sourceKind": serde_json::to_value(input.source_kind).unwrap_or(Value::Null),
+            // Stage 5.2: channel segmentation reads the channel identity and
+            // the source message time.
+            "channelScopeRef": input.channel_scope_ref,
+            "sourceTimestamp": serde_json::to_value(input.source_timestamp).unwrap_or(Value::Null),
         });
         let outcome = hooks.run(kura_plugin::points::CHAT_TURN_START, &mut payload);
         if let Some((plugin_id, reason)) = outcome.halted {
@@ -561,12 +580,13 @@ impl Service {
                 dispatch_input.model = model.to_string();
             }
             if let Some(messages) = payload.get("messages") {
-                dispatch_input.messages = serde_json::from_value(messages.clone()).map_err(
-                    |err| ChatError::HookPayload {
-                        point: kura_plugin::points::CHAT_PRE_DISPATCH.to_string(),
-                        reason: format!("messages: {err}"),
-                    },
-                )?;
+                dispatch_input.messages =
+                    serde_json::from_value(messages.clone()).map_err(|err| {
+                        ChatError::HookPayload {
+                            point: kura_plugin::points::CHAT_PRE_DISPATCH.to_string(),
+                            reason: format!("messages: {err}"),
+                        }
+                    })?;
             }
         }
         Ok(())
@@ -588,12 +608,20 @@ impl Service {
             "sourceMessageId": input.source_message_id,
             "requestTurnId": result.request_turn_id,
             "responseTurnId": result.response_turn_id,
+            // Stage 3.4: which skills this turn used, for usage feedback.
+            "skills": result.skills,
         });
         let _ = hooks.run(kura_plugin::points::CHAT_TURN_END, &mut payload);
     }
 
     /// Best-effort `chat.hook.vetoed` event so vetoes are auditable.
-    fn publish_hook_veto(&self, point: &str, plugin_id: &str, reason: &str, scope: &kura_events::Scope) {
+    fn publish_hook_veto(
+        &self,
+        point: &str,
+        plugin_id: &str,
+        reason: &str,
+        scope: &kura_events::Scope,
+    ) {
         let mut payload: Map<String, Value> = Map::new();
         payload.insert("point".to_string(), Value::String(point.to_string()));
         payload.insert("pluginId".to_string(), Value::String(plugin_id.to_string()));
@@ -1446,7 +1474,9 @@ pub(crate) fn split_for_turn(messages: &[Message]) -> (Option<String>, Vec<Respo
     }
     // The last user message is the question. Anything after it -- a trailing
     // system note, say -- stays in the history where it was.
-    let question_at = items.iter().rposition(|message| message.role == MessageRole::User);
+    let question_at = items
+        .iter()
+        .rposition(|message| message.role == MessageRole::User);
     let question = match question_at {
         Some(at) => items.remove(at).content,
         None => String::new(),
@@ -1503,13 +1533,52 @@ pub fn response_continuity_source_event_key(source_event_key: &str) -> String {
 }
 
 /// Go `persistDispatch`.
-fn persist_dispatch(store: Option<&dyn ChatStore>, dispatch: &Dispatch) -> Result<(), ChatError> {
+fn persist_dispatch(
+    store: Option<&dyn ChatStore>,
+    tenant_id: &str,
+    dispatch: &Dispatch,
+) -> Result<(), ChatError> {
+    record_token_spend(tenant_id, dispatch);
     let Some(store) = store else {
         return Ok(());
     };
     store
         .upsert_llm_dispatch(dispatch)
+        .map_err(ChatError::Store)?;
+    // D11: bind the row to its tenant so the tenant-scoped list/get paths
+    // see it. Without this every chat dispatch stayed a NULL-tenant row.
+    store
+        .bind_llm_dispatch_tenant(&dispatch.dispatch_id, tenant_id)
         .map_err(ChatError::Store)
+}
+
+/// Stage 10.3: token spend by tenant and provider. The dispatcher cannot
+/// label by tenant (it does not know one); the chat service does. Called on
+/// every persist; a not-yet-settled dispatch has zero usage and adds nothing.
+fn record_token_spend(tenant_id: &str, dispatch: &Dispatch) {
+    if !matches!(
+        dispatch.status,
+        DispatchStatus::Completed | DispatchStatus::PartialFailed | DispatchStatus::Failed
+    ) {
+        return;
+    }
+    let metrics = kura_telemetry::metrics::registry();
+    for (kind, tokens) in [
+        ("input", dispatch.usage.input_tokens),
+        ("output", dispatch.usage.output_tokens),
+    ] {
+        if tokens > 0 {
+            metrics.add(
+                kura_telemetry::metrics::LLM_TOKENS_TOTAL,
+                &[
+                    ("tenant", tenant_id.trim()),
+                    ("provider", dispatch.provider.as_str()),
+                    ("kind", kind),
+                ],
+                tokens as u64,
+            );
+        }
+    }
 }
 
 /// Go `publishDispatchEvent`: builds the `llm.*` event payload and persists

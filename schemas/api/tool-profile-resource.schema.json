@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/tool-profile-resource.schema.json",
+  "title": "ToolProfileResource",
+  "description": "A configured tool provider. Note what is absent: there is no credential field. The profile holds a secretRef; the value lives only in the tenant secret plane. additionalProperties is false so a credential field cannot be added without this contract changing.",
+  "type": "object",
+  "required": [
+    "profileId", "title", "capability", "family", "authMode", "source",
+    "enabled", "isDefault", "secretConfigured", "limits", "readiness",
+    "createdAt", "updatedAt"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "profileId": { "type": "string" },
+    "tenantId": { "type": "string" },
+    "title": { "type": "string" },
+    "capability": { "type": "string", "enum": ["web.search", "image.generate", "video.generate", "browser.session"] },
+    "family": { "type": "string" },
+    "authMode": { "type": "string", "enum": ["none", "api_key", "oauth_device", "local_cli_bridge"] },
+    "source": { "type": "string", "enum": ["builtin", "config", "managed"] },
+    "enabled": { "type": "boolean" },
+    "isDefault": { "type": "boolean" },
+    "baseUrl": { "type": "string" },
+    "secretRef": {
+      "type": "string",
+      "description": "Reference into the tenant secret plane. Never a value."
+    },
+    "secretConfigured": { "type": "boolean" },
+    "mcpServerId": { "type": "string", "description": "mcp_backed only: the MCP server that serves this capability." },
+    "mcpToolName": { "type": "string", "description": "mcp_backed only: the tool on that server." },
+    "limits": {
+      "type": "object",
+      "required": ["timeoutMs", "maxResults", "maxCallsPerDay"],
+      "additionalProperties": false,
+      "properties": {
+        "timeoutMs": { "type": "integer", "minimum": 0 },
+        "maxResults": { "type": "integer", "minimum": 0 },
+        "maxCallsPerDay": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0 means inherit the plane default, not unlimited."
+        }
+      }
+    },
+    "readiness": { "type": "string", "enum": ["unconfigured", "ready", "disabled", "error"] },
+    "issues": { "type": "array", "items": { "type": "string" } },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

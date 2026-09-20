@@ -10,7 +10,7 @@
 //! append_event_for_tenant returns TenancyError::TenantContextRequired when the context
 //! lacks a tenant; this is fail-closed by design.
 
-use crate::{require, TenancyError};
+use crate::{TenancyError, require};
 
 /// Tenant-aware accessor for the events table.
 pub struct Events {
@@ -35,7 +35,10 @@ impl Events {
 
     /// Persists a tenant-owned event with tenant_id pre-bound. Returns the persisted
     /// event including the assigned sequence and the bound tenant id.
-    pub fn append_event_for_tenant(&self, event: &kura_events::Event) -> Result<kura_events::Event, TenancyError> {
+    pub fn append_event_for_tenant(
+        &self,
+        event: &kura_events::Event,
+    ) -> Result<kura_events::Event, TenancyError> {
         let tenant_id = require()?;
         if Self::is_global_category(&event.category) {
             return Err(TenancyError::Store(
@@ -44,13 +47,20 @@ impl Events {
         }
         let mut prepared = event.clone();
         prepared.tenant_id = tenant_id.clone();
-        self.store.append_event_for_tenant_raw(&prepared, &tenant_id).map_err(TenancyError::from)
+        self.store
+            .append_event_for_tenant_raw(&prepared, &tenant_id)
+            .map_err(TenancyError::from)
     }
 
     /// Returns persisted events whose tenant_id matches the caller. Global rows
     /// (tenant_id NULL) are NOT returned.
-    pub fn list_events_for_tenant(&self, filter: &kura_events::Filter) -> Result<Vec<kura_events::Event>, TenancyError> {
+    pub fn list_events_for_tenant(
+        &self,
+        filter: &kura_events::Filter,
+    ) -> Result<Vec<kura_events::Event>, TenancyError> {
         let tenant_id = require()?;
-        self.store.list_events_for_tenant_raw(&tenant_id, filter).map_err(TenancyError::from)
+        self.store
+            .list_events_for_tenant_raw(&tenant_id, filter)
+            .map_err(TenancyError::from)
     }
 }

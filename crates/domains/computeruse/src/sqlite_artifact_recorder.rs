@@ -41,14 +41,22 @@ impl SqliteArtifactRecorder {
 }
 
 impl ArtifactRecorder for SqliteArtifactRecorder {
-    fn save_computer_use_artifact(&self, input: ArtifactCaptureRequest) -> Result<Artifact, String> {
+    fn save_computer_use_artifact(
+        &self,
+        input: ArtifactCaptureRequest,
+    ) -> Result<Artifact, String> {
         let now = Utc::now();
         let digest = Sha256::digest(&input.content);
         let artifact_id = format!("cuart_{}", hex_encode(&digest[..8]));
-        let storage_key = format!("computer-use/{}/{}", input.computer_use_session_id, artifact_id);
+        let storage_key = format!(
+            "computer-use/{}/{}",
+            input.computer_use_session_id, artifact_id
+        );
 
         if !self.data_dir.is_empty() {
-            let full_path = Path::new(&self.data_dir).join("artifacts").join(&storage_key);
+            let full_path = Path::new(&self.data_dir)
+                .join("artifacts")
+                .join(&storage_key);
             if let Some(parent) = full_path.parent() {
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("create artifact directory: {e}"))?;
@@ -84,7 +92,9 @@ impl ArtifactRecorder for SqliteArtifactRecorder {
         if self.data_dir.is_empty() {
             return Ok(Vec::new());
         }
-        let full_path = Path::new(&self.data_dir).join("artifacts").join(storage_key);
+        let full_path = Path::new(&self.data_dir)
+            .join("artifacts")
+            .join(storage_key);
         std::fs::read(&full_path).map_err(|e| format!("read artifact content: {e}"))
     }
 }

@@ -12,6 +12,7 @@ use crate::catalog::REASON_QUOTA_STATE_UNAVAILABLE;
 use crate::catalog::definition_for;
 use crate::error::Result;
 use crate::manager::Manager;
+use crate::projection::recovery_actions_for_quota_status;
 use crate::types::AbuseRestrictionStatus;
 use crate::types::AbuseRestrictionSummary;
 use crate::types::BillingEvidenceExport;
@@ -26,7 +27,6 @@ use crate::types::QuotaStatus;
 use crate::types::QuotaStatusItem;
 use crate::types::RecoveryAction;
 use crate::types::TenantQuotaDashboard;
-use crate::projection::recovery_actions_for_quota_status;
 use crate::types::go_zero_time;
 use crate::types::is_zero_i64;
 
@@ -305,10 +305,18 @@ fn append_standard_evidence_redactions(
     mut redactions: Vec<BillingEvidenceRedaction>,
 ) -> Vec<BillingEvidenceRedaction> {
     let standard = [
-        ("$.rawAuditPayload", "raw_audit_payload_excluded", "[EXCLUDED]"),
+        (
+            "$.rawAuditPayload",
+            "raw_audit_payload_excluded",
+            "[EXCLUDED]",
+        ),
         ("$.connectorPayload", "connector_payload", "[REDACTED]"),
         ("$.secrets", "secret", "[REDACTED]"),
-        ("$.unrelatedRunContent", "unrelated_content_excluded", "[EXCLUDED]"),
+        (
+            "$.unrelatedRunContent",
+            "unrelated_content_excluded",
+            "[EXCLUDED]",
+        ),
     ];
     let mut seen: std::collections::HashSet<String> =
         redactions.iter().map(|item| item.path.clone()).collect();
@@ -329,12 +337,18 @@ fn effective_limit_state_for_denial(
     denial: &QuotaDenialDetail,
 ) -> Map<String, Value> {
     let mut plan = Map::new();
-    plan.insert("planKey".to_string(), Value::from(dashboard.plan.plan_key.clone()));
+    plan.insert(
+        "planKey".to_string(),
+        Value::from(dashboard.plan.plan_key.clone()),
+    );
     plan.insert(
         "enforcementMode".to_string(),
         Value::from(dashboard.plan.enforcement_mode.as_str()),
     );
-    plan.insert("status".to_string(), Value::from(dashboard.plan.status.as_str()));
+    plan.insert(
+        "status".to_string(),
+        Value::from(dashboard.plan.status.as_str()),
+    );
     plan.insert(
         "basePlanLabel".to_string(),
         Value::from(dashboard.plan.base_plan_label.clone()),
@@ -382,7 +396,10 @@ fn effective_limit_state_for_denial(
                 period_evidence_state(&item.current_period),
             );
             if let Some(previous) = &item.previous_period {
-                quota.insert("previousPeriod".to_string(), period_evidence_state(previous));
+                quota.insert(
+                    "previousPeriod".to_string(),
+                    period_evidence_state(previous),
+                );
             }
             if let Some(override_) = &item.override_ {
                 let mut override_state = Map::new();
@@ -471,7 +488,10 @@ fn abuse_restriction_evidence_state(restriction: &AbuseRestrictionSummary) -> Ma
         "restrictionId".to_string(),
         Value::from(restriction.restriction_id.clone()),
     );
-    map.insert("status".to_string(), Value::from(restriction.status.as_str()));
+    map.insert(
+        "status".to_string(),
+        Value::from(restriction.status.as_str()),
+    );
     map.insert(
         "affectedCategory".to_string(),
         Value::from(restriction.affected_category.as_str()),
@@ -566,10 +586,10 @@ mod tests {
     use crate::fixtures::FixtureRepo;
     use crate::fixtures::TEN_FINITE;
     use crate::types::AbuseRestrictionRecord;
-    use crate::types::UsageEventKind;
-    use crate::types::UsageEvent;
-    use crate::types::UsageCounter;
     use crate::types::QuotaOverride;
+    use crate::types::UsageCounter;
+    use crate::types::UsageEvent;
+    use crate::types::UsageEventKind;
 
     fn exhausted_denial() -> QuotaDenial {
         QuotaDenial {
@@ -692,7 +712,10 @@ mod tests {
                 "{name}: expected first recovery action {want_action}, got {:?}",
                 detail.recovery_actions
             );
-            assert!(!detail.operation_ref.is_empty() && !detail.operation_key.is_empty(), "{name}");
+            assert!(
+                !detail.operation_ref.is_empty() && !detail.operation_key.is_empty(),
+                "{name}"
+            );
         }
     }
 
@@ -700,12 +723,30 @@ mod tests {
     fn project_denial_detail_maps_safe_operation_references_for_all_guarded_categories() {
         let cases: [(&str, &str); 7] = [
             (Category::RUN_LAUNCHES, "tenant:ten_a:run:client_1"),
-            (Category::WORKFLOW_LAUNCHES, "tenant:ten_a:workflow:run_1:workflow_1"),
-            (Category::RUNTIME_TOOL_CALLS, "tenant:ten_a:tool_call:run_1:step_1:tool_1"),
-            (Category::LIVE_VALIDATION_ATTEMPTS, "tenant:ten_a:live_validation:validation_1"),
-            (Category::INTEGRATION_OPERATIONS, "tenant:ten_a:integration:calendar:operation_1"),
-            (Category::ARTIFACT_STORAGE_BYTES, "tenant:ten_a:artifact:artifact_1"),
-            (Category::REPLAY_EVALUATION_ATTEMPTS, "tenant:ten_a:evaluation:candidate_1:attempt_1"),
+            (
+                Category::WORKFLOW_LAUNCHES,
+                "tenant:ten_a:workflow:run_1:workflow_1",
+            ),
+            (
+                Category::RUNTIME_TOOL_CALLS,
+                "tenant:ten_a:tool_call:run_1:step_1:tool_1",
+            ),
+            (
+                Category::LIVE_VALIDATION_ATTEMPTS,
+                "tenant:ten_a:live_validation:validation_1",
+            ),
+            (
+                Category::INTEGRATION_OPERATIONS,
+                "tenant:ten_a:integration:calendar:operation_1",
+            ),
+            (
+                Category::ARTIFACT_STORAGE_BYTES,
+                "tenant:ten_a:artifact:artifact_1",
+            ),
+            (
+                Category::REPLAY_EVALUATION_ATTEMPTS,
+                "tenant:ten_a:evaluation:candidate_1:attempt_1",
+            ),
         ];
         for (category, operation_key) in cases {
             let category = Category::from(category);
@@ -825,7 +866,10 @@ mod tests {
                 denial.denial_id
             );
             if denial.classification == DenialClassification::ABUSE_RESTRICTION {
-                assert!(!export.audit_refs.is_empty(), "expected abuse restriction audit ref");
+                assert!(
+                    !export.audit_refs.is_empty(),
+                    "expected abuse restriction audit ref"
+                );
             }
         }
     }

@@ -12,11 +12,9 @@ use rusqlite::params;
 
 use kura_store::SQLiteStore;
 
-use crate::records::{
-    discord_destination_validation_document, discord_hosted_setup_document,
-};
-use crate::seeds::exec_insert;
 use crate::FIXTURE_TIMESTAMP;
+use crate::records::{discord_destination_validation_document, discord_hosted_setup_document};
+use crate::seeds::exec_insert;
 
 /// Table names expected from the Roadmap 49 storage migration (migration v45).
 pub static R49_DISCORD_HARDENING_TABLE_NAMES: [&str; 3] = [
@@ -40,7 +38,10 @@ pub fn build_r49_discord_hardening_fixture() -> R49DiscordHardeningFixture {
         ("discord_smoke_evidence".to_string(), 2),
     ]);
     R49DiscordHardeningFixture {
-        tenant_ids: vec!["ten_discord_alpha".to_string(), "ten_discord_beta".to_string()],
+        tenant_ids: vec![
+            "ten_discord_alpha".to_string(),
+            "ten_discord_beta".to_string(),
+        ],
         expected_row_count: counts,
     }
 }
@@ -78,7 +79,25 @@ pub fn seed_r49_discord_hardening_rows(
         exec_insert(
             &conn,
             "INSERT INTO discord_hosted_setups (tenant_id, connector_id, connector_kind, display_name, status, readiness_state, credential_state, respond_in_dm, require_mention, delivery_mode, reason_code, redaction_status, created_at, updated_at, validated_at, retention_expires_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![tenant_id, connector_id, "discord", "Discord R49", "degraded", "degraded_needs_repair", "valid", 1i64, 1i64, "gateway", "destination_validation_failed", "redacted", ts, ts, ts, ts, hosted_document],
+            params![
+                tenant_id,
+                connector_id,
+                "discord",
+                "Discord R49",
+                "degraded",
+                "degraded_needs_repair",
+                "valid",
+                1i64,
+                1i64,
+                "gateway",
+                "destination_validation_failed",
+                "redacted",
+                ts,
+                ts,
+                ts,
+                ts,
+                hosted_document
+            ],
         )?;
 
         let destination_document = discord_destination_validation_document(
@@ -96,13 +115,38 @@ pub fn seed_r49_discord_hardening_rows(
         exec_insert(
             &conn,
             "INSERT INTO discord_destination_validations (tenant_id, connector_id, destination_id, destination_type, provider_label, selected, validation_state, reason_code, validated_at, redaction_status, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            params![tenant_id, connector_id, format!("channel_{suffix}"), "channel", None::<String>, 1i64, "missing_permission", "permission_missing", ts, "redacted", destination_document],
+            params![
+                tenant_id,
+                connector_id,
+                format!("channel_{suffix}"),
+                "channel",
+                None::<String>,
+                1i64,
+                "missing_permission",
+                "permission_missing",
+                ts,
+                "redacted",
+                destination_document
+            ],
         )?;
 
         exec_insert(
             &conn,
             "INSERT INTO discord_smoke_evidence (smoke_evidence_id, tenant_id, connector_id, status, credential_mode, owner, reason, remaining_risk, validated_at, retention_expires_at, redaction_status, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![format!("discord_smoke_{suffix}"), tenant_id, connector_id, "skipped", "unavailable", "operator", "safe_credentials_unavailable", "live smoke skipped", ts, ts, "redacted", "{\"status\":\"skipped\"}"],
+            params![
+                format!("discord_smoke_{suffix}"),
+                tenant_id,
+                connector_id,
+                "skipped",
+                "unavailable",
+                "operator",
+                "safe_credentials_unavailable",
+                "live smoke skipped",
+                ts,
+                ts,
+                "redacted",
+                "{\"status\":\"skipped\"}"
+            ],
         )?;
     }
     Ok(fixture)
@@ -116,7 +160,9 @@ pub fn count_r49_discord_hardening_rows(
     let mut counts = HashMap::new();
     for table in R49_DISCORD_HARDENING_TABLE_NAMES {
         let count: i64 = conn
-            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
             .map_err(|e| format!("count {table}: {e}"))?;
         counts.insert(table.to_string(), count);
     }

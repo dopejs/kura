@@ -40,7 +40,10 @@ pub fn build_dashboard_projection(
     let projection_id = {
         let trimmed = input.projection_id.trim().to_string();
         if trimmed.is_empty() {
-            format!("dashboard_{}", generated_at.timestamp_nanos_opt().unwrap_or_default())
+            format!(
+                "dashboard_{}",
+                generated_at.timestamp_nanos_opt().unwrap_or_default()
+            )
         } else {
             trimmed
         }
@@ -96,8 +99,14 @@ pub fn build_dashboard_projection(
     }
     for group in &input.attempt_groups {
         if group.tenant_id == input.tenant_id {
-            *projection.drift_summary.entry("total".to_string()).or_insert(0) += group.drift_count;
-            *projection.failure_summary.entry("total".to_string()).or_insert(0) += group.failure_count;
+            *projection
+                .drift_summary
+                .entry("total".to_string())
+                .or_insert(0) += group.drift_count;
+            *projection
+                .failure_summary
+                .entry("total".to_string())
+                .or_insert(0) += group.failure_count;
             *projection
                 .unsupported_summary
                 .entry("total".to_string())

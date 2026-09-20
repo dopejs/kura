@@ -14,7 +14,7 @@ use kura_delivery::{
 use kura_events::Bus;
 use kura_store::delivery::DeliverySummaryWindowRecord;
 
-use common::{store, wait_for_window_status, ScriptedAdapter};
+use common::{ScriptedAdapter, store, wait_for_window_status};
 
 fn seed_digest_preference_state(
     manager: &kura_delivery::Manager,
@@ -95,11 +95,16 @@ fn digest_windows_batch_routine_success_and_urgent_bypasses() {
     assert_eq!(second.mode, DeliveryMode::Digest);
     assert_eq!(first.status, OutcomeStatus::Queued);
     assert!(!first.summary_window_id.is_empty());
-    assert_eq!(first.summary_window_id, second.summary_window_id, "routine successes share one window");
+    assert_eq!(
+        first.summary_window_id, second.summary_window_id,
+        "routine successes share one window"
+    );
     assert_eq!(urgent.status, OutcomeStatus::Delivered);
     assert_eq!(urgent.mode, DeliveryMode::Immediate);
 
-    let (mut window, ok) = manager.get_summary_window(&first.summary_window_id).unwrap();
+    let (mut window, ok) = manager
+        .get_summary_window(&first.summary_window_id)
+        .unwrap();
     assert!(ok);
     assert_eq!(window.result_count, 2);
 
@@ -107,33 +112,54 @@ fn digest_windows_batch_routine_success_and_urgent_bypasses() {
     // emission (a 1-minute thread is parked), and emit manually.
     window.window_ends_at = Utc::now() - chrono::Duration::seconds(1);
     window.updated_at = Utc::now();
-    store.lock().upsert_delivery_summary_window(&DeliverySummaryWindowRecord {
-        summary_window_id: window.summary_window_id.clone(),
-        environment_scope: window.environment_scope.clone(),
-        target_id: window.target_id.clone(),
-        preference_id: window.preference_id.clone(),
-        status: window.status.as_str().to_string(),
-        window_ends_at: window.window_ends_at,
-        updated_at: window.updated_at,
-        document: serde_json::to_string(&window).unwrap(),
-    }).unwrap();
+    store
+        .lock()
+        .upsert_delivery_summary_window(&DeliverySummaryWindowRecord {
+            summary_window_id: window.summary_window_id.clone(),
+            environment_scope: window.environment_scope.clone(),
+            target_id: window.target_id.clone(),
+            preference_id: window.preference_id.clone(),
+            status: window.status.as_str().to_string(),
+            window_ends_at: window.window_ends_at,
+            updated_at: window.updated_at,
+            document: serde_json::to_string(&window).unwrap(),
+        })
+        .unwrap();
     manager.clear_window_schedule(&window.summary_window_id);
     manager.emit_window(&window.summary_window_id).unwrap();
 
-    wait_for_window_status(&manager, &window.summary_window_id, kura_delivery::SummaryWindowStatus::Delivered);
-    let (delivered_window, _) = manager.get_summary_window(&window.summary_window_id).unwrap();
+    wait_for_window_status(
+        &manager,
+        &window.summary_window_id,
+        kura_delivery::SummaryWindowStatus::Delivered,
+    );
+    let (delivered_window, _) = manager
+        .get_summary_window(&window.summary_window_id)
+        .unwrap();
     assert!(!delivered_window.emitted_delivery_id.is_empty());
-    let (digest_outcome, ok) = manager.get_outcome(&delivered_window.emitted_delivery_id).unwrap();
+    let (digest_outcome, ok) = manager
+        .get_outcome(&delivered_window.emitted_delivery_id)
+        .unwrap();
     assert!(ok);
     assert_eq!(digest_outcome.status, OutcomeStatus::Delivered);
     assert_eq!(digest_outcome.chosen_target_id, target.target_id);
     assert_eq!(digest_outcome.source_kind, "summary_window");
-    assert_eq!(digest_outcome.payload_preview, "digest summary with 2 routed results");
+    assert_eq!(
+        digest_outcome.payload_preview,
+        "digest summary with 2 routed results"
+    );
 
     // The digest delivery itself lands in the sink (2 batched results -> 1 emitted message).
     let messages = sink.messages();
-    assert_eq!(messages.len(), 2, "one urgent immediate + one digest emission: {messages:?}");
-    assert_eq!(messages[1].payload_preview, "digest summary with 2 routed results");
+    assert_eq!(
+        messages.len(),
+        2,
+        "one urgent immediate + one digest emission: {messages:?}"
+    );
+    assert_eq!(
+        messages[1].payload_preview,
+        "digest summary with 2 routed results"
+    );
 }
 
 #[test]
@@ -154,16 +180,19 @@ fn digest_empty_window_is_cancelled() {
         updated_at: now,
         ..kura_delivery::SummaryWindow::default()
     };
-    store.lock().upsert_delivery_summary_window(&DeliverySummaryWindowRecord {
-        summary_window_id: window.summary_window_id.clone(),
-        environment_scope: window.environment_scope.clone(),
-        target_id: window.target_id.clone(),
-        preference_id: window.preference_id.clone(),
-        status: window.status.as_str().to_string(),
-        window_ends_at: window.window_ends_at,
-        updated_at: window.updated_at,
-        document: serde_json::to_string(&window).unwrap(),
-    }).unwrap();
+    store
+        .lock()
+        .upsert_delivery_summary_window(&DeliverySummaryWindowRecord {
+            summary_window_id: window.summary_window_id.clone(),
+            environment_scope: window.environment_scope.clone(),
+            target_id: window.target_id.clone(),
+            preference_id: window.preference_id.clone(),
+            status: window.status.as_str().to_string(),
+            window_ends_at: window.window_ends_at,
+            updated_at: window.updated_at,
+            document: serde_json::to_string(&window).unwrap(),
+        })
+        .unwrap();
     manager.emit_window("window_empty").unwrap();
     let (window, _) = manager.get_summary_window("window_empty").unwrap();
     assert_eq!(window.status, kura_delivery::SummaryWindowStatus::Cancelled);
@@ -171,7 +200,8 @@ fn digest_empty_window_is_cancelled() {
 
 #[test]
 fn digest_restore_rearms_open_and_ready_windows() {
-    let (manager, _store) = common::manager_with(vec![ScriptedAdapter::new(TargetKind::TestSink, Vec::new())]);
+    let (manager, _store) =
+        common::manager_with(vec![ScriptedAdapter::new(TargetKind::TestSink, Vec::new())]);
     seed_digest_preference_state(&manager);
     let outcome = manager
         .emit_outcome(OutcomeInput {

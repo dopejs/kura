@@ -391,7 +391,9 @@ async fn setup_oauth_callback(
     };
     let request: SetupOAuthCallbackRequest = decode_json_body(&body)?;
     // Go's mapOAuthResult default treats an unknown/empty result as denied.
-    let result = request.result.unwrap_or(kura_setupwizard::OAuthResult::Denied);
+    let result = request
+        .result
+        .unwrap_or(kura_setupwizard::OAuthResult::Denied);
     let session = match service
         .complete_oauth(OAuthCallbackInput {
             tenant_context: tc,
@@ -416,7 +418,13 @@ async fn setup_session_retry(
     Path(session_id): Path<String>,
     tenant: Option<Extension<TenantContext>>,
 ) -> Result<(StatusCode, AxumJson<serde_json::Value>), ApiError> {
-    setup_session_recovery(&state, tenant.as_ref().map(|v| &v.0), &session_id, SetupRecovery::Retry).await
+    setup_session_recovery(
+        &state,
+        tenant.as_ref().map(|v| &v.0),
+        &session_id,
+        SetupRecovery::Retry,
+    )
+    .await
 }
 
 /// POST /v1/setup/sessions/{id}/replace — Go handleSetupSessionRoutes replace branch.
@@ -425,7 +433,13 @@ async fn setup_session_replace(
     Path(session_id): Path<String>,
     tenant: Option<Extension<TenantContext>>,
 ) -> Result<(StatusCode, AxumJson<serde_json::Value>), ApiError> {
-    setup_session_recovery(&state, tenant.as_ref().map(|v| &v.0), &session_id, SetupRecovery::Replace).await
+    setup_session_recovery(
+        &state,
+        tenant.as_ref().map(|v| &v.0),
+        &session_id,
+        SetupRecovery::Replace,
+    )
+    .await
 }
 
 /// POST /v1/setup/sessions/{id}/cancel — Go handleSetupSessionRoutes cancel branch.
@@ -434,7 +448,13 @@ async fn setup_session_cancel(
     Path(session_id): Path<String>,
     tenant: Option<Extension<TenantContext>>,
 ) -> Result<(StatusCode, AxumJson<serde_json::Value>), ApiError> {
-    setup_session_recovery(&state, tenant.as_ref().map(|v| &v.0), &session_id, SetupRecovery::Cancel).await
+    setup_session_recovery(
+        &state,
+        tenant.as_ref().map(|v| &v.0),
+        &session_id,
+        SetupRecovery::Cancel,
+    )
+    .await
 }
 
 /// POST /v1/setup/sessions/{id}/disable — Go handleSetupSessionRoutes disable
@@ -727,18 +747,20 @@ pub struct SlackSmokeEvidenceResource {
 pub fn project_slack_hosted_setup_resource(
     record: &kura_store::SlackHostedSetupRecord,
 ) -> SlackHostedSetupResource {
-    let workspace_binding = record.workspace_binding.as_ref().map(|binding| {
-        SlackWorkspaceBindingResource {
-            workspace_id: binding.workspace_id.clone(),
-            workspace_label: binding.workspace_label.clone(),
-            installation_id: binding.installation_id.clone(),
-            oauth_grant_state: binding.oauth_grant_state.clone(),
-            required_scope_state: binding.required_scope_state.clone(),
-            validated_at: binding.validated_at,
-            redaction_status: binding.redaction_status.clone(),
-            safe_evidence: binding.safe_evidence.clone(),
-        }
-    });
+    let workspace_binding =
+        record
+            .workspace_binding
+            .as_ref()
+            .map(|binding| SlackWorkspaceBindingResource {
+                workspace_id: binding.workspace_id.clone(),
+                workspace_label: binding.workspace_label.clone(),
+                installation_id: binding.installation_id.clone(),
+                oauth_grant_state: binding.oauth_grant_state.clone(),
+                required_scope_state: binding.required_scope_state.clone(),
+                validated_at: binding.validated_at,
+                redaction_status: binding.redaction_status.clone(),
+                safe_evidence: binding.safe_evidence.clone(),
+            });
     let route_policy = record
         .route_policy
         .as_ref()
@@ -816,8 +838,7 @@ pub fn project_slack_smoke_evidence_resource(
 // ---------------------------------------------------------------------------
 
 /// Go scope string from slackSetupWizardIntegration.AuthorizationURL.
-pub const SLACK_OAUTH_SCOPE: &str =
-    "app_mentions:read,channels:history,channels:read,chat:write,groups:history,groups:read,im:history,im:read,usergroups:read,users:read";
+pub const SLACK_OAUTH_SCOPE: &str = "app_mentions:read,channels:history,channels:read,chat:write,groups:history,groups:read,im:history,im:read,usergroups:read,users:read";
 
 /// Go slackSetupWizardIntegration.AuthorizationURL: builds the Slack OAuth
 /// authorize URL from the connector config. Returns Err for an unconfigured
@@ -831,7 +852,11 @@ pub fn slack_authorization_url(
     if client_id.is_empty() {
         return Err("slack oauth client id is not configured".to_string());
     }
-    let mut base_url = cfg.oauth_api_base_url.trim().trim_end_matches('/').to_string();
+    let mut base_url = cfg
+        .oauth_api_base_url
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
     if base_url.is_empty() {
         base_url = cfg.api_base_url.trim().trim_end_matches('/').to_string();
     }
@@ -894,8 +919,9 @@ pub fn slack_scopes_contain(scopes: &str, required: &str) -> bool {
 /// Go hasSlackRoutePolicyValidation.
 #[must_use]
 pub fn has_slack_route_policy_validation(refs: &[kura_setupwizard::ResourceRef]) -> bool {
-    refs.iter()
-        .any(|reference| reference.kind == "slack_route_policy_validation" && !reference.id.trim().is_empty())
+    refs.iter().any(|reference| {
+        reference.kind == "slack_route_policy_validation" && !reference.id.trim().is_empty()
+    })
 }
 
 /// Go slackWorkspaceIDFromRouteRefs: the second "workspace/binding" path segment
@@ -917,8 +943,9 @@ pub fn slack_workspace_id_from_route_refs(refs: &[kura_setupwizard::ResourceRef]
 /// Go hasTelegramAllowmentValidation.
 #[must_use]
 pub fn has_telegram_allowment_validation(refs: &[kura_setupwizard::ResourceRef]) -> bool {
-    refs.iter()
-        .any(|reference| reference.kind == "telegram_allowment_validation" && !reference.id.trim().is_empty())
+    refs.iter().any(|reference| {
+        reference.kind == "telegram_allowment_validation" && !reference.id.trim().is_empty()
+    })
 }
 
 /// Go connectorReasonForTelegramSetup.
@@ -989,7 +1016,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use chrono::Utc;
     use kura_identity::{Permission, TenantContext as IdentityTenantContext};
@@ -1001,6 +1028,7 @@ mod tests {
     fn test_config() -> kura_config::Config {
         kura_config::Config {
             project_root: String::new(),
+            store: Default::default(),
             environment: kura_config::Environment::Test,
             bind_addr: "127.0.0.1:19192".to_string(),
             data_dir: "/tmp/kura-api-setupwizard-test".to_string(),
@@ -1008,19 +1036,29 @@ mod tests {
             version: "0.1.0".to_string(),
             llm: kura_config::LlmConfig::default(),
             connectors: kura_config::ConnectorConfig {
-                discord: kura_config::DiscordConnectorConfig { enabled: false, ..Default::default() },
-                telegram: kura_config::TelegramConnectorConfig { enabled: false, ..Default::default() },
-                slack: kura_config::SlackConnectorConfig { enabled: false, ..Default::default() },
-                matrix: kura_config::MatrixConnectorConfig { enabled: false, ..Default::default() },
+                discord: kura_config::DiscordConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                telegram: kura_config::TelegramConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                slack: kura_config::SlackConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                matrix: kura_config::MatrixConnectorConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
             },
+            egress: Default::default(),
         }
     }
 
     fn test_state() -> AppState {
-        let dir = std::env::temp_dir().join(format!(
-            "kura-api-setupwizard-{}",
-            Uuid::now_v7()
-        ));
+        let dir = std::env::temp_dir().join(format!("kura-api-setupwizard-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let store = Arc::new(Mutex::new(
             SQLiteStore::new(dir.to_str().expect("path")).expect("store"),
@@ -1058,19 +1096,22 @@ mod tests {
             None => builder.body(Body::empty()).expect("request"),
         };
         let mut req = req;
-        req.extensions_mut().insert(TenantContext(IdentityTenantContext {
-            tenant_id: tenant_id.to_string(),
-            principal_id: format!("prn_{tenant_id}"),
-            permissions,
-            ..Default::default()
-        }));
+        req.extensions_mut()
+            .insert(TenantContext(IdentityTenantContext {
+                tenant_id: tenant_id.to_string(),
+                principal_id: format!("prn_{tenant_id}"),
+                permissions,
+                ..Default::default()
+            }));
         req
     }
 
     async fn send(app: &axum::Router, req: Request<Body>) -> (StatusCode, serde_json::Value) {
         let response = app.clone().oneshot(req).await.expect("oneshot");
         let status = response.status();
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let json = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -1094,7 +1135,13 @@ mod tests {
         let app = router().with_state(state.clone());
 
         // Targets: proof targets present, Discord connector target catalogued.
-        let req = setup_tenant_request("GET", "/v1/setup/targets", None, &tenant_id, actor_permissions());
+        let req = setup_tenant_request(
+            "GET",
+            "/v1/setup/targets",
+            None,
+            &tenant_id,
+            actor_permissions(),
+        );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::OK, "targets body: {json}");
         let items = json["items"].as_array().expect("items array");
@@ -1102,20 +1149,28 @@ mod tests {
         let discord = items
             .iter()
             .find(|t| t["targetId"] == kura_setupwizard::TARGET_DISCORD_CONNECTOR);
-        assert!(discord.is_some(), "expected Discord connector target, got {json}");
+        assert!(
+            discord.is_some(),
+            "expected Discord connector target, got {json}"
+        );
         assert_eq!(discord.expect("discord")["targetKind"], "connector");
 
         // Start an openai_compatible submitted-secret session (201).
         let req = setup_tenant_request(
             "POST",
             "/v1/setup/sessions",
-            Some(r#"{"targetId":"provider.openai_compatible","setupStyle":"submitted_secret","source":"wizard"}"#),
+            Some(
+                r#"{"targetId":"provider.openai_compatible","setupStyle":"submitted_secret","source":"wizard"}"#,
+            ),
             &tenant_id,
             actor_permissions(),
         );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::CREATED, "start body: {json}");
-        let session_id = json["session"]["setupSessionId"].as_str().expect("session id").to_string();
+        let session_id = json["session"]["setupSessionId"]
+            .as_str()
+            .expect("session id")
+            .to_string();
 
         // Submit-secret handler wiring + error mapping. NOTE: kura-setupwizard
         // installs its DefaultDiagnosticProbe only when a secrets manager is
@@ -1128,15 +1183,23 @@ mod tests {
         let req = setup_tenant_request(
             "POST",
             &format!("/v1/setup/sessions/{session_id}/submit-secret"),
-            Some(r#"{"secretRef":"OPENAI_COMPATIBLE_API_KEY","value":"R46_FAKE_OPENAI_COMPATIBLE_KEY_DO_NOT_LEAK","displayName":"OpenAI-compatible API key"}"#),
+            Some(
+                r#"{"secretRef":"OPENAI_COMPATIBLE_API_KEY","value":"R46_FAKE_OPENAI_COMPATIBLE_KEY_DO_NOT_LEAK","displayName":"OpenAI-compatible API key"}"#,
+            ),
             &tenant_id,
             actor_permissions(),
         );
         let (status, json) = send(&app, req).await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "submit body: {json}");
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "submit body: {json}"
+        );
         assert_eq!(json["code"], "setup_failed:unexpected");
         assert!(
-            !json.to_string().contains("R46_FAKE_OPENAI_COMPATIBLE_KEY_DO_NOT_LEAK"),
+            !json
+                .to_string()
+                .contains("R46_FAKE_OPENAI_COMPATIBLE_KEY_DO_NOT_LEAK"),
             "submit response leaked secret: {json}"
         );
 
@@ -1144,13 +1207,18 @@ mod tests {
         let req = setup_tenant_request(
             "POST",
             "/v1/setup/sessions",
-            Some(r#"{"targetId":"integration.feishu_lark","setupStyle":"oauth","source":"wizard"}"#),
+            Some(
+                r#"{"targetId":"integration.feishu_lark","setupStyle":"oauth","source":"wizard"}"#,
+            ),
             &tenant_id,
             actor_permissions(),
         );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::CREATED, "oauth session body: {json}");
-        let oauth_session_id = json["session"]["setupSessionId"].as_str().expect("session id").to_string();
+        let oauth_session_id = json["session"]["setupSessionId"]
+            .as_str()
+            .expect("session id")
+            .to_string();
 
         let req = setup_tenant_request(
             "POST",
@@ -1200,13 +1268,18 @@ mod tests {
         let req = setup_tenant_request(
             "POST",
             "/v1/setup/sessions",
-            Some(r#"{"targetId":"provider.openai_compatible","setupStyle":"submitted_secret","source":"wizard"}"#),
+            Some(
+                r#"{"targetId":"provider.openai_compatible","setupStyle":"submitted_secret","source":"wizard"}"#,
+            ),
             &tenant_id,
             actor_permissions(),
         );
         let (status, json) = send(&app, req).await;
         assert_eq!(status, StatusCode::CREATED, "start body: {json}");
-        let session_id = json["session"]["setupSessionId"].as_str().expect("session id").to_string();
+        let session_id = json["session"]["setupSessionId"]
+            .as_str()
+            .expect("session id")
+            .to_string();
 
         for (action, expected_state) in [
             ("cancel", "cancelled"),
@@ -1317,8 +1390,14 @@ mod tests {
         assert_eq!(json["connectorId"], "slack-main");
         assert_eq!(json["terminalState"], "ready");
         assert_eq!(json["deliveryEligible"], serde_json::Value::Bool(true));
-        assert_eq!(json["workspaceBinding"]["workspaceId"], "workspace_redacted");
-        assert_eq!(json["routePolicy"]["selectedChannels"][0]["conversationId"], "channel_redacted");
+        assert_eq!(
+            json["workspaceBinding"]["workspaceId"],
+            "workspace_redacted"
+        );
+        assert_eq!(
+            json["routePolicy"]["selectedChannels"][0]["conversationId"],
+            "channel_redacted"
+        );
         assert_eq!(json["routePolicy"]["mentionGate"], "agent_mention_required");
     }
 
@@ -1331,10 +1410,16 @@ mod tests {
         cfg.oauth_api_base_url = "https://slack.example".to_string();
         let url = slack_authorization_url(&cfg, "state_ref_1", "https://kura.local/callback")
             .expect("authorization url");
-        assert!(url.starts_with("https://slack.example/oauth/v2/authorize?"), "{url}");
+        assert!(
+            url.starts_with("https://slack.example/oauth/v2/authorize?"),
+            "{url}"
+        );
         assert!(url.contains("client_id=client_123"), "{url}");
         assert!(url.contains("state=state_ref_1"), "{url}");
-        assert!(url.contains("redirect_uri=https%3A%2F%2Fkura.local%2Fcallback"), "{url}");
+        assert!(
+            url.contains("redirect_uri=https%3A%2F%2Fkura.local%2Fcallback"),
+            "{url}"
+        );
         assert!(url.contains("scope="), "{url}");
 
         let empty = kura_config::SlackConnectorConfig::default();
@@ -1347,7 +1432,10 @@ mod tests {
     fn per_connector_setup_helpers() {
         assert_eq!(telegram_setup_id("abc def/ghi:j.k"), "abc_def_ghi_j_k");
         assert_eq!(telegram_setup_id("  "), "unknown");
-        assert_eq!(first_non_empty_string(&["  ", "slack-main", "x"]), "slack-main");
+        assert_eq!(
+            first_non_empty_string(&["  ", "slack-main", "x"]),
+            "slack-main"
+        );
         assert_eq!(first_non_empty_string(&["", "  "]), "");
         assert!(slack_scopes_contain("chat:write,users:read", "chat:write"));
         assert!(!slack_scopes_contain("users:read", "chat:write"));
@@ -1369,7 +1457,8 @@ mod tests {
         assert!(has_telegram_allowment_validation(&refs));
 
         assert_eq!(
-            connector_reason_for_telegram_setup(kura_setupwizard::REASON_CREDENTIAL_MISSING).as_str(),
+            connector_reason_for_telegram_setup(kura_setupwizard::REASON_CREDENTIAL_MISSING)
+                .as_str(),
             "auth_missing"
         );
         assert_eq!(

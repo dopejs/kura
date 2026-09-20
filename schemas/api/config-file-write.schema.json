@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/config-file-write.schema.json",
+  "title": "ConfigFileWriteResult",
+  "description": "Result of writing config.json through the daemon. restartRequired is always true today: no setting hot-applies, and hotApplied is the published (empty) list rather than an implied boundary.",
+  "type": "object",
+  "required": ["applied", "dryRun", "sha256", "restartRequired", "hotApplied", "restartRequiredFor", "warnings"],
+  "additionalProperties": false,
+  "properties": {
+    "applied": { "type": "boolean" },
+    "dryRun": { "type": "boolean" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "restartRequired": { "type": "boolean" },
+    "hotApplied": { "type": "array", "items": { "type": "string" } },
+    "restartRequiredFor": { "type": "array", "items": { "type": "string" } },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  }
+}

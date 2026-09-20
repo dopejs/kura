@@ -5,8 +5,8 @@
 //! on a dedicated std::thread with a current-thread Tokio runtime (the
 //! bridge_runtime pattern from rs/chat/src/service.rs).
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
@@ -16,8 +16,8 @@ use tokio_tungstenite::tungstenite::Message;
 use kura_connectors::DiagnosticReasonCode;
 use kura_imtypes::InboundMessage;
 
-use crate::transport::{GatewayMessage, GatewayTransportInner, TransportLifecycleEvent};
 use crate::DiscordError;
+use crate::transport::{GatewayMessage, GatewayTransportInner, TransportLifecycleEvent};
 
 pub(crate) const GATEWAY_URL: &str = "wss://gateway.discord.gg";
 pub(crate) const GATEWAY_VERSION: &str = "10";
@@ -42,7 +42,9 @@ pub(crate) fn spawn_gateway(
     std::thread::Builder::new()
         .name("kura-discord-gateway".to_string())
         .spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build();
             match runtime {
                 Ok(rt) => rt.block_on(run_gateway(inner, handle)),
                 Err(err) => {
@@ -91,7 +93,9 @@ async fn connect_and_listen(
     handle: &Arc<dyn Fn(InboundMessage) + Send + Sync>,
 ) -> Result<(), ()> {
     let url = format!("{GATEWAY_URL}/?v={GATEWAY_VERSION}&encoding=json");
-    let (mut ws, _response) = tokio_tungstenite::connect_async(&url).await.map_err(|_| ())?;
+    let (mut ws, _response) = tokio_tungstenite::connect_async(&url)
+        .await
+        .map_err(|_| ())?;
 
     let identify = serde_json::json!({
         "op": OP_IDENTIFY,
@@ -105,7 +109,9 @@ async fn connect_and_listen(
             },
         },
     });
-    ws.send(Message::Text(identify.to_string().into())).await.map_err(|_| ())?;
+    ws.send(Message::Text(identify.to_string().into()))
+        .await
+        .map_err(|_| ())?;
 
     let mut sequence: Option<u64> = None;
     let mut heartbeat_interval: Option<Duration> = None;
@@ -118,7 +124,11 @@ async fn connect_and_listen(
         if let Some(interval) = heartbeat_interval {
             if last_heartbeat.elapsed() >= interval {
                 let heartbeat = serde_json::json!({ "op": OP_HEARTBEAT, "d": sequence });
-                if ws.send(Message::Text(heartbeat.to_string().into())).await.is_err() {
+                if ws
+                    .send(Message::Text(heartbeat.to_string().into()))
+                    .await
+                    .is_err()
+                {
                     return Err(());
                 }
                 last_heartbeat = Instant::now();
@@ -130,13 +140,7 @@ async fn connect_and_listen(
             Ok(None) | Ok(Some(Err(_))) => return Err(()),
             Ok(Some(Ok(Message::Close(_)))) => return Err(()),
             Ok(Some(Ok(Message::Text(text)))) => {
-                match handle_payload(
-                    inner,
-                    handle,
-                    &text,
-                    &mut sequence,
-                    &mut heartbeat_interval,
-                ) {
+                match handle_payload(inner, handle, &text, &mut sequence, &mut heartbeat_interval) {
                     PayloadAction::Continue => {}
                     PayloadAction::Reconnect => return Err(()),
                 }
@@ -216,9 +220,21 @@ fn parse_gateway_message(data: Option<&Value>) -> Option<GatewayMessage> {
     let author = d.get("author")?;
     Some(GatewayMessage {
         id: d.get("id")?.as_str()?.to_string(),
-        channel_id: d.get("channel_id").and_then(Value::as_str).unwrap_or_default().to_string(),
-        guild_id: d.get("guild_id").and_then(Value::as_str).unwrap_or_default().to_string(),
-        content: d.get("content").and_then(Value::as_str).unwrap_or_default().to_string(),
+        channel_id: d
+            .get("channel_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        guild_id: d
+            .get("guild_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        content: d
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
         author: Some(crate::transport::GatewayUser {
             id: author.get("id")?.as_str()?.to_string(),
             bot: author.get("bot").and_then(Value::as_bool).unwrap_or(false),
@@ -230,7 +246,10 @@ fn parse_gateway_message(data: Option<&Value>) -> Option<GatewayMessage> {
                 mentions
                     .iter()
                     .filter_map(|mention| {
-                        mention.get("id").and_then(Value::as_str).map(str::to_string)
+                        mention
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
                     })
                     .collect()
             })
@@ -266,7 +285,10 @@ mod tests {
         assert_eq!(message.id, "msg_1");
         assert_eq!(message.guild_id, "guild_1");
         assert_eq!(message.content, "<@bot_1> hello");
-        assert_eq!(message.author.as_ref().map(|a| a.id.as_str()), Some("user_1"));
+        assert_eq!(
+            message.author.as_ref().map(|a| a.id.as_str()),
+            Some("user_1")
+        );
         assert_eq!(message.mentions, vec!["bot_1".to_string()]);
     }
 

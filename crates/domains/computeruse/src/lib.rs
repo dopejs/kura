@@ -7,8 +7,10 @@ use serde::{Deserialize, Serialize};
 
 mod manager;
 mod sqlite_artifact_recorder;
+pub mod subprocess_driver;
 pub use manager::*;
 pub use sqlite_artifact_recorder::SqliteArtifactRecorder;
+pub use subprocess_driver::{SubprocessDriver, SubprocessDriverConfig, WorkerSupervisor};
 
 macro_rules! string_enum {
     ($name:ident { $first:ident => $first_s:literal $(, $v:ident => $s:literal)* $(,)? }) => {
@@ -319,8 +321,13 @@ fn is_zero_i64(v: &i64) -> bool {
 // ---- driver ----
 
 pub trait Driver: Send + Sync {
-    fn start_session(&self, session: Session, input: CreateSessionInput) -> Result<Session, String>;
-    fn execute_action(&self, session: Session, action: Action) -> Result<(Session, Action, Vec<ArtifactCaptureRequest>), String>;
+    fn start_session(&self, session: Session, input: CreateSessionInput)
+    -> Result<Session, String>;
+    fn execute_action(
+        &self,
+        session: Session,
+        action: Action,
+    ) -> Result<(Session, Action, Vec<ArtifactCaptureRequest>), String>;
     fn close_session(&self, session: Session) -> Result<Session, String>;
 }
 
@@ -339,11 +346,18 @@ impl MemoryDriver {
 }
 
 impl Driver for MemoryDriver {
-    fn start_session(&self, mut session: Session, input: CreateSessionInput) -> Result<Session, String> {
+    fn start_session(
+        &self,
+        mut session: Session,
+        input: CreateSessionInput,
+    ) -> Result<Session, String> {
         session.status = SessionStatus::Active;
         session.driver_kind = first_non_empty(&[input.driver_kind.trim(), "browser"]);
         if !input.initial_url.trim().is_empty() {
-            let page = PageSummary { url: input.initial_url.trim().to_string(), title: title_from_url(&input.initial_url) };
+            let page = PageSummary {
+                url: input.initial_url.trim().to_string(),
+                title: title_from_url(&input.initial_url),
+            };
             session.current_page = Some(page.clone());
             session.trusted_page_scope = Some(next_trusted_scope(&session, "", &page));
         }
@@ -358,7 +372,11 @@ impl Driver for MemoryDriver {
         Ok(session)
     }
 
-    fn execute_action(&self, mut session: Session, mut action: Action) -> Result<(Session, Action, Vec<ArtifactCaptureRequest>), String> {
+    fn execute_action(
+        &self,
+        mut session: Session,
+        mut action: Action,
+    ) -> Result<(Session, Action, Vec<ArtifactCaptureRequest>), String> {
         session.current_page = navigation_current_page(&session);
         let now = Utc::now();
         action.status = ActionStatus::Running;
@@ -370,24 +388,48 @@ impl Driver for MemoryDriver {
             ActionKind::Navigate => {
                 let raw_url = input_string(&action.input, "url");
                 if raw_url.is_empty() {
-                    return Ok((session, fail_action(action, FailureClass::NavigationFailure, "navigate action requires url"), Vec::new()));
+                    return Ok((
+                        session,
+                        fail_action(
+                            action,
+                            FailureClass::NavigationFailure,
+                            "navigate action requires url",
+                        ),
+                        Vec::new(),
+                    ));
                 }
-                let page = PageSummary { url: raw_url.clone(), title: title_from_url(&raw_url) };
+                let page = PageSummary {
+                    url: raw_url.clone(),
+                    title: title_from_url(&raw_url),
+                };
                 action.page_after = Some(page.clone());
                 session.current_page = Some(page.clone());
-                session.trusted_page_scope = Some(next_trusted_scope(&session, &action.computer_use_action_id, &page));
+                session.trusted_page_scope = Some(next_trusted_scope(
+                    &session,
+                    &action.computer_use_action_id,
+                    &page,
+                ));
             }
             ActionKind::Wait => {
                 action.page_after = clone_page(session.current_page.as_ref());
             }
             ActionKind::Screenshot | ActionKind::Snapshot => {
                 action.page_after = clone_page(session.current_page.as_ref());
-                captures.push(build_page_evidence_capture(&session, &action, action.action_kind));
+                captures.push(build_page_evidence_capture(
+                    &session,
+                    &action,
+                    action.action_kind,
+                ));
             }
             ActionKind::Click | ActionKind::Input | ActionKind::Select | ActionKind::Download => {
                 if mismatched(action.target_match_context.as_ref()) {
-                    let evidence = build_page_evidence_capture(&session, &action, ActionKind::Snapshot);
-                    let failed = fail_action(action, FailureClass::TargetMismatch, "approved target no longer matches current page");
+                    let evidence =
+                        build_page_evidence_capture(&session, &action, ActionKind::Snapshot);
+                    let failed = fail_action(
+                        action,
+                        FailureClass::TargetMismatch,
+                        "approved target no longer matches current page",
+                    );
                     return Ok((session, failed, vec![evidence]));
                 }
                 action.page_after = clone_page(session.current_page.as_ref());
@@ -395,7 +437,11 @@ impl Driver for MemoryDriver {
                     action.page_after = apply_selection_state(action.page_after.as_ref(), &action);
                     session.current_page = clone_page(action.page_after.as_ref());
                 }
-                captures.push(build_page_evidence_capture(&session, &action, ActionKind::Snapshot));
+                captures.push(build_page_evidence_capture(
+                    &session,
+                    &action,
+                    ActionKind::Snapshot,
+                ));
                 if action.action_kind == ActionKind::Download {
                     captures.push(ArtifactCaptureRequest {
                         run_id: session.run_id.clone(),
@@ -414,20 +460,38 @@ impl Driver for MemoryDriver {
                 let page = match action.action_kind {
                     ActionKind::Back => {
                         if back.is_empty() {
-                            return Ok((session, fail_action(action, FailureClass::NavigationFailure, "back action requires prior page history"), Vec::new()));
+                            return Ok((
+                                session,
+                                fail_action(
+                                    action,
+                                    FailureClass::NavigationFailure,
+                                    "back action requires prior page history",
+                                ),
+                                Vec::new(),
+                            ));
                         }
                         back.last().cloned()
                     }
                     _ => {
                         if forward.is_empty() {
-                            return Ok((session, fail_action(action, FailureClass::NavigationFailure, "forward action requires forward page history"), Vec::new()));
+                            return Ok((
+                                session,
+                                fail_action(
+                                    action,
+                                    FailureClass::NavigationFailure,
+                                    "forward action requires forward page history",
+                                ),
+                                Vec::new(),
+                            ));
                         }
                         forward.last().cloned()
                     }
                 };
                 action.page_after = page.clone();
                 session.current_page = page.clone();
-                session.trusted_page_scope = page.as_ref().map(|p| next_trusted_scope(&session, &action.computer_use_action_id, p));
+                session.trusted_page_scope = page
+                    .as_ref()
+                    .map(|p| next_trusted_scope(&session, &action.computer_use_action_id, p));
             }
             ActionKind::CloseSession => {
                 let closed = self.close_session(session.clone())?;
@@ -449,7 +513,11 @@ impl Driver for MemoryDriver {
     }
 }
 
-pub(crate) fn build_page_evidence_capture(session: &Session, action: &Action, kind: ActionKind) -> ArtifactCaptureRequest {
+pub(crate) fn build_page_evidence_capture(
+    session: &Session,
+    action: &Action,
+    kind: ActionKind,
+) -> ArtifactCaptureRequest {
     let mut artifact_kind = ArtifactKind::PageSnapshot;
     let mut mime_type = "application/json";
     let mut file_name = "page-snapshot.json";
@@ -459,7 +527,15 @@ pub(crate) fn build_page_evidence_capture(session: &Session, action: &Action, ki
         file_name = "screenshot.txt";
     }
     let content = if artifact_kind == ArtifactKind::Screenshot {
-        format!("screenshot placeholder for {} ({})", first_page_field(action.page_after.as_ref(), action.page_before.as_ref(), "url"), action.action_kind.as_str())
+        format!(
+            "screenshot placeholder for {} ({})",
+            first_page_field(
+                action.page_after.as_ref(),
+                action.page_before.as_ref(),
+                "url"
+            ),
+            action.action_kind.as_str()
+        )
     } else {
         let json = serde_json::json!({
             "sessionId": &session.computer_use_session_id,
@@ -473,7 +549,8 @@ pub(crate) fn build_page_evidence_capture(session: &Session, action: &Action, ki
         let mut s = serde_json::to_string(&json).unwrap_or_default();
         s.push(char::from(10));
         s
-    };    ArtifactCaptureRequest {
+    };
+    ArtifactCaptureRequest {
         run_id: session.run_id.clone(),
         computer_use_session_id: session.computer_use_session_id.clone(),
         computer_use_action_id: action.computer_use_action_id.clone(),
@@ -495,8 +572,11 @@ fn navigation_history(session: &Session) -> (Vec<PageSummary>, Vec<PageSummary>)
     (back, forward)
 }
 
-fn navigation_state(session: &Session) -> (Option<PageSummary>, Vec<PageSummary>, Vec<PageSummary>) {
-    let mut current: Option<PageSummary> = session.actions.iter().find_map(|a| a.page_before.clone());
+fn navigation_state(
+    session: &Session,
+) -> (Option<PageSummary>, Vec<PageSummary>, Vec<PageSummary>) {
+    let mut current: Option<PageSummary> =
+        session.actions.iter().find_map(|a| a.page_before.clone());
     if current.is_none() {
         current = clone_page(session.current_page.as_ref());
     }
@@ -561,23 +641,44 @@ fn apply_selection_state(page: Option<&PageSummary>, action: &Action) -> Option<
     }
     let selector = selector_from_target(action.target_match_context.as_ref());
     if !selector.is_empty() {
-        next.title = format!("{} [{selector}={label}]", first_non_empty(&[&next.title, &next.url, "page"])).trim().to_string();
+        next.title = format!(
+            "{} [{selector}={label}]",
+            first_non_empty(&[&next.title, &next.url, "page"])
+        )
+        .trim()
+        .to_string();
     } else {
-        next.title = format!("{} [selected={label}]", first_non_empty(&[&next.title, &next.url, "page"])).trim().to_string();
+        next.title = format!(
+            "{} [selected={label}]",
+            first_non_empty(&[&next.title, &next.url, "page"])
+        )
+        .trim()
+        .to_string();
     }
     Some(next)
 }
 
 fn selector_from_target(target: Option<&TargetMatchContext>) -> String {
-    target.map(|t| t.expected_selector.trim().to_string()).unwrap_or_default()
+    target
+        .map(|t| t.expected_selector.trim().to_string())
+        .unwrap_or_default()
 }
 
 fn input_string(input: &serde_json::Map<String, serde_json::Value>, key: &str) -> String {
-    input.get(key).and_then(|v| v.as_str()).unwrap_or("").trim().to_string()
+    input
+        .get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 fn download_file_name(action: &Action) -> String {
-    let mut base = first_page_field(action.page_after.as_ref(), action.page_before.as_ref(), "title");
+    let mut base = first_page_field(
+        action.page_after.as_ref(),
+        action.page_before.as_ref(),
+        "title",
+    );
     if base.is_empty() {
         base = "computer-use-download".to_string();
     }
@@ -598,15 +699,27 @@ title={}
 action={}
 selector={}
 ",
-        first_page_field(action.page_after.as_ref(), action.page_before.as_ref(), "url"),
-        first_page_field(action.page_after.as_ref(), action.page_before.as_ref(), "title"),
+        first_page_field(
+            action.page_after.as_ref(),
+            action.page_before.as_ref(),
+            "url"
+        ),
+        first_page_field(
+            action.page_after.as_ref(),
+            action.page_before.as_ref(),
+            "title"
+        ),
         action.action_kind.as_str(),
         selector_from_target(action.target_match_context.as_ref()),
     )
 }
 
 fn next_trusted_scope(session: &Session, action_id: &str, page: &PageSummary) -> TrustedPageScope {
-    let revision = session.trusted_page_scope.as_ref().map(|s| s.scope_revision + 1).unwrap_or(1);
+    let revision = session
+        .trusted_page_scope
+        .as_ref()
+        .map(|s| s.scope_revision + 1)
+        .unwrap_or(1);
     let now = Utc::now();
     TrustedPageScope {
         scope_id: format!("cuscope_{}", now.timestamp_nanos_opt().unwrap_or(0)),
@@ -626,7 +739,9 @@ fn mismatched(target: Option<&TargetMatchContext>) -> bool {
     let expected_selector = target.expected_selector.trim().to_lowercase();
     let expected_text = target.expected_text.trim().to_lowercase();
     let expected_url = target.expected_page_url.trim().to_lowercase();
-    expected_selector.contains("missing") || expected_text.contains("missing") || expected_url.contains("missing")
+    expected_selector.contains("missing")
+        || expected_text.contains("missing")
+        || expected_url.contains("missing")
 }
 
 fn fail_action(mut action: Action, class: FailureClass, reason: &str) -> Action {
@@ -681,15 +796,31 @@ fn clone_page(page: Option<&PageSummary>) -> Option<PageSummary> {
     page.cloned()
 }
 
-fn first_page_field(after: Option<&PageSummary>, before: Option<&PageSummary>, field: &str) -> String {
+fn first_page_field(
+    after: Option<&PageSummary>,
+    before: Option<&PageSummary>,
+    field: &str,
+) -> String {
     match field {
         "url" => {
-            if let Some(a) = after { if !a.url.is_empty() { return a.url.clone(); } }
-            if let Some(b) = before { return b.url.clone(); }
+            if let Some(a) = after {
+                if !a.url.is_empty() {
+                    return a.url.clone();
+                }
+            }
+            if let Some(b) = before {
+                return b.url.clone();
+            }
         }
         "title" => {
-            if let Some(a) = after { if !a.title.is_empty() { return a.title.clone(); } }
-            if let Some(b) = before { return b.title.clone(); }
+            if let Some(a) = after {
+                if !a.title.is_empty() {
+                    return a.title.clone();
+                }
+            }
+            if let Some(b) = before {
+                return b.title.clone();
+            }
         }
         _ => {}
     }

@@ -23,10 +23,10 @@ use crate::{
     AccessRequest, ApprovalMode, BackendAvailabilityStatus, BackendCapabilityProfile,
     BackendHostStatus, BackendKind, BackendSelectionOutcome, ConsumerContractView,
     ConsumerRequirementDeclaration, Decision, DecisionApprovalStatus, DecisionResolution,
-    EnvironmentMode, ErrorClass, Execution,
-    ExecutionFinalization, ExecutionRequest, ExecutionStatus, FilesystemMode, NetworkMode,
-    PROFILE_ID_DOCKER_DEFAULT, PROFILE_ID_MANAGED_PROVIDER_CLAUDE,
-    PROFILE_ID_MANAGED_PROVIDER_CODEX, PROFILE_ID_PROJECT_TOOLS, PROFILE_ID_SUBPROCESS_DEFAULT, PolicyRecordStatus, Profile,
+    EnvironmentMode, ErrorClass, Execution, ExecutionFinalization, ExecutionRequest,
+    ExecutionStatus, FilesystemMode, NetworkMode, PROFILE_ID_DOCKER_DEFAULT,
+    PROFILE_ID_MANAGED_PROVIDER_CLAUDE, PROFILE_ID_MANAGED_PROVIDER_CODEX,
+    PROFILE_ID_PROJECT_TOOLS, PROFILE_ID_SUBPROCESS_DEFAULT, PolicyRecordStatus, Profile,
     Result as SandboxResult, SecretResolution, SecretScopeOutcome, Source, is_terminal,
 };
 
@@ -1293,7 +1293,8 @@ impl Manager {
             },
             payload,
             ..kura_events::Event::default()
-        }).map(|_| ())
+        })
+        .map(|_| ())
     }
 
     fn publish_decision_recorded(&self, execution: &Execution) -> Result<(), SandboxError> {
@@ -1357,7 +1358,8 @@ impl Manager {
             },
             payload,
             ..kura_events::Event::default()
-        }).map(|_| ())
+        })
+        .map(|_| ())
     }
 
     pub(crate) fn publish_execution_started(
@@ -1392,7 +1394,8 @@ impl Manager {
             },
             payload,
             ..kura_events::Event::default()
-        }).map(|_| ())
+        })
+        .map(|_| ())
     }
 
     pub(crate) fn publish_execution_terminal(
@@ -1466,7 +1469,8 @@ impl Manager {
             },
             payload,
             ..kura_events::Event::default()
-        }).map(|_| ())
+        })
+        .map(|_| ())
     }
 
     fn publish_event(

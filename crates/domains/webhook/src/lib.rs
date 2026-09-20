@@ -243,7 +243,10 @@ impl Manager {
 
     /// Go `WithStore`: installs durable persistence for webhook endpoints + secrets and returns
     /// the manager.
-    pub fn with_store(&mut self, store: Arc<parking_lot::Mutex<kura_store::SQLiteStore>>) -> &mut Self {
+    pub fn with_store(
+        &mut self,
+        store: Arc<parking_lot::Mutex<kura_store::SQLiteStore>>,
+    ) -> &mut Self {
         self.docs = Some(store);
         self
     }
@@ -251,15 +254,20 @@ impl Manager {
     /// Go `LoadFromStore`: reloads persisted webhook endpoints + signing secrets on startup.
     /// A no-op when no store is installed.
     pub fn load_from_store(&self) -> Result<(), String> {
-        let Some(docs) = &self.docs else { return Ok(()); };
-        let items: Vec<PersistedEndpoint> = kura_store::list_documents(&docs.lock(), DOC_KIND_WEBHOOK)?;
+        let Some(docs) = &self.docs else {
+            return Ok(());
+        };
+        let items: Vec<PersistedEndpoint> =
+            kura_store::list_documents(&docs.lock(), DOC_KIND_WEBHOOK)?;
         let mut inner = self.inner.write();
         for item in items {
             let endpoint = item.endpoint;
             if !inner.by_id.contains_key(&endpoint.webhook_id) {
                 inner.ids.push(endpoint.webhook_id.clone());
             }
-            inner.by_id.insert(endpoint.webhook_id.clone(), endpoint.clone());
+            inner
+                .by_id
+                .insert(endpoint.webhook_id.clone(), endpoint.clone());
             if let Some(secret) = decode_hex(&item.secret_hex) {
                 inner.secrets.insert(endpoint.webhook_id, secret);
             }
@@ -299,20 +307,30 @@ impl Manager {
         };
         {
             let mut inner = self.inner.write();
-            inner.by_id.insert(endpoint.webhook_id.clone(), endpoint.clone());
+            inner
+                .by_id
+                .insert(endpoint.webhook_id.clone(), endpoint.clone());
             inner.ids.push(endpoint.webhook_id.clone());
-            inner.secrets.insert(endpoint.webhook_id.clone(), secret.clone());
+            inner
+                .secrets
+                .insert(endpoint.webhook_id.clone(), secret.clone());
         }
         self.persist(&endpoint, &secret);
-        Ok(CreateSecret { endpoint, secret: encode_hex(&secret) })
+        Ok(CreateSecret {
+            endpoint,
+            secret: encode_hex(&secret),
+        })
     }
 
     /// Issues a new signing secret, invalidating the previous one (Go `Rotate`).
     pub fn rotate(&self, tenant_id: &str, webhook_id: &str) -> Result<CreateSecret, WebhookError> {
         let (endpoint, secret) = {
             let mut inner = self.inner.write();
-            let existing =
-                inner.by_id.get(webhook_id.trim()).cloned().ok_or(WebhookError::EndpointNotFound)?;
+            let existing = inner
+                .by_id
+                .get(webhook_id.trim())
+                .cloned()
+                .ok_or(WebhookError::EndpointNotFound)?;
             if existing.tenant_id != tenant_id.trim() {
                 return Err(WebhookError::CrossTenant);
             }
@@ -321,28 +339,44 @@ impl Manager {
             endpoint.secret_fingerprint = fingerprint(&secret);
             endpoint.secret_version += 1;
             endpoint.updated_at = Utc::now();
-            inner.by_id.insert(endpoint.webhook_id.clone(), endpoint.clone());
-            inner.secrets.insert(endpoint.webhook_id.clone(), secret.clone());
+            inner
+                .by_id
+                .insert(endpoint.webhook_id.clone(), endpoint.clone());
+            inner
+                .secrets
+                .insert(endpoint.webhook_id.clone(), secret.clone());
             (endpoint, secret)
         };
         self.persist(&endpoint, &secret);
-        Ok(CreateSecret { endpoint, secret: encode_hex(&secret) })
+        Ok(CreateSecret {
+            endpoint,
+            secret: encode_hex(&secret),
+        })
     }
 
     /// Deactivates a webhook so further triggers are rejected (Go `Disable`).
     pub fn disable(&self, tenant_id: &str, webhook_id: &str) -> Result<Endpoint, WebhookError> {
         let (endpoint, secret) = {
             let mut inner = self.inner.write();
-            let existing =
-                inner.by_id.get(webhook_id.trim()).cloned().ok_or(WebhookError::EndpointNotFound)?;
+            let existing = inner
+                .by_id
+                .get(webhook_id.trim())
+                .cloned()
+                .ok_or(WebhookError::EndpointNotFound)?;
             if existing.tenant_id != tenant_id.trim() {
                 return Err(WebhookError::CrossTenant);
             }
-            let secret = inner.secrets.get(webhook_id.trim()).cloned().unwrap_or_default();
+            let secret = inner
+                .secrets
+                .get(webhook_id.trim())
+                .cloned()
+                .unwrap_or_default();
             let mut endpoint = existing;
             endpoint.status = Status::Disabled;
             endpoint.updated_at = Utc::now();
-            inner.by_id.insert(endpoint.webhook_id.clone(), endpoint.clone());
+            inner
+                .by_id
+                .insert(endpoint.webhook_id.clone(), endpoint.clone());
             (endpoint, secret)
         };
         self.persist(&endpoint, &secret);
@@ -379,7 +413,11 @@ impl Manager {
         let (endpoint, secret) = {
             let inner = self.inner.read();
             let endpoint = inner.by_id.get(input.webhook_id.trim()).cloned();
-            let secret = inner.secrets.get(input.webhook_id.trim()).cloned().unwrap_or_default();
+            let secret = inner
+                .secrets
+                .get(input.webhook_id.trim())
+                .cloned()
+                .unwrap_or_default();
             (endpoint, secret)
         };
 
@@ -398,7 +436,11 @@ impl Manager {
         };
 
         let Some(endpoint) = endpoint else {
-            return fail(record, TriggerStatus::AuthFailed, WebhookError::EndpointNotFound);
+            return fail(
+                record,
+                TriggerStatus::AuthFailed,
+                WebhookError::EndpointNotFound,
+            );
         };
         if endpoint.tenant_id != input.tenant_id.trim() {
             return fail(record, TriggerStatus::AuthFailed, WebhookError::CrossTenant);
@@ -407,13 +449,21 @@ impl Manager {
             return fail(record, TriggerStatus::Disabled, WebhookError::Disabled);
         }
         if input.payload.len() > MAX_PAYLOAD_BYTES {
-            return fail(record, TriggerStatus::PayloadTooLarge, WebhookError::PayloadTooLarge);
+            return fail(
+                record,
+                TriggerStatus::PayloadTooLarge,
+                WebhookError::PayloadTooLarge,
+            );
         }
         if input.signature.trim().is_empty() {
             return fail(record, TriggerStatus::AuthFailed, WebhookError::MissingAuth);
         }
         if !verify_signature(&secret, &input.payload, &input.signature) {
-            return fail(record, TriggerStatus::AuthFailed, WebhookError::BadSignature);
+            return fail(
+                record,
+                TriggerStatus::AuthFailed,
+                WebhookError::BadSignature,
+            );
         }
         let idempotency_key = input.idempotency_key.trim();
         if !idempotency_key.is_empty() && self.mark_seen(&endpoint.webhook_id, idempotency_key) {
@@ -423,7 +473,11 @@ impl Manager {
         let (allowed, reason) = self.quota.allow(&endpoint.tenant_id, &endpoint.webhook_id);
         if !allowed {
             record.failure_reason = reason;
-            return fail(record, TriggerStatus::QuotaDenied, WebhookError::QuotaDenied);
+            return fail(
+                record,
+                TriggerStatus::QuotaDenied,
+                WebhookError::QuotaDenied,
+            );
         }
         match self.firer.fire(&endpoint, &input.payload) {
             Err(err) => fail(record, TriggerStatus::AuthFailed, WebhookError::Fire(err)),
@@ -476,7 +530,9 @@ impl Manager {
 
     /// Go `persist`: write-through of an endpoint + its secret (errors ignored, as in Go).
     fn persist(&self, endpoint: &Endpoint, secret: &[u8]) {
-        let Some(docs) = &self.docs else { return; };
+        let Some(docs) = &self.docs else {
+            return;
+        };
         let persisted = PersistedEndpoint {
             endpoint: endpoint.clone(),
             secret_hex: encode_hex(secret),
@@ -509,7 +565,10 @@ fn fail(
 /// Go `validTargetKind`.
 #[must_use]
 fn valid_target_kind(kind: TargetKind) -> bool {
-    matches!(kind, TargetKind::Routine | TargetKind::Workflow | TargetKind::Run)
+    matches!(
+        kind,
+        TargetKind::Routine | TargetKind::Workflow | TargetKind::Run
+    )
 }
 
 /// Go `verifySignature` (HMAC-SHA256 over the payload, constant-time compare).
@@ -551,8 +610,15 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
         ipad[i] ^= k[i];
         opad[i] ^= k[i];
     }
-    let inner = Sha256::new().chain_update(ipad).chain_update(data).finalize();
-    Sha256::new().chain_update(opad).chain_update(inner).finalize().into()
+    let inner = Sha256::new()
+        .chain_update(ipad)
+        .chain_update(data)
+        .finalize();
+    Sha256::new()
+        .chain_update(opad)
+        .chain_update(inner)
+        .finalize()
+        .into()
 }
 
 /// Constant-time equality (Go `hmac.Equal`).
@@ -620,4 +686,3 @@ fn hex_val(b: u8) -> Option<u8> {
         _ => None,
     }
 }
-

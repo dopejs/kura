@@ -10,7 +10,7 @@ use chrono::{Duration, Utc};
 use kura_secrets::{
     SecretStatus, SecretVersion, SecretVersionStatus, Store, TenantSecret, ValueBackend,
 };
-use kura_store::{SecretStoreHandle, SQLiteStore};
+use kura_store::{SQLiteStore, SecretStoreHandle};
 
 fn temp_dir(name: &str) -> String {
     let dir = std::env::temp_dir().join(format!("kura_store_{name}_{}", std::process::id()));
@@ -58,25 +58,53 @@ fn secret_create_get_list_rotate_disable_round_trip() {
     let store = SQLiteStore::new(&dir).unwrap();
 
     let mut secret = secret_fixture("sec_1", "ten_1", "slack.token");
-    store.create_tenant_secret(&secret, &version_fixture(&secret, "sec_1_v1")).unwrap();
+    store
+        .create_tenant_secret(&secret, &version_fixture(&secret, "sec_1_v1"))
+        .unwrap();
 
     // Get by ref within the tenant.
-    let got = store.get_secret_by_ref("ten_1", "slack.token").unwrap().expect("present");
+    let got = store
+        .get_secret_by_ref("ten_1", "slack.token")
+        .unwrap()
+        .expect("present");
     assert_eq!(got.secret_id, "sec_1");
     assert_eq!(got.display_name, "secret slack.token");
     assert_eq!(got.status, SecretStatus::Active);
     assert_eq!(got.active_version_id, "sec_1_v1");
-    assert!(store.get_secret_by_ref("ten_1", "missing.ref").unwrap().is_none());
-    assert!(store.get_secret_by_ref("ten_2", "slack.token").unwrap().is_none());
+    assert!(
+        store
+            .get_secret_by_ref("ten_1", "missing.ref")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .get_secret_by_ref("ten_2", "slack.token")
+            .unwrap()
+            .is_none()
+    );
 
     // Version lookup.
-    let version = store.get_secret_version("ten_1", "sec_1_v1").unwrap().expect("version present");
+    let version = store
+        .get_secret_version("ten_1", "sec_1_v1")
+        .unwrap()
+        .expect("version present");
     assert_eq!(version.secret_id, "sec_1");
     assert_eq!(version.version_number, 1);
     assert_eq!(version.value_backend_ref, "backend/sec_1_v1");
     assert_eq!(version.status, SecretVersionStatus::Active);
-    assert!(store.get_secret_version("ten_1", "sec_1_v2").unwrap().is_none());
-    assert!(store.get_secret_version("ten_2", "sec_1_v1").unwrap().is_none());
+    assert!(
+        store
+            .get_secret_version("ten_1", "sec_1_v2")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .get_secret_version("ten_2", "sec_1_v1")
+            .unwrap()
+            .is_none()
+    );
 
     // List orders by updated_at DESC.
     let listed = store.list_secrets("ten_1").unwrap();
@@ -88,7 +116,10 @@ fn secret_create_get_list_rotate_disable_round_trip() {
     secret.display_name = "slack token v2".to_string();
     secret.updated_at = Utc::now();
     store.update_secret_metadata(&secret).unwrap();
-    let updated = store.get_secret_by_ref("ten_1", "slack.token").unwrap().unwrap();
+    let updated = store
+        .get_secret_by_ref("ten_1", "slack.token")
+        .unwrap()
+        .unwrap();
     assert_eq!(updated.display_name, "slack token v2");
 
     // Rotate: version_number increments and the prior version is superseded.
@@ -99,15 +130,28 @@ fn secret_create_get_list_rotate_disable_round_trip() {
         ..secret.clone()
     };
     store
-        .rotate_tenant_secret(&rotated_secret, "sec_1_v1", version_fixture(&rotated_secret, "sec_1_v2"))
+        .rotate_tenant_secret(
+            &rotated_secret,
+            "sec_1_v1",
+            version_fixture(&rotated_secret, "sec_1_v2"),
+        )
         .unwrap();
-    let superseded = store.get_secret_version("ten_1", "sec_1_v1").unwrap().unwrap();
+    let superseded = store
+        .get_secret_version("ten_1", "sec_1_v1")
+        .unwrap()
+        .unwrap();
     assert_eq!(superseded.status, SecretVersionStatus::Superseded);
     assert!(superseded.superseded_at.is_some());
-    let rotated = store.get_secret_version("ten_1", "sec_1_v2").unwrap().unwrap();
+    let rotated = store
+        .get_secret_version("ten_1", "sec_1_v2")
+        .unwrap()
+        .unwrap();
     assert_eq!(rotated.version_number, 2, "next version allocated");
     assert_eq!(rotated.status, SecretVersionStatus::Active);
-    let secret_after = store.get_secret_by_ref("ten_1", "slack.token").unwrap().unwrap();
+    let secret_after = store
+        .get_secret_by_ref("ten_1", "slack.token")
+        .unwrap()
+        .unwrap();
     assert_eq!(secret_after.active_version_id, "sec_1_v2");
 
     // Disable.
@@ -119,7 +163,10 @@ fn secret_create_get_list_rotate_disable_round_trip() {
         ..rotated_secret
     };
     store.disable_tenant_secret(&disabled).unwrap();
-    let disabled_after = store.get_secret_by_ref("ten_1", "slack.token").unwrap().unwrap();
+    let disabled_after = store
+        .get_secret_by_ref("ten_1", "slack.token")
+        .unwrap()
+        .unwrap();
     assert_eq!(disabled_after.status, SecretStatus::Disabled);
     assert_eq!(disabled_after.disabled_reason, "operator_rotated");
     assert!(disabled_after.disabled_at.is_some());
@@ -137,12 +184,27 @@ async fn secrets_store_trait_round_trip() {
 
     // Manager.Create is not available with a no-op backend value, so exercise
     // the Store trait directly (metadata only; values stay in the backend).
-    handle.create_secret(secret.clone(), version.clone()).await.expect("create via trait");
-    let got = handle.get_secret_by_ref("ten_1", "trait.ref").await.expect("get via trait").expect("present");
+    handle
+        .create_secret(secret.clone(), version.clone())
+        .await
+        .expect("create via trait");
+    let got = handle
+        .get_secret_by_ref("ten_1", "trait.ref")
+        .await
+        .expect("get via trait")
+        .expect("present");
     assert_eq!(got.secret_id, "sec_t1");
     let versions = handle.list_secrets("ten_1").await.expect("list via trait");
     assert_eq!(versions.len(), 1);
-    assert_eq!(handle.get_secret_version("ten_1", "sec_t1_v1").await.unwrap().unwrap().value_backend_ref, "backend/sec_t1_v1");
+    assert_eq!(
+        handle
+            .get_secret_version("ten_1", "sec_t1_v1")
+            .await
+            .unwrap()
+            .unwrap()
+            .value_backend_ref,
+        "backend/sec_t1_v1"
+    );
 
     // Rotate through the trait.
     let rotated = TenantSecret {
@@ -152,10 +214,18 @@ async fn secrets_store_trait_round_trip() {
         ..secret
     };
     handle
-        .rotate_secret(rotated.clone(), "sec_t1_v1", version_fixture(&rotated, "sec_t1_v2"))
+        .rotate_secret(
+            rotated.clone(),
+            "sec_t1_v1",
+            version_fixture(&rotated, "sec_t1_v2"),
+        )
         .await
         .expect("rotate via trait");
-    let old = handle.get_secret_version("ten_1", "sec_t1_v1").await.unwrap().unwrap();
+    let old = handle
+        .get_secret_version("ten_1", "sec_t1_v1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(old.status, SecretVersionStatus::Superseded);
 
     // Disable through the trait.
@@ -166,8 +236,15 @@ async fn secrets_store_trait_round_trip() {
         updated_at: Utc::now(),
         ..rotated
     };
-    handle.disable_secret(disabled).await.expect("disable via trait");
-    let final_state = handle.get_secret_by_ref("ten_1", "trait.ref").await.unwrap().unwrap();
+    handle
+        .disable_secret(disabled)
+        .await
+        .expect("disable via trait");
+    let final_state = handle
+        .get_secret_by_ref("ten_1", "trait.ref")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(final_state.status, SecretStatus::Disabled);
     let _ = &manager;
 }
@@ -185,10 +262,16 @@ impl ValueBackend for NoopBackend {
     ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<String>> {
         Box::pin(async move { Ok("noop".to_string()) })
     }
-    fn get<'a>(&'a self, _backend_ref: &'a str) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<String>> {
+    fn get<'a>(
+        &'a self,
+        _backend_ref: &'a str,
+    ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<String>> {
         Box::pin(async move { Ok("value".to_string()) })
     }
-    fn delete<'a>(&'a self, _backend_ref: &'a str) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<()>> {
+    fn delete<'a>(
+        &'a self,
+        _backend_ref: &'a str,
+    ) -> kura_secrets::BoxFuture<'a, kura_secrets::Result<()>> {
         Box::pin(async move { Ok(()) })
     }
 }
@@ -199,12 +282,22 @@ fn secret_tenant_isolation_and_refs() {
     let store = SQLiteStore::new(&dir).unwrap();
 
     let secret_a = secret_fixture("sec_a", "ten_1", "shared.ref");
-    store.create_tenant_secret(&secret_a, &version_fixture(&secret_a, "sec_a_v1")).unwrap();
+    store
+        .create_tenant_secret(&secret_a, &version_fixture(&secret_a, "sec_a_v1"))
+        .unwrap();
     let secret_b = secret_fixture("sec_b", "ten_2", "shared.ref");
-    store.create_tenant_secret(&secret_b, &version_fixture(&secret_b, "sec_b_v1")).unwrap();
+    store
+        .create_tenant_secret(&secret_b, &version_fixture(&secret_b, "sec_b_v1"))
+        .unwrap();
 
-    let a = store.get_secret_by_ref("ten_1", "shared.ref").unwrap().unwrap();
-    let b = store.get_secret_by_ref("ten_2", "shared.ref").unwrap().unwrap();
+    let a = store
+        .get_secret_by_ref("ten_1", "shared.ref")
+        .unwrap()
+        .unwrap();
+    let b = store
+        .get_secret_by_ref("ten_2", "shared.ref")
+        .unwrap()
+        .unwrap();
     assert_ne!(a.secret_id, b.secret_id, "same ref, different tenants");
     assert_eq!(a.tenant_id, "ten_1");
     assert_eq!(b.tenant_id, "ten_2");

@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{schema_root_dir, validate_fixtures, Fixture};
+use common::{Fixture, schema_root_dir, validate_fixtures};
 use kura_contracts::Validator;
 
 #[test]
@@ -13,10 +13,7 @@ fn test_plugin_schemas_accept_canonical_fixtures() {
             r##"schemas/plugin/plugin-profile.schema.json"##,
             r##"{"disabled":["channel-discord"],"entries":{"memory":{"enabled":true,"config":{"tickSeconds":60}},"triage":{"enabled":false}}}"##,
         ),
-        (
-            r##"schemas/plugin/plugin-profile.schema.json"##,
-            r##"{}"##,
-        ),
+        (r##"schemas/plugin/plugin-profile.schema.json"##, r##"{}"##),
         (
             r##"schemas/plugin/plugin-manifest.schema.json"##,
             r##"{"id":"session-strategy","version":"0.1.0","summary":"external session window","requires":["chat"],"hooks":[{"point":"chat/pre-dispatch","onError":"veto"}],"seams":["context.embedder"],"entry":{"kind":"process","command":"/bin/sh","args":["run.sh"],"timeoutMs":2000}}"##,

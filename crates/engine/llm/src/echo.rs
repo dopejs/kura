@@ -44,8 +44,15 @@ impl Provider for EchoProvider {
                 if request.cancel.is_cancelled() {
                     return Err(ProviderError::Cancelled);
                 }
-                let delta = if index > 0 { format!(" {part}") } else { part.to_string() };
-                emit(StreamChunk { delta, ..StreamChunk::default() })?;
+                let delta = if index > 0 {
+                    format!(" {part}")
+                } else {
+                    part.to_string()
+                };
+                emit(StreamChunk {
+                    delta,
+                    ..StreamChunk::default()
+                })?;
             }
             Ok(echo_response(&request.messages))
         })
@@ -88,18 +95,28 @@ mod tests {
     use crate::provider::CancelToken;
 
     fn user_message(content: &str) -> Message {
-        Message { role: crate::types::MessageRole::User, content: content.into(), ..Default::default() }
+        Message {
+            role: crate::types::MessageRole::User,
+            content: content.into(),
+            ..Default::default()
+        }
     }
 
     fn request(messages: Vec<Message>) -> ProviderRequest {
-        ProviderRequest { messages, ..ProviderRequest::default() }
+        ProviderRequest {
+            messages,
+            ..ProviderRequest::default()
+        }
     }
 
     #[tokio::test]
     async fn complete_echoes_trimmed_joined_content_with_word_usage() {
         let provider = EchoProvider::new();
         let response = provider
-            .complete(request(vec![user_message("  hello world  "), user_message("again")]))
+            .complete(request(vec![
+                user_message("  hello world  "),
+                user_message("again"),
+            ]))
             .await
             .unwrap();
         assert_eq!(response.output, "hello world\nagain");

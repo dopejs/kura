@@ -56,3 +56,43 @@ jobs:
         run: pnpm test:clients
       - name: Typecheck web
         run: pnpm typecheck:web
+
+  docker-image:
+    name: Docker image (build + healthz smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # The cargo release build dominates this job; the GHA layer cache keeps
+      # it off the critical path for runs that do not touch crates/.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          tags: kura-agent:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # Regression guard for the build/runtime libc mismatch that made the
+      # published image exit on start: a glibc binary in a musl base.
+      - name: Start container
+        run: |
+          docker run -d --name kura-ci -p 127.0.0.1:19191:19191 kura-agent:ci
+      - name: Wait for /healthz
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:19191/healthz; then
+              echo && echo "healthz ok after ${i}s" && exit 0
+            fi
+            sleep 1
+          done
+          echo "healthz did not come up within 30s" >&2
+          docker logs kura-ci >&2 || true
+          exit 1
+      - name: Container logs
+        if: always()
+        run: docker logs kura-ci || true
+      - name: Stop container
+        if: always()
+        run: docker rm -f kura-ci || true

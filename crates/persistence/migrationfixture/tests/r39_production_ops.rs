@@ -112,9 +112,16 @@ fn r39_validation_rejects_raw_credential_rows() {
 #[test]
 fn r39_static_fixture_matches_go_ids() {
     let fixture = build_r39_production_ops_fixture();
-    let ids: Vec<&str> = fixture.tenants.iter().map(|tenant| tenant.tenant_id.as_str()).collect();
+    let ids: Vec<&str> = fixture
+        .tenants
+        .iter()
+        .map(|tenant| tenant.tenant_id.as_str())
+        .collect();
     assert_eq!(ids, vec!["ten_ops_alpha", "ten_ops_beta", "ten_ops_gamma"]);
-    assert_eq!(fixture.tenants[0].credential_refs, vec!["secretref_calendar_alpha", "secretref_provider_alpha"]);
+    assert_eq!(
+        fixture.tenants[0].credential_refs,
+        vec!["secretref_calendar_alpha", "secretref_provider_alpha"]
+    );
     assert!(fixture.tenants[2].reconnect_required);
     assert!(fixture.tenants[2].operator_action_needed);
 }

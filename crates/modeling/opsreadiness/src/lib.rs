@@ -27,14 +27,31 @@ pub const RESULT_NO_SHIP: &str = "no_ship";
 pub const RESULT_SHIP_WITH_RECORDED_SKIPS: &str = "ship_with_recorded_skips";
 
 pub const REQUIRED_WORKLOAD_AREAS: &[&str] = &[
-    "runtime", "scheduler", "integrations", "delivery", "approvals", "quotas", "tenant_switching", "evaluation",
+    "runtime",
+    "scheduler",
+    "integrations",
+    "delivery",
+    "approvals",
+    "quotas",
+    "tenant_switching",
+    "evaluation",
 ];
 
 pub const REQUIRED_FAULT_TYPES: &[&str] = &[
-    "transient_5xx", "rate_limit", "auth_expiry", "provider_unavailable", "slow_response", "malformed_response",
+    "transient_5xx",
+    "rate_limit",
+    "auth_expiry",
+    "provider_unavailable",
+    "slow_response",
+    "malformed_response",
 ];
 
-pub const REQUIRED_RESOURCE_CATEGORIES: &[&str] = &["logs", "stored_data_size", "active_work_or_queue_backlog", "memory"];
+pub const REQUIRED_RESOURCE_CATEGORIES: &[&str] = &[
+    "logs",
+    "stored_data_size",
+    "active_work_or_queue_backlog",
+    "memory",
+];
 
 mod hosted;
 mod validation;
@@ -273,9 +290,19 @@ pub const HOSTED_ROLLBACK_NO_ROLLBACK_NEEDED: &str = "no_rollback_needed";
 pub const HOSTED_ROLLBACK_BLOCKED: &str = "blocked";
 
 pub const REQUIRED_HOSTED_EVIDENCE_TYPES: &[&str] = &[
-    "deployment_manifest", "configuration_profile", "health_checks", "logs", "soak_report",
-    "backup_evidence", "restore_evidence", "upgrade_preflight", "upgrade_postflight",
-    "rollback_decision", "integration_diagnostics", "resource_observations", "redaction_check",
+    "deployment_manifest",
+    "configuration_profile",
+    "health_checks",
+    "logs",
+    "soak_report",
+    "backup_evidence",
+    "restore_evidence",
+    "upgrade_preflight",
+    "upgrade_postflight",
+    "rollback_decision",
+    "integration_diagnostics",
+    "resource_observations",
+    "redaction_check",
     "retention_metadata",
 ];
 

@@ -40,7 +40,11 @@ pub fn classify_diagnostic(
     let now = input.evidence_timestamp.unwrap_or_else(Utc::now);
 
     let (redaction_status, safe_evidence, redaction_failure_id) = if input.redaction_reliable {
-        (RedactionStatus::Redacted, input.safe_evidence, String::new())
+        (
+            RedactionStatus::Redacted,
+            input.safe_evidence,
+            String::new(),
+        )
     } else {
         (
             RedactionStatus::Suppressed,
@@ -215,7 +219,10 @@ mod tests {
     #[test]
     fn defaults_id_timestamp_freshness_retention() {
         let state = classify_diagnostic(input(DiagnosticReasonCode::NetworkFailed)).unwrap();
-        assert_eq!(state.diagnostic_state_id, "diag_discord-main_network_failed");
+        assert_eq!(
+            state.diagnostic_state_id,
+            "diag_discord-main_network_failed"
+        );
         assert_eq!(state.freshness_state, FreshnessState::Fresh);
         assert!(state.retention_expires_at > state.evidence_timestamp);
         assert_eq!(state.redaction_status, RedactionStatus::Redacted);

@@ -7,6 +7,8 @@ import { App } from "./App";
 const mockClient = {
   getMe: vi.fn(),
   listTenants: vi.fn(),
+  getMemoryOverview: vi.fn(),
+  rebuildMemoryIndexes: vi.fn(),
   getOnboarding: vi.fn(),
   getActivation: vi.fn(),
   getBillingQuotaDashboard: vi.fn(),

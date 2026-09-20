@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use chrono::Utc;
 
-use crate::manager::{new_delivery_id, new_summary_window_id, payload_map, DeliveryError, ManagerInner};
+use crate::manager::{
+    DeliveryError, ManagerInner, new_delivery_id, new_summary_window_id, payload_map,
+};
 use crate::{
     DeliveryMode, DeliveryOutcome, DeliveryPreference, DeliveryTarget, OutcomeStatus, ResultClass,
     SummaryWindow, SummaryWindowStatus,
@@ -55,7 +57,11 @@ impl ManagerInner {
                 return Ok(item);
             }
         }
-        let mut window_minutes = pref.summary_policy.as_ref().map(|p| p.window_minutes).unwrap_or(0);
+        let mut window_minutes = pref
+            .summary_policy
+            .as_ref()
+            .map(|p| p.window_minutes)
+            .unwrap_or(0);
         if window_minutes <= 0 {
             window_minutes = 15;
         }
@@ -78,7 +84,11 @@ impl ManagerInner {
 
     /// Port of `scheduleWindow`: dedupes on `windowScheduled`, then spawns a detached thread
     /// that sleeps until `when` and emits the window.
-    pub(crate) fn schedule_window(self: &Arc<Self>, summary_window_id: &str, when: chrono::DateTime<Utc>) {
+    pub(crate) fn schedule_window(
+        self: &Arc<Self>,
+        summary_window_id: &str,
+        when: chrono::DateTime<Utc>,
+    ) {
         if summary_window_id.trim().is_empty() {
             return;
         }
@@ -87,7 +97,9 @@ impl ManagerInner {
             if schedules.window_scheduled.contains_key(summary_window_id) {
                 return;
             }
-            schedules.window_scheduled.insert(summary_window_id.to_string(), ());
+            schedules
+                .window_scheduled
+                .insert(summary_window_id.to_string(), ());
         }
         let inner = Arc::clone(self);
         let summary_window_id = summary_window_id.to_string();
@@ -103,19 +115,28 @@ impl ManagerInner {
     /// Port of `clearWindowSchedule`. Public on [`crate::Manager`] for tests that advance the
     /// window clock manually.
     pub(crate) fn clear_window_schedule(&self, summary_window_id: &str) {
-        self.schedules.lock().window_scheduled.remove(summary_window_id);
+        self.schedules
+            .lock()
+            .window_scheduled
+            .remove(summary_window_id);
     }
 
     /// Port of `emitWindow`: emits the batched digest delivery once the window has elapsed.
     /// A still-open window reschedules itself; an empty window is cancelled; windows already
     /// delivered/failed/cancelled are no-ops.
-    pub(crate) fn emit_window(self: &Arc<Self>, summary_window_id: &str) -> Result<(), DeliveryError> {
+    pub(crate) fn emit_window(
+        self: &Arc<Self>,
+        summary_window_id: &str,
+    ) -> Result<(), DeliveryError> {
         let inner_result = self.emit_window_inner(summary_window_id);
         self.clear_window_schedule(summary_window_id);
         inner_result
     }
 
-    pub(crate) fn emit_window_inner(self: &Arc<Self>, summary_window_id: &str) -> Result<(), DeliveryError> {
+    pub(crate) fn emit_window_inner(
+        self: &Arc<Self>,
+        summary_window_id: &str,
+    ) -> Result<(), DeliveryError> {
         let (mut window, ok) = self.get_summary_window(summary_window_id)?;
         if !ok {
             return Ok(());
@@ -194,7 +215,9 @@ impl ManagerInner {
     pub fn restore(self: &Arc<Self>) -> Result<(), DeliveryError> {
         let outcomes = self.list_outcomes(&crate::OutcomeFilter::default())?;
         for outcome in outcomes {
-            if outcome.status != OutcomeStatus::Queued && outcome.status != OutcomeStatus::Dispatching {
+            if outcome.status != OutcomeStatus::Queued
+                && outcome.status != OutcomeStatus::Dispatching
+            {
                 continue;
             }
             let mut next_run_at = Utc::now();
@@ -203,7 +226,8 @@ impl ManagerInner {
                     next_run_at = next_retry_at;
                 }
             }
-            if outcome.mode == DeliveryMode::Digest && !outcome.summary_window_id.trim().is_empty() {
+            if outcome.mode == DeliveryMode::Digest && !outcome.summary_window_id.trim().is_empty()
+            {
                 continue;
             }
             self.schedule_retry(&outcome.delivery_id, next_run_at);
@@ -225,7 +249,6 @@ impl ManagerInner {
     }
 }
 
-
 impl crate::Manager {
     /// Port of `Restore` (see digest.go): resumes queued outcomes and re-arms summary
     /// windows after a restart.
@@ -235,7 +258,10 @@ impl crate::Manager {
 
     /// Port of `emitWindow`. Public so tests can advance the window clock manually; the
     /// detached schedule threads call the same logic.
-    pub fn emit_window(&self, summary_window_id: &str) -> Result<(), crate::manager::DeliveryError> {
+    pub fn emit_window(
+        &self,
+        summary_window_id: &str,
+    ) -> Result<(), crate::manager::DeliveryError> {
         self.inner.emit_window(summary_window_id)
     }
 

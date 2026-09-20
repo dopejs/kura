@@ -11,11 +11,27 @@
 //! Deliberately not ported (documented divergence, matching the wave-8
 //! conventions): recordThreadApprovalProjection (kura-threads is not an api
 //! dependency; Go no-ops when the projection prerequisites are unmet).
+//!
+//! **Tenancy.** The policy engine holds approvals in memory for the whole
+//! daemon, so tenant scoping is applied at this layer against the
+//! `approvals`/`decisions` tenant columns:
+//! - writes bind the row to the acting tenant ([`bind_persisted_row`]);
+//! - the list intersects the engine's view with
+//!   `list_approvals_for_tenant_raw`, which excludes pre-backfill
+//!   (`tenant_id IS NULL`) rows — the documented `kura-tenancy` read
+//!   convention;
+//! - the by-id routes are covered by `ByIDTenantGuardLayer`, attached in
+//!   [`super::router`], which instead *admits* legacy NULL rows and answers
+//!   404 (never a disclosure) for rows owned by another tenant.
+//!
+//! Within a tenant, approvals stay visible to every member: resolving another
+//! principal's request is the point of an approval gate, and who may resolve
+//! is a role question the `protected()` permission model already answers.
 
 use std::collections::HashMap;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -27,7 +43,7 @@ use kura_policy as policy;
 use kura_sandbox as sandbox;
 
 use crate::error::ApiError;
-use crate::middleware::environment_scope_from_config;
+use crate::middleware::{TenantContext, environment_scope_from_config};
 use crate::state::AppState;
 
 use super::decode_json_required;
@@ -36,7 +52,10 @@ use super::decode_json_required;
 #[must_use]
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/v1/policy/approvals", get(list_approvals).post(request_approval))
+        .route(
+            "/v1/policy/approvals",
+            get(list_approvals).post(request_approval),
+        )
         .route("/v1/policy/approvals/{approval_id}", get(get_approval))
         .route(
             "/v1/policy/approvals/{approval_id}/resolve",
@@ -84,8 +103,8 @@ struct ConsumerPolicyIndex {
 
 fn load_consumer_policy_index(state: &AppState) -> Result<ConsumerPolicyIndex, ApiError> {
     let records = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_consumer_policy_records()
         .map_err(ApiError::from_store)?;
     let mut index = ConsumerPolicyIndex {
@@ -97,7 +116,9 @@ fn load_consumer_policy_index(state: &AppState) -> Result<ConsumerPolicyIndex, A
         else {
             continue;
         };
-        let Some(policy_record) = &view.policy_record else { continue };
+        let Some(policy_record) = &view.policy_record else {
+            continue;
+        };
         if !policy_record.approval_id.trim().is_empty() {
             index
                 .by_approval_id
@@ -144,8 +165,8 @@ fn sync_consumer_policy_record(
     decision: &policy::Decision,
 ) -> Result<(), ApiError> {
     let records = state
-        .store
-        .lock()
+        .store_pool
+        .read()
         .list_consumer_policy_records()
         .map_err(ApiError::from_store)?;
     for record_row in records {
@@ -154,7 +175,9 @@ fn sync_consumer_policy_record(
         else {
             continue;
         };
-        let Some(record) = view.policy_record.as_mut() else { continue };
+        let Some(record) = view.policy_record.as_mut() else {
+            continue;
+        };
         if record.approval_id.trim() != approval.approval_id.trim() {
             continue;
         }
@@ -216,20 +239,71 @@ fn sync_consumer_policy_record(
 // Persistence + events
 // ---------------------------------------------------------------------------
 
-fn persist_approval(state: &AppState, approval: &policy::Approval) -> Result<(), ApiError> {
+/// Binds a just-persisted row to the acting tenant, mirroring the
+/// `kura-tenancy` `*ForTenant` accessors (which cannot be used here: they own
+/// an `SQLiteStore` by value while the API holds a shared handle). A row owned
+/// by another tenant refuses the write rather than silently rebinding.
+fn bind_persisted_row(
+    state: &AppState,
+    tenant: Option<&TenantContext>,
+    table: &str,
+    pk_column: &str,
+    pk: &str,
+) -> Result<(), ApiError> {
+    let Some(tc) = tenant else { return Ok(()) };
+    let tenant_id = tc.0.tenant_id.trim();
+    if tenant_id.is_empty() {
+        return Ok(());
+    }
+    match state
+        .store
+        .lock()
+        .bind_row_tenant(table, pk_column, pk, tenant_id)
+    {
+        Ok(()) => Ok(()),
+        Err(e) if kura_store::SQLiteStore::is_cross_tenant_row(&e) => {
+            Err(ApiError::NotFound("not found".to_string()))
+        }
+        Err(e) => Err(ApiError::from_store(e)),
+    }
+}
+
+fn persist_approval(
+    state: &AppState,
+    tenant: Option<&TenantContext>,
+    approval: &policy::Approval,
+) -> Result<(), ApiError> {
     state
         .store
         .lock()
         .upsert_approval(approval)
-        .map_err(ApiError::from_store)
+        .map_err(ApiError::from_store)?;
+    bind_persisted_row(
+        state,
+        tenant,
+        "approvals",
+        "approval_id",
+        &approval.approval_id,
+    )
 }
 
-fn persist_decision(state: &AppState, decision: &policy::Decision) -> Result<(), ApiError> {
+fn persist_decision(
+    state: &AppState,
+    tenant: Option<&TenantContext>,
+    decision: &policy::Decision,
+) -> Result<(), ApiError> {
     state
         .store
         .lock()
         .upsert_decision(decision)
-        .map_err(ApiError::from_store)
+        .map_err(ApiError::from_store)?;
+    bind_persisted_row(
+        state,
+        tenant,
+        "decisions",
+        "decision_id",
+        &decision.decision_id,
+    )
 }
 
 fn publish_policy_event(
@@ -259,14 +333,26 @@ fn publish_policy_event(
     Ok(())
 }
 
-fn approval_payload(approval: &policy::Approval, include_resolution: bool) -> serde_json::Map<String, serde_json::Value> {
+fn approval_payload(
+    approval: &policy::Approval,
+    include_resolution: bool,
+) -> serde_json::Map<String, serde_json::Value> {
     let mut payload = serde_json::Map::new();
     payload.insert("action".to_string(), serde_json::json!(approval.action));
-    payload.insert("resourceKind".to_string(), serde_json::json!(approval.resource_kind));
-    payload.insert("resourceId".to_string(), serde_json::json!(approval.resource_id));
+    payload.insert(
+        "resourceKind".to_string(),
+        serde_json::json!(approval.resource_kind),
+    );
+    payload.insert(
+        "resourceId".to_string(),
+        serde_json::json!(approval.resource_id),
+    );
     payload.insert("status".to_string(), json_value(&approval.status));
     if include_resolution {
-        payload.insert("resolution".to_string(), serde_json::json!(approval.resolution));
+        payload.insert(
+            "resolution".to_string(),
+            serde_json::json!(approval.resolution),
+        );
     }
     if let Some(sandbox) = &approval.sandbox {
         payload.insert("sandbox".to_string(), sandbox.clone());
@@ -277,10 +363,19 @@ fn approval_payload(approval: &policy::Approval, include_resolution: bool) -> se
 fn decision_payload(decision: &policy::Decision) -> serde_json::Map<String, serde_json::Value> {
     let mut payload = serde_json::Map::new();
     payload.insert("action".to_string(), serde_json::json!(decision.action));
-    payload.insert("resourceKind".to_string(), serde_json::json!(decision.resource_kind));
-    payload.insert("resourceId".to_string(), serde_json::json!(decision.resource_id));
+    payload.insert(
+        "resourceKind".to_string(),
+        serde_json::json!(decision.resource_kind),
+    );
+    payload.insert(
+        "resourceId".to_string(),
+        serde_json::json!(decision.resource_id),
+    );
     payload.insert("outcome".to_string(), json_value(&decision.outcome));
-    payload.insert("approvalId".to_string(), serde_json::json!(decision.approval_id));
+    payload.insert(
+        "approvalId".to_string(),
+        serde_json::json!(decision.approval_id),
+    );
     if let Some(sandbox) = &decision.sandbox {
         payload.insert("sandbox".to_string(), sandbox.clone());
     }
@@ -294,10 +389,15 @@ fn decision_payload(decision: &policy::Decision) -> serde_json::Map<String, serd
 /// GET /v1/policy/approvals (Go handlePolicyApprovals GET branch).
 async fn list_approvals(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<ApprovalListResponse>, ApiError> {
     let engine = engine(&state)?;
-    let raw_status = params.get("status").map(String::as_str).unwrap_or("").trim();
+    let raw_status = params
+        .get("status")
+        .map(String::as_str)
+        .unwrap_or("")
+        .trim();
     let status = if raw_status.is_empty() {
         None
     } else {
@@ -309,25 +409,61 @@ async fn list_approvals(
         }
     };
     let index = load_consumer_policy_index(&state)?;
+    let visible = tenant_visible_approval_ids(&state, tenant.as_ref().map(|e| &e.0))?;
     let items = engine
         .list_approvals(status)
         .into_iter()
+        .filter(|approval| match &visible {
+            Some(ids) => ids.contains(approval.approval_id.trim()),
+            None => true,
+        })
         .map(|approval| enrich_approval(&index, approval))
         .collect();
     Ok(Json(ApprovalListResponse { items }))
+}
+
+/// Approval ids the caller's tenant owns, or `None` when no tenant is acting
+/// (single-user assembly) and the engine's full view is the answer.
+///
+/// Pre-backfill rows (`tenant_id IS NULL`) are **not** listed: that is the
+/// `kura-tenancy` read convention, and listing them would hand every tenant
+/// the daemon's pre-tenancy history. The by-id routes stay reachable for them
+/// through `ByIDTenantGuardLayer`, so nothing becomes unrecoverable — it stops
+/// being enumerable.
+fn tenant_visible_approval_ids(
+    state: &AppState,
+    tenant: Option<&TenantContext>,
+) -> Result<Option<std::collections::HashSet<String>>, ApiError> {
+    let Some(tc) = tenant else { return Ok(None) };
+    let tenant_id = tc.0.tenant_id.trim();
+    if tenant_id.is_empty() {
+        return Ok(None);
+    }
+    let rows = state
+        .store_pool
+        .read()
+        .list_approvals_for_tenant_raw(tenant_id)
+        .map_err(ApiError::from_store)?;
+    Ok(Some(
+        rows.into_iter()
+            .map(|approval| approval.approval_id.trim().to_string())
+            .collect(),
+    ))
 }
 
 /// POST /v1/policy/approvals (Go handlePolicyApprovals POST branch) — 201
 /// with {approval, decision}.
 async fn request_approval(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
     body: Bytes,
 ) -> Result<(StatusCode, Json<ApprovalDecisionResponse>), ApiError> {
     let input: policy::RequestApprovalInput = decode_json_required(&body)?;
     let engine = engine(&state)?;
+    let tenant = tenant.as_ref().map(|e| &e.0);
     let (approval, decision) = engine.request_approval(input).map_err(map_policy_error)?;
-    persist_approval(&state, &approval)?;
-    persist_decision(&state, &decision)?;
+    persist_approval(&state, tenant, &approval)?;
+    persist_decision(&state, tenant, &decision)?;
     publish_policy_event(
         &state,
         "policy.approval_requested",
@@ -371,17 +507,19 @@ async fn get_approval(
 /// action (advancing its owning workflow) on approval.
 async fn resolve_approval(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
     Path(approval_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<ApprovalDecisionResponse>, ApiError> {
     let input: policy::ResolveApprovalInput = decode_json_required(&body)?;
     let engine = engine(&state)?;
+    let tenant = tenant.as_ref().map(|e| &e.0);
     let approval_id = approval_id.trim().to_string();
     let (approval, decision) = engine
         .resolve_approval(&approval_id, input)
         .map_err(map_policy_error)?;
-    persist_approval(&state, &approval)?;
-    persist_decision(&state, &decision)?;
+    persist_approval(&state, tenant, &approval)?;
+    persist_decision(&state, tenant, &decision)?;
     sync_consumer_policy_record(&state, &approval, &decision)?;
 
     let index = load_consumer_policy_index(&state)?;
@@ -417,7 +555,10 @@ async fn resolve_approval(
             }
             let mut payload = serde_json::Map::new();
             payload.insert("status".to_string(), json_value(&action.status));
-            payload.insert("failureClass".to_string(), serde_json::json!(action.failure_class));
+            payload.insert(
+                "failureClass".to_string(),
+                serde_json::json!(action.failure_class),
+            );
             payload.insert(
                 "computerUseActionId".to_string(),
                 serde_json::json!(action.computer_use_action_id),
@@ -455,8 +596,8 @@ async fn resolve_approval(
                 if let Some(runtime_manager) = state.runtime.as_deref() {
                     let environment_scope = environment_scope_from_config(&state.config);
                     let workflow = state
-                        .store
-                        .lock()
+                        .store_pool
+                        .read()
                         .get_workflow(&environment_scope, &action.run_id, &action.workflow_id)
                         .map_err(ApiError::from_store)?;
                     if let Some(workflow) = workflow {
@@ -484,7 +625,7 @@ async fn resolve_approval(
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests_support::{request_json, test_state};
+    use super::super::tests_support::{request_json, request_json_as_tenant, test_state};
     use axum::http::StatusCode;
     use std::sync::Arc;
 
@@ -545,13 +686,113 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{resolved}");
         assert_eq!(resolved["approval"]["status"], "approved");
 
-        let (status, _) = request_json(
-            state,
+        let (status, _) =
+            request_json(state, "GET", "/v1/policy/approvals/approval_missing", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// Approvals are tenant-scoped: one tenant's approval is neither listed
+    /// nor readable by another, and the denial is a 404 rather than a 403 so
+    /// the row's existence is not disclosed.
+    #[tokio::test]
+    async fn approvals_are_scoped_to_the_acting_tenant() {
+        let state = state_with_engine();
+
+        let (status, created) = request_json_as_tenant(
+            state.clone(),
+            "tnt_a",
+            "POST",
+            "/v1/policy/approvals",
+            Some(serde_json::json!({
+                "action": "tool.execute",
+                "resourceKind": "skill",
+                "resourceId": "skill_deploy",
+                "reason": "tenant a work",
+                "requestedBy": "operator_a"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{created}");
+        let approval_id = created["approval"]["approvalId"]
+            .as_str()
+            .expect("approvalId")
+            .to_string();
+
+        // Owner sees it in the list.
+        let (status, listed) =
+            request_json_as_tenant(state.clone(), "tnt_a", "GET", "/v1/policy/approvals", None)
+                .await;
+        assert_eq!(status, StatusCode::OK, "{listed}");
+        assert_eq!(listed["items"].as_array().expect("items").len(), 1);
+
+        // Another tenant does not — the policy engine holds it in memory for
+        // the whole daemon, so this is exactly the leak being closed.
+        let (status, listed) =
+            request_json_as_tenant(state.clone(), "tnt_b", "GET", "/v1/policy/approvals", None)
+                .await;
+        assert_eq!(status, StatusCode::OK, "{listed}");
+        assert!(
+            listed["items"].as_array().expect("items").is_empty(),
+            "tenant b must not see tenant a's approvals: {listed}"
+        );
+
+        // By-id is guarded too, and does not disclose existence.
+        let (status, _) = request_json_as_tenant(
+            state.clone(),
+            "tnt_b",
             "GET",
-            "/v1/policy/approvals/approval_missing",
+            &format!("/v1/policy/approvals/{approval_id}"),
             None,
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Resolving another tenant's approval is refused on the same guard.
+        let (status, _) = request_json_as_tenant(
+            state.clone(),
+            "tnt_b",
+            "POST",
+            &format!("/v1/policy/approvals/{approval_id}/resolve"),
+            Some(serde_json::json!({ "resolution": "approved" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // The owner still reaches both.
+        let (status, _) = request_json_as_tenant(
+            state.clone(),
+            "tnt_a",
+            "GET",
+            &format!("/v1/policy/approvals/{approval_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    /// The single-user assembly has no tenant context; nothing may start
+    /// filtering there.
+    #[tokio::test]
+    async fn without_a_tenant_the_engine_view_is_unfiltered() {
+        let state = state_with_engine();
+        let (status, _) = request_json(
+            state.clone(),
+            "POST",
+            "/v1/policy/approvals",
+            Some(serde_json::json!({
+                "action": "tool.execute",
+                "resourceKind": "skill",
+                "resourceId": "skill_local",
+                "reason": "local",
+                "requestedBy": "operator"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+
+        let (status, listed) =
+            request_json(state.clone(), "GET", "/v1/policy/approvals", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed["items"].as_array().expect("items").len(), 1);
     }
 }

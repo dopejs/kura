@@ -25,8 +25,12 @@ pub const TENANT_SOURCE_EXPLICIT_HEADER: &str = "explicit_header";
 pub trait ResolverStore {
     fn get_principal(&self, principal_id: &str) -> Result<Option<Principal>, IdentityError>;
     fn get_tenant(&self, tenant_id: &str) -> Result<Option<Tenant>, IdentityError>;
-    fn list_memberships(&self, filter: &MembershipFilter) -> Result<Vec<Membership>, IdentityError>;
-    fn list_token_tenant_grants(&self, token_id: &str) -> Result<Vec<TokenTenantGrant>, IdentityError>;
+    fn list_memberships(&self, filter: &MembershipFilter)
+    -> Result<Vec<Membership>, IdentityError>;
+    fn list_token_tenant_grants(
+        &self,
+        token_id: &str,
+    ) -> Result<Vec<TokenTenantGrant>, IdentityError>;
 }
 
 #[derive(Debug, Clone)]
@@ -57,9 +61,16 @@ impl<S: ResolverStore + ?Sized> Resolver<S> {
         self
     }
 
-    pub fn resolve(&self, token: &TokenAuthority, selected_tenant_id: &str) -> Result<TenantContext, IdentityError> {
+    pub fn resolve(
+        &self,
+        token: &TokenAuthority,
+        selected_tenant_id: &str,
+    ) -> Result<TenantContext, IdentityError> {
         let now = (self.now)();
-        if token.token_id.is_empty() || token.principal_id.is_empty() || token.status != LifecycleStatus::Active {
+        if token.token_id.is_empty()
+            || token.principal_id.is_empty()
+            || token.status != LifecycleStatus::Active
+        {
             return Err(IdentityError::TenantAccessDenied);
         }
         if token.expires_at.is_some_and(|expires_at| expires_at <= now) {
@@ -102,7 +113,9 @@ impl<S: ResolverStore + ?Sized> Resolver<S> {
             limit: 500,
         })?;
         for membership in memberships {
-            if membership.principal_id != principal.principal_id || membership.status != LifecycleStatus::Active {
+            if membership.principal_id != principal.principal_id
+                || membership.status != LifecycleStatus::Active
+            {
                 continue;
             }
             let perms = permissions_for_role(membership.role, membership.status);
@@ -166,7 +179,12 @@ mod tests {
                 Role::Owner,
                 LifecycleStatus::Active,
             );
-            store.insert_grant(&format!("grant_{tenant_id}"), "tok_1", tenant_id, LifecycleStatus::Active);
+            store.insert_grant(
+                &format!("grant_{tenant_id}"),
+                "tok_1",
+                tenant_id,
+                LifecycleStatus::Active,
+            );
         }
         let resolver = Resolver::new(store).with_now(move || now);
         let token = active_token("prn_1", "ten_default");
@@ -175,7 +193,9 @@ mod tests {
         assert_eq!(default_ctx.tenant_id, "ten_default");
         assert_eq!(default_ctx.tenant_source, TENANT_SOURCE_DEFAULT);
 
-        let explicit_ctx = resolver.resolve(&token, "ten_other").expect("explicit resolve");
+        let explicit_ctx = resolver
+            .resolve(&token, "ten_other")
+            .expect("explicit resolve");
         assert_eq!(explicit_ctx.tenant_id, "ten_other");
         assert_eq!(explicit_ctx.tenant_source, TENANT_SOURCE_EXPLICIT_HEADER);
 
@@ -190,7 +210,13 @@ mod tests {
         let store = Arc::new(MemoryStore::new());
         store.insert_principal("prn_1", LifecycleStatus::Disabled, "ten_1");
         store.insert_tenant("ten_1", LifecycleStatus::Active);
-        store.insert_membership("mem_1", "ten_1", "prn_1", Role::Owner, LifecycleStatus::Active);
+        store.insert_membership(
+            "mem_1",
+            "ten_1",
+            "prn_1",
+            Role::Owner,
+            LifecycleStatus::Active,
+        );
         store.insert_grant("grant_1", "tok_1", "ten_1", LifecycleStatus::Active);
         let resolver = Resolver::new(store.clone());
 
@@ -200,7 +226,13 @@ mod tests {
         ));
 
         store.insert_principal("prn_1", LifecycleStatus::Active, "ten_1");
-        store.insert_membership("mem_1", "ten_1", "prn_1", Role::Owner, LifecycleStatus::Removed);
+        store.insert_membership(
+            "mem_1",
+            "ten_1",
+            "prn_1",
+            Role::Owner,
+            LifecycleStatus::Removed,
+        );
         assert!(matches!(
             resolver.resolve(&active_token("prn_1", ""), "ten_1"),
             Err(IdentityError::TenantAccessDenied)
@@ -212,7 +244,13 @@ mod tests {
         let store = Arc::new(MemoryStore::new());
         store.insert_principal("prn_1", LifecycleStatus::Active, "ten_1");
         store.insert_tenant("ten_1", LifecycleStatus::Active);
-        store.insert_membership("mem_1", "ten_1", "prn_1", Role::Owner, LifecycleStatus::Active);
+        store.insert_membership(
+            "mem_1",
+            "ten_1",
+            "prn_1",
+            Role::Owner,
+            LifecycleStatus::Active,
+        );
         store.insert_grant("grant_1", "tok_1", "ten_1", LifecycleStatus::Active);
         let resolver = Resolver::new(store);
 
@@ -243,7 +281,10 @@ mod tests {
         }
 
         impl ResolverStore for CountingStore {
-            fn get_principal(&self, principal_id: &str) -> Result<Option<Principal>, IdentityError> {
+            fn get_principal(
+                &self,
+                principal_id: &str,
+            ) -> Result<Option<Principal>, IdentityError> {
                 *self.get_principal_calls.lock() += 1;
                 self.inner.get_principal(principal_id)
             }
@@ -251,11 +292,17 @@ mod tests {
                 *self.get_tenant_calls.lock() += 1;
                 self.inner.get_tenant(tenant_id)
             }
-            fn list_memberships(&self, filter: &MembershipFilter) -> Result<Vec<Membership>, IdentityError> {
+            fn list_memberships(
+                &self,
+                filter: &MembershipFilter,
+            ) -> Result<Vec<Membership>, IdentityError> {
                 *self.list_membership_calls.lock() += 1;
                 self.inner.list_memberships(filter)
             }
-            fn list_token_tenant_grants(&self, token_id: &str) -> Result<Vec<TokenTenantGrant>, IdentityError> {
+            fn list_token_tenant_grants(
+                &self,
+                token_id: &str,
+            ) -> Result<Vec<TokenTenantGrant>, IdentityError> {
                 *self.list_grant_calls.lock() += 1;
                 self.inner.list_token_tenant_grants(token_id)
             }
@@ -267,7 +314,9 @@ mod tests {
             .insert_principal("prn_1", LifecycleStatus::Active, "ten_199");
         for idx in 0..250 {
             let tenant_id = format!("ten_{idx}");
-            counting.inner.insert_tenant(&tenant_id, LifecycleStatus::Active);
+            counting
+                .inner
+                .insert_tenant(&tenant_id, LifecycleStatus::Active);
             counting.inner.insert_membership(
                 &format!("mem_{tenant_id}"),
                 &tenant_id,
@@ -275,9 +324,12 @@ mod tests {
                 Role::Viewer,
                 LifecycleStatus::Active,
             );
-            counting
-                .inner
-                .insert_grant(&format!("grant_{tenant_id}"), "tok_1", &tenant_id, LifecycleStatus::Active);
+            counting.inner.insert_grant(
+                &format!("grant_{tenant_id}"),
+                "tok_1",
+                &tenant_id,
+                LifecycleStatus::Active,
+            );
         }
         let resolver = Resolver::new(counting.clone());
 

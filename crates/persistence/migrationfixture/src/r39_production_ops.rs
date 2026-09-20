@@ -7,7 +7,7 @@
 use std::io::{Read, Write};
 use std::path::Path;
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 /// Roadmap 39 fixture expectations (Go R39ProductionOpsFixture).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -67,7 +67,9 @@ pub fn build_r39_production_ops_fixture() -> R39ProductionOpsFixture {
 }
 
 /// Builds the standalone r39 SQLite fixture file (Go BuildR39ProductionOpsSQLiteFixture).
-pub fn build_r39_production_ops_sqlite_fixture(db_path: &str) -> Result<R39ProductionOpsFixture, String> {
+pub fn build_r39_production_ops_sqlite_fixture(
+    db_path: &str,
+) -> Result<R39ProductionOpsFixture, String> {
     let fixture = build_r39_production_ops_fixture();
     create_parent_dir(db_path)?;
     let conn = Connection::open(db_path).map_err(|e| format!("open sqlite fixture: {e}"))?;
@@ -90,7 +92,10 @@ pub fn build_r39_production_ops_sqlite_fixture(db_path: &str) -> Result<R39Produ
         .map_err(|e| format!("insert tenant {}: {e}", tenant.tenant_id))?;
         for secret_ref in &tenant.credential_refs {
             if contains_r39_raw_credential(secret_ref) {
-                return Err(format!("credential ref for {} contains raw material", tenant.tenant_id));
+                return Err(format!(
+                    "credential ref for {} contains raw material",
+                    tenant.tenant_id
+                ));
             }
             conn.execute(
                 "INSERT INTO r39_secret_refs (tenant_id, secret_ref, reconnect_required) VALUES (?1, ?2, ?3)",
@@ -100,7 +105,11 @@ pub fn build_r39_production_ops_sqlite_fixture(db_path: &str) -> Result<R39Produ
         }
         conn.execute(
             "INSERT INTO r39_work_items (work_id, tenant_id, state) VALUES (?1, ?2, ?3)",
-            params![format!("work_{}", tenant.tenant_id), tenant.tenant_id, tenant.work_state],
+            params![
+                format!("work_{}", tenant.tenant_id),
+                tenant.tenant_id,
+                tenant.work_state
+            ],
         )
         .map_err(|e| format!("insert work for {}: {e}", tenant.tenant_id))?;
     }
@@ -109,10 +118,13 @@ pub fn build_r39_production_ops_sqlite_fixture(db_path: &str) -> Result<R39Produ
 
 /// Copies the built fixture to a restore destination with 0o600 permissions
 /// (Go CopyR39ProductionOpsSQLiteFixture).
-pub fn copy_r39_production_ops_sqlite_fixture(source_path: &str, dest_path: &str) -> Result<(), String> {
+pub fn copy_r39_production_ops_sqlite_fixture(
+    source_path: &str,
+    dest_path: &str,
+) -> Result<(), String> {
     create_parent_dir(dest_path)?;
-    let mut source = std::fs::File::open(source_path)
-        .map_err(|e| format!("open source sqlite fixture: {e}"))?;
+    let mut source =
+        std::fs::File::open(source_path).map_err(|e| format!("open source sqlite fixture: {e}"))?;
     let mut bytes = Vec::new();
     source
         .read_to_end(&mut bytes)
@@ -141,7 +153,8 @@ pub fn validate_r39_production_ops_sqlite_restore(
     db_path: &str,
     expected: &R39ProductionOpsFixture,
 ) -> Result<(), String> {
-    let conn = Connection::open(db_path).map_err(|e| format!("open restored sqlite fixture: {e}"))?;
+    let conn =
+        Connection::open(db_path).map_err(|e| format!("open restored sqlite fixture: {e}"))?;
 
     let integrity: String = conn
         .query_row("PRAGMA integrity_check", [], |row| row.get(0))
@@ -169,10 +182,16 @@ pub fn validate_r39_production_ops_sqlite_restore(
             )
             .map_err(|e| format!("read tenant {}: {e}", tenant.tenant_id))?;
         if quota_state != tenant.quota_state || work_state != tenant.work_state {
-            return Err(format!("tenant {} state mismatch after restore", tenant.tenant_id));
+            return Err(format!(
+                "tenant {} state mismatch after restore",
+                tenant.tenant_id
+            ));
         }
         if bool_int(tenant.reconnect_required) != reconnect_required {
-            return Err(format!("tenant {} reconnect state mismatch after restore", tenant.tenant_id));
+            return Err(format!(
+                "tenant {} reconnect state mismatch after restore",
+                tenant.tenant_id
+            ));
         }
         for secret_ref in &tenant.credential_refs {
             let exists: i64 = conn

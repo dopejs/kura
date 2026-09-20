@@ -7,19 +7,18 @@ use chrono::{DateTime, Utc};
 use kura_adapterprovider::{Handler, HandlerError, Operation};
 use kura_integrations::{ReadinessStatus, Resource};
 use kura_mail::{
-    apply_attachment_policy, AccountProjection, AttachmentReference, AttachmentRefInput,
-    AttachmentResolutionStatus, ComposeMode, CreateDraftInput, Direction, DraftSnapshot,
-    DraftStatus, DownloadAttachmentInput, ForwardMessageInput, ListDraftsInput,
-    ListThreadsInput, MessageSnapshot, ReplyForwardResultMode,
-    ReplyMessageInput, SendDraftInput, SendMessageInput, ThreadSnapshot, UpdateDraftInput,
-    DeliveryState,
+    AccountProjection, AttachmentRefInput, AttachmentReference, AttachmentResolutionStatus,
+    ComposeMode, CreateDraftInput, DeliveryState, Direction, DownloadAttachmentInput,
+    DraftSnapshot, DraftStatus, ForwardMessageInput, ListDraftsInput, ListThreadsInput,
+    MessageSnapshot, ReplyForwardResultMode, ReplyMessageInput, SendDraftInput, SendMessageInput,
+    ThreadSnapshot, UpdateDraftInput, apply_attachment_policy,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::value::RawValue;
 use serde_json::Value;
+use serde_json::value::RawValue;
 
-use crate::{first_non_empty, parse_token, Client, FaultKind, ProviderFault, ScopedToken};
+use crate::{Client, FaultKind, ProviderFault, ScopedToken, first_non_empty, parse_token};
 
 pub struct MailProvider {
     client: Client,
@@ -30,16 +29,26 @@ pub fn new_mail_provider(client: Client) -> MailProvider {
 }
 
 impl Handler for MailProvider {
-    fn handle(&self, op: Operation, deadline: Option<Duration>) -> Result<Option<Box<RawValue>>, HandlerError> {
+    fn handle(
+        &self,
+        op: Operation,
+        deadline: Option<Duration>,
+    ) -> Result<Option<Box<RawValue>>, HandlerError> {
         if op.domain != "mail" {
-            return Err(HandlerError::Fault(ProviderFault {
-                kind: FaultKind::Internal,
-                code: "unsupported_domain".to_string(),
-                message: "adapter serves the mail domain only".to_string(),
-            }
-            .to_adapter_fault()));
+            return Err(HandlerError::Fault(
+                ProviderFault {
+                    kind: FaultKind::Internal,
+                    code: "unsupported_domain".to_string(),
+                    message: "adapter serves the mail domain only".to_string(),
+                }
+                .to_adapter_fault(),
+            ));
         }
-        let raw_cred = op.credential.as_deref().map(|r| r.get().as_bytes()).unwrap_or(&[]);
+        let raw_cred = op
+            .credential
+            .as_deref()
+            .map(|r| r.get().as_bytes())
+            .unwrap_or(&[]);
         let token = parse_token(raw_cred).map_err(|f| HandlerError::Fault(f.to_adapter_fault()))?;
         let resource: Resource = op
             .resource
@@ -55,7 +64,13 @@ impl Handler for MailProvider {
 }
 
 impl MailProvider {
-    fn route(&self, token: &ScopedToken, resource: &Resource, op: &Operation, deadline: Option<Duration>) -> Result<Box<RawValue>, ProviderFault> {
+    fn route(
+        &self,
+        token: &ScopedToken,
+        resource: &Resource,
+        op: &Operation,
+        deadline: Option<Duration>,
+    ) -> Result<Box<RawValue>, ProviderFault> {
         let payload = op.payload.as_deref();
         match op.operation.as_str() {
             "ProjectAccount" => marshal_result(self.project_account(token, resource, deadline)?),
@@ -101,15 +116,29 @@ impl MailProvider {
             }
             "ForwardMessage" => {
                 let input = decode_payload::<ForwardMessagePayload>(payload)?;
-                marshal_result(self.forward_message(token, &input.account, &input.input, deadline)?)
+                marshal_result(self.forward_message(
+                    token,
+                    &input.account,
+                    &input.input,
+                    deadline,
+                )?)
             }
             "ResolveAttachments" => {
                 let input = decode_payload::<ResolveAttachmentsPayload>(payload)?;
-                marshal_result(resolve_with_policy(&input.refs, &input.parent_kind, &input.parent_id))
+                marshal_result(resolve_with_policy(
+                    &input.refs,
+                    &input.parent_kind,
+                    &input.parent_id,
+                ))
             }
             "DownloadAttachment" => {
                 let input = decode_payload::<DownloadAttachmentPayload>(payload)?;
-                marshal_result(self.download_attachment(token, &input.account, &input.input, deadline)?)
+                marshal_result(self.download_attachment(
+                    token,
+                    &input.account,
+                    &input.input,
+                    deadline,
+                )?)
             }
             _ => Err(ProviderFault {
                 kind: FaultKind::Internal,
@@ -119,12 +148,37 @@ impl MailProvider {
         }
     }
 
-    fn project_account(&self, token: &ScopedToken, resource: &Resource, deadline: Option<Duration>) -> Result<AccountProjection, ProviderFault> {
+    fn project_account(
+        &self,
+        token: &ScopedToken,
+        resource: &Resource,
+        deadline: Option<Duration>,
+    ) -> Result<AccountProjection, ProviderFault> {
         let mut out = MailboxResp::default();
-        self.client.call(deadline, "GET", "/open-apis/mail/v1/user_mailboxes/primary", &token.access_token, None::<&Value>, Some(&mut out), false)?;
-        let account_key = resource.account_binding.as_ref().map(|b| b.account_key.clone()).unwrap_or_default();
-        let external_id = resource.account_binding.as_ref().map(|b| b.external_account_id.clone()).unwrap_or_default();
-        let account_label = resource.account_binding.as_ref().map(|b| b.account_label.clone()).unwrap_or_default();
+        self.client.call(
+            deadline,
+            "GET",
+            "/open-apis/mail/v1/user_mailboxes/primary",
+            &token.access_token,
+            None::<&Value>,
+            Some(&mut out),
+            false,
+        )?;
+        let account_key = resource
+            .account_binding
+            .as_ref()
+            .map(|b| b.account_key.clone())
+            .unwrap_or_default();
+        let external_id = resource
+            .account_binding
+            .as_ref()
+            .map(|b| b.external_account_id.clone())
+            .unwrap_or_default();
+        let account_label = resource
+            .account_binding
+            .as_ref()
+            .map(|b| b.account_label.clone())
+            .unwrap_or_default();
         let address = first_non_empty(&[&out.mailbox_address, &account_key, &external_id]);
         let now = Utc::now();
         Ok(AccountProjection {
@@ -149,7 +203,13 @@ impl MailProvider {
         })
     }
 
-    fn list_threads(&self, token: &ScopedToken, account: &AccountProjection, input: &ListThreadsInput, deadline: Option<Duration>) -> Result<Vec<ThreadSnapshot>, ProviderFault> {
+    fn list_threads(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        input: &ListThreadsInput,
+        deadline: Option<Duration>,
+    ) -> Result<Vec<ThreadSnapshot>, ProviderFault> {
         let mut query: Vec<String> = Vec::new();
         if input.limit > 0 {
             query.push(format!("page_size={}", input.limit));
@@ -157,63 +217,183 @@ impl MailProvider {
         if !input.cursor.trim().is_empty() {
             query.push(format!("page_token={}", input.cursor));
         }
-        let mut path = format!("/open-apis/mail/v1/user_mailboxes/{}/threads", account.mailbox_address);
+        let mut path = format!(
+            "/open-apis/mail/v1/user_mailboxes/{}/threads",
+            account.mailbox_address
+        );
         if !query.is_empty() {
             path.push('?');
             path.push_str(&query.join("&"));
         }
         let mut out = MailThreadItems::default();
-        self.client.call(deadline, "GET", &path, &token.access_token, None::<&Value>, Some(&mut out), false)?;
-        Ok(out.items.iter().map(|item| map_thread(account, item)).collect())
+        self.client.call(
+            deadline,
+            "GET",
+            &path,
+            &token.access_token,
+            None::<&Value>,
+            Some(&mut out),
+            false,
+        )?;
+        Ok(out
+            .items
+            .iter()
+            .map(|item| map_thread(account, item))
+            .collect())
     }
 
-    fn get_thread(&self, token: &ScopedToken, account: &AccountProjection, thread_id: &str, deadline: Option<Duration>) -> Result<ThreadSnapshot, ProviderFault> {
-        let path = format!("/open-apis/mail/v1/user_mailboxes/{}/threads/{}", account.mailbox_address, thread_id);
+    fn get_thread(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        thread_id: &str,
+        deadline: Option<Duration>,
+    ) -> Result<ThreadSnapshot, ProviderFault> {
+        let path = format!(
+            "/open-apis/mail/v1/user_mailboxes/{}/threads/{}",
+            account.mailbox_address, thread_id
+        );
         let mut out = MailThreadResp::default();
-        self.client.call(deadline, "GET", &path, &token.access_token, None::<&Value>, Some(&mut out), false)?;
+        self.client.call(
+            deadline,
+            "GET",
+            &path,
+            &token.access_token,
+            None::<&Value>,
+            Some(&mut out),
+            false,
+        )?;
         Ok(map_thread(account, &out.thread))
     }
 
-    fn get_message(&self, token: &ScopedToken, account: &AccountProjection, message_id: &str, deadline: Option<Duration>) -> Result<MessageSnapshot, ProviderFault> {
-        let path = format!("/open-apis/mail/v1/user_mailboxes/{}/messages/{}", account.mailbox_address, message_id);
+    fn get_message(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        message_id: &str,
+        deadline: Option<Duration>,
+    ) -> Result<MessageSnapshot, ProviderFault> {
+        let path = format!(
+            "/open-apis/mail/v1/user_mailboxes/{}/messages/{}",
+            account.mailbox_address, message_id
+        );
         let mut out = MailMessageResp::default();
-        self.client.call(deadline, "GET", &path, &token.access_token, None::<&Value>, Some(&mut out), false)?;
+        self.client.call(
+            deadline,
+            "GET",
+            &path,
+            &token.access_token,
+            None::<&Value>,
+            Some(&mut out),
+            false,
+        )?;
         Ok(map_message(account, &out.message, Direction::Inbound))
     }
 
-    fn list_drafts(&self, token: &ScopedToken, account: &AccountProjection, deadline: Option<Duration>) -> Result<Vec<DraftSnapshot>, ProviderFault> {
-        let path = format!("/open-apis/mail/v1/user_mailboxes/{}/drafts", account.mailbox_address);
+    fn list_drafts(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        deadline: Option<Duration>,
+    ) -> Result<Vec<DraftSnapshot>, ProviderFault> {
+        let path = format!(
+            "/open-apis/mail/v1/user_mailboxes/{}/drafts",
+            account.mailbox_address
+        );
         let mut out = MailDraftItems::default();
-        self.client.call(deadline, "GET", &path, &token.access_token, None::<&Value>, Some(&mut out), false)?;
-        Ok(out.items.iter().map(|item| map_draft(account, item, ComposeMode::NewMessage)).collect())
+        self.client.call(
+            deadline,
+            "GET",
+            &path,
+            &token.access_token,
+            None::<&Value>,
+            Some(&mut out),
+            false,
+        )?;
+        Ok(out
+            .items
+            .iter()
+            .map(|item| map_draft(account, item, ComposeMode::NewMessage))
+            .collect())
     }
 
-    fn get_draft(&self, token: &ScopedToken, account: &AccountProjection, draft_id: &str, deadline: Option<Duration>) -> Result<DraftSnapshot, ProviderFault> {
-        let path = format!("/open-apis/mail/v1/user_mailboxes/{}/drafts/{}", account.mailbox_address, draft_id);
+    fn get_draft(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        draft_id: &str,
+        deadline: Option<Duration>,
+    ) -> Result<DraftSnapshot, ProviderFault> {
+        let path = format!(
+            "/open-apis/mail/v1/user_mailboxes/{}/drafts/{}",
+            account.mailbox_address, draft_id
+        );
         let mut out = MailDraftResp::default();
-        self.client.call(deadline, "GET", &path, &token.access_token, None::<&Value>, Some(&mut out), false)?;
+        self.client.call(
+            deadline,
+            "GET",
+            &path,
+            &token.access_token,
+            None::<&Value>,
+            Some(&mut out),
+            false,
+        )?;
         Ok(map_draft(account, &out.draft, ComposeMode::NewMessage))
     }
 
-    fn create_draft(&self, token: &ScopedToken, account: &AccountProjection, input: &CreateDraftInput, deadline: Option<Duration>) -> Result<DraftWithAttachments, ProviderFault> {
+    fn create_draft(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        input: &CreateDraftInput,
+        deadline: Option<Duration>,
+    ) -> Result<DraftWithAttachments, ProviderFault> {
         let mut body = serde_json::json!({ "subject": input.subject, "body": input.body, "to": input.to, "cc": input.cc, "bcc": input.bcc });
         if !input.thread_id.trim().is_empty() {
             body["thread_id"] = Value::String(input.thread_id.clone());
         }
-        let path = format!("/open-apis/mail/v1/user_mailboxes/{}/drafts", account.mailbox_address);
+        let path = format!(
+            "/open-apis/mail/v1/user_mailboxes/{}/drafts",
+            account.mailbox_address
+        );
         let mut out = MailDraftResp::default();
-        self.client.call(deadline, "POST", &path, &token.access_token, Some(&body), Some(&mut out), true)?;
+        self.client.call(
+            deadline,
+            "POST",
+            &path,
+            &token.access_token,
+            Some(&body),
+            Some(&mut out),
+            true,
+        )?;
         let mut draft = map_draft(account, &out.draft, input.compose_mode);
         draft.thread_id = first_non_empty(&[&draft.thread_id, &input.thread_id]);
         let attachments = resolve_with_policy(&input.attachment_refs, "draft", &draft.draft_id);
         Ok(DraftWithAttachments { draft, attachments })
     }
 
-    fn update_draft(&self, token: &ScopedToken, account: &AccountProjection, input: &UpdateDraftInput, deadline: Option<Duration>) -> Result<DraftWithAttachments, ProviderFault> {
+    fn update_draft(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        input: &UpdateDraftInput,
+        deadline: Option<Duration>,
+    ) -> Result<DraftWithAttachments, ProviderFault> {
         let body = serde_json::json!({ "subject": input.subject, "body": input.body, "to": input.to, "cc": input.cc, "bcc": input.bcc });
-        let path = format!("/open-apis/mail/v1/user_mailboxes/{}/drafts/{}", account.mailbox_address, input.draft_id);
+        let path = format!(
+            "/open-apis/mail/v1/user_mailboxes/{}/drafts/{}",
+            account.mailbox_address, input.draft_id
+        );
         let mut out = MailDraftResp::default();
-        self.client.call(deadline, "PATCH", &path, &token.access_token, Some(&body), Some(&mut out), true)?;
+        self.client.call(
+            deadline,
+            "PATCH",
+            &path,
+            &token.access_token,
+            Some(&body),
+            Some(&mut out),
+            true,
+        )?;
         let mut draft = map_draft(account, &out.draft, ComposeMode::NewMessage);
         if draft.draft_id.is_empty() {
             draft.draft_id = input.draft_id.clone();
@@ -223,76 +403,204 @@ impl MailProvider {
         Ok(DraftWithAttachments { draft, attachments })
     }
 
-    fn send_message(&self, token: &ScopedToken, account: &AccountProjection, input: &SendMessageInput, deadline: Option<Duration>) -> Result<MessageWithAttachments, ProviderFault> {
+    fn send_message(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        input: &SendMessageInput,
+        deadline: Option<Duration>,
+    ) -> Result<MessageWithAttachments, ProviderFault> {
         let body = serde_json::json!({ "subject": input.subject, "body": input.body, "to": input.to, "cc": input.cc, "bcc": input.bcc });
-        let path = format!("/open-apis/mail/v1/user_mailboxes/{}/messages/send", account.mailbox_address);
+        let path = format!(
+            "/open-apis/mail/v1/user_mailboxes/{}/messages/send",
+            account.mailbox_address
+        );
         let mut out = MailMessageResp::default();
-        self.client.call(deadline, "POST", &path, &token.access_token, Some(&body), Some(&mut out), true)?;
+        self.client.call(
+            deadline,
+            "POST",
+            &path,
+            &token.access_token,
+            Some(&body),
+            Some(&mut out),
+            true,
+        )?;
         let message_id = out.message.message_id.clone();
         let attachments = resolve_with_policy(&input.attachment_refs, "message", &message_id);
-        Ok(MessageWithAttachments { message: map_message(account, &out.message, Direction::Outbound), attachments })
+        Ok(MessageWithAttachments {
+            message: map_message(account, &out.message, Direction::Outbound),
+            attachments,
+        })
     }
 
-    fn send_draft(&self, token: &ScopedToken, account: &AccountProjection, input: &SendDraftInput, deadline: Option<Duration>) -> Result<SendDraftResult, ProviderFault> {
-        let path = format!("/open-apis/mail/v1/user_mailboxes/{}/drafts/{}/send", account.mailbox_address, input.draft_id);
+    fn send_draft(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        input: &SendDraftInput,
+        deadline: Option<Duration>,
+    ) -> Result<SendDraftResult, ProviderFault> {
+        let path = format!(
+            "/open-apis/mail/v1/user_mailboxes/{}/drafts/{}/send",
+            account.mailbox_address, input.draft_id
+        );
         let mut out = SendDraftResp::default();
-        self.client.call(deadline, "POST", &path, &token.access_token, Some(&Value::Object(Default::default())), Some(&mut out), true)?;
+        self.client.call(
+            deadline,
+            "POST",
+            &path,
+            &token.access_token,
+            Some(&Value::Object(Default::default())),
+            Some(&mut out),
+            true,
+        )?;
         let mut draft = map_draft(account, &out.draft, ComposeMode::NewMessage);
         if draft.draft_id.is_empty() {
             draft.draft_id = input.draft_id.clone();
         }
         draft.draft_status = DraftStatus::SentFromDraft;
-        Ok(SendDraftResult { draft, message: map_message(account, &out.message, Direction::Outbound), attachments: Vec::new() })
+        Ok(SendDraftResult {
+            draft,
+            message: map_message(account, &out.message, Direction::Outbound),
+            attachments: Vec::new(),
+        })
     }
 
-    fn reply_message(&self, token: &ScopedToken, account: &AccountProjection, input: &ReplyMessageInput, deadline: Option<Duration>) -> Result<OptionalDraftMessage, ProviderFault> {
+    fn reply_message(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        input: &ReplyMessageInput,
+        deadline: Option<Duration>,
+    ) -> Result<OptionalDraftMessage, ProviderFault> {
         let body = serde_json::json!({ "subject": input.subject, "body": input.body });
-        let path = format!("/open-apis/mail/v1/user_mailboxes/{}/messages/{}/reply", account.mailbox_address, input.message_id);
+        let path = format!(
+            "/open-apis/mail/v1/user_mailboxes/{}/messages/{}/reply",
+            account.mailbox_address, input.message_id
+        );
         if input.result_mode == ReplyForwardResultMode::Draft {
             let mut out = MailDraftResp::default();
-            self.client.call(deadline, "POST", &format!("{path}?as_draft=true"), &token.access_token, Some(&body), Some(&mut out), true)?;
+            self.client.call(
+                deadline,
+                "POST",
+                &format!("{path}?as_draft=true"),
+                &token.access_token,
+                Some(&body),
+                Some(&mut out),
+                true,
+            )?;
             let mut draft = map_draft(account, &out.draft, ComposeMode::Reply);
             draft.source_message_id = input.message_id.clone();
-            return Ok(OptionalDraftMessage { draft: Some(draft), message: None, attachments: Vec::new() });
+            return Ok(OptionalDraftMessage {
+                draft: Some(draft),
+                message: None,
+                attachments: Vec::new(),
+            });
         }
         let mut out = MailMessageResp::default();
-        self.client.call(deadline, "POST", &path, &token.access_token, Some(&body), Some(&mut out), true)?;
+        self.client.call(
+            deadline,
+            "POST",
+            &path,
+            &token.access_token,
+            Some(&body),
+            Some(&mut out),
+            true,
+        )?;
         let mut message = map_message(account, &out.message, Direction::Outbound);
         if message.reply_to_message_id.is_empty() {
             message.reply_to_message_id = input.message_id.clone();
         }
-        Ok(OptionalDraftMessage { draft: None, message: Some(message), attachments: Vec::new() })
+        Ok(OptionalDraftMessage {
+            draft: None,
+            message: Some(message),
+            attachments: Vec::new(),
+        })
     }
 
-    fn forward_message(&self, token: &ScopedToken, account: &AccountProjection, input: &ForwardMessageInput, deadline: Option<Duration>) -> Result<OptionalDraftMessage, ProviderFault> {
+    fn forward_message(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        input: &ForwardMessageInput,
+        deadline: Option<Duration>,
+    ) -> Result<OptionalDraftMessage, ProviderFault> {
         let body = serde_json::json!({ "subject": input.subject, "body": input.body, "to": input.to, "cc": input.cc, "bcc": input.bcc });
-        let path = format!("/open-apis/mail/v1/user_mailboxes/{}/messages/{}/forward", account.mailbox_address, input.message_id);
+        let path = format!(
+            "/open-apis/mail/v1/user_mailboxes/{}/messages/{}/forward",
+            account.mailbox_address, input.message_id
+        );
         if input.result_mode == ReplyForwardResultMode::Draft {
             let mut out = MailDraftResp::default();
-            self.client.call(deadline, "POST", &format!("{path}?as_draft=true"), &token.access_token, Some(&body), Some(&mut out), true)?;
+            self.client.call(
+                deadline,
+                "POST",
+                &format!("{path}?as_draft=true"),
+                &token.access_token,
+                Some(&body),
+                Some(&mut out),
+                true,
+            )?;
             let mut draft = map_draft(account, &out.draft, ComposeMode::Forward);
             draft.source_message_id = input.message_id.clone();
-            return Ok(OptionalDraftMessage { draft: Some(draft), message: None, attachments: Vec::new() });
+            return Ok(OptionalDraftMessage {
+                draft: Some(draft),
+                message: None,
+                attachments: Vec::new(),
+            });
         }
         let mut out = MailMessageResp::default();
-        self.client.call(deadline, "POST", &path, &token.access_token, Some(&body), Some(&mut out), true)?;
+        self.client.call(
+            deadline,
+            "POST",
+            &path,
+            &token.access_token,
+            Some(&body),
+            Some(&mut out),
+            true,
+        )?;
         let mut message = map_message(account, &out.message, Direction::Outbound);
         if message.forwarded_from_message_id.is_empty() {
             message.forwarded_from_message_id = input.message_id.clone();
         }
-        Ok(OptionalDraftMessage { draft: None, message: Some(message), attachments: Vec::new() })
+        Ok(OptionalDraftMessage {
+            draft: None,
+            message: Some(message),
+            attachments: Vec::new(),
+        })
     }
 
-    fn download_attachment(&self, token: &ScopedToken, account: &AccountProjection, input: &DownloadAttachmentInput, deadline: Option<Duration>) -> Result<AttachmentReference, ProviderFault> {
-        let path = format!("/open-apis/mail/v1/user_mailboxes/{}/messages/{}/attachments/{}", account.mailbox_address, input.message_id, input.attachment_ref_id);
+    fn download_attachment(
+        &self,
+        token: &ScopedToken,
+        account: &AccountProjection,
+        input: &DownloadAttachmentInput,
+        deadline: Option<Duration>,
+    ) -> Result<AttachmentReference, ProviderFault> {
+        let path = format!(
+            "/open-apis/mail/v1/user_mailboxes/{}/messages/{}/attachments/{}",
+            account.mailbox_address, input.message_id, input.attachment_ref_id
+        );
         let mut out = MailAttachmentResp::default();
-        self.client.call(deadline, "GET", &path, &token.access_token, None::<&Value>, Some(&mut out), false)?;
+        self.client.call(
+            deadline,
+            "GET",
+            &path,
+            &token.access_token,
+            None::<&Value>,
+            Some(&mut out),
+            false,
+        )?;
         let mut reference = AttachmentReference {
             attachment_ref_id: input.attachment_ref_id.clone(),
             integration_id: account.integration_id.clone(),
             parent_kind: "message".to_string(),
             parent_id: input.message_id.clone(),
-            display_name: first_non_empty(&[&out.display_name, &input.display_name, "attachment.bin"]),
+            display_name: first_non_empty(&[
+                &out.display_name,
+                &input.display_name,
+                "attachment.bin",
+            ]),
             media_type: first_non_empty(&[&out.media_type, &input.media_type]),
             size_bytes: Some(non_zero(out.size_bytes, input.size_bytes)),
             resolution_status: AttachmentResolutionStatus::Resolved,
@@ -546,7 +854,11 @@ fn map_thread(account: &AccountProjection, item: &FeishuMailThread) -> ThreadSna
     }
 }
 
-fn map_message(account: &AccountProjection, item: &FeishuMailMessage, direction: Direction) -> MessageSnapshot {
+fn map_message(
+    account: &AccountProjection,
+    item: &FeishuMailMessage,
+    direction: Direction,
+) -> MessageSnapshot {
     let now = Utc::now();
     let mut message = MessageSnapshot {
         message_id: item.message_id.clone(),
@@ -573,7 +885,11 @@ fn map_message(account: &AccountProjection, item: &FeishuMailMessage, direction:
     message
 }
 
-fn map_draft(account: &AccountProjection, item: &FeishuMailDraft, mode: ComposeMode) -> DraftSnapshot {
+fn map_draft(
+    account: &AccountProjection,
+    item: &FeishuMailDraft,
+    mode: ComposeMode,
+) -> DraftSnapshot {
     let now = Utc::now();
     DraftSnapshot {
         draft_id: item.draft_id.clone(),
@@ -591,7 +907,11 @@ fn map_draft(account: &AccountProjection, item: &FeishuMailDraft, mode: ComposeM
     }
 }
 
-fn resolve_with_policy(refs: &[AttachmentRefInput], parent_kind: &str, parent_id: &str) -> Vec<AttachmentReference> {
+fn resolve_with_policy(
+    refs: &[AttachmentRefInput],
+    parent_kind: &str,
+    parent_id: &str,
+) -> Vec<AttachmentReference> {
     if refs.is_empty() {
         return Vec::new();
     }
@@ -616,11 +936,7 @@ fn resolve_with_policy(refs: &[AttachmentRefInput], parent_kind: &str, parent_id
 }
 
 fn non_zero(a: i64, b: i64) -> i64 {
-    if a != 0 {
-        a
-    } else {
-        b
-    }
+    if a != 0 { a } else { b }
 }
 
 fn decode_payload<T: DeserializeOwned>(payload: Option<&RawValue>) -> Result<T, ProviderFault> {

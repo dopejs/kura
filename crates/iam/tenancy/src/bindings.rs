@@ -12,7 +12,9 @@ pub struct BindingAccessScope {
 
 impl BindingAccessScope {
     fn allows(&self, tenant_id: &str, permission: Permission) -> bool {
-        !self.tenant_id.is_empty() && self.tenant_id == tenant_id && has_permission(&self.permissions, permission)
+        !self.tenant_id.is_empty()
+            && self.tenant_id == tenant_id
+            && has_permission(&self.permissions, permission)
     }
 
     /// Whether the scope may read the workspace.

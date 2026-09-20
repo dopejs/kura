@@ -11,14 +11,14 @@ use std::path::Path;
 use chrono::Utc;
 use kura_connectors::{Connector, Status as ConnectorStatus};
 use kura_integrations::{
-    AccountBinding, AuthState as IntegrationAuthState, BackendBinding, BackendKind,
-    HealthState, ReadinessStatus, Resource,
+    AccountBinding, AuthState as IntegrationAuthState, BackendBinding, BackendKind, HealthState,
+    ReadinessStatus, Resource,
 };
 use kura_providers::{AuthMode, AuthState, AuthStatus, Family};
+use kura_store::SQLiteStore;
 use kura_store::mcp::{
     MCPServerRecord, MCPServerStateRecord, MCPToolExposureRuleRecord, MCPToolRecord,
 };
-use kura_store::SQLiteStore;
 
 /// Fake secret material that must never appear in stored rows (used by the
 /// migration regression suite to assert the boundary is not leaked).
@@ -65,14 +65,23 @@ impl R37CredentialFixture {
 pub fn seed_r37_local_credential_files(data_dir: &str) -> Result<R37CredentialFixture, String> {
     let fixture = R37CredentialFixture::new();
     let mut mcp = BTreeMap::new();
-    mcp.insert("R37_MCP_TOKEN".to_string(), R37_FAKE_SECRET_TENANT_A.to_string());
-    mcp.insert("R37_SHARED_TOKEN".to_string(), "shared-r37-value".to_string());
+    mcp.insert(
+        "R37_MCP_TOKEN".to_string(),
+        R37_FAKE_SECRET_TENANT_A.to_string(),
+    );
+    mcp.insert(
+        "R37_SHARED_TOKEN".to_string(),
+        "shared-r37-value".to_string(),
+    );
     mcp.insert("R37_CONFLICT_TOKEN".to_string(), "mcp-side".to_string());
     write_r37_credential_json(&Path::new(data_dir).join("mcp-secrets.json"), &mcp)?;
 
     let mut skill = BTreeMap::new();
     skill.insert("R37_SKILL_TOKEN".to_string(), "skill-r37-value".to_string());
-    skill.insert("R37_SHARED_TOKEN".to_string(), "shared-r37-value".to_string());
+    skill.insert(
+        "R37_SHARED_TOKEN".to_string(),
+        "shared-r37-value".to_string(),
+    );
     skill.insert("R37_CONFLICT_TOKEN".to_string(), "skill-side".to_string());
     write_r37_credential_json(&Path::new(data_dir).join("skill-secrets.json"), &skill)?;
     Ok(fixture)
@@ -198,11 +207,9 @@ pub fn seed_r37_local_credential_state(
     Ok(fixture)
 }
 
-fn write_r37_credential_json(
-    path: &Path,
-    value: &BTreeMap<String, String>,
-) -> Result<(), String> {
-    let payload = serde_json::to_vec(value).map_err(|e| format!("marshal {}: {e}", path.display()))?;
+fn write_r37_credential_json(path: &Path, value: &BTreeMap<String, String>) -> Result<(), String> {
+    let payload =
+        serde_json::to_vec(value).map_err(|e| format!("marshal {}: {e}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;

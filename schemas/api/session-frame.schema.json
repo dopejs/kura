@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/session-frame.schema.json",
+  "title": "SessionFrame",
+  "description": "An explicit, durable statement of what a thread is for. Rendered as a system message on every turn, so it survives window elision instead of depending on where in the transcript it was last said.",
+  "type": "object",
+  "required": ["threadId", "goal", "constraints", "updatedAt"],
+  "additionalProperties": false,
+  "properties": {
+    "threadId": { "type": "string" },
+    "tenantId": { "type": "string" },
+    "goal": { "type": "string", "minLength": 1 },
+    "constraints": { "type": "array", "items": { "type": "string" } },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

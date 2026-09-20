@@ -48,7 +48,11 @@ pub fn export_catalog(now: DateTime<Utc>) -> CatalogExport {
 
 #[must_use]
 pub fn initial_catalog(now: DateTime<Utc>) -> Vec<CatalogEntry> {
-    let now = if now == go_zero_time() { Utc::now() } else { now };
+    let now = if now == go_zero_time() {
+        Utc::now()
+    } else {
+        now
+    };
     let common_tests: &[&str] = &["allowed", "denied", "retry", "restart_pending"];
     let tests = |extra: &[&str]| -> Vec<String> {
         common_tests
@@ -245,7 +249,10 @@ mod tests {
         assert_eq!(entries.len(), required_categories().len());
         let mut seen = std::collections::HashMap::new();
         for entry in &entries {
-            assert!(!entry.definition.category.is_empty(), "catalog entry missing category");
+            assert!(
+                !entry.definition.category.is_empty(),
+                "catalog entry missing category"
+            );
             assert_eq!(entry.definition.period_anchor, PERIOD_ANCHOR_UTC);
             assert!(
                 !entry.definition.denial_reason_code.is_empty(),

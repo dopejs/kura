@@ -83,11 +83,10 @@ mod types;
 #[cfg(test)]
 mod testutil;
 
-pub use error::reason_code_from_error;
 pub use error::ActivationError;
 pub use error::Error;
 pub use error::StoreError;
-pub use service::stable_activation_id;
+pub use error::reason_code_from_error;
 pub use service::ActivateInput;
 pub use service::AuditSink;
 pub use service::BillingProjector;
@@ -99,6 +98,7 @@ pub use service::IdentityRepository;
 pub use service::RunTestChatInput;
 pub use service::Service;
 pub use service::StateStore;
+pub use service::stable_activation_id;
 pub use sqlite::BillingProjectorAdapter;
 pub use sqlite::ChatRunnerAdapter;
 pub use sqlite::SqliteActivationStore;

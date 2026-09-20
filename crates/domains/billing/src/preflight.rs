@@ -1,9 +1,9 @@
 //! Live-validation preflight quota gate (port of
 //! `live_validation_preflight.go`).
 
+use crate::denial::new_quota_state_unavailable_denial;
 use crate::error::BillingError;
 use crate::error::Result;
-use crate::denial::new_quota_state_unavailable_denial;
 use crate::manager::Manager;
 use crate::manager::ReserveInput;
 use crate::manager::ReserveResult;
@@ -62,12 +62,19 @@ mod tests {
 
     #[tokio::test]
     async fn preflight_fails_closed_without_manager_when_hosted() {
-        let hosted = reserve_live_validation_preflight(None, TEN_FINITE, "validation_1", "", true).await.unwrap();
+        let hosted = reserve_live_validation_preflight(None, TEN_FINITE, "validation_1", "", true)
+            .await
+            .unwrap();
         assert!(!hosted.allowed);
-        assert!(matches!(hosted.failure, Some(BillingError::QuotaStateUnavailable)));
+        assert!(matches!(
+            hosted.failure,
+            Some(BillingError::QuotaStateUnavailable)
+        ));
         assert!(hosted.denial.is_some());
 
-        let dev = reserve_live_validation_preflight(None, TEN_FINITE, "validation_1", "", false).await.unwrap();
+        let dev = reserve_live_validation_preflight(None, TEN_FINITE, "validation_1", "", false)
+            .await
+            .unwrap();
         assert!(dev.allowed);
     }
 
@@ -76,15 +83,10 @@ mod tests {
         let now = fixed_now();
         let repo = Arc::new(FixtureRepo::new(now));
         let manager = Manager::with_clock(repo, move || now);
-        let result = reserve_live_validation_preflight(
-            Some(&manager),
-            TEN_FINITE,
-            "validation_1",
-            "",
-            true,
-        )
-        .await
-        .unwrap();
+        let result =
+            reserve_live_validation_preflight(Some(&manager), TEN_FINITE, "validation_1", "", true)
+                .await
+                .unwrap();
         assert!(result.allowed, "{result:?}");
         let reservation = result.reservation.expect("reservation");
         assert_eq!(reservation.category, Category::LIVE_VALIDATION_ATTEMPTS);

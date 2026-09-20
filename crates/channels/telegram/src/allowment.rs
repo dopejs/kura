@@ -154,14 +154,18 @@ pub fn decide_route(update: &InboundUpdate, allowments: &AllowmentIndex) -> Rout
     if !update.unsupported_surface.trim().is_empty() {
         return RouteDecision {
             outcome: RouteOutcome::Unsupported,
-            reason_code: DiagnosticReasonCode::UnsupportedCapability.as_str().to_string(),
+            reason_code: DiagnosticReasonCode::UnsupportedCapability
+                .as_str()
+                .to_string(),
             surface: update.unsupported_surface.clone(),
         };
     }
     if update.text.trim().is_empty() {
         return RouteDecision {
             outcome: RouteOutcome::Unsupported,
-            reason_code: DiagnosticReasonCode::UnsupportedCapability.as_str().to_string(),
+            reason_code: DiagnosticReasonCode::UnsupportedCapability
+                .as_str()
+                .to_string(),
             surface,
         };
     }
@@ -313,7 +317,11 @@ mod tests {
             },
             &allowed,
         );
-        assert_eq!(accepted.outcome, RouteOutcome::Accepted, "allowed direct chat");
+        assert_eq!(
+            accepted.outcome,
+            RouteOutcome::Accepted,
+            "allowed direct chat"
+        );
 
         let blocked = decide_route(
             &InboundUpdate {
@@ -325,7 +333,11 @@ mod tests {
             },
             &allowed,
         );
-        assert_eq!(blocked.outcome, RouteOutcome::Blocked, "unknown direct chat");
+        assert_eq!(
+            blocked.outcome,
+            RouteOutcome::Blocked,
+            "unknown direct chat"
+        );
         assert_eq!(blocked.reason_code, "blocked_route");
     }
 
@@ -350,7 +362,11 @@ mod tests {
             },
             &allowed,
         );
-        assert_eq!(ignored.outcome, RouteOutcome::Ignored, "group without mention");
+        assert_eq!(
+            ignored.outcome,
+            RouteOutcome::Ignored,
+            "group without mention"
+        );
         assert_eq!(ignored.reason_code, "mention_required");
 
         let accepted = decide_route(
@@ -393,7 +409,11 @@ mod tests {
             },
             &allowed,
         );
-        assert_eq!(unsupported.outcome, RouteOutcome::Unsupported, "unsupported surface");
+        assert_eq!(
+            unsupported.outcome,
+            RouteOutcome::Unsupported,
+            "unsupported surface"
+        );
 
         let failed = decide_route(
             &InboundUpdate {

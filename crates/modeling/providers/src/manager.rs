@@ -114,7 +114,10 @@ pub fn new_manager(
         cfg,
         dispatcher,
         registry,
-        inner: RwLock::new(Inner { accounts, ..Inner::default() }),
+        inner: RwLock::new(Inner {
+            accounts,
+            ..Inner::default()
+        }),
     };
     manager.load_profiles();
     manager
@@ -126,7 +129,11 @@ impl Manager {
     #[must_use]
     pub fn list_profiles(&self) -> Vec<Profile> {
         let inner = self.inner.read();
-        inner.order.iter().map(|id| inner.profiles[id].clone()).collect()
+        inner
+            .order
+            .iter()
+            .map(|id| inner.profiles[id].clone())
+            .collect()
     }
 
     #[must_use]
@@ -150,11 +157,19 @@ impl Manager {
 
     #[must_use]
     pub fn get_auth_state(&self, provider_id: &str) -> Option<AuthState> {
-        self.inner.read().auth_states.get(provider_id.trim()).cloned()
+        self.inner
+            .read()
+            .auth_states
+            .get(provider_id.trim())
+            .cloned()
     }
 
     #[must_use]
-    pub fn get_auth_state_for_tenant(&self, provider_id: &str, tenant_id: &str) -> Option<AuthState> {
+    pub fn get_auth_state_for_tenant(
+        &self,
+        provider_id: &str,
+        tenant_id: &str,
+    ) -> Option<AuthState> {
         self.inner
             .read()
             .auth_states
@@ -181,7 +196,8 @@ impl Manager {
                     provider_id: profile.provider_id.clone(),
                     model_id: model_id.clone(),
                     display_name: model_id.clone(),
-                    default: *model_id == profile.default_model || *model_id == profile.effective_model,
+                    default: *model_id == profile.default_model
+                        || *model_id == profile.effective_model,
                     available: profile.ready,
                     source: profile.source.as_str().to_string(),
                     chat: profile.capabilities.chat,
@@ -196,7 +212,11 @@ impl Manager {
 
     #[must_use]
     pub fn get_preference(&self, provider_id: &str) -> Option<Preference> {
-        self.inner.read().preferences.get(provider_id.trim()).cloned()
+        self.inner
+            .read()
+            .preferences
+            .get(provider_id.trim())
+            .cloned()
     }
 
     // -- restore --------------------------------------------------------------
@@ -283,20 +303,36 @@ impl Manager {
         Ok(results)
     }
 
-    pub async fn start_managed_auth(&self, provider_id: &str) -> Result<(AuthState, Vec<Model>), ProvidersError> {
-        self.run_managed_action(provider_id, ManagedAction::Start).await
+    pub async fn start_managed_auth(
+        &self,
+        provider_id: &str,
+    ) -> Result<(AuthState, Vec<Model>), ProvidersError> {
+        self.run_managed_action(provider_id, ManagedAction::Start)
+            .await
     }
 
-    pub async fn complete_managed_auth(&self, provider_id: &str) -> Result<(AuthState, Vec<Model>), ProvidersError> {
-        self.run_managed_action(provider_id, ManagedAction::Complete).await
+    pub async fn complete_managed_auth(
+        &self,
+        provider_id: &str,
+    ) -> Result<(AuthState, Vec<Model>), ProvidersError> {
+        self.run_managed_action(provider_id, ManagedAction::Complete)
+            .await
     }
 
-    pub async fn refresh_managed_auth(&self, provider_id: &str) -> Result<(AuthState, Vec<Model>), ProvidersError> {
-        self.run_managed_action(provider_id, ManagedAction::Refresh).await
+    pub async fn refresh_managed_auth(
+        &self,
+        provider_id: &str,
+    ) -> Result<(AuthState, Vec<Model>), ProvidersError> {
+        self.run_managed_action(provider_id, ManagedAction::Refresh)
+            .await
     }
 
-    pub async fn revoke_managed_auth(&self, provider_id: &str) -> Result<(AuthState, Vec<Model>), ProvidersError> {
-        self.run_managed_action(provider_id, ManagedAction::Revoke).await
+    pub async fn revoke_managed_auth(
+        &self,
+        provider_id: &str,
+    ) -> Result<(AuthState, Vec<Model>), ProvidersError> {
+        self.run_managed_action(provider_id, ManagedAction::Revoke)
+            .await
     }
 
     async fn run_managed_action(
@@ -304,7 +340,8 @@ impl Manager {
         provider_id: &str,
         action: ManagedAction,
     ) -> Result<(AuthState, Vec<Model>), ProvidersError> {
-        self.run_managed_action_for_tenant(provider_id, "", action).await
+        self.run_managed_action_for_tenant(provider_id, "", action)
+            .await
     }
 
     /// Go runManagedActionForTenant: run the bridge action and bind the
@@ -341,7 +378,8 @@ impl Manager {
         provider_id: &str,
         tenant_id: &str,
     ) -> Result<(AuthState, Vec<Model>), ProvidersError> {
-        self.run_managed_action_for_tenant(provider_id, tenant_id, ManagedAction::Start).await
+        self.run_managed_action_for_tenant(provider_id, tenant_id, ManagedAction::Start)
+            .await
     }
 
     pub async fn complete_managed_auth_for_tenant(
@@ -349,7 +387,8 @@ impl Manager {
         provider_id: &str,
         tenant_id: &str,
     ) -> Result<(AuthState, Vec<Model>), ProvidersError> {
-        self.run_managed_action_for_tenant(provider_id, tenant_id, ManagedAction::Complete).await
+        self.run_managed_action_for_tenant(provider_id, tenant_id, ManagedAction::Complete)
+            .await
     }
 
     pub async fn refresh_managed_auth_for_tenant(
@@ -357,7 +396,8 @@ impl Manager {
         provider_id: &str,
         tenant_id: &str,
     ) -> Result<(AuthState, Vec<Model>), ProvidersError> {
-        self.run_managed_action_for_tenant(provider_id, tenant_id, ManagedAction::Refresh).await
+        self.run_managed_action_for_tenant(provider_id, tenant_id, ManagedAction::Refresh)
+            .await
     }
 
     pub async fn revoke_managed_auth_for_tenant(
@@ -365,7 +405,8 @@ impl Manager {
         provider_id: &str,
         tenant_id: &str,
     ) -> Result<(AuthState, Vec<Model>), ProvidersError> {
-        self.run_managed_action_for_tenant(provider_id, tenant_id, ManagedAction::Revoke).await
+        self.run_managed_action_for_tenant(provider_id, tenant_id, ManagedAction::Revoke)
+            .await
     }
 
     fn managed_bridge(&self, provider_id: &str) -> Option<Arc<dyn ManagedBridge>> {
@@ -385,7 +426,11 @@ impl Manager {
 
     // -- preferences ----------------------------------------------------------
 
-    pub fn set_default_model(&self, provider_id: &str, model: &str) -> Result<Preference, ProvidersError> {
+    pub fn set_default_model(
+        &self,
+        provider_id: &str,
+        model: &str,
+    ) -> Result<Preference, ProvidersError> {
         let trimmed_provider_id = provider_id.trim();
         let trimmed_model = model.trim();
         if trimmed_provider_id.is_empty() {
@@ -395,7 +440,9 @@ impl Manager {
             return Err(ProvidersError::Prepare(PrepareError::ModelRequired));
         }
         let profile = self.get_profile(trimmed_provider_id).ok_or_else(|| {
-            ProvidersError::Prepare(PrepareError::ProviderNotFound(trimmed_provider_id.to_string()))
+            ProvidersError::Prepare(PrepareError::ProviderNotFound(
+                trimmed_provider_id.to_string(),
+            ))
         })?;
         validate_model(&profile, trimmed_model)?;
         let preference = Preference {
@@ -413,8 +460,21 @@ impl Manager {
 
     // -- resolution -----------------------------------------------------------
 
-    pub fn resolve(&self, provider_id: &str, model: &str, timeout_ms: i64, max_retries: i64) -> Result<ResolvedDispatch, ProvidersError> {
-        self.resolve_with_profile(provider_id, model, timeout_ms, max_retries, |pid| self.get_profile(pid), false)
+    pub fn resolve(
+        &self,
+        provider_id: &str,
+        model: &str,
+        timeout_ms: i64,
+        max_retries: i64,
+    ) -> Result<ResolvedDispatch, ProvidersError> {
+        self.resolve_with_profile(
+            provider_id,
+            model,
+            timeout_ms,
+            max_retries,
+            |pid| self.get_profile(pid),
+            false,
+        )
     }
 
     pub fn resolve_for_tenant(
@@ -425,9 +485,14 @@ impl Manager {
         max_retries: i64,
         tenant_id: &str,
     ) -> Result<ResolvedDispatch, ProvidersError> {
-        self.resolve_with_profile(provider_id, model, timeout_ms, max_retries, |pid| {
-            self.get_profile_for_tenant(pid, tenant_id)
-        }, true)
+        self.resolve_with_profile(
+            provider_id,
+            model,
+            timeout_ms,
+            max_retries,
+            |pid| self.get_profile_for_tenant(pid, tenant_id),
+            true,
+        )
     }
 
     fn resolve_with_profile<F>(
@@ -453,10 +518,14 @@ impl Manager {
             ProvidersError::Prepare(PrepareError::ProviderNotFound(effective_provider.clone()))
         })?;
         if !profile.registered {
-            return Err(ProvidersError::Prepare(PrepareError::ProviderNotFound(effective_provider.clone())));
+            return Err(ProvidersError::Prepare(PrepareError::ProviderNotFound(
+                effective_provider.clone(),
+            )));
         }
         if require_managed_auth_ready && profile.source == Source::Managed && !profile.ready {
-            return Err(ProvidersError::ProviderAuthUnavailable(effective_provider.clone()));
+            return Err(ProvidersError::ProviderAuthUnavailable(
+                effective_provider.clone(),
+            ));
         }
 
         let mut effective_model = model.trim().to_string();
@@ -502,8 +571,16 @@ impl Manager {
         })
     }
 
-    pub fn resolve_dispatch_input(&self, input: CreateDispatchInput) -> Result<(ResolvedDispatch, CreateDispatchInput), ProvidersError> {
-        let resolved = self.resolve(&input.provider, &input.model, input.timeout_ms, input.max_retries)?;
+    pub fn resolve_dispatch_input(
+        &self,
+        input: CreateDispatchInput,
+    ) -> Result<(ResolvedDispatch, CreateDispatchInput), ProvidersError> {
+        let resolved = self.resolve(
+            &input.provider,
+            &input.model,
+            input.timeout_ms,
+            input.max_retries,
+        )?;
         if input.messages.is_empty() {
             return Err(ProvidersError::Prepare(PrepareError::MessagesRequired));
         }
@@ -522,7 +599,11 @@ impl Manager {
 
     // -- setup gate -----------------------------------------------------------
 
-    pub fn setup_dependent_use_decision(&self, session: &SetupSession, capability: &str) -> kura_setupwizard::DependentUseDecision {
+    pub fn setup_dependent_use_decision(
+        &self,
+        session: &SetupSession,
+        capability: &str,
+    ) -> kura_setupwizard::DependentUseDecision {
         let service: Service = new_service(ServiceDependencies::default());
         service.dependent_use_decision(session, capability)
     }
@@ -545,13 +626,24 @@ impl Manager {
             };
             return Err(ProvidersError::ProviderAuthUnavailable(effective_provider));
         }
-        let resolved = self.resolve_for_tenant(provider_id, model, timeout_ms, max_retries, &session.tenant_id)?;
+        let resolved = self.resolve_for_tenant(
+            provider_id,
+            model,
+            timeout_ms,
+            max_retries,
+            &session.tenant_id,
+        )?;
         Ok((resolved, decision))
     }
 
     // -- checks ---------------------------------------------------------------
 
-    pub async fn run_check(&self, provider_id: &str, check_id: &str, input: CheckInput) -> Result<Check, ProvidersError> {
+    pub async fn run_check(
+        &self,
+        provider_id: &str,
+        check_id: &str,
+        input: CheckInput,
+    ) -> Result<Check, ProvidersError> {
         let started_at = Utc::now();
         let resolved = self.resolve(provider_id, &input.model, 0, 0)?;
 
@@ -564,7 +656,11 @@ impl Manager {
         let dispatch_input = CreateDispatchInput {
             provider: resolved.provider_id.clone(),
             model: resolved.model.clone(),
-            messages: vec![Message { role: MessageRole::User, content: prompt, ..Default::default() }],
+            messages: vec![Message {
+                role: MessageRole::User,
+                content: prompt,
+                ..Default::default()
+            }],
             // A reachability check asks the endpoint to say one word. Offering
             // tools would test something the check is not about.
             tools: Vec::new(),
@@ -573,7 +669,9 @@ impl Manager {
         };
 
         let Some(dispatcher) = &self.dispatcher else {
-            return Err(ProvidersError::Prepare(PrepareError::ProviderNotFound(resolved.provider_id)));
+            return Err(ProvidersError::Prepare(PrepareError::ProviderNotFound(
+                resolved.provider_id,
+            )));
         };
         let dispatch = dispatcher.prepare(dispatch_input, false)?;
         let cancel = CancelToken::new();
@@ -672,7 +770,9 @@ impl Manager {
         let removed = {
             let mut inner = self.inner.write();
             let before = inner.accounts.len();
-            inner.accounts.retain(|existing| existing.id != provider_id.trim());
+            inner
+                .accounts
+                .retain(|existing| existing.id != provider_id.trim());
             inner.accounts.len() != before
         };
         if removed {
@@ -694,7 +794,9 @@ impl Manager {
                 effective_model = "echo-v1".to_string();
             } else {
                 effective_model = String::new();
-                issues.push("configured default model is incompatible with provider echo".to_string());
+                issues.push(
+                    "configured default model is incompatible with provider echo".to_string(),
+                );
             }
         }
         Profile {
@@ -712,7 +814,11 @@ impl Manager {
             effective_model,
             effective_timeout_ms: default_positive(self.cfg.default_timeout_ms, 30000),
             effective_max_retries: max_retry_value(0, self.cfg.default_max_retries),
-            capabilities: CapabilityFlags { chat: true, stream: true, ..CapabilityFlags::default() },
+            capabilities: CapabilityFlags {
+                chat: true,
+                stream: true,
+                ..CapabilityFlags::default()
+            },
             issues,
             ..Profile::default()
         }
@@ -761,8 +867,14 @@ impl Manager {
             source: Source::Config,
             model_selection_mode: ModelSelectionMode::Open,
             registered: has_provider(&self.dispatcher, &provider_id),
-            configured: !base_url.is_empty() || secret_configured || !profile_default_model.is_empty() || default_provider == provider_id,
-            ready: !request_url.is_empty() && secret_configured && !effective_model.is_empty() && has_provider(&self.dispatcher, &provider_id),
+            configured: !base_url.is_empty()
+                || secret_configured
+                || !profile_default_model.is_empty()
+                || default_provider == provider_id,
+            ready: !request_url.is_empty()
+                && secret_configured
+                && !effective_model.is_empty()
+                && has_provider(&self.dispatcher, &provider_id),
             base_url,
             request_url,
             default_model: profile_default_model,
@@ -771,7 +883,11 @@ impl Manager {
             effective_max_retries: max_retries,
             secret_configured,
             secret_ref: self.cfg.openai_compatible.api_key_env.trim().to_string(),
-            capabilities: CapabilityFlags { chat: true, stream: true, ..CapabilityFlags::default() },
+            capabilities: CapabilityFlags {
+                chat: true,
+                stream: true,
+                ..CapabilityFlags::default()
+            },
             issues,
             ..Profile::default()
         }
@@ -781,7 +897,11 @@ impl Manager {
         self.build_managed_profile_for_tenant(bridge, "")
     }
 
-    fn build_managed_profile_for_tenant(&self, bridge: &Arc<dyn ManagedBridge>, tenant_id: &str) -> Profile {
+    fn build_managed_profile_for_tenant(
+        &self,
+        bridge: &Arc<dyn ManagedBridge>,
+        tenant_id: &str,
+    ) -> Profile {
         let inner = self.inner.read();
         let key = tenant_auth_key(tenant_id, &bridge.provider_id());
         let (state, has_state) = match inner.auth_states.get(&key) {
@@ -797,7 +917,11 @@ impl Manager {
                 false,
             ),
         };
-        let models = inner.models.get(&bridge.provider_id()).cloned().unwrap_or_default();
+        let models = inner
+            .models
+            .get(&bridge.provider_id())
+            .cloned()
+            .unwrap_or_default();
         drop(inner);
 
         let mut issues = Vec::new();
@@ -815,7 +939,9 @@ impl Manager {
             default_model_from_models(&models)
         };
         let mut effective_model = default_model.clone();
-        if self.cfg.default_provider.trim() == bridge.provider_id() && !self.cfg.default_model.trim().is_empty() {
+        if self.cfg.default_provider.trim() == bridge.provider_id()
+            && !self.cfg.default_model.trim().is_empty()
+        {
             effective_model = self.cfg.default_model.trim().to_string();
         }
         if default_model.trim().is_empty() {
@@ -881,7 +1007,10 @@ impl Manager {
 
 #[must_use]
 pub fn new_check_id() -> String {
-    let now = Utc::now().format("%Y%m%d%H%M%S%.6f").to_string().replace('.', "");
+    let now = Utc::now()
+        .format("%Y%m%d%H%M%S%.6f")
+        .to_string()
+        .replace('.', "");
     format!("provider_check_{now}")
 }
 
@@ -915,7 +1044,9 @@ fn validate_model(profile: &Profile, model: &str) -> Result<(), ProvidersError> 
 
 #[must_use]
 fn has_provider(dispatcher: &Option<Arc<Dispatcher>>, provider_id: &str) -> bool {
-    dispatcher.as_ref().map_or(false, |d| d.has_provider(provider_id))
+    dispatcher
+        .as_ref()
+        .map_or(false, |d| d.has_provider(provider_id))
 }
 
 #[must_use]
@@ -951,13 +1082,21 @@ fn build_account_profile(
         auth_mode: AuthMode::ApiKey,
         source: Source::Config,
         model_selection_mode: ModelSelectionMode::Open,
-        known_models: if model.is_empty() { Vec::new() } else { vec![model.clone()] },
+        known_models: if model.is_empty() {
+            Vec::new()
+        } else {
+            vec![model.clone()]
+        },
         registered: has_provider(dispatcher, account.id.trim()),
         configured: true,
         ready: issues.is_empty(),
         default_model: model.clone(),
         effective_model: model,
-        capabilities: CapabilityFlags { chat: true, stream: true, ..CapabilityFlags::default() },
+        capabilities: CapabilityFlags {
+            chat: true,
+            stream: true,
+            ..CapabilityFlags::default()
+        },
         issues,
         ..Profile::default()
     }
@@ -1018,7 +1157,11 @@ fn available_model_count(items: &[Model]) -> i64 {
 
 #[must_use]
 fn capabilities_from_models(items: &[Model]) -> CapabilityFlags {
-    let mut flags = CapabilityFlags { chat: true, stream: true, ..CapabilityFlags::default() };
+    let mut flags = CapabilityFlags {
+        chat: true,
+        stream: true,
+        ..CapabilityFlags::default()
+    };
     for item in items {
         flags.chat |= item.chat;
         flags.stream |= item.stream;

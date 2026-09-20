@@ -11,13 +11,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
-use common::{harness, FakeWorkflowLauncher, HarnessOptions, TEST_TENANT_ID};
+use common::{FakeWorkflowLauncher, HarnessOptions, TEST_TENANT_ID, harness};
 use kura_delivery::OutcomeFilter;
+use kura_integrations::DiagnosticReasonCode;
 use kura_reminders::{
     ActionKind, BehaviorMode, Clock, CreateInput, FollowUpLink, FollowUpLinkKind, State,
     TransitionInput, WorkflowLaunchConfig, WorkflowLaunchResult,
 };
-use kura_integrations::DiagnosticReasonCode;
 use kura_router::{Session, SessionKind, SessionStatus};
 use kura_runtime::{Run, RunStatus};
 use kura_scheduler::{Trigger, TriggerKind};
@@ -64,15 +64,26 @@ fn tick_creates_due_occurrence_and_links_delivery_outcome() {
 
     let (updated, ok) = h.manager.get(&reminder.reminder_id).unwrap();
     assert!(ok, "expected reminder to exist after tick");
-    assert_eq!(updated.current_state, State::Due, "expected reminder state due: {updated:?}");
+    assert_eq!(
+        updated.current_state,
+        State::Due,
+        "expected reminder state due: {updated:?}"
+    );
     assert!(
         !updated.active_occurrence_id.is_empty(),
         "expected active occurrence id: {updated:?}"
     );
 
-    let (occurrence, ok) = h.manager.get_occurrence(&updated.active_occurrence_id).unwrap();
+    let (occurrence, ok) = h
+        .manager
+        .get_occurrence(&updated.active_occurrence_id)
+        .unwrap();
     assert!(ok, "expected occurrence to exist");
-    assert_eq!(occurrence.state, State::Due, "expected occurrence state due: {occurrence:?}");
+    assert_eq!(
+        occurrence.state,
+        State::Due,
+        "expected occurrence state due: {occurrence:?}"
+    );
     assert!(
         !occurrence.latest_delivery_id.is_empty()
             && occurrence.latest_delivery_status == "delivered",
@@ -101,7 +112,11 @@ fn tick_creates_due_occurrence_and_links_delivery_outcome() {
     );
 
     let actions = h.manager.list_actions(&reminder.reminder_id).unwrap();
-    assert_eq!(actions.len(), 3, "expected created, due, and delivery_linked actions: {actions:?}");
+    assert_eq!(
+        actions.len(),
+        3,
+        "expected created, due, and delivery_linked actions: {actions:?}"
+    );
     let mut counts = HashMap::new();
     for action in &actions {
         *counts.entry(action.action_kind).or_insert(0) += 1;
@@ -139,7 +154,11 @@ fn recurring_reminders_mark_missed_and_preserve_acknowledged_history() {
 
     let (first_occurrence, ok) = h.manager.get_occurrence(&first_occurrence_id).unwrap();
     assert!(ok, "expected first occurrence to exist");
-    assert_eq!(first_occurrence.state, State::Missed, "expected first occurrence missed: {first_occurrence:?}");
+    assert_eq!(
+        first_occurrence.state,
+        State::Missed,
+        "expected first occurrence missed: {first_occurrence:?}"
+    );
 
     let (second_reminder, ok) = h.manager.get(&reminder.reminder_id).unwrap();
     assert!(ok, "expected reminder to exist");
@@ -149,7 +168,7 @@ fn recurring_reminders_mark_missed_and_preserve_acknowledged_history() {
         "expected rollover to a new occurrence: {second_reminder:?}"
     );
 
-    let (_, second_occurrence, _, ) = h
+    let (_, second_occurrence, _) = h
         .manager
         .acknowledge(
             &reminder.reminder_id,
@@ -161,7 +180,11 @@ fn recurring_reminders_mark_missed_and_preserve_acknowledged_history() {
             },
         )
         .unwrap();
-    assert_eq!(second_occurrence.state, State::Acknowledged, "expected second occurrence acknowledged");
+    assert_eq!(
+        second_occurrence.state,
+        State::Acknowledged,
+        "expected second occurrence acknowledged"
+    );
 
     h.clock.set(start + chrono::Duration::minutes(3));
     h.manager.tick().unwrap();
@@ -172,9 +195,16 @@ fn recurring_reminders_mark_missed_and_preserve_acknowledged_history() {
             && final_reminder.active_occurrence_id != second_occurrence_id,
         "expected new active occurrence after acknowledged history: {final_reminder:?}"
     );
-    let (third_occurrence, ok) = h.manager.get_occurrence(&final_reminder.active_occurrence_id).unwrap();
+    let (third_occurrence, ok) = h
+        .manager
+        .get_occurrence(&final_reminder.active_occurrence_id)
+        .unwrap();
     assert!(ok, "expected third occurrence to exist");
-    assert_eq!(third_occurrence.state, State::Due, "expected third occurrence due: {third_occurrence:?}");
+    assert_eq!(
+        third_occurrence.state,
+        State::Due,
+        "expected third occurrence due: {third_occurrence:?}"
+    );
 
     let (preserved_second, ok) = h.manager.get_occurrence(&second_occurrence_id).unwrap();
     assert!(ok, "expected acknowledged history occurrence to exist");
@@ -218,7 +248,10 @@ fn workflow_linked_reminder_acknowledges_on_success_and_stays_due_on_failure() {
         State::Acknowledged,
         "expected acknowledged reminder after workflow launch: {success_current:?}"
     );
-    let (success_occurrence, ok) = success.manager.get_occurrence(&success_current.active_occurrence_id).unwrap();
+    let (success_occurrence, ok) = success
+        .manager
+        .get_occurrence(&success_current.active_occurrence_id)
+        .unwrap();
     assert!(ok, "expected success occurrence to exist");
     assert_eq!(success_occurrence.state, State::Acknowledged);
     assert_eq!(success_occurrence.run_id, "run_reminder_1");
@@ -246,7 +279,10 @@ fn workflow_linked_reminder_acknowledges_on_success_and_stays_due_on_failure() {
     failure.manager.tick().unwrap();
     let (failure_current, ok) = failure.manager.get(&failure_reminder.reminder_id).unwrap();
     assert!(ok, "expected failure reminder to exist");
-    let (failure_occurrence, ok) = failure.manager.get_occurrence(&failure_current.active_occurrence_id).unwrap();
+    let (failure_occurrence, ok) = failure
+        .manager
+        .get_occurrence(&failure_current.active_occurrence_id)
+        .unwrap();
     assert!(ok, "expected failure occurrence to exist");
     assert_eq!(
         failure_occurrence.state,
@@ -254,9 +290,14 @@ fn workflow_linked_reminder_acknowledges_on_success_and_stays_due_on_failure() {
         "expected occurrence to remain due after launch failure: {failure_occurrence:?}"
     );
 
-    failure.clock.set(due_at + chrono::Duration::milliseconds(20));
+    failure
+        .clock
+        .set(due_at + chrono::Duration::milliseconds(20));
     failure.manager.tick().unwrap();
-    let (failure_occurrence, ok) = failure.manager.get_occurrence(&failure_current.active_occurrence_id).unwrap();
+    let (failure_occurrence, ok) = failure
+        .manager
+        .get_occurrence(&failure_current.active_occurrence_id)
+        .unwrap();
     assert!(ok, "expected failure occurrence to exist");
     assert_eq!(
         failure_occurrence.state,
@@ -326,7 +367,10 @@ fn refreshes_follow_up_link_staleness() {
         .follow_up_link
         .as_ref()
         .expect("expected follow-up link on reminder");
-    assert!(!link.stale, "expected existing run link to stay fresh: {link:?}");
+    assert!(
+        !link.stale,
+        "expected existing run link to stay fresh: {link:?}"
+    );
 
     let missing_workflow_reminder = h
         .manager
@@ -342,20 +386,29 @@ fn refreshes_follow_up_link_staleness() {
             ..CreateInput::default()
         })
         .unwrap();
-    let (refreshed_workflow_reminder, ok) = h.manager.get(&missing_workflow_reminder.reminder_id).unwrap();
+    let (refreshed_workflow_reminder, ok) = h
+        .manager
+        .get(&missing_workflow_reminder.reminder_id)
+        .unwrap();
     assert!(ok, "expected workflow reminder to exist");
     let link = refreshed_workflow_reminder
         .follow_up_link
         .as_ref()
         .expect("expected follow-up link on reminder");
-    assert!(link.stale, "expected missing workflow link to be stale: {link:?}");
+    assert!(
+        link.stale,
+        "expected missing workflow link to be stale: {link:?}"
+    );
     assert_eq!(link.source_display_state, "stale");
     assert!(link.last_checked_at.is_some(), "expected lastCheckedAt set");
     let diagnostic = link
         .diagnostic_failure
         .as_ref()
         .expect("expected stale follow-up diagnostic projection");
-    assert_eq!(diagnostic.reason_code, DiagnosticReasonCode::OperatorActionNeeded);
+    assert_eq!(
+        diagnostic.reason_code,
+        DiagnosticReasonCode::OperatorActionNeeded
+    );
 }
 
 #[test]
@@ -379,7 +432,11 @@ fn performance_smoke() {
     // Shared CI runners run debug builds noticeably slower than a dev
     // machine; scale the smoke bounds there so the gate catches order-of-
     // magnitude regressions without flaking on scheduler jitter.
-    let bound_scale: u32 = if std::env::var_os("CI").is_some() { 10 } else { 1 };
+    let bound_scale: u32 = if std::env::var_os("CI").is_some() {
+        10
+    } else {
+        1
+    };
 
     let list_started = Instant::now();
     let items = h.manager.list().unwrap();
@@ -402,7 +459,10 @@ fn performance_smoke() {
     let (first, ok) = h.manager.get(&items[0].reminder_id).unwrap();
     assert!(ok, "expected first reminder to exist");
     let occurrence_started = Instant::now();
-    let (occurrence, ok) = h.manager.get_occurrence(&first.active_occurrence_id).unwrap();
+    let (occurrence, ok) = h
+        .manager
+        .get_occurrence(&first.active_occurrence_id)
+        .unwrap();
     let occurrence_elapsed = occurrence_started.elapsed();
     assert!(ok, "expected occurrence to exist");
     assert!(
@@ -547,7 +607,10 @@ fn snooze_requires_snoozed_until_and_reschedules_next_due() {
     let (redue, ok) = h.manager.get(&reminder.reminder_id).unwrap();
     assert!(ok);
     assert_eq!(redue.current_state, State::Due);
-    let (redue_occ, ok) = h.manager.get_occurrence(&redue.active_occurrence_id).unwrap();
+    let (redue_occ, ok) = h
+        .manager
+        .get_occurrence(&redue.active_occurrence_id)
+        .unwrap();
     assert!(ok);
     assert_eq!(redue_occ.state, State::Due);
     assert!(!redue_occ.latest_delivery_id.is_empty());

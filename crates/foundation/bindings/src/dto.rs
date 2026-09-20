@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::redaction::{safe_label, safe_reason};
 use crate::types::{
-    BindingRule, BindingRuntimeScope, BindingStatus, CapabilityVisibilityPolicy, Classification, EffectiveVisibility,
-    RedactionStatus, RepairStatus, RuntimeBindingEvidence, ScopeKind, ValidationStatus, Visibility, VisibilityScopeKind,
-    Workspace, WorkspaceStatus,
+    BindingRule, BindingRuntimeScope, BindingStatus, CapabilityVisibilityPolicy, Classification,
+    EffectiveVisibility, RedactionStatus, RepairStatus, RuntimeBindingEvidence, ScopeKind,
+    ValidationStatus, Visibility, VisibilityScopeKind, Workspace, WorkspaceStatus,
 };
 
 /// The body for POST /v1/workspaces.
@@ -215,7 +215,9 @@ pub fn to_binding_resource(b: &BindingRule) -> BindingResource {
 }
 
 /// Maps a policy to its safe JSON view.
-pub fn to_capability_visibility_resource(p: &CapabilityVisibilityPolicy) -> CapabilityVisibilityResource {
+pub fn to_capability_visibility_resource(
+    p: &CapabilityVisibilityPolicy,
+) -> CapabilityVisibilityResource {
     CapabilityVisibilityResource {
         policy_id: p.policy_id.clone(),
         tenant_id: p.tenant_id.clone(),
@@ -269,7 +271,10 @@ mod tests {
     // redaction in mapped resources (FR-028).
     #[test]
     fn rfc3339_nano_matches_go_layout() {
-        assert_eq!(rfc3339_nano(&DateTime::<Utc>::UNIX_EPOCH), "1970-01-01T00:00:00Z");
+        assert_eq!(
+            rfc3339_nano(&DateTime::<Utc>::UNIX_EPOCH),
+            "1970-01-01T00:00:00Z"
+        );
         let nanos = DateTime::from_timestamp_nanos(1_234_567_890);
         assert_eq!(rfc3339_nano(&nanos), "1970-01-01T00:00:01.23456789Z");
     }
@@ -303,7 +308,10 @@ mod tests {
         };
         let json = serde_json::to_value(to_binding_resource(&rule)).unwrap();
         assert_eq!(json["scopeLabel"], "discord:chan_123");
-        assert!(json.get("selectedProfileId").is_none(), "omitempty must drop empty ids: {json}");
+        assert!(
+            json.get("selectedProfileId").is_none(),
+            "omitempty must drop empty ids: {json}"
+        );
         // SafeLabel never yields an empty string, so omitempty never drops the summary.
         assert_eq!(json["resultingSelectionSummary"], "(unnamed)");
     }

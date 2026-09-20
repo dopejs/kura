@@ -7,7 +7,7 @@
 //! parent workflow and inherits to children at backfill time per the parent-child orphan
 //! rule.
 
-use crate::{emit_denial, require, TenancyError};
+use crate::{TenancyError, emit_denial, require};
 
 /// Tenant-aware accessor for the workflows family.
 pub struct Workflows {
@@ -53,14 +53,27 @@ impl Workflows {
                 self.emit("store:GetWorkflowForTenant", "workflow");
                 Ok(None)
             }
-            _ => self.store.get_workflow(environment_scope, run_id, workflow_id).map_err(TenancyError::from),
+            _ => self
+                .store
+                .get_workflow(environment_scope, run_id, workflow_id)
+                .map_err(TenancyError::from),
         }
     }
 
-    pub fn upsert_workflow_for_tenant(&self, workflow: &kura_orchestration::Workflow) -> Result<(), TenancyError> {
+    pub fn upsert_workflow_for_tenant(
+        &self,
+        workflow: &kura_orchestration::Workflow,
+    ) -> Result<(), TenancyError> {
         let tenant_id = require()?;
-        self.store.upsert_workflow(workflow).map_err(TenancyError::from)?;
-        match self.store.bind_row_tenant("workflows", "workflow_id", &workflow.workflow_id, &tenant_id) {
+        self.store
+            .upsert_workflow(workflow)
+            .map_err(TenancyError::from)?;
+        match self.store.bind_row_tenant(
+            "workflows",
+            "workflow_id",
+            &workflow.workflow_id,
+            &tenant_id,
+        ) {
             Err(e) if crate::SQLiteStore::is_cross_tenant_row(&e) => {
                 self.emit("store:UpsertWorkflowForTenant", "workflow");
                 Err(TenancyError::CrossTenantWrite)

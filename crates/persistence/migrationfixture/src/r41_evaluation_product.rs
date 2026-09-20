@@ -9,8 +9,8 @@ use rusqlite::params;
 
 use kura_store::SQLiteStore;
 
-use crate::seeds::exec_insert;
 use crate::FIXTURE_TIMESTAMP;
+use crate::seeds::exec_insert;
 
 /// Table names expected from the Roadmap 41 storage migration (migration v38).
 pub static R41_EVALUATION_PRODUCT_TABLE_NAMES: [&str; 13] = [
@@ -85,67 +85,224 @@ pub fn seed_r41_evaluation_product_rows(
         exec_insert(
             &conn,
             "INSERT INTO evaluation_discovery_policies (policy_id, tenant_id, enabled, window_start, window_end, max_inspected_records, max_emitted_candidates, cost_budget, created_by, created_at, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![policy_id, tenant_id, 1i64, ts, ts, 50i64, 10i64, 100i64, format!("prn_{suffix}"), ts, ts, "{\"redactionStatus\":\"clean\"}"],
+            params![
+                policy_id,
+                tenant_id,
+                1i64,
+                ts,
+                ts,
+                50i64,
+                10i64,
+                100i64,
+                format!("prn_{suffix}"),
+                ts,
+                ts,
+                "{\"redactionStatus\":\"clean\"}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO evaluation_discovery_runs (discovery_run_id, tenant_id, policy_id, status, cursor, window_start, window_end, max_inspected_records, max_emitted_candidates, cost_budget, inspected_records, emitted_candidates, started_by, started_at, completed_at, updated_at, idempotency_key, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![run_id, tenant_id, policy_id, "completed", format!("cursor_{suffix}"), ts, ts, 50i64, 10i64, 100i64, 12i64, 1i64, format!("prn_{suffix}"), ts, ts, ts, format!("idem_{suffix}"), "{\"status\":\"completed\"}"],
+            params![
+                run_id,
+                tenant_id,
+                policy_id,
+                "completed",
+                format!("cursor_{suffix}"),
+                ts,
+                ts,
+                50i64,
+                10i64,
+                100i64,
+                12i64,
+                1i64,
+                format!("prn_{suffix}"),
+                ts,
+                ts,
+                ts,
+                format!("idem_{suffix}"),
+                "{\"status\":\"completed\"}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO evaluation_discovered_candidates (discovered_candidate_id, tenant_id, discovery_run_id, source_kind, source_id, score, score_band, redaction_status, evidence_ref, readiness_status, suppression_state, retention_state, created_at, updated_at, expires_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![candidate_id, tenant_id, run_id, "run", "run_seed", 0.92f64, "high", "redacted", evidence_id, "ready", "none", "active", ts, ts, None::<String>, "{\"evidence\":\"redacted\"}"],
+            params![
+                candidate_id,
+                tenant_id,
+                run_id,
+                "run",
+                "run_seed",
+                0.92f64,
+                "high",
+                "redacted",
+                evidence_id,
+                "ready",
+                "none",
+                "active",
+                ts,
+                ts,
+                None::<String>,
+                "{\"evidence\":\"redacted\"}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO evaluation_candidate_evidence (evidence_id, tenant_id, discovered_candidate_id, redaction_status, materialization_allowed, retention_state, created_at, expires_at, document_json) VALUES (?,?,?,?,?,?,?,?,?)",
-            params![evidence_id, tenant_id, candidate_id, "redacted", 1i64, "active", ts, None::<String>, "{\"redactedPayload\":{\"token\":\"[REDACTED]\"}}"],
+            params![
+                evidence_id,
+                tenant_id,
+                candidate_id,
+                "redacted",
+                1i64,
+                "active",
+                ts,
+                None::<String>,
+                "{\"redactedPayload\":{\"token\":\"[REDACTED]\"}}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO evaluation_suppressions (suppression_id, tenant_id, target_kind, target_id, target_source_ref, reason_code, created_by, active, created_at, expires_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            params![format!("r41_suppression_{suffix}"), tenant_id, "discovered_candidate", candidate_id, None::<String>, "operator_hidden", format!("prn_{suffix}"), (index % 2) as i64, ts, None::<String>, "{\"active\":true}"],
+            params![
+                format!("r41_suppression_{suffix}"),
+                tenant_id,
+                "discovered_candidate",
+                candidate_id,
+                None::<String>,
+                "operator_hidden",
+                format!("prn_{suffix}"),
+                (index % 2) as i64,
+                ts,
+                None::<String>,
+                "{\"active\":true}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO evaluation_product_fixtures (fixture_id, tenant_id, display_name, domain_class, source_kind, source_candidate_id, current_revision_id, review_state, suppression_state, retention_state, created_by, created_at, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![fixture_id, tenant_id, format!("R41 fixture {suffix}"), "runtime", "run", candidate_id, revision_id, "approved", "none", "active", format!("prn_{suffix}"), ts, ts, "{\"displayName\":\"R41 fixture\"}"],
+            params![
+                fixture_id,
+                tenant_id,
+                format!("R41 fixture {suffix}"),
+                "runtime",
+                "run",
+                candidate_id,
+                revision_id,
+                "approved",
+                "none",
+                "active",
+                format!("prn_{suffix}"),
+                ts,
+                ts,
+                "{\"displayName\":\"R41 fixture\"}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO evaluation_fixture_revisions (revision_id, fixture_id, tenant_id, revision_number, redaction_status, created_by, created_at, document_json) VALUES (?,?,?,?,?,?,?,?)",
-            params![revision_id, fixture_id, tenant_id, 1i64, "redacted", format!("prn_{suffix}"), ts, "{\"payload\":{\"secret\":\"[REDACTED]\"}}"],
+            params![
+                revision_id,
+                fixture_id,
+                tenant_id,
+                1i64,
+                "redacted",
+                format!("prn_{suffix}"),
+                ts,
+                "{\"payload\":{\"secret\":\"[REDACTED]\"}}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO evaluation_campaigns (campaign_id, tenant_id, display_name, status, created_at, started_at, completed_at, published_at, retention_state, idempotency_key, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            params![campaign_id, tenant_id, format!("R41 campaign {suffix}"), "completed", ts, ts, ts, None::<String>, "active", format!("campaign_idem_{suffix}"), "{\"status\":\"completed\"}"],
+            params![
+                campaign_id,
+                tenant_id,
+                format!("R41 campaign {suffix}"),
+                "completed",
+                ts,
+                ts,
+                ts,
+                None::<String>,
+                "active",
+                format!("campaign_idem_{suffix}"),
+                "{\"status\":\"completed\"}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO evaluation_campaign_items (campaign_item_id, campaign_id, tenant_id, source_type, source_id, suppression_checked_at, created_at, document_json) VALUES (?,?,?,?,?,?,?,?)",
-            params![item_id, campaign_id, tenant_id, "product_fixture", fixture_id, ts, ts, "{\"sourceSnapshot\":{\"fixtureId\":\"redacted\"}}"],
+            params![
+                item_id,
+                campaign_id,
+                tenant_id,
+                "product_fixture",
+                fixture_id,
+                ts,
+                ts,
+                "{\"sourceSnapshot\":{\"fixtureId\":\"redacted\"}}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO evaluation_campaign_attempt_groups (attempt_group_id, campaign_id, campaign_item_id, tenant_id, status, drift_count, failure_count, unsupported_count, operator_action_needed_count, created_at, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![group_id, campaign_id, item_id, tenant_id, "completed", index as i64, 0i64, 0i64, 0i64, ts, ts, "{\"summary\":\"ok\"}"],
+            params![
+                group_id,
+                campaign_id,
+                item_id,
+                tenant_id,
+                "completed",
+                index as i64,
+                0i64,
+                0i64,
+                0i64,
+                ts,
+                ts,
+                "{\"summary\":\"ok\"}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO evaluation_dashboard_projections (projection_id, tenant_id, window_start, window_end, generated_at, cursor, document_json) VALUES (?,?,?,?,?,?,?)",
-            params![projection_id, tenant_id, ts, ts, ts, format!("cursor_{suffix}"), "{\"campaignStatusCounts\":{\"completed\":1}}"],
+            params![
+                projection_id,
+                tenant_id,
+                ts,
+                ts,
+                ts,
+                format!("cursor_{suffix}"),
+                "{\"campaignStatusCounts\":{\"completed\":1}}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO evaluation_tool_call_inspections (inspection_id, tenant_id, campaign_id, campaign_item_id, tool_call_ref, classification, redaction_status, created_at, updated_at, document_json) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            params![inspection_id, tenant_id, campaign_id, item_id, format!("tool_call_{suffix}"), "matched", "redacted", ts, ts, "{\"diffSummary\":\"redacted\"}"],
+            params![
+                inspection_id,
+                tenant_id,
+                campaign_id,
+                item_id,
+                format!("tool_call_{suffix}"),
+                "matched",
+                "redacted",
+                ts,
+                ts,
+                "{\"diffSummary\":\"redacted\"}"
+            ],
         )?;
         exec_insert(
             &conn,
             "INSERT INTO evaluation_retention_applications (application_id, tenant_id, resource_kind, resource_id, dry_run, outcome, applied_at, document_json) VALUES (?,?,?,?,?,?,?,?)",
-            params![retention_id, tenant_id, "campaign", campaign_id, (index % 2) as i64, "retained", ts, "{\"outcome\":\"retained\"}"],
+            params![
+                retention_id,
+                tenant_id,
+                "campaign",
+                campaign_id,
+                (index % 2) as i64,
+                "retained",
+                ts,
+                "{\"outcome\":\"retained\"}"
+            ],
         )?;
     }
     Ok(fixture)
@@ -159,7 +316,9 @@ pub fn count_r41_evaluation_product_rows(
     let mut counts = HashMap::new();
     for table in R41_EVALUATION_PRODUCT_TABLE_NAMES {
         let count: i64 = conn
-            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
             .map_err(|e| format!("count {table}: {e}"))?;
         counts.insert(table.to_string(), count);
     }

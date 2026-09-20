@@ -7,10 +7,10 @@
 //! and source-event-key duplicates resolve to the existing turn.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Transaction};
+use rusqlite::{Transaction, params};
 
-use crate::crud::{enum_str, null_string};
 use crate::SQLiteStore;
+use crate::crud::{enum_str, null_string};
 
 fn new_store_id(prefix: &str) -> String {
     let hex = uuid::Uuid::new_v4().simple().to_string();
@@ -49,7 +49,10 @@ pub struct ContinuityLookupQuery {
 
 impl SQLiteStore {
     /// Go `SaveContinuityTurn` with the retry loop for unique/busy errors.
-    pub fn save_continuity_turn(&self, turn: &kura_threads::ContinuityTurn) -> Result<kura_threads::ContinuityTurn, String> {
+    pub fn save_continuity_turn(
+        &self,
+        turn: &kura_threads::ContinuityTurn,
+    ) -> Result<kura_threads::ContinuityTurn, String> {
         let mut last_err: Option<String> = None;
         for attempt in 0..5 {
             match self.save_continuity_turn_once(turn) {
@@ -69,13 +72,19 @@ impl SQLiteStore {
         self.save_continuity_turn_once(turn)
     }
 
-    fn save_continuity_turn_once(&self, turn: &kura_threads::ContinuityTurn) -> Result<kura_threads::ContinuityTurn, String> {
+    fn save_continuity_turn_once(
+        &self,
+        turn: &kura_threads::ContinuityTurn,
+    ) -> Result<kura_threads::ContinuityTurn, String> {
         let mut turn = turn.clone();
         if is_unset_time(&turn.recorded_at) {
             turn.recorded_at = Utc::now();
         }
-        if turn.retention_expires_at.is_none() || turn.retention_expires_at.is_some_and(|t| is_unset_time(&t)) {
-            turn.retention_expires_at = Some(self.thread_retention_expiry(&turn.tenant_id, turn.recorded_at)?);
+        if turn.retention_expires_at.is_none()
+            || turn.retention_expires_at.is_some_and(|t| is_unset_time(&t))
+        {
+            turn.retention_expires_at =
+                Some(self.thread_retention_expiry(&turn.tenant_id, turn.recorded_at)?);
         }
         if turn.continuity_turn_id.is_empty() {
             turn.continuity_turn_id = new_store_id("turn");
@@ -100,13 +109,22 @@ impl SQLiteStore {
         }
         if let Err(err) = insert_continuity_turn_tx(&tx, &turn) {
             if is_unique_constraint_error(&err) && !turn.source_event_key.trim().is_empty() {
-                let existing = self.get_continuity_turn_by_source_event_key(&turn.tenant_id, &turn.source_event_key)?;
+                let existing = self.get_continuity_turn_by_source_event_key(
+                    &turn.tenant_id,
+                    &turn.source_event_key,
+                )?;
                 if let Some(existing) = existing {
                     return Ok(existing);
                 }
-                return Err(format!("insert continuity turn {}: {err}", turn.continuity_turn_id));
+                return Err(format!(
+                    "insert continuity turn {}: {err}",
+                    turn.continuity_turn_id
+                ));
             }
-            return Err(format!("insert continuity turn {}: {err}", turn.continuity_turn_id));
+            return Err(format!(
+                "insert continuity turn {}: {err}",
+                turn.continuity_turn_id
+            ));
         }
         tx.commit()
             .map_err(|e| format!("commit continuity turn: {e}"))?;
@@ -114,7 +132,10 @@ impl SQLiteStore {
     }
 
     /// Go `ListContinuityTurns`: current-session turns with full evidence.
-    pub fn list_continuity_turns(&self, query: &ContinuityLookupQuery) -> Result<Vec<kura_threads::ContinuityTurn>, String> {
+    pub fn list_continuity_turns(
+        &self,
+        query: &ContinuityLookupQuery,
+    ) -> Result<Vec<kura_threads::ContinuityTurn>, String> {
         let now = query.now.unwrap_or_else(Utc::now);
         let limit = if query.limit <= 0 {
             kura_threads::DEFAULT_CONTINUITY_MAX_PRIOR_TURNS as i64 + 64
@@ -140,7 +161,13 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("list continuity turns: {e}"))?;
         let mut rows = stmt
-            .query(params![query.tenant_id, query.thread_id, query.session_segment_id, fmt_time(now), limit])
+            .query(params![
+                query.tenant_id,
+                query.thread_id,
+                query.session_segment_id,
+                fmt_time(now),
+                limit
+            ])
             .map_err(|e| e.to_string())?;
         let mut turns = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
@@ -151,7 +178,10 @@ impl SQLiteStore {
     }
 
     /// Go `ListContinuityTurnsOutsideSessionSegment`: reset-boundary turns.
-    pub fn list_continuity_turns_outside_session_segment(&self, query: &ContinuityLookupQuery) -> Result<Vec<kura_threads::ContinuityTurn>, String> {
+    pub fn list_continuity_turns_outside_session_segment(
+        &self,
+        query: &ContinuityLookupQuery,
+    ) -> Result<Vec<kura_threads::ContinuityTurn>, String> {
         let now = query.now.unwrap_or_else(Utc::now);
         let limit = if query.limit <= 0 {
             kura_threads::DEFAULT_CONTINUITY_MAX_PRIOR_TURNS as i64 + 64
@@ -172,7 +202,13 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("list reset-boundary continuity turns: {e}"))?;
         let mut rows = stmt
-            .query(params![query.tenant_id, query.thread_id, query.session_segment_id, fmt_time(now), limit])
+            .query(params![
+                query.tenant_id,
+                query.thread_id,
+                query.session_segment_id,
+                fmt_time(now),
+                limit
+            ])
             .map_err(|e| e.to_string())?;
         let mut turns = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
@@ -212,10 +248,12 @@ impl SQLiteStore {
             preview.assembly_completed_at = now;
         }
         if preview.assembly_duration_ms == 0 {
-            preview.assembly_duration_ms = (preview.assembly_completed_at - preview.assembly_started_at).num_milliseconds();
+            preview.assembly_duration_ms =
+                (preview.assembly_completed_at - preview.assembly_started_at).num_milliseconds();
         }
         if is_unset_time(&preview.retention_expires_at) {
-            preview.retention_expires_at = self.thread_retention_expiry(&preview.tenant_id, preview.assembly_completed_at)?;
+            preview.retention_expires_at =
+                self.thread_retention_expiry(&preview.tenant_id, preview.assembly_completed_at)?;
         }
         // Go's empty-status default (Applied/Empty) is unrepresentable in the
         // closed Rust enum; callers construct the preview with an explicit status.
@@ -236,7 +274,8 @@ impl SQLiteStore {
             }
             insert_continuity_preview_item_tx(&tx, item)?;
         }
-        tx.commit().map_err(|e| format!("commit continuity preview: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit continuity preview: {e}"))?;
         Ok(preview)
     }
 
@@ -283,7 +322,12 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("get continuity preview {preview_id}: {e}"))?;
         let mut rows = stmt
-            .query(params![tenant_id, thread_id, preview_id, fmt_time(Utc::now())])
+            .query(params![
+                tenant_id,
+                thread_id,
+                preview_id,
+                fmt_time(Utc::now())
+            ])
             .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
@@ -298,13 +342,18 @@ impl SQLiteStore {
                  ORDER BY item_order ASC, preview_item_id ASC",
             )
             .map_err(|e| format!("list continuity preview items: {e}"))?;
-        let mut rows = stmt.query(params![preview_id, tenant_id, thread_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![preview_id, tenant_id, thread_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             let item_raw: String = row.get(0).map_err(|e| e.to_string())?;
             items.push(scan_continuity_preview_item(&item_raw)?);
         }
-        Ok(Some(kura_threads::ContinuityPreviewDetail { preview, items }))
+        Ok(Some(kura_threads::ContinuityPreviewDetail {
+            preview,
+            items,
+        }))
     }
 
     pub fn get_continuity_turn_by_source_event_key(
@@ -319,7 +368,9 @@ impl SQLiteStore {
                  WHERE tenant_id = ?1 AND source_event_key = ?2",
             )
             .map_err(|e| format!("get continuity turn by source event key: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, source_event_key]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, source_event_key])
+            .map_err(|e| e.to_string())?;
         let Some(row) = rows.next().map_err(|e| e.to_string())? else {
             return Ok(None);
         };
@@ -330,16 +381,25 @@ impl SQLiteStore {
 
 fn err_retryable(err: &str) -> bool {
     let lower = err.to_lowercase();
-    lower.contains("unique constraint") || lower.contains("database is locked") || lower.contains("busy")
+    lower.contains("unique constraint")
+        || lower.contains("database is locked")
+        || lower.contains("busy")
 }
 
 fn fmt_time(dt: DateTime<Utc>) -> String {
     dt.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
 }
 
-fn insert_continuity_turn_tx(tx: &Transaction, turn: &kura_threads::ContinuityTurn) -> Result<(), String> {
-    let document_json = serde_json::to_string(turn).map_err(|e| format!("marshal continuity turn: {e}"))?;
-    let source_timestamp = turn.source_timestamp.filter(|t| !is_unset_time(t)).map(|t| fmt_time(t));
+fn insert_continuity_turn_tx(
+    tx: &Transaction,
+    turn: &kura_threads::ContinuityTurn,
+) -> Result<(), String> {
+    let document_json =
+        serde_json::to_string(turn).map_err(|e| format!("marshal continuity turn: {e}"))?;
+    let source_timestamp = turn
+        .source_timestamp
+        .filter(|t| !is_unset_time(t))
+        .map(|t| fmt_time(t));
     tx.execute(
         r#"INSERT INTO thread_continuity_turns (
             continuity_turn_id, tenant_id, thread_id, session_segment_id, acceptance_sequence,
@@ -372,8 +432,12 @@ fn insert_continuity_turn_tx(tx: &Transaction, turn: &kura_threads::ContinuityTu
     Ok(())
 }
 
-fn insert_continuity_preview_tx(tx: &Transaction, preview: &kura_threads::ContinuityPreview) -> Result<(), String> {
-    let document_json = serde_json::to_string(preview).map_err(|e| format!("marshal continuity preview: {e}"))?;
+fn insert_continuity_preview_tx(
+    tx: &Transaction,
+    preview: &kura_threads::ContinuityPreview,
+) -> Result<(), String> {
+    let document_json =
+        serde_json::to_string(preview).map_err(|e| format!("marshal continuity preview: {e}"))?;
     tx.execute(
         r#"INSERT INTO thread_continuity_previews (
             continuity_preview_id, tenant_id, thread_id, session_segment_id, dispatch_id,
@@ -410,10 +474,21 @@ fn insert_continuity_preview_tx(tx: &Transaction, preview: &kura_threads::Contin
     Ok(())
 }
 
-fn insert_continuity_preview_item_tx(tx: &Transaction, item: &kura_threads::ContinuityPreviewItem) -> Result<(), String> {
-    let document_json = serde_json::to_string(item).map_err(|e| format!("marshal continuity preview item: {e}"))?;
-    let source_timestamp = item.source_timestamp.filter(|t| !is_unset_time(t)).map(|t| fmt_time(t));
-    let sequence: Option<i64> = if item.acceptance_sequence > 0 { Some(item.acceptance_sequence) } else { None };
+fn insert_continuity_preview_item_tx(
+    tx: &Transaction,
+    item: &kura_threads::ContinuityPreviewItem,
+) -> Result<(), String> {
+    let document_json =
+        serde_json::to_string(item).map_err(|e| format!("marshal continuity preview item: {e}"))?;
+    let source_timestamp = item
+        .source_timestamp
+        .filter(|t| !is_unset_time(t))
+        .map(|t| fmt_time(t));
+    let sequence: Option<i64> = if item.acceptance_sequence > 0 {
+        Some(item.acceptance_sequence)
+    } else {
+        None
+    };
     tx.execute(
         r#"INSERT INTO thread_continuity_preview_items (
             preview_item_id, continuity_preview_id, tenant_id, thread_id, item_kind,
@@ -440,7 +515,12 @@ fn insert_continuity_preview_item_tx(tx: &Transaction, item: &kura_threads::Cont
             document_json,
         ],
     )
-    .map_err(|e| format!("insert continuity preview item {}: {e}", item.preview_item_id))?;
+    .map_err(|e| {
+        format!(
+            "insert continuity preview item {}: {e}",
+            item.preview_item_id
+        )
+    })?;
     Ok(())
 }
 

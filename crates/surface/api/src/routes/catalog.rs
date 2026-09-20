@@ -108,7 +108,9 @@ async fn list_items(
     State(state): State<AppState>,
 ) -> Result<Json<CatalogItemListResponse>, ApiError> {
     let manager = manager(&state)?;
-    Ok(Json(CatalogItemListResponse { items: manager.list_items() }))
+    Ok(Json(CatalogItemListResponse {
+        items: manager.list_items(),
+    }))
 }
 
 /// POST /v1/catalog/items (Go handleCatalogItems POST branch) — 201.
@@ -118,7 +120,9 @@ async fn register_item(
 ) -> Result<(StatusCode, Json<catalog::CatalogItem>), ApiError> {
     let request: RegisterCatalogItemRequest = decode_json_required(&body)?;
     let manager = manager(&state)?;
-    let item = manager.register_item(request.item).map_err(map_catalog_error)?;
+    let item = manager
+        .register_item(request.item)
+        .map_err(map_catalog_error)?;
     Ok((StatusCode::CREATED, Json(item)))
 }
 
@@ -197,8 +201,13 @@ mod tests {
     #[tokio::test]
     async fn register_list_inspect_and_enable_item() {
         let state = state_with_manager();
-        let (status, registered) =
-            request_json(state.clone(), "POST", "/v1/catalog/items", Some(item_body())).await;
+        let (status, registered) = request_json(
+            state.clone(),
+            "POST",
+            "/v1/catalog/items",
+            Some(item_body()),
+        )
+        .await;
         assert_eq!(status, StatusCode::CREATED, "{registered}");
         let item_id = registered["itemId"].as_str().expect("itemId").to_string();
 

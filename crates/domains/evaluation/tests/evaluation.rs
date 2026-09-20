@@ -20,10 +20,16 @@ fn enum_wire_values_are_snake_case() {
     assert_eq!(CandidateKind::CuratedWork.as_str(), "curated_work");
     assert_eq!(CandidateKind::Fixture.as_str(), "fixture");
     assert_eq!(SourceKind::ComputerUse.as_str(), "computer_use");
-    assert_eq!(ReadinessStatus::PartiallyReplayable.as_str(), "partially_replayable");
+    assert_eq!(
+        ReadinessStatus::PartiallyReplayable.as_str(),
+        "partially_replayable"
+    );
     assert_eq!(ReplayMode::LiveValidation.as_str(), "live_validation");
     assert_eq!(ReplayAttemptStatus::Unreplayable.as_str(), "unreplayable");
-    assert_eq!(ApprovalHandling::FreshApprovalRequired.as_str(), "fresh_approval_required");
+    assert_eq!(
+        ApprovalHandling::FreshApprovalRequired.as_str(),
+        "fresh_approval_required"
+    );
     assert_eq!(SideEffectHandling::EvidenceOnly.as_str(), "evidence_only");
     assert_eq!(ComparisonTerminalStatus::Drifted.as_str(), "drifted");
     assert_eq!(DriftPlane::Integration.as_str(), "integration");
@@ -82,8 +88,14 @@ fn replay_candidate_roundtrips_camel_case_and_rename() {
         assert!(json.contains(key), "missing {key} in {json}");
     }
     // The custom Go tag renames the field; neither snake nor plain camelCase leaks.
-    assert!(!json.contains("expected_comparison"), "snake field leaked: {json}");
-    assert!(!json.contains("\"expectedComparison\""), "wrong rename: {json}");
+    assert!(
+        !json.contains("expected_comparison"),
+        "snake field leaked: {json}"
+    );
+    assert!(
+        !json.contains("\"expectedComparison\""),
+        "wrong rename: {json}"
+    );
     // Empty optional fields (omitempty) are skipped.
     assert!(!json.contains("fixtureId"));
     assert!(!json.contains("latestAttemptId"));

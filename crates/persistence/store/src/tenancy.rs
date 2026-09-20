@@ -26,13 +26,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, params_from_iter, types::Value, Row};
+use rusqlite::{Row, params, params_from_iter, types::Value};
 
+use crate::SQLiteStore;
 use crate::crud::{
     decode_map, decode_opt_json, decode_vec, enum_str, marshal_json, marshal_map, marshal_vec,
     now_rfc3339, null_string, opt_time_string, parse_enum, parse_opt_rfc3339, parse_rfc3339,
 };
-use crate::SQLiteStore;
 
 // ---------------------------------------------------------------------------
 // Sentinels
@@ -75,7 +75,12 @@ impl SQLiteStore {
     /// table and pk_column are not bind-parameter eligible in SQLite, so callers MUST
     /// pass trusted compile-time constants. The tenancy layer owns the small set of
     /// allowed (table, pk_column) pairs.
-    pub fn lookup_row_tenant(&self, table: &str, pk_column: &str, pk: &str) -> Result<Option<String>, String> {
+    pub fn lookup_row_tenant(
+        &self,
+        table: &str,
+        pk_column: &str,
+        pk: &str,
+    ) -> Result<Option<String>, String> {
         let sql = format!("SELECT tenant_id FROM {table} WHERE {pk_column} = ?1");
         match self.conn.query_row(&sql, params![pk], |row| row.get(0)) {
             Ok(tenant) => Ok(tenant),
@@ -98,7 +103,9 @@ impl SQLiteStore {
         if tenant_id.is_empty() {
             return Err("BindRowTenant: empty tenantID".to_string());
         }
-        let sql = format!("UPDATE {table} SET tenant_id = ?1 WHERE {pk_column} = ?2 AND (tenant_id IS NULL OR tenant_id = ?1)");
+        let sql = format!(
+            "UPDATE {table} SET tenant_id = ?1 WHERE {pk_column} = ?2 AND (tenant_id IS NULL OR tenant_id = ?1)"
+        );
         let affected = self
             .conn
             .execute(&sql, params![tenant_id, pk])
@@ -136,7 +143,9 @@ impl SQLiteStore {
             }
             _ => {}
         }
-        let sql = format!("DELETE FROM {table} WHERE {pk_column} = ?1 AND (tenant_id IS NULL OR tenant_id = ?2)");
+        let sql = format!(
+            "DELETE FROM {table} WHERE {pk_column} = ?1 AND (tenant_id IS NULL OR tenant_id = ?2)"
+        );
         let affected = self
             .conn
             .execute(&sql, params![pk, tenant_id])
@@ -185,7 +194,10 @@ impl SQLiteStore {
     /// Returns all runs whose tenant_id matches tenant_id in ascending creation order.
     /// Pass A semantics: pre-backfill rows whose tenant_id is still NULL are NOT
     /// returned (fail-closed).
-    pub fn list_runs_for_tenant_raw(&self, tenant_id: &str) -> Result<Vec<kura_runtime::Run>, String> {
+    pub fn list_runs_for_tenant_raw(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<kura_runtime::Run>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -237,7 +249,10 @@ impl SQLiteStore {
     }
 
     /// Mirrors list_sessions but filtered by tenant. NULL-tenant rows are excluded.
-    pub fn list_sessions_for_tenant_raw(&self, tenant_id: &str) -> Result<Vec<kura_router::Session>, String> {
+    pub fn list_sessions_for_tenant_raw(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<kura_router::Session>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -257,7 +272,11 @@ impl SQLiteStore {
     }
 
     /// Mirrors list_steps but filtered by tenant (and run). NULL-tenant rows excluded.
-    pub fn list_steps_for_tenant_raw(&self, tenant_id: &str, run_id: &str) -> Result<Vec<kura_runtime::Step>, String> {
+    pub fn list_steps_for_tenant_raw(
+        &self,
+        tenant_id: &str,
+        run_id: &str,
+    ) -> Result<Vec<kura_runtime::Step>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -268,7 +287,9 @@ impl SQLiteStore {
                 ORDER BY created_at ASC, step_id ASC"#,
             )
             .map_err(|e| format!("list steps for tenant: {e}"))?;
-        let mut rows = stmt.query(params![tenant_id, run_id]).map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(params![tenant_id, run_id])
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_step(row)?);
@@ -309,7 +330,10 @@ impl SQLiteStore {
     }
 
     /// Mirrors list_llm_dispatches but filtered by tenant (newest first).
-    pub fn list_llm_dispatches_for_tenant_raw(&self, tenant_id: &str) -> Result<Vec<kura_llm::Dispatch>, String> {
+    pub fn list_llm_dispatches_for_tenant_raw(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<kura_llm::Dispatch>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -457,7 +481,11 @@ impl SQLiteStore {
     /// Persists a run row binding tenant_id in the same INSERT. Returns
     /// ERR_CROSS_TENANT_ROW if the row exists and is owned by a different tenant —
     /// the existing row is preserved.
-    pub fn upsert_run_for_tenant_safe(&self, run: &kura_runtime::Run, tenant_id: &str) -> Result<(), String> {
+    pub fn upsert_run_for_tenant_safe(
+        &self,
+        run: &kura_runtime::Run,
+        tenant_id: &str,
+    ) -> Result<(), String> {
         if tenant_id.is_empty() {
             return Err("UpsertRunForTenantSafe: empty tenantID".to_string());
         }
@@ -512,7 +540,11 @@ impl SQLiteStore {
     }
 
     /// Persists a session row binding tenant_id in the same statement.
-    pub fn upsert_session_for_tenant_safe(&self, session: &kura_router::Session, tenant_id: &str) -> Result<(), String> {
+    pub fn upsert_session_for_tenant_safe(
+        &self,
+        session: &kura_router::Session,
+        tenant_id: &str,
+    ) -> Result<(), String> {
         if tenant_id.is_empty() {
             return Err("UpsertSessionForTenantSafe: empty tenantID".to_string());
         }
@@ -558,7 +590,9 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("upsert session for tenant: {e}"))?;
         if affected == 0 {
-            if let Some(owner) = self.lookup_row_tenant("sessions", "session_id", &session.session_id)? {
+            if let Some(owner) =
+                self.lookup_row_tenant("sessions", "session_id", &session.session_id)?
+            {
                 if !owner.is_empty() && owner != tenant_id {
                     return Err(Self::ERR_CROSS_TENANT_ROW.to_string());
                 }
@@ -568,7 +602,11 @@ impl SQLiteStore {
     }
 
     /// Persists an llm dispatch row binding tenant_id in the same statement.
-    pub fn upsert_llm_dispatch_for_tenant_safe(&self, dispatch: &kura_llm::Dispatch, tenant_id: &str) -> Result<(), String> {
+    pub fn upsert_llm_dispatch_for_tenant_safe(
+        &self,
+        dispatch: &kura_llm::Dispatch,
+        tenant_id: &str,
+    ) -> Result<(), String> {
         if tenant_id.is_empty() {
             return Err("UpsertLLMDispatchForTenantSafe: empty tenantID".to_string());
         }
@@ -628,7 +666,9 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("upsert llm dispatch for tenant: {e}"))?;
         if affected == 0 {
-            if let Some(owner) = self.lookup_row_tenant("llm_dispatches", "dispatch_id", &dispatch.dispatch_id)? {
+            if let Some(owner) =
+                self.lookup_row_tenant("llm_dispatches", "dispatch_id", &dispatch.dispatch_id)?
+            {
                 if !owner.is_empty() && owner != tenant_id {
                     return Err(Self::ERR_CROSS_TENANT_ROW.to_string());
                 }
@@ -640,7 +680,11 @@ impl SQLiteStore {
     /// Persists a step row binding tenant_id in the same statement. Cross-tenant
     /// collisions are atomically refused — tenant A's row is never modified by tenant
     /// B's write attempt.
-    pub fn upsert_step_for_tenant_safe(&self, step: &kura_runtime::Step, tenant_id: &str) -> Result<(), String> {
+    pub fn upsert_step_for_tenant_safe(
+        &self,
+        step: &kura_runtime::Step,
+        tenant_id: &str,
+    ) -> Result<(), String> {
         if tenant_id.is_empty() {
             return Err("UpsertStepForTenantSafe: empty tenantID".to_string());
         }
@@ -695,7 +739,11 @@ impl SQLiteStore {
     }
 
     /// Persists a tool_call row binding tenant_id in the same statement.
-    pub fn upsert_tool_call_for_tenant_safe(&self, tool_call: &kura_runtime::ToolCall, tenant_id: &str) -> Result<(), String> {
+    pub fn upsert_tool_call_for_tenant_safe(
+        &self,
+        tool_call: &kura_runtime::ToolCall,
+        tenant_id: &str,
+    ) -> Result<(), String> {
         if tenant_id.is_empty() {
             return Err("UpsertToolCallForTenantSafe: empty tenantID".to_string());
         }
@@ -778,7 +826,9 @@ impl SQLiteStore {
             )
             .map_err(|e| format!("upsert tool_call for tenant: {e}"))?;
         if affected == 0 {
-            if let Some(owner) = self.lookup_row_tenant("tool_calls", "tool_call_id", &tool_call.tool_call_id)? {
+            if let Some(owner) =
+                self.lookup_row_tenant("tool_calls", "tool_call_id", &tool_call.tool_call_id)?
+            {
                 if !owner.is_empty() && owner != tenant_id {
                     return Err(Self::ERR_CROSS_TENANT_ROW.to_string());
                 }
@@ -859,7 +909,10 @@ impl SQLiteStore {
                 |row| row.get(0),
             )
             .map_err(|e| format!("load event sequence for tenant: {e}"))?;
-        Ok(AppendEventResult { sequence, tenant_id: tenant_id.to_string() })
+        Ok(AppendEventResult {
+            sequence,
+            tenant_id: tenant_id.to_string(),
+        })
     }
 }
 
@@ -885,8 +938,8 @@ impl SQLiteStore {
         if event.event_id.trim().is_empty() {
             return Err("AppendEventForTenantRaw: empty event_id (caller must pre-fill via ensureEventDefaults)".to_string());
         }
-        let payload_json =
-            serde_json::to_string(&event.payload).map_err(|e| format!("marshal event payload: {e}"))?;
+        let payload_json = serde_json::to_string(&event.payload)
+            .map_err(|e| format!("marshal event payload: {e}"))?;
         let affected = self
             .conn
             .execute(
@@ -1013,8 +1066,13 @@ impl SQLiteStore {
         }
         sql.push_str(" ORDER BY rowid ASC");
 
-        let mut stmt = self.conn.prepare(&sql).map_err(|e| format!("list events for tenant: {e}"))?;
-        let mut rows = stmt.query(params_from_iter(args.iter())).map_err(|e| e.to_string())?;
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| format!("list events for tenant: {e}"))?;
+        let mut rows = stmt
+            .query(params_from_iter(args.iter()))
+            .map_err(|e| e.to_string())?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().map_err(|e| e.to_string())? {
             items.push(scan_event_with_tenant(row)?);
@@ -1023,7 +1081,10 @@ impl SQLiteStore {
     }
 
     /// Mirrors list_approvals but filtered by tenant.
-    pub fn list_approvals_for_tenant_raw(&self, tenant_id: &str) -> Result<Vec<kura_policy::Approval>, String> {
+    pub fn list_approvals_for_tenant_raw(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<kura_policy::Approval>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -1044,7 +1105,10 @@ impl SQLiteStore {
     }
 
     /// Mirrors list_decisions but filtered by tenant.
-    pub fn list_decisions_for_tenant_raw(&self, tenant_id: &str) -> Result<Vec<kura_policy::Decision>, String> {
+    pub fn list_decisions_for_tenant_raw(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<kura_policy::Decision>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -1123,7 +1187,11 @@ impl SQLiteStore {
 
     /// Returns the tenant_id of an mcp_tools row keyed by the composite PK
     /// (server_id, tool_name). Ok(None) when the row is absent.
-    pub fn mcp_tool_tenant_id(&self, server_id: &str, tool_name: &str) -> Result<Option<String>, String> {
+    pub fn mcp_tool_tenant_id(
+        &self,
+        server_id: &str,
+        tool_name: &str,
+    ) -> Result<Option<String>, String> {
         match self.conn.query_row(
             r#"SELECT tenant_id FROM mcp_tools
             WHERE server_id = ?1 AND tool_name = ?2"#,
@@ -1186,7 +1254,8 @@ static DEFAULT_TENANT_CACHE: LazyLock<Mutex<HashMap<String, DefaultTenantCacheEn
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Paths that already emitted the cold-path warning (warn-once semantics per db).
-static COLD_WARNED_PATHS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+static COLD_WARNED_PATHS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 impl SQLiteStore {
     /// Returns the bootstrapped personal tenant id, caching after the first read.
@@ -1220,7 +1289,10 @@ impl SQLiteStore {
                 let id = id.trim().to_string();
                 DEFAULT_TENANT_CACHE.lock().unwrap().insert(
                     key.to_string(),
-                    DefaultTenantCacheEntry { id: id.clone(), seeded: true },
+                    DefaultTenantCacheEntry {
+                        id: id.clone(),
+                        seeded: true,
+                    },
                 );
                 Ok(id)
             }
@@ -1248,7 +1320,10 @@ impl SQLiteStore {
                 // that we did look so the fail-closed branch is not tripped next call.
                 DEFAULT_TENANT_CACHE.lock().unwrap().insert(
                     key.to_string(),
-                    DefaultTenantCacheEntry { id: String::new(), seeded: true },
+                    DefaultTenantCacheEntry {
+                        id: String::new(),
+                        seeded: true,
+                    },
                 );
                 Ok(())
             }
@@ -1503,8 +1578,8 @@ fn scan_llm_dispatch(row: &Row) -> Result<kura_llm::Dispatch, String> {
     let tool_calls_raw: Option<String> = row.get(19).map_err(|e| e.to_string())?;
 
     let status: kura_llm::DispatchStatus = parse_enum(&status)?;
-    let messages: Vec<kura_llm::Message> =
-        crate::crud::decode_json_field(&messages_raw).map_err(|e| format!("decode llm dispatch messages: {e}"))?;
+    let messages: Vec<kura_llm::Message> = crate::crud::decode_json_field(&messages_raw)
+        .map_err(|e| format!("decode llm dispatch messages: {e}"))?;
     // Null for every dispatch written before these columns existed, and for
     // any plain chat request since.
     let tools: Vec<kura_llm::ToolSpec> = match tools_raw {
@@ -1517,8 +1592,8 @@ fn scan_llm_dispatch(row: &Row) -> Result<kura_llm::Dispatch, String> {
             .map_err(|e| format!("decode llm dispatch tool calls: {e}"))?,
         _ => Vec::new(),
     };
-    let usage: kura_llm::Usage =
-        crate::crud::decode_json_field(&usage_raw).map_err(|e| format!("decode llm dispatch usage: {e}"))?;
+    let usage: kura_llm::Usage = crate::crud::decode_json_field(&usage_raw)
+        .map_err(|e| format!("decode llm dispatch usage: {e}"))?;
     let partial = status == kura_llm::DispatchStatus::PartialFailed;
 
     Ok(kura_llm::Dispatch {
@@ -1683,7 +1758,10 @@ fn scan_event_with_tenant(row: &Row) -> Result<kura_events::Event, String> {
             capability_id: capability_id.unwrap_or_default(),
             ..kura_events::Scope::default()
         },
-        resource: kura_events::Resource { kind: resource_kind, id: resource_id },
+        resource: kura_events::Resource {
+            kind: resource_kind,
+            id: resource_id,
+        },
         payload: decode_map(&payload_json)?,
     })
 }

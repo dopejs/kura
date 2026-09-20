@@ -196,7 +196,12 @@ impl Manager {
         let version_id = format!("secver_{}", random_hex(12));
         let backend_ref = self
             .backend
-            .put(&input.tenant_id, &secret.secret_id, &version_id, &input.value)
+            .put(
+                &input.tenant_id,
+                &secret.secret_id,
+                &version_id,
+                &input.value,
+            )
             .await?;
         // The store assigns the real version number transactionally (Go:
         // `VersionNumber: 0` here, SQL `MAX(version_number)+1` in RotateSecret).
@@ -611,7 +616,10 @@ mod tests {
                 .expect_err("disabled rotate"),
             SecretsError::SecretDisabled
         );
-        let fetched = manager.get("ten_1", "svc/token").await.expect("get disabled");
+        let fetched = manager
+            .get("ten_1", "svc/token")
+            .await
+            .expect("get disabled");
         assert_eq!(fetched.status, SecretStatus::Disabled);
         let listed = manager.list("ten_1").await.expect("list");
         assert_eq!(listed.len(), 1);

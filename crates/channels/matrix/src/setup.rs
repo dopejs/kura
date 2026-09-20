@@ -5,7 +5,9 @@ use chrono::{Duration, Utc};
 use kura_connectors::{DiagnosticReasonCode, LifecycleState, RedactionStatus};
 
 use crate::is_unset_time;
-use crate::readiness::{homeserver_state, normalize_homeserver_binding, validate_homeserver_binding};
+use crate::readiness::{
+    homeserver_state, normalize_homeserver_binding, validate_homeserver_binding,
+};
 use crate::routes::{has_ready_route_policy, normalize_route_policy};
 use crate::types::{
     BotCredentialState, HostedSetup, HostedSetupInput, RoutePolicyState, TerminalState,
@@ -26,7 +28,11 @@ pub fn evaluate_hosted_setup(input: HostedSetupInput) -> HostedSetup {
     if timeout <= Duration::zero() {
         timeout = Duration::minutes(5);
     }
-    let binding = normalize_homeserver_binding(&input.tenant_id, &input.connector_id, input.homeserver_binding);
+    let binding = normalize_homeserver_binding(
+        &input.tenant_id,
+        &input.connector_id,
+        input.homeserver_binding,
+    );
     let policy = normalize_route_policy(input.route_policy, now);
     let mut setup = HostedSetup {
         tenant_id: input.tenant_id.trim().to_string(),
@@ -53,9 +59,13 @@ pub fn evaluate_hosted_setup(input: HostedSetupInput) -> HostedSetup {
     if setup.bot_credential_state == BotCredentialState::default() {
         setup.bot_credential_state = BotCredentialState::Unknown;
     }
-    if input.redaction_suppressed || setup.bot_credential_state == BotCredentialState::RedactionSuppressed {
+    if input.redaction_suppressed
+        || setup.bot_credential_state == BotCredentialState::RedactionSuppressed
+    {
         setup.status = LifecycleState::Failed;
-        setup.reason_code = DiagnosticReasonCode::UnknownConnectorFailure.as_str().to_string();
+        setup.reason_code = DiagnosticReasonCode::UnknownConnectorFailure
+            .as_str()
+            .to_string();
         setup.redaction_status = RedactionStatus::Suppressed;
         return setup;
     }
@@ -67,7 +77,9 @@ pub fn evaluate_hosted_setup(input: HostedSetupInput) -> HostedSetup {
     }
     if input.requested_hosted_homeserver || input.requested_account_provision {
         setup.status = LifecycleState::UnsupportedCapability;
-        setup.reason_code = DiagnosticReasonCode::UnsupportedCapability.as_str().to_string();
+        setup.reason_code = DiagnosticReasonCode::UnsupportedCapability
+            .as_str()
+            .to_string();
         return setup;
     }
     if setup.bot_credential_state != BotCredentialState::Valid {
@@ -77,7 +89,9 @@ pub fn evaluate_hosted_setup(input: HostedSetupInput) -> HostedSetup {
     if !input.provider_available {
         setup.status = LifecycleState::Failed;
         setup.terminal_state = TerminalState::Unavailable;
-        setup.reason_code = DiagnosticReasonCode::ProviderUnavailable.as_str().to_string();
+        setup.reason_code = DiagnosticReasonCode::ProviderUnavailable
+            .as_str()
+            .to_string();
         return setup;
     }
     if !input.network_available {
@@ -119,6 +133,8 @@ pub fn reason_for_bot_credential(state: BotCredentialState) -> String {
         | BotCredentialState::NotStarted
         | BotCredentialState::Submitted
         | BotCredentialState::Unknown => DiagnosticReasonCode::AuthMissing.as_str().to_string(),
-        _ => DiagnosticReasonCode::UnknownConnectorFailure.as_str().to_string(),
+        _ => DiagnosticReasonCode::UnknownConnectorFailure
+            .as_str()
+            .to_string(),
     }
 }

@@ -86,15 +86,26 @@ pub fn find_active_suppression(
     suppression_id: &str,
     now: DateTime<Utc>,
 ) -> Option<SuppressionRecord> {
-    records.iter().find(|record| {
-        record.suppression_id == suppression_id && active_suppression_for_tenant(record, tenant_id, now)
-    }).cloned()
+    records
+        .iter()
+        .find(|record| {
+            record.suppression_id == suppression_id
+                && active_suppression_for_tenant(record, tenant_id, now)
+        })
+        .cloned()
 }
 
 /// Go `RevokeSuppressionRecord`.
 #[must_use]
-pub fn revoke_suppression_record(mut record: SuppressionRecord, revoked_at: DateTime<Utc>) -> SuppressionRecord {
-    let revoked_at = if is_zero_time(revoked_at) { Utc::now() } else { revoked_at };
+pub fn revoke_suppression_record(
+    mut record: SuppressionRecord,
+    revoked_at: DateTime<Utc>,
+) -> SuppressionRecord {
+    let revoked_at = if is_zero_time(revoked_at) {
+        Utc::now()
+    } else {
+        revoked_at
+    };
     record.active = false;
     record.expires_at = Some(revoked_at);
     record
@@ -138,7 +149,11 @@ pub fn suppression_applies(
     false
 }
 
-fn active_suppression_for_tenant(record: &SuppressionRecord, tenant_id: &str, now: DateTime<Utc>) -> bool {
+fn active_suppression_for_tenant(
+    record: &SuppressionRecord,
+    tenant_id: &str,
+    now: DateTime<Utc>,
+) -> bool {
     if !record.active {
         return false;
     }

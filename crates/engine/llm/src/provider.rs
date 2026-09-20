@@ -56,7 +56,9 @@ impl CancelToken {
 
 impl fmt::Debug for CancelToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CancelToken").field("cancelled", &self.is_cancelled()).finish()
+        f.debug_struct("CancelToken")
+            .field("cancelled", &self.is_cancelled())
+            .finish()
     }
 }
 
@@ -83,7 +85,11 @@ pub enum ProviderError {
 
 impl ProviderError {
     pub fn provider(code: impl Into<String>, message: impl Into<String>, retryable: bool) -> Self {
-        Self::Provider { code: code.into(), message: message.into(), retryable }
+        Self::Provider {
+            code: code.into(),
+            message: message.into(),
+            retryable,
+        }
     }
 
     pub fn other(message: impl Into<String>) -> Self {
@@ -118,7 +124,11 @@ impl fmt::Display for ProviderError {
             Self::Timeout => write!(f, "context deadline exceeded"),
             // Go's ProviderError.Error(): message if set, otherwise the code.
             Self::Provider { code, message, .. } => {
-                if message.is_empty() { write!(f, "{code}") } else { write!(f, "{message}") }
+                if message.is_empty() {
+                    write!(f, "{code}")
+                } else {
+                    write!(f, "{message}")
+                }
             }
             Self::Other(message) => write!(f, "{message}"),
         }

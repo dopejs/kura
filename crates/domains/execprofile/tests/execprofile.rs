@@ -92,8 +92,12 @@ fn register_invalid_profile_rejected() {
 #[test]
 fn list_profiles_sorted_with_live_status() {
     let manager = Manager::new("test", None, None, None);
-    manager.register_profile(sample_profile("p_z", &["docker"], &[])).unwrap();
-    manager.register_profile(sample_profile("p_a", &["network"], &[])).unwrap();
+    manager
+        .register_profile(sample_profile("p_z", &["docker"], &[]))
+        .unwrap();
+    manager
+        .register_profile(sample_profile("p_a", &["network"], &[]))
+        .unwrap();
     let listed = manager.list_profiles();
     assert_eq!(listed.len(), 2);
     assert_eq!(listed[0].profile.profile_id, "p_a");
@@ -108,7 +112,9 @@ fn list_profiles_sorted_with_live_status() {
 #[test]
 fn get_profile_lookup() {
     let manager = Manager::new("test", None, None, None);
-    manager.register_profile(sample_profile("p_a", &["docker"], &[])).unwrap();
+    manager
+        .register_profile(sample_profile("p_a", &["docker"], &[]))
+        .unwrap();
     let proj = manager.get_profile("p_a").unwrap();
     assert_eq!(proj.profile.name, "p_a name");
     assert!(matches!(
@@ -120,29 +126,43 @@ fn get_profile_lookup() {
 #[test]
 fn status_derives_unmet_requirement_reason() {
     let manager = Manager::new("test", None, Some(Box::new(UnmetAll)), None);
-    manager.register_profile(sample_profile("p_a", &["docker"], &["docker_engine"])).unwrap();
+    manager
+        .register_profile(sample_profile("p_a", &["docker"], &["docker_engine"]))
+        .unwrap();
     let proj = manager.get_profile("p_a").unwrap();
     assert_eq!(proj.status.health, HealthStatus::Ready);
     assert!(!proj.status.available);
     assert_eq!(proj.status.reason, "unmet requirements: docker_engine");
-    assert_eq!(proj.status.unmet_requirements, vec!["docker_engine".to_string()]);
+    assert_eq!(
+        proj.status.unmet_requirements,
+        vec!["docker_engine".to_string()]
+    );
 }
 
 #[test]
 fn explain_denial_splits_eligible_missing_unavailable() {
     let manager = Manager::new("test", None, None, None);
-    manager.register_profile(sample_profile("p_docker", &["docker", "network"], &[])).unwrap();
-    manager.register_profile(sample_profile("p_basic", &["local_fs"], &[])).unwrap();
+    manager
+        .register_profile(sample_profile("p_docker", &["docker", "network"], &[]))
+        .unwrap();
+    manager
+        .register_profile(sample_profile("p_basic", &["local_fs"], &[]))
+        .unwrap();
     let required = vec!["docker".to_string(), "network".to_string()];
     let exp = manager.explain_denial(&required);
     assert_eq!(exp.required_capabilities, required);
     assert_eq!(exp.eligible_profiles, vec!["p_docker".to_string()]);
-    assert_eq!(exp.missing_capabilities["p_basic"], vec!["docker".to_string(), "network".to_string()]);
+    assert_eq!(
+        exp.missing_capabilities["p_basic"],
+        vec!["docker".to_string(), "network".to_string()]
+    );
     assert!(exp.unavailable.is_empty());
 
     // Unavailable profiles land in 'unavailable' with their reason.
     let degraded = Manager::new("test", Some(Box::new(DegradedHealth)), None, None);
-    degraded.register_profile(sample_profile("p_docker", &["docker"], &[])).unwrap();
+    degraded
+        .register_profile(sample_profile("p_docker", &["docker"], &[]))
+        .unwrap();
     let exp = degraded.explain_denial(&["docker".to_string()]);
     assert!(exp.eligible_profiles.is_empty());
     assert_eq!(exp.unavailable["p_docker"], "backend down");
@@ -151,8 +171,12 @@ fn explain_denial_splits_eligible_missing_unavailable() {
 #[test]
 fn compatibility_for_ignores_availability() {
     let manager = Manager::new("test", None, None, None);
-    manager.register_profile(sample_profile("p_docker", &["docker"], &[])).unwrap();
-    manager.register_profile(sample_profile("p_basic", &["local_fs"], &[])).unwrap();
+    manager
+        .register_profile(sample_profile("p_docker", &["docker"], &[]))
+        .unwrap();
+    manager
+        .register_profile(sample_profile("p_basic", &["local_fs"], &[]))
+        .unwrap();
     let compat = manager.compatibility_for(&["docker".to_string()]);
     assert_eq!(compat.compatible, vec!["p_docker".to_string()]);
     assert_eq!(compat.incompatible, vec!["p_basic".to_string()]);
@@ -161,7 +185,9 @@ fn compatibility_for_ignores_availability() {
 #[test]
 fn select_profile_lifecycle_is_audited() {
     let manager = Manager::new("test", None, None, None);
-    manager.register_profile(sample_profile("p_a", &["docker"], &[])).unwrap();
+    manager
+        .register_profile(sample_profile("p_a", &["docker"], &[]))
+        .unwrap();
     let sel = manager.select_profile("tenant-a", "p_a", "alice").unwrap();
     assert_eq!(sel.tenant_id, "tenant-a");
     assert_eq!(sel.profile_id, "p_a");
@@ -171,7 +197,10 @@ fn select_profile_lifecycle_is_audited() {
     let (sel2, ok) = manager.selection_for_tenant("tenant-a");
     assert!(ok);
     assert_eq!(sel2, sel);
-    assert_eq!(manager.selection_for_tenant("tenant-b"), (Selection::default(), false));
+    assert_eq!(
+        manager.selection_for_tenant("tenant-b"),
+        (Selection::default(), false)
+    );
 
     // A second selection appends to the audit history.
     let sel3 = manager.select_profile("tenant-a", "p_a", "bob").unwrap();
@@ -183,24 +212,34 @@ fn select_profile_lifecycle_is_audited() {
 fn select_profile_fails_closed() {
     // Permission denied.
     let denied = Manager::new("test", None, None, Some(Box::new(DenyAll)));
-    denied.register_profile(sample_profile("p_a", &["docker"], &[])).unwrap();
+    denied
+        .register_profile(sample_profile("p_a", &["docker"], &[]))
+        .unwrap();
     assert!(matches!(
-        denied.select_profile("tenant-a", "p_a", "alice").unwrap_err(),
+        denied
+            .select_profile("tenant-a", "p_a", "alice")
+            .unwrap_err(),
         ExecProfileError::PermissionDenied
     ));
 
     // Unavailable profile.
     let degraded = Manager::new("test", Some(Box::new(DegradedHealth)), None, None);
-    degraded.register_profile(sample_profile("p_a", &["docker"], &[])).unwrap();
+    degraded
+        .register_profile(sample_profile("p_a", &["docker"], &[]))
+        .unwrap();
     assert!(matches!(
-        degraded.select_profile("tenant-a", "p_a", "alice").unwrap_err(),
+        degraded
+            .select_profile("tenant-a", "p_a", "alice")
+            .unwrap_err(),
         ExecProfileError::ProfileUnavailable
     ));
 
     // Unknown profile.
     let manager = Manager::new("test", None, None, None);
     assert!(matches!(
-        manager.select_profile("tenant-a", "nope", "alice").unwrap_err(),
+        manager
+            .select_profile("tenant-a", "nope", "alice")
+            .unwrap_err(),
         ExecProfileError::ProfileNotFound
     ));
 }
@@ -208,12 +247,19 @@ fn select_profile_fails_closed() {
 #[test]
 fn restore_reloads_profiles_and_selections() {
     let manager = Manager::new("test", None, None, None);
-    let profile = manager.register_profile(sample_profile("p_a", &["docker"], &[])).unwrap();
-    let selection = manager.select_profile("tenant-a", &profile.profile_id, "alice").unwrap();
+    let profile = manager
+        .register_profile(sample_profile("p_a", &["docker"], &[]))
+        .unwrap();
+    let selection = manager
+        .select_profile("tenant-a", &profile.profile_id, "alice")
+        .unwrap();
 
     let fresh = Manager::new("test", None, None, None);
     fresh.restore(vec![profile.clone()], vec![selection.clone()]);
-    assert_eq!(fresh.get_profile(&profile.profile_id).unwrap().profile, profile);
+    assert_eq!(
+        fresh.get_profile(&profile.profile_id).unwrap().profile,
+        profile
+    );
     assert_eq!(fresh.selection_for_tenant("tenant-a"), (selection, true));
 }
 
@@ -235,7 +281,10 @@ fn wire_round_trip() {
     assert_eq!(BackendKind::Ssh.as_str(), "ssh");
     assert_eq!(BackendKind::LocalShell.as_str(), "local_shell");
     assert_eq!(HealthStatus::Degraded.as_str(), "degraded");
-    assert_eq!(serde_json::to_value(BackendKind::Ssh).unwrap(), json!("ssh"));
+    assert_eq!(
+        serde_json::to_value(BackendKind::Ssh).unwrap(),
+        json!("ssh")
+    );
 
     let exp = DenialExplanation {
         required_capabilities: vec!["docker".to_string()],
@@ -269,14 +318,21 @@ fn persistence_round_trip() {
     let store = Arc::new(parking_lot::Mutex::new(SQLiteStore::new(&dir).unwrap()));
     let mut manager = Manager::new("test", None, None, None);
     manager.with_store(Arc::clone(&store));
-    let profile = manager.register_profile(sample_profile("p_a", &["docker"], &[])).unwrap();
-    manager.select_profile("tenant-a", &profile.profile_id, "alice").unwrap();
+    let profile = manager
+        .register_profile(sample_profile("p_a", &["docker"], &[]))
+        .unwrap();
+    manager
+        .select_profile("tenant-a", &profile.profile_id, "alice")
+        .unwrap();
 
     // A fresh manager recovers profiles + selections from the store.
     let mut fresh = Manager::new("test", None, None, None);
     fresh.with_store(Arc::clone(&store));
     fresh.load_from_store().unwrap();
-    assert_eq!(fresh.get_profile(&profile.profile_id).unwrap().profile, profile);
+    assert_eq!(
+        fresh.get_profile(&profile.profile_id).unwrap().profile,
+        profile
+    );
     let (sel, ok) = fresh.selection_for_tenant("tenant-a");
     assert!(ok);
     assert_eq!(sel.profile_id, profile.profile_id);
@@ -288,5 +344,3 @@ fn manager_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<kura_execprofile::Manager>();
 }
-
-

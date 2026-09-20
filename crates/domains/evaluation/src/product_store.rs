@@ -2,8 +2,8 @@
 //! and filters for the tenant-scoped evaluation product resources.
 
 use crate::types::{
-    CandidateEvidence, DiscoveryPolicy, DiscoveryRun, DiscoveredCandidate, ProductResourceKind,
-    ProductLifecycleStatus, ReadinessStatus, ScoreBand, SourceKind, SuppressionRecord,
+    CandidateEvidence, DiscoveredCandidate, DiscoveryPolicy, DiscoveryRun, ProductLifecycleStatus,
+    ProductResourceKind, ReadinessStatus, ScoreBand, SourceKind, SuppressionRecord,
     SuppressionState,
 };
 
@@ -52,9 +52,13 @@ pub struct RetentionApplicationFilter {
 /// Go `ProductStore` interface.
 pub trait ProductStore: Send + Sync {
     fn upsert_discovery_policy(&self, policy: DiscoveryPolicy) -> Result<(), String>;
-    fn list_discovery_policies(&self, filter: &DiscoveryPolicyFilter) -> Result<Vec<DiscoveryPolicy>, String>;
+    fn list_discovery_policies(
+        &self,
+        filter: &DiscoveryPolicyFilter,
+    ) -> Result<Vec<DiscoveryPolicy>, String>;
     fn save_discovery_run(&self, run: DiscoveryRun) -> Result<(), String>;
-    fn list_discovery_runs(&self, filter: &DiscoveryRunFilter) -> Result<Vec<DiscoveryRun>, String>;
+    fn list_discovery_runs(&self, filter: &DiscoveryRunFilter)
+    -> Result<Vec<DiscoveryRun>, String>;
     fn save_discovered_candidate(
         &self,
         candidate: DiscoveredCandidate,

@@ -1609,13 +1609,22 @@ mod tests {
             provider: "echo".to_string(),
             model: "echo-1".to_string(),
             skills: vec!["skill_a".to_string()],
-            skill_contracts: vec![serde_json::json!({ "name": "x" }).as_object().expect("obj").clone()],
+            skill_contracts: vec![
+                serde_json::json!({ "name": "x" })
+                    .as_object()
+                    .expect("obj")
+                    .clone(),
+            ],
             query: "hello".to_string(),
             status: "completed".to_string(),
             partial: false,
             reply: "hi".to_string(),
             finish_reason: "stop".to_string(),
-            usage: llm::Usage { input_tokens: 3, output_tokens: 1, total_tokens: 4 },
+            usage: llm::Usage {
+                input_tokens: 3,
+                output_tokens: 1,
+                total_tokens: 4,
+            },
             error_code: String::new(),
             error: String::new(),
             thread_id: "thread_1".to_string(),
@@ -1634,7 +1643,10 @@ mod tests {
         assert_eq!(json["usage"]["inputTokens"], 3);
         assert!(json.get("errorCode").is_none(), "empty string omitted");
         assert_eq!(json["continuityApplied"], true);
-        assert!(json.get("continuityExcludedCount").is_none(), "None omitted");
+        assert!(
+            json.get("continuityExcludedCount").is_none(),
+            "None omitted"
+        );
     }
 
     #[test]

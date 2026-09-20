@@ -3,13 +3,13 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use futures::future::BoxFuture;
 use kura_llm::{CancelToken, ProviderError, ProviderRequest, ProviderResponse, StreamChunk};
 use kura_providers::{AuthMode, AuthState, AuthStatus, Family, Model};
 use kura_sandbox::{
     AccessRequest, DecisionResolution, LocalStateAccessMode, ManagedProviderActionKind,
     NetworkMode, SensitiveLocalStateAccessSummary,
 };
-use futures::future::BoxFuture;
 
 use crate::bridge::{Bridge, RunError, Runner, SandboxManager};
 use crate::error::Error;
@@ -21,8 +21,8 @@ use crate::evaluate::{
     new_managed_provider_operation_id, operation_metadata_from_plan,
 };
 use crate::helpers::{
-    base_name, clone_roots, decode_jwt_payload, filepath_join, first_non_empty, latest_user_message,
-    merge_string_maps, now_ptr,
+    base_name, clone_roots, decode_jwt_payload, filepath_join, first_non_empty,
+    latest_user_message, merge_string_maps, now_ptr,
 };
 
 pub const CODEX_PROVIDER_ID: &str = "codex_managed";
@@ -154,7 +154,10 @@ impl CodexBridge {
                 }
             }
         }
-        items.first().map(|item| item.model_id.clone()).unwrap_or_default()
+        items
+            .first()
+            .map(|item| item.model_id.clone())
+            .unwrap_or_default()
     }
 
     /// Go `baseState`.
@@ -714,7 +717,8 @@ fn codex_complete(
     } else {
         model
     };
-    let mut operation = bridge.cli_operation_plan(ManagedProviderActionKind::PromptExecution, &local_state);
+    let mut operation =
+        bridge.cli_operation_plan(ManagedProviderActionKind::PromptExecution, &local_state);
 
     let unique = uuid::Uuid::new_v4().simple().to_string();
     let temp_path = std::env::temp_dir().join(format!("kura-codex-output-{unique}.txt"));
@@ -723,9 +727,15 @@ fn codex_complete(
         .create_new(true)
         .open(&temp_path)
     {
-        return Err(ProviderError::provider("provider_error", err.to_string(), false));
+        return Err(ProviderError::provider(
+            "provider_error",
+            err.to_string(),
+            false,
+        ));
     }
-    let _guard = TempFileGuard { path: temp_path.clone() };
+    let _guard = TempFileGuard {
+        path: temp_path.clone(),
+    };
 
     let temp_dir = std::env::temp_dir().to_string_lossy().into_owned();
     let mut write_roots = operation.access.write_roots.clone();

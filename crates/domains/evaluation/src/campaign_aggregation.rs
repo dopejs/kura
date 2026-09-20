@@ -54,7 +54,10 @@ pub fn build_campaign_attempt_group(
     };
     let summary = campaign_attempt_summary(&input);
     Ok(CampaignAttemptGroup {
-        attempt_group_id: format!("attempt_group_{}_{}", input.campaign_id, input.campaign_item_id),
+        attempt_group_id: format!(
+            "attempt_group_{}_{}",
+            input.campaign_id, input.campaign_item_id
+        ),
         campaign_id: input.campaign_id,
         campaign_item_id: input.campaign_item_id,
         tenant_id: input.tenant_id,
