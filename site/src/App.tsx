@@ -4,7 +4,7 @@ import { LanguageMenu } from "./LanguageMenu";
 import { writeLanguagePreference } from "./language-preference";
 import { localeForPath, type SiteLocale } from "./locales";
 import { SearchDialog } from "./SearchDialog";
-import type { PageLink, SitePage, SitePayload } from "./types";
+import type { PageLink, SitePage, SitePayload, TableOfContentsItem } from "./types";
 
 const REPO = "https://github.com/dopejs/kura";
 
@@ -98,17 +98,23 @@ $ kura tui`}</code></pre></section>
   </main>;
 }
 
-function Sidebar({ page, locale }: { readonly page: SitePage; readonly locale: SiteLocale }): ReactNode {
-  return <aside className="sidebar" aria-label={locale.ui.documentation}><h2>{locale.ui.documentation}</h2>{DOCS.map(([title, href]) => <a key={href} href={href} aria-current={page.href === href ? "page" : undefined}>{title}</a>)}</aside>;
+/** A link's title in the reader's language, falling back to English. */
+function linkTitle(item: PageLink, locale: SiteLocale): string {
+  return item.localized?.[locale.lang] ?? item.title;
 }
 
-function Outline({ page, locale }: { readonly page: SitePage; readonly locale: SiteLocale }): ReactNode {
-  if (page.tableOfContents.length === 0) return null;
-  return <aside className="outline" aria-label={locale.ui.onThisPage}><h2>{locale.ui.onThisPage}</h2>{page.tableOfContents.map((item) => <a key={item.id} className={`outline-${String(item.level)}`} href={`#${item.id}`}>{item.title}</a>)}</aside>;
+function Sidebar({ page, navigation, locale }: { readonly page: SitePage; readonly navigation?: readonly PageLink[]; readonly locale: SiteLocale }): ReactNode {
+  const items: readonly PageLink[] = navigation ?? DOCS.map(([title, href]) => ({ href, title }));
+  return <aside className="sidebar" aria-label={locale.ui.documentation}><h2>{locale.ui.documentation}</h2>{items.map((item) => <a key={item.href} href={item.href} aria-current={page.href === item.href ? "page" : undefined}>{linkTitle(item, locale)}</a>)}</aside>;
+}
+
+function Outline({ tableOfContents, locale }: { readonly tableOfContents: readonly TableOfContentsItem[]; readonly locale: SiteLocale }): ReactNode {
+  if (tableOfContents.length === 0) return null;
+  return <aside className="outline" aria-label={locale.ui.onThisPage}><h2>{locale.ui.onThisPage}</h2>{tableOfContents.map((item) => <a key={item.id} className={`outline-${String(item.level)}`} href={`#${item.id}`}>{item.title}</a>)}</aside>;
 }
 
 function Pagination({ previous, next, locale }: { readonly previous?: PageLink; readonly next?: PageLink; readonly locale: SiteLocale }): ReactNode {
-  const link = (item: PageLink | undefined, direction: "previous" | "next") => item === undefined ? <span /> : <a className={`page-link page-link--${direction}`} href={item.href}><small>{direction === "previous" ? locale.ui.previous : locale.ui.next}</small><strong>{item.title}</strong></a>;
+  const link = (item: PageLink | undefined, direction: "previous" | "next") => item === undefined ? <span /> : <a className={`page-link page-link--${direction}`} href={item.href}><small>{direction === "previous" ? locale.ui.previous : locale.ui.next}</small><strong>{linkTitle(item, locale)}</strong></a>;
   return <nav className="pagination" aria-label="Pagination">{link(previous, "previous")}{link(next, "next")}</nav>;
 }
 
@@ -117,6 +123,9 @@ function Footer(): ReactNode { return <footer className="site-footer"><span>Kura
 export function App({ payload, initialLocalePath }: AppProps): ReactNode {
   const [localePath, setLocalePath] = useState(initialLocalePath);
   const locale = localeForPath(localePath);
+  // The page carries its translations; a reader whose language has one sees
+  // it, everyone else sees English with the notice.
+  const translated = payload.page.localized?.[locale.lang];
   const changeLocale = (path: string): void => {
     const next = localeForPath(path);
     writeLanguagePreference(next.path); setLocalePath(next.path);
@@ -125,9 +134,9 @@ export function App({ payload, initialLocalePath }: AppProps): ReactNode {
   return <div className="site" dir={locale.dir ?? "ltr"}>
     <Header page={payload.page} locale={locale} onLocaleChange={changeLocale} />
     {payload.page.layout === "home" ? <Home locale={locale} /> : <div className="docs-grid">
-      <Sidebar page={payload.page} locale={locale} />
-      <main className="doc-main"><p className="language-notice">{locale.ui.englishOnly}</p><article className="doc-content" dangerouslySetInnerHTML={{ __html: payload.page.html }} /><p className="last-updated">{locale.ui.lastUpdated}: <time dateTime={payload.page.lastUpdated}>{payload.page.lastUpdated.slice(0, 10)}</time></p><Pagination previous={payload.previous} next={payload.next} locale={locale} /></main>
-      <Outline page={payload.page} locale={locale} />
+      <Sidebar page={payload.page} navigation={payload.navigation} locale={locale} />
+      <main className="doc-main">{translated === undefined && locale.lang !== "en" ? <p className="language-notice">{locale.ui.englishOnly}</p> : null}<article className="doc-content" lang={translated === undefined ? "en" : locale.lang} dangerouslySetInnerHTML={{ __html: translated?.html ?? payload.page.html }} /><p className="last-updated">{locale.ui.lastUpdated}: <time dateTime={payload.page.lastUpdated}>{payload.page.lastUpdated.slice(0, 10)}</time></p><Pagination previous={payload.previous} next={payload.next} locale={locale} /></main>
+      <Outline tableOfContents={translated?.tableOfContents ?? payload.page.tableOfContents} locale={locale} />
     </div>}
     <Footer />
   </div>;

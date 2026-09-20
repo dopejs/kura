@@ -230,16 +230,19 @@ async fn an_online_backup_taken_under_two_tenant_load_restores_with_tenant_isola
             actor.tenant_id
         );
     }
-    // The dispatch rows written under load are in the copy too.
+    // The dispatch rows written before the snapshot are in the copy; turns
+    // that completed after it are not, and must not be expected (the copy
+    // is a point in time, not a mirror).
     let dispatches = restored_app
         .state
         .store
         .lock()
         .list_llm_dispatches()
         .unwrap();
+    assert!(!dispatches.is_empty(), "dispatches written under load are in the copy");
     assert!(
-        dispatches.len() >= total_turns,
-        "{} dispatches for {total_turns} turns",
+        dispatches.len() <= total_turns,
+        "{} dispatches cannot exceed the {total_turns} turns that ran",
         dispatches.len()
     );
     // Tokens issued before the backup still authenticate on the restored copy

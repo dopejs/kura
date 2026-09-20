@@ -23,6 +23,42 @@ const DOCUMENTS = [
   ["architecture", "Architecture", "Read the source-of-truth plugin architecture design.", "docs/harness/plugin-architecture.md"],
 ];
 
+// Translated documents live at site/src/content/<lang>/<slug>.md. A locale
+// listed here with a file for a slug is served in that language; a missing
+// file falls back to English with the "English only" notice. URLs stay
+// language-neutral: the translation travels inside the page payload and the
+// client picks it by the reader's language preference.
+const LOCALIZED = {
+  "zh-Hans": {
+    "getting-started": ["快速开始", "安装 Kura 并启动守护进程、终端界面和 Web 客户端。"],
+    usage: ["使用", "通过 CLI、终端界面、Web 客户端和聊天频道使用 Kura。"],
+    configuration: ["配置", "配置 Kura 的 profile、模型提供方、存储和运行策略。"],
+    plugins: ["插件", "理解 Kura 的插件内核与内置能力。"],
+    "external-plugins": ["外部插件", "用任意语言编写隔离运行的插件来扩展 Kura。"],
+    memory: ["记忆", "查看 Kura 可归因、可撤销的分层记忆。"],
+    "context-session": ["上下文与会话", "了解 Kura 如何组装带引用的上下文与持久会话。"],
+    "skills-improvement": ["技能与自我改进", "治理由 agent 编写的技能与配置改进。"],
+    channels: ["频道", "安全地把 Kura 接入支持的消息频道。"],
+    api: ["API 参考", "使用 Kura 的本地 HTTP API。"],
+    deployment: ["部署", "面向团队运行 Kura：TLS、令牌、指标、备份。"],
+    architecture: ["架构", "阅读作为事实来源的插件架构设计。"],
+  },
+  "zh-Hant": {
+    "getting-started": ["快速開始", "安裝 Kura 並啟動守護程序、終端介面與 Web 客戶端。"],
+    usage: ["使用", "透過 CLI、終端介面、Web 客戶端與聊天頻道使用 Kura。"],
+    configuration: ["設定", "設定 Kura 的 profile、模型供應商、儲存與執行策略。"],
+    plugins: ["外掛", "理解 Kura 的外掛核心與內建能力。"],
+    "external-plugins": ["外部外掛", "用任意語言撰寫隔離執行的外掛來擴充 Kura。"],
+    memory: ["記憶", "檢視 Kura 可歸因、可撤銷的分層記憶。"],
+    "context-session": ["上下文與工作階段", "了解 Kura 如何組裝帶引用的上下文與持久工作階段。"],
+    "skills-improvement": ["技能與自我改進", "治理由 agent 撰寫的技能與設定改進。"],
+    channels: ["頻道", "安全地把 Kura 接入支援的訊息頻道。"],
+    api: ["API 參考", "使用 Kura 的本機 HTTP API。"],
+    deployment: ["部署", "面向團隊執行 Kura：TLS、權杖、指標、備份。"],
+    architecture: ["架構", "閱讀作為事實來源的外掛架構設計。"],
+  },
+};
+
 const markdown = new MarkdownIt({ html: true, linkify: true, typographer: true });
 markdown.use(anchor, {
   slugify(value) {
@@ -61,9 +97,7 @@ export async function loadSiteContent() {
     headings: [], text: "personal agent OS plugins memory context sessions channels audit",
   }];
 
-  for (const [slug, title, description, sourcePath] of DOCUMENTS) {
-    const absolute = path.join(repositoryRoot, sourcePath);
-    const [source, metadata] = await Promise.all([readFile(absolute, "utf8"), stat(absolute)]);
+  const renderDocument = (source) => {
     const tokens = markdown.parse(source, {});
     const headings = [];
     const tableOfContents = [];
@@ -77,26 +111,61 @@ export async function loadSiteContent() {
         tableOfContents.push({ id: token.attrGet("id") ?? "", level, title: heading });
       }
     }
+    return {
+      html: markdown.renderer.render(tokens, markdown.options, {}),
+      headings, tableOfContents,
+      text: tokens.map(inlineText).filter(Boolean).join(" ").slice(0, 10_000),
+    };
+  };
+
+  for (const [slug, title, description, sourcePath] of DOCUMENTS) {
+    const absolute = path.join(repositoryRoot, sourcePath);
+    const [source, metadata] = await Promise.all([readFile(absolute, "utf8"), stat(absolute)]);
+    const rendered = renderDocument(source);
+    const localized = {};
+    let lastUpdated = metadata.mtime;
+    let text = rendered.text;
+    let headings = rendered.headings;
+    for (const [lang, titles] of Object.entries(LOCALIZED)) {
+      const entry = titles[slug];
+      if (entry === undefined) continue;
+      const translated = path.join(siteRoot, "src", "content", lang, `${slug}.md`);
+      let translatedSource;
+      let translatedStat;
+      try {
+        [translatedSource, translatedStat] = await Promise.all([readFile(translated, "utf8"), stat(translated)]);
+      } catch {
+        continue;
+      }
+      const page = renderDocument(translatedSource);
+      localized[lang] = { title: entry[0], description: entry[1], html: page.html, tableOfContents: page.tableOfContents };
+      if (translatedStat.mtime > lastUpdated) lastUpdated = translatedStat.mtime;
+      text = `${text} ${page.text}`.slice(0, 20_000);
+      headings = [...headings, ...page.headings];
+    }
     const route = `/docs/${slug}`;
     pages.push({
       route, href: hrefForRoute(route), title, description, layout: "doc",
-      html: markdown.renderer.render(tokens, markdown.options, {}), tableOfContents,
-      lastUpdated: metadata.mtime.toISOString(), headings,
-      text: tokens.map(inlineText).filter(Boolean).join(" ").slice(0, 10_000),
+      html: rendered.html, tableOfContents: rendered.tableOfContents, localized,
+      lastUpdated: lastUpdated.toISOString(), headings, text,
     });
   }
 
   const publicPage = (page) => ({
     route: page.route, href: page.href, title: page.title, description: page.description,
     layout: page.layout, html: page.html, tableOfContents: page.tableOfContents,
-    lastUpdated: page.lastUpdated,
+    lastUpdated: page.lastUpdated, ...(page.localized === undefined ? {} : { localized: page.localized }),
   });
+  const localizedTitles = (page) => Object.fromEntries(Object.entries(page.localized ?? {}).map(([lang, value]) => [lang, value.title]));
+  const link = (page) => ({ href: page.href, title: page.title, localized: localizedTitles(page) });
+  const navigation = pages.filter((page) => page.layout === "doc").map(link);
   const payloadForPage = (page) => {
     const index = pages.indexOf(page);
     return {
       page: publicPage(page),
-      ...(index > 1 ? { previous: { href: pages[index - 1].href, title: pages[index - 1].title } } : {}),
-      ...(index > 0 && index < pages.length - 1 ? { next: { href: pages[index + 1].href, title: pages[index + 1].title } } : {}),
+      navigation,
+      ...(index > 1 ? { previous: link(pages[index - 1]) } : {}),
+      ...(index > 0 && index < pages.length - 1 ? { next: link(pages[index + 1]) } : {}),
     };
   };
   const byRoute = new Map(pages.map((page) => [page.route, page]));

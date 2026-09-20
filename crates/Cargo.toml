@@ -4,7 +4,7 @@ members = ["foundation/protocol", "engine/model-provider", "engine/core", "surfa
 
 [workspace.package]
 edition = "2024"
-version = "0.2.4"
+version = "0.3.0"
 rust-version = "1.85"
 license = "Apache-2.0"
 

@@ -23,15 +23,15 @@ daemon) and `kura-tui` (the terminal client) into `~/.local/bin` or
 Pin a version or destination with:
 
 ```bash
-KURA_VERSION=v0.2.4 KURA_INSTALL_DIR=~/bin sh -c "$(curl -fsSL https://kura.dopejs.com/install.sh)"
+KURA_VERSION=v0.3.0 KURA_INSTALL_DIR=~/bin sh -c "$(curl -fsSL https://kura.dopejs.com/install.sh)"
 ```
 
 Prefer manual? Grab a tarball from the releases page:
 
 ```bash
-curl -LO https://github.com/dopejs/kura/releases/latest/download/kura-0.2.4-aarch64-apple-darwin.tar.gz
-tar xzf kura-0.2.4-aarch64-apple-darwin.tar.gz
-sudo install -m 755 kura-0.2.4-aarch64-apple-darwin/{kura,kura-tui} /usr/local/bin/
+curl -LO https://github.com/dopejs/kura/releases/latest/download/kura-0.3.0-aarch64-apple-darwin.tar.gz
+tar xzf kura-0.3.0-aarch64-apple-darwin.tar.gz
+sudo install -m 755 kura-0.3.0-aarch64-apple-darwin/{kura,kura-tui} /usr/local/bin/
 ```
 
 ## Build from source

@@ -15,6 +15,15 @@ export interface SitePage {
   readonly html: string;
   readonly tableOfContents: readonly TableOfContentsItem[];
   readonly lastUpdated: string;
+  /** Translations keyed by BCP 47 language (`zh-Hans`, …); absent = English only. */
+  readonly localized?: Readonly<Record<string, LocalizedPage>>;
+}
+
+export interface LocalizedPage {
+  readonly title: string;
+  readonly description: string;
+  readonly html: string;
+  readonly tableOfContents: readonly TableOfContentsItem[];
 }
 
 export interface PageSummary {
@@ -29,10 +38,13 @@ export interface PageSummary {
 export interface PageLink {
   readonly href: string;
   readonly title: string;
+  readonly localized?: Readonly<Record<string, string>>;
 }
 
 export interface SitePayload {
   readonly page: SitePage;
+  /** Every documentation page, in order, with localized titles for the sidebar. */
+  readonly navigation?: readonly PageLink[];
   readonly previous?: PageLink;
   readonly next?: PageLink;
 }

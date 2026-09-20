@@ -6,7 +6,7 @@
 # Detects OS/arch, downloads the latest GitHub release tarball, verifies
 # its SHA-256 against the release's SHA256SUMS, and installs `kura` and
 # `kura-tui` into an existing PATH directory (~/.local/bin or
-# /usr/local/bin). Override the version with KURA_VERSION=v0.2.4 and the
+# /usr/local/bin). Override the version with KURA_VERSION=v0.3.0 and the
 # destination with KURA_INSTALL_DIR=/some/bin.
 
 set -eu

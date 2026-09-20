@@ -1,7 +1,9 @@
-# BuildKit reads this for `-f deploy/docker/Dockerfile`. Only daemon/ is needed.
+# BuildKit reads this for `-f deploy/docker/Dockerfile`. The build stage needs
+# the Rust workspace only; everything else (web, site, node_modules, the old
+# Go tree) stays out of the context so the daemon image build is not slowed
+# or invalidated by unrelated changes.
 *
-!daemon
-daemon/**/*_test.go
+!crates
+crates/target
 **/.git
 **/node_modules
-**/.gocache

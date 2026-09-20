@@ -105,21 +105,22 @@ The chat pipeline (query and stream) now runs three kernel hook points:
 - `chat/turn-end` — after the dispatch settled and continuity was
   persisted; observational (a halt only stops later handlers).
 - `chat/tool-call` (Stage 9.0, 2026-09-19) — before a tool the model asked
-  for is executed. Payload: `{tenantId, threadId, dispatchId, callId, name,
-  arguments}`; hooks may rewrite `arguments` or halt. A veto is reported to
+  for is executed. Payload: `{tenantId, threadId, agentProfileId, callId,
+  name, arguments}`; hooks may rewrite `arguments` or halt. A veto is reported to
   the model as a tool error (and as `chat.hook.vetoed`), never silently
   dropped, so the model can answer without the tool.
 
-Tool calling (Stage 9.0): a turn is a bounded sequence of dispatch rounds.
-The assembly's `ToolHost` (`crates/surface/app/src/tool_host.rs`) decides
-which tools the tenant is offered; when the model answers with tool calls
-the service runs them, appends the assistant request and the tool results,
-and dispatches again. Every round is its own persisted dispatch record
-(`tools_json`, `tool_calls_json`, schema v5) with its own `llm.dispatch.*`
-events, each call is a `chat.tool.called` event, and the turn's
-`toolTrace` is returned on the chat response. After `toolMaxRounds`
-(`plugins.json` → `entries.chat.config`, default 4) the model is dispatched
-once more with no tools so the turn ends in text.
+Tool calling (Stage 9.0, merged 2026-09-20): a turn is the agent loop
+`kura-core` already had, driven over the dispatcher — `chat/src/round.rs`
+makes one dispatcher round a `ModelProvider`, so every round is prepared,
+hooked, persisted (`tools_json`, `tool_calls_json`) and evented exactly
+like the single dispatch a turn used to be. The assembly's `ToolSource`
+(`crates/surface/app/src/tool_host.rs`) resolves the registry per turn and
+per tenant: the connected MCP servers' tools, `memory.lookup`, and one tool
+per Ready tool profile; each is wrapped so a call runs `chat/tool-call`,
+is recorded as a `chat.tool.called` event and counted. The loop is capped
+at `toolMaxRounds` (`plugins.json` → `entries.chat.config`, default 16);
+a turn that hits the cap is failed rather than answered with half a result.
 
 A veto surfaces as `ChatError::HookVetoed` → HTTP 403 and is recorded as a
 `chat.hook.vetoed` event. `GET /v1/plugins` reports every hook registration

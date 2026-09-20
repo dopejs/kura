@@ -17,4 +17,18 @@ describe("site content", () => {
     expect(plugins?.tableOfContents.some((heading) => heading.id === "introspection")).toBe(true);
     expect(content.searchIndex).toHaveLength(content.pages.length);
   });
+
+  it("carries Simplified and Traditional Chinese translations for every documentation page", async () => {
+    const content = await loadSiteContent();
+    const docs = content.pages.filter((page) => page.layout === "doc");
+    for (const page of docs) {
+      const localized = (page as { localized?: Record<string, { html: string; title: string }> }).localized ?? {};
+      expect(Object.keys(localized), page.route).toEqual(expect.arrayContaining(["zh-Hans", "zh-Hant"]));
+      expect(localized["zh-Hans"].html.length, page.route).toBeGreaterThan(200);
+      expect(localized["zh-Hant"].title, page.route).not.toEqual(page.title);
+    }
+    const payload = content.payloadForPath("/docs/plugins/");
+    expect(payload.navigation?.length).toBe(docs.length);
+    expect(payload.navigation?.[0].localized?.["zh-Hans"]).toBe("快速开始");
+  });
 });

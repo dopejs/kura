@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "kura-activation"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures",
@@ -1239,7 +1239,7 @@ dependencies = [
 
 [[package]]
 name = "kura-adapterprovider"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "kura-adapterrpc",
  "serde_json",
@@ -1247,7 +1247,7 @@ dependencies = [
 
 [[package]]
 name = "kura-adapterref"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "kura-adapterrpc",
  "serde_json",
@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "kura-adapterrpc"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "parking_lot",
  "serde",
@@ -1265,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "kura-api"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "axum",
  "chrono",
@@ -1337,7 +1337,7 @@ dependencies = [
 
 [[package]]
 name = "kura-app"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "axum",
  "chrono",
@@ -1409,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "kura-artifacts"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-computeruse",
@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "kura-audit"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-billing",
@@ -1433,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "kura-billing"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "parking_lot",
@@ -1445,7 +1445,7 @@ dependencies = [
 
 [[package]]
 name = "kura-bindings"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "serde",
@@ -1455,7 +1455,7 @@ dependencies = [
 
 [[package]]
 name = "kura-calendar"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-adapterrpc",
@@ -1470,7 +1470,7 @@ dependencies = [
 
 [[package]]
 name = "kura-capabilities"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-adapterref",
@@ -1482,7 +1482,7 @@ dependencies = [
 
 [[package]]
 name = "kura-catalog"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-store",
@@ -1495,7 +1495,7 @@ dependencies = [
 
 [[package]]
 name = "kura-chat"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures",
@@ -1525,7 +1525,7 @@ dependencies = [
 
 [[package]]
 name = "kura-checkpoints"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "kura-runtime",
  "kura-store",
@@ -1534,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "kura-cli"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "axum",
  "clap",
@@ -1547,7 +1547,7 @@ dependencies = [
 
 [[package]]
 name = "kura-computeruse"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-policy",
@@ -1564,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "kura-config"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "kura-egress",
  "parking_lot",
@@ -1575,7 +1575,7 @@ dependencies = [
 
 [[package]]
 name = "kura-connectors"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-livevalidation",
@@ -1587,7 +1587,7 @@ dependencies = [
 
 [[package]]
 name = "kura-context"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1595,7 +1595,7 @@ dependencies = [
 
 [[package]]
 name = "kura-contracts"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-plugin",
@@ -1606,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "kura-core"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "futures",
  "kura-model-provider",
@@ -1619,7 +1619,7 @@ dependencies = [
 
 [[package]]
 name = "kura-delivery"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-calendar",
@@ -1639,7 +1639,7 @@ dependencies = [
 
 [[package]]
 name = "kura-discord"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures",
@@ -1669,7 +1669,7 @@ dependencies = [
 
 [[package]]
 name = "kura-egress"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1679,7 +1679,7 @@ dependencies = [
 
 [[package]]
 name = "kura-evaluation"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-billing",
@@ -1699,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "kura-events"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-billing",
@@ -1718,7 +1718,7 @@ dependencies = [
 
 [[package]]
 name = "kura-evidence"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-routine",
@@ -1733,7 +1733,7 @@ dependencies = [
 
 [[package]]
 name = "kura-execprofile"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-config",
@@ -1750,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "kura-feishulark"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-adapterprovider",
@@ -1765,7 +1765,7 @@ dependencies = [
 
 [[package]]
 name = "kura-identity"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "hex",
@@ -1780,7 +1780,7 @@ dependencies = [
 
 [[package]]
 name = "kura-im"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures",
@@ -1805,7 +1805,7 @@ dependencies = [
 
 [[package]]
 name = "kura-improvement"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "parking_lot",
@@ -1816,7 +1816,7 @@ dependencies = [
 
 [[package]]
 name = "kura-imtypes"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-router",
@@ -1826,7 +1826,7 @@ dependencies = [
 
 [[package]]
 name = "kura-integrations"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-livevalidation",
@@ -1841,7 +1841,7 @@ dependencies = [
 
 [[package]]
 name = "kura-inventory"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -1849,7 +1849,7 @@ dependencies = [
 
 [[package]]
 name = "kura-livevalidation"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-billing",
@@ -1863,7 +1863,7 @@ dependencies = [
 
 [[package]]
 name = "kura-llm"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures",
@@ -1879,7 +1879,7 @@ dependencies = [
 
 [[package]]
 name = "kura-mail"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-adapterrpc",
@@ -1894,7 +1894,7 @@ dependencies = [
 
 [[package]]
 name = "kura-managedproviders"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures",
@@ -1912,7 +1912,7 @@ dependencies = [
 
 [[package]]
 name = "kura-matrix"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures",
@@ -1939,7 +1939,7 @@ dependencies = [
 
 [[package]]
 name = "kura-mcp"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures-util",
@@ -1967,7 +1967,7 @@ dependencies = [
 
 [[package]]
 name = "kura-memory"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "parking_lot",
@@ -1979,7 +1979,7 @@ dependencies = [
 
 [[package]]
 name = "kura-migrationfixture"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-connectors",
@@ -1993,7 +1993,7 @@ dependencies = [
 
 [[package]]
 name = "kura-model-provider"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "async-stream",
  "bytes",
@@ -2009,7 +2009,7 @@ dependencies = [
 
 [[package]]
 name = "kura-opsreadiness"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-integrations",
@@ -2019,7 +2019,7 @@ dependencies = [
 
 [[package]]
 name = "kura-orchestration"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-calendar",
@@ -2039,7 +2039,7 @@ dependencies = [
 
 [[package]]
 name = "kura-plugin"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "kura-telemetry",
  "parking_lot",
@@ -2050,7 +2050,7 @@ dependencies = [
 
 [[package]]
 name = "kura-policy"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-integrations",
@@ -2063,7 +2063,7 @@ dependencies = [
 
 [[package]]
 name = "kura-profiles"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "serde",
@@ -2073,7 +2073,7 @@ dependencies = [
 
 [[package]]
 name = "kura-protocol"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2082,7 +2082,7 @@ dependencies = [
 
 [[package]]
 name = "kura-providers"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures",
@@ -2098,7 +2098,7 @@ dependencies = [
 
 [[package]]
 name = "kura-reminders"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-calendar",
@@ -2123,7 +2123,7 @@ dependencies = [
 
 [[package]]
 name = "kura-router"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "parking_lot",
@@ -2135,7 +2135,7 @@ dependencies = [
 
 [[package]]
 name = "kura-routine"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-store",
@@ -2148,7 +2148,7 @@ dependencies = [
 
 [[package]]
 name = "kura-runtime"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-calendar",
@@ -2165,7 +2165,7 @@ dependencies = [
 
 [[package]]
 name = "kura-sandbox"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "base64",
  "chrono",
@@ -2190,7 +2190,7 @@ dependencies = [
 
 [[package]]
 name = "kura-scheduler"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -2210,7 +2210,7 @@ dependencies = [
 
 [[package]]
 name = "kura-secrets"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "parking_lot",
@@ -2223,7 +2223,7 @@ dependencies = [
 
 [[package]]
 name = "kura-session"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "serde",
@@ -2232,7 +2232,7 @@ dependencies = [
 
 [[package]]
 name = "kura-setupwizard"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures",
@@ -2247,7 +2247,7 @@ dependencies = [
 
 [[package]]
 name = "kura-skills"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-identity",
@@ -2263,7 +2263,7 @@ dependencies = [
 
 [[package]]
 name = "kura-slack"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures",
@@ -2290,7 +2290,7 @@ dependencies = [
 
 [[package]]
 name = "kura-store"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-billing",
@@ -2329,7 +2329,7 @@ dependencies = [
 
 [[package]]
 name = "kura-swarm"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "parking_lot",
@@ -2341,7 +2341,7 @@ dependencies = [
 
 [[package]]
 name = "kura-telegram"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures",
@@ -2368,7 +2368,7 @@ dependencies = [
 
 [[package]]
 name = "kura-telemetry"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "parking_lot",
@@ -2376,7 +2376,7 @@ dependencies = [
 
 [[package]]
 name = "kura-tenancy"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-audit",
@@ -2403,7 +2403,7 @@ dependencies = [
 
 [[package]]
 name = "kura-threads"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-profiles",
@@ -2415,7 +2415,7 @@ dependencies = [
 
 [[package]]
 name = "kura-tools"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-egress",
@@ -2428,7 +2428,7 @@ dependencies = [
 
 [[package]]
 name = "kura-triage"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-store",
@@ -2441,7 +2441,7 @@ dependencies = [
 
 [[package]]
 name = "kura-tui"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "clap",
  "crossterm",
@@ -2455,7 +2455,7 @@ dependencies = [
 
 [[package]]
 name = "kura-webhook"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "kura-store",
