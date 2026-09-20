@@ -47,6 +47,7 @@ a { color:inherit; }
 .language-menu__option:hover { background:var(--soft); color:var(--text); }
 .language-menu__option--current { color:var(--brand); }
 .icon-button,.mobile-menu { display:grid; place-items:center; min-width:34px; padding:0 7px; font-size:12px; text-decoration:none; cursor:pointer; }
+.github-mark { width:18px; height:18px; }
 .mobile-menu { display:none; font-size:18px; }
 
 .home-page { width:min(1120px,100%); margin:0 auto; padding:80px 24px 88px; }

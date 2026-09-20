@@ -43,4 +43,11 @@ describe("localized marketing site", () => {
       expect(locale?.home.headlineTail, lang).toBe("");
     }
   });
+
+  it("uses the GitHub mark instead of a text placeholder", () => {
+    const html = renderToStaticMarkup(<App payload={homePayload} initialLocalePath="en" />);
+    expect(html).toContain('aria-label="GitHub"');
+    expect(html).toContain('class="github-mark"');
+    expect(html).not.toContain('aria-label="GitHub">GH</a>');
+  });
 });
