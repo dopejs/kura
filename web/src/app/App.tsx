@@ -57,8 +57,12 @@ import { AgentProfileEditor } from "../features/agent-profiles/AgentProfileEdito
 import { AgentProfileHistory } from "../features/agent-profiles/AgentProfileHistory";
 import { ThreadLifecycleView } from "../features/thread-lifecycle";
 import { MemoryOverviewPanel } from "../features/memory-overview";
+import { isGatewayMode } from "./gatewayMode";
 
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:19192";
+// Behind kura-gateway the page and the API share an origin, and the gateway
+// authenticates the user and attaches the daemon token itself.
+const GATEWAY_MODE = isGatewayMode();
 const DEFAULT_RUN_GOAL = "Run an operator shell smoke check.";
 const DEFAULT_TEST_QUERY = "Return one bounded readiness confirmation.";
 const DEFAULT_ACTIVATION_TEST_CHAT = "Run a safe hosted activation test.";
@@ -164,7 +168,7 @@ const EMPTY_SHELL: ShellSnapshot = {
 const ROLE_OPTIONS: TenantRole[] = ["owner", "admin", "operator", "viewer"];
 
 export function App() {
-  const [daemonURL, setDaemonURL] = useState(DEFAULT_DAEMON_URL);
+  const [daemonURL, setDaemonURL] = useState(GATEWAY_MODE ? window.location.origin : DEFAULT_DAEMON_URL);
   const [accessToken, setAccessToken] = useState("");
   const [status, setStatus] = useState<ShellStatus>("idle");
   const [eventStatus, setEventStatus] = useState<EventStatus>("disconnected");
@@ -231,7 +235,7 @@ export function App() {
   }
 
   async function refreshShell(options: { soft?: boolean; tenantId?: string; explicitSelection?: boolean } = {}) {
-    if (!accessToken.trim()) {
+    if (!GATEWAY_MODE && !accessToken.trim()) {
       setStatus("error");
       setActiveTenantStatus("denied");
       setError("Access token is required to load the operator shell.");
@@ -485,7 +489,14 @@ export function App() {
   }
 
   useEffect(() => {
-    if (!canUseTenantActions || !accessToken.trim() || !tenantOptions) {
+    if (GATEWAY_MODE) {
+      void refreshShell();
+    }
+    // Load once on mount; later loads are user- or event-driven.
+  }, []);
+
+  useEffect(() => {
+    if (!canUseTenantActions || (!GATEWAY_MODE && !accessToken.trim()) || !tenantOptions) {
       setEventStatus("disconnected");
       return;
     }
@@ -1597,14 +1608,22 @@ export function App() {
       </section>
 
       <section className="config-panel">
-        <label>
-          <span>Daemon URL</span>
-          <input value={daemonURL} onChange={(event) => setDaemonURL(event.target.value)} placeholder={DEFAULT_DAEMON_URL} />
-        </label>
-        <label>
-          <span>Access Token</span>
-          <input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} placeholder="Bearer token" type="password" />
-        </label>
+        {GATEWAY_MODE ? (
+          <p>
+            <a href="/gw/settings">Model settings</a>
+          </p>
+        ) : (
+          <>
+            <label>
+              <span>Daemon URL</span>
+              <input value={daemonURL} onChange={(event) => setDaemonURL(event.target.value)} placeholder={DEFAULT_DAEMON_URL} />
+            </label>
+            <label>
+              <span>Access Token</span>
+              <input value={accessToken} onChange={(event) => setAccessToken(event.target.value)} placeholder="Bearer token" type="password" />
+            </label>
+          </>
+        )}
         <label>
           <span>Active Tenant</span>
           <select
