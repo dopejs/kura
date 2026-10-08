@@ -648,6 +648,33 @@ impl SQLiteStore {
         Ok(items)
     }
 
+    /// Every membership the principal holds, in any tenant and any status.
+    /// Used to decide whether a change to the principal itself stays inside
+    /// one tenant.
+    pub fn list_principal_memberships(
+        &self,
+        principal_id: &str,
+    ) -> Result<Vec<kura_identity::Membership>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                r#"SELECT membership_id, tenant_id, principal_id, role, status, invitation_id,
+                    created_at, updated_at, accepted_at, removed_at
+                FROM memberships
+                WHERE principal_id = ?1
+                ORDER BY created_at ASC, membership_id ASC"#,
+            )
+            .map_err(|e| format!("list memberships of {principal_id}: {e}"))?;
+        let mut rows = stmt
+            .query(params![principal_id])
+            .map_err(|e| e.to_string())?;
+        let mut items = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            items.push(scan_membership(row)?);
+        }
+        Ok(items)
+    }
+
     pub fn upsert_tenant_invitation(
         &self,
         invitation: &kura_identity::TenantInvitation,

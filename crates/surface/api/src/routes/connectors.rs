@@ -296,14 +296,23 @@ fn new_ingress_id() -> String {
 // Supervision handlers
 // ---------------------------------------------------------------------------
 
-/// GET /v1/connectors (Go handleConnectors GET branch, local path).
+/// The authenticated tenant, if the request carries one. Connectors are
+/// visible to and changeable by their own tenant only; a request without a
+/// tenant context (identity not configured) keeps the daemon-wide view.
+fn acting_tenant(tenant: Option<&Extension<TenantContext>>) -> &str {
+    tenant.map_or("", |extension| extension.0.0.tenant_id.trim())
+}
+
+/// GET /v1/connectors (Go handleConnectors GET branch, local path), limited
+/// to the acting tenant's connectors.
 async fn list_connectors(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
 ) -> Result<Json<ConnectorListResponse>, ApiError> {
     let supervisor = supervisor(&state)?;
     Ok(Json(ConnectorListResponse {
         items: supervisor
-            .list()
+            .list_for_tenant(acting_tenant(tenant.as_ref()))
             .into_iter()
             .map(project_connector_resource)
             .collect(),
@@ -312,12 +321,27 @@ async fn list_connectors(
 
 /// POST /v1/connectors (Go handleConnectors POST branch) — 201 on first
 /// registration, 200 on re-registration.
+/// The connector is registered under the acting tenant; naming another
+/// tenant is 403, and re-registering an id another tenant owns is 409 (the
+/// supervisor would otherwise move it to the caller).
 async fn register_connector(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
     body: Bytes,
 ) -> Result<(StatusCode, Json<connectors::Connector>), ApiError> {
-    let input: connectors::RegisterInput = decode_json_required(&body)?;
+    let mut input: connectors::RegisterInput = decode_json_required(&body)?;
+    input.tenant_id = super::scoped_tenant(tenant.as_deref(), &input.tenant_id)?;
     let supervisor = supervisor(&state)?;
+    let acting = acting_tenant(tenant.as_ref());
+    if !acting.is_empty() {
+        if let Some(existing) = supervisor.get(input.connector_id.trim()) {
+            if !existing.tenant_id.is_empty() && existing.tenant_id != acting {
+                return Err(ApiError::Conflict(
+                    "connector id is already registered".to_string(),
+                ));
+            }
+        }
+    }
     let (connector, created) = supervisor.register(input).map_err(map_connectors_error)?;
     persist_connector(&state, &connector)?;
     let mut payload = serde_json::Map::new();
@@ -351,11 +375,12 @@ async fn register_connector(
 /// GET /v1/connectors/{connector_id} (Go handleConnectorByID, local path).
 async fn get_connector(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
     Path(connector_id): Path<String>,
 ) -> Result<Json<connectors::Connector>, ApiError> {
     let supervisor = supervisor(&state)?;
     supervisor
-        .get(connector_id.trim())
+        .get_for_tenant(connector_id.trim(), acting_tenant(tenant.as_ref()))
         .map(|connector| Json(project_connector_resource(connector)))
         .ok_or_else(|| ApiError::NotFound("not found".to_string()))
 }
@@ -365,12 +390,16 @@ async fn get_connector(
 /// disabled connector answers 409.
 async fn connector_action(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
     Path((connector_id, action)): Path<(String, String)>,
     body: Bytes,
 ) -> Result<Json<connectors::Connector>, ApiError> {
     let supervisor = supervisor(&state)?;
     let connector_id = connector_id.trim();
-    if supervisor.get(connector_id).is_none() {
+    if supervisor
+        .get_for_tenant(connector_id, acting_tenant(tenant.as_ref()))
+        .is_none()
+    {
         return Err(ApiError::NotFound("not found".to_string()));
     }
     let (connector, event_name, payload) = match action.as_str() {
@@ -796,10 +825,14 @@ fn blocked_response(
 #[allow(clippy::too_many_lines)]
 async fn ingress_messages(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
     Path(connector_id): Path<String>,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let request: ConnectorIngressMessageRequest = decode_json_required(&body)?;
+    let mut request: ConnectorIngressMessageRequest = decode_json_required(&body)?;
+    // The authenticated tenant wins; with it set, only that tenant's
+    // connectors resolve below.
+    request.tenant_id = super::scoped_tenant(tenant.as_deref(), &request.tenant_id)?;
     if request.message.message_id.trim().is_empty() {
         return Err(ApiError::BadRequest("messageId is required".to_string()));
     }
@@ -1240,7 +1273,7 @@ async fn ingress_messages(
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests_support::{request_json, test_state};
+    use super::super::tests_support::{request_json, request_json_as_tenant, test_state};
     use axum::http::StatusCode;
     use std::sync::Arc;
 
@@ -1348,5 +1381,103 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// Connectors belong to the tenant that registered them: another tenant
+    /// can neither name that tenant, list, read, act on, take over, nor feed
+    /// ingress into them (shared-hosting.md §4.5).
+    #[tokio::test]
+    async fn connectors_stay_inside_the_authenticated_tenant() {
+        let state = state_with_supervisor();
+        let (status, registered) = request_json_as_tenant(
+            state.clone(),
+            "ten_a",
+            "POST",
+            "/v1/connectors",
+            Some(register_body()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{registered}");
+        assert_eq!(registered["tenantId"], "ten_a");
+
+        let mut foreign = register_body();
+        foreign["tenantId"] = serde_json::json!("ten_a");
+        let (status, _) = request_json_as_tenant(
+            state.clone(),
+            "ten_b",
+            "POST",
+            "/v1/connectors",
+            Some(foreign),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "naming another tenant");
+
+        let (status, _) = request_json_as_tenant(
+            state.clone(),
+            "ten_b",
+            "POST",
+            "/v1/connectors",
+            Some(register_body()),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::CONFLICT,
+            "taking over another tenant's id"
+        );
+
+        let (status, listed) =
+            request_json_as_tenant(state.clone(), "ten_b", "GET", "/v1/connectors", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed["items"].as_array().expect("items").len(), 0);
+
+        let (status, _) = request_json_as_tenant(
+            state.clone(),
+            "ten_b",
+            "GET",
+            "/v1/connectors/discord-test",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (status, _) = request_json_as_tenant(
+            state.clone(),
+            "ten_b",
+            "POST",
+            "/v1/connectors/discord-test/restart",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let message = serde_json::json!({
+            "route": { "kind": "direct", "peerId": "user_1" },
+            "message": { "messageId": "msg_1", "text": "hello" }
+        });
+        let (status, _) = request_json_as_tenant(
+            state.clone(),
+            "ten_b",
+            "POST",
+            "/v1/connectors/discord-test/ingress/messages",
+            Some(message.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // The owner still sees and uses it; the registration is unchanged.
+        let (status, listed) =
+            request_json_as_tenant(state.clone(), "ten_a", "GET", "/v1/connectors", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed["items"][0]["tenantId"], "ten_a");
+        let (status, accepted) = request_json_as_tenant(
+            state,
+            "ten_a",
+            "POST",
+            "/v1/connectors/discord-test/ingress/messages",
+            Some(message),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
     }
 }

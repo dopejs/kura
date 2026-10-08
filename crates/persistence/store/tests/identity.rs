@@ -309,6 +309,59 @@ fn membership_round_trips_through_sqlite() {
 }
 
 #[test]
+fn principal_memberships_span_tenants() {
+    let dir = temp_dir("identity_principal_memberships");
+    let store = SQLiteStore::new(&dir).unwrap();
+    let membership = |id: &str, tenant: &str, principal: &str, status| Membership {
+        membership_id: id.to_string(),
+        tenant_id: tenant.to_string(),
+        principal_id: principal.to_string(),
+        role: Role::Viewer,
+        status,
+        invitation_id: String::new(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        accepted_at: None,
+        removed_at: None,
+    };
+    store
+        .upsert_membership(&membership(
+            "mem_1",
+            "ten_1",
+            "prn_1",
+            LifecycleStatus::Active,
+        ))
+        .unwrap();
+    store
+        .upsert_membership(&membership(
+            "mem_2",
+            "ten_2",
+            "prn_1",
+            LifecycleStatus::Removed,
+        ))
+        .unwrap();
+    store
+        .upsert_membership(&membership(
+            "mem_3",
+            "ten_1",
+            "prn_2",
+            LifecycleStatus::Active,
+        ))
+        .unwrap();
+
+    let got = store.list_principal_memberships("prn_1").unwrap();
+    let ids: Vec<_> = got.iter().map(|m| m.membership_id.as_str()).collect();
+    assert_eq!(ids, ["mem_1", "mem_2"]);
+    assert_eq!(got[1].status, LifecycleStatus::Removed);
+    assert!(
+        store
+            .list_principal_memberships("prn_missing")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn tenant_invitation_round_trips_through_sqlite() {
     let dir = temp_dir("identity_invitation");
     let store = SQLiteStore::new(&dir).unwrap();

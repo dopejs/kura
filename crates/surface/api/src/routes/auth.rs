@@ -1490,6 +1490,12 @@ async fn principals_list(
 
 /// PATCH /v1/principals/{principal_id} - Go handlePrincipalRoutes
 /// (TenantManage required; empty status defaults to active).
+///
+/// A principal's status is principal-wide, so a tenant manager may only
+/// change principals that live entirely inside their tenant: the target must
+/// hold an active membership in the caller's tenant (404 otherwise, so other
+/// tenants' principals are not discoverable) and none in any other tenant
+/// (409: remove the membership instead). See shared-hosting.md §4.5.
 #[allow(clippy::unused_async)]
 async fn principal_update(
     State(state): State<AppState>,
@@ -1509,6 +1515,24 @@ async fn principal_update(
             "not found".to_string(),
         )));
     };
+    let active_tenants: Vec<String> = store
+        .list_principal_memberships(&principal.principal_id)
+        .map_err(ApiError::from_store)?
+        .into_iter()
+        .filter(|membership| membership.status == LifecycleStatus::Active)
+        .map(|membership| membership.tenant_id)
+        .collect();
+    if !active_tenants.contains(&tc.0.tenant_id) {
+        return Err(AuthApiError::Api(ApiError::NotFound(
+            "not found".to_string(),
+        )));
+    }
+    if active_tenants.iter().any(|id| *id != tc.0.tenant_id) {
+        return Err(AuthApiError::Api(ApiError::Conflict(
+            "the principal is also a member of another tenant; remove its membership instead"
+                .to_string(),
+        )));
+    }
     principal.status = request.status.unwrap_or(LifecycleStatus::Active);
     principal.updated_at = tc.0.resolved_at;
     store
@@ -2961,6 +2985,24 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
 
+        // The invited principal is active in both tenants, so neither tenant
+        // may flip its principal-wide status.
+        let principal_uri = format!("/v1/principals/{}", invited_principal.principal_id);
+        let disable = Some(r#"{"status":"disabled"}"#);
+        let default_tenant = h.default_tenant.tenant_id.clone();
+        let (status, json) = send(
+            &app,
+            request_with(
+                "PATCH",
+                &principal_uri,
+                disable,
+                Some(&h.auth_header),
+                Some(&default_tenant),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "body: {json}");
+
         let (status, json) = send(
             &app,
             request_with(
@@ -2974,19 +3016,34 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
 
-        let principal_uri = format!("/v1/principals/{}", invited_principal.principal_id);
+        // No longer a member of the org: the org cannot see it.
         let (status, json) = send(
             &app,
             request_with(
                 "PATCH",
                 &principal_uri,
-                Some(r#"{"status":"disabled"}"#),
+                disable,
                 Some(&h.auth_header),
                 Some(&org_id),
             ),
         )
         .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "body: {json}");
+
+        // Only a member of the default tenant now: that tenant may disable it.
+        let (status, json) = send(
+            &app,
+            request_with(
+                "PATCH",
+                &principal_uri,
+                disable,
+                Some(&h.auth_header),
+                Some(&default_tenant),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
+        assert_eq!(json["principal"]["status"], serde_json::json!("disabled"));
 
         let audit_uri = format!("/v1/tenant-audit-events?tenantId={org_id}");
         let (status, json) = send(

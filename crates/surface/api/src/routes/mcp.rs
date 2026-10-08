@@ -508,12 +508,13 @@ async fn skill_detail(
 /// parameter (Go handleWebhooks GET).
 async fn list_webhooks(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
     Query(query): Query<WebhookListQuery>,
 ) -> Result<Json<WebhookListResponse>, ApiError> {
     let manager = webhook_manager(&state)?;
     let tenant_id = query.tenant_id.unwrap_or_default();
     Ok(Json(WebhookListResponse {
-        items: manager.list_for_tenant(&webhook_tenant(&tenant_id)),
+        items: manager.list_for_tenant(&webhook_tenant(tenant.as_deref(), &tenant_id)?),
     }))
 }
 
@@ -521,11 +522,12 @@ async fn list_webhooks(
 /// secret is returned exactly once (Go handleWebhooks POST).
 async fn create_webhook(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
     body: Bytes,
 ) -> Result<(StatusCode, Json<webhook::CreateSecret>), ApiError> {
     let manager = webhook_manager(&state)?;
     let request: CreateWebhookRequest = decode_json_body(&body)?;
-    let tenant_id = webhook_tenant(&request.tenant_id);
+    let tenant_id = webhook_tenant(tenant.as_deref(), &request.tenant_id)?;
     let created = manager
         .create(
             &tenant_id,
@@ -541,11 +543,15 @@ async fn create_webhook(
 /// handleWebhookRoutes get branch).
 async fn get_webhook(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
     Query(query): Query<WebhookListQuery>,
     Path(webhook_id): Path<String>,
 ) -> Result<Json<webhook::Endpoint>, ApiError> {
     let manager = webhook_manager(&state)?;
-    let tenant_id = webhook_tenant(query.tenant_id.as_deref().unwrap_or_default());
+    let tenant_id = webhook_tenant(
+        tenant.as_deref(),
+        query.tenant_id.as_deref().unwrap_or_default(),
+    )?;
     let endpoint = manager
         .get(&tenant_id, &webhook_id)
         .ok_or_else(|| write_webhook_error(&webhook::WebhookError::EndpointNotFound))?;
@@ -556,16 +562,20 @@ async fn get_webhook(
 /// handleWebhookRoutes "rotate").
 async fn rotate_webhook(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
     Query(query): Query<WebhookListQuery>,
     Path(webhook_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<webhook::CreateSecret>, ApiError> {
     let manager = webhook_manager(&state)?;
     let request: WebhookTenantRequest = decode_optional_json_body(&body)?;
-    let tenant_id = webhook_tenant(&first_non_empty(&[
-        request.tenant_id.as_str(),
-        query.tenant_id.as_deref().unwrap_or_default(),
-    ]));
+    let tenant_id = webhook_tenant(
+        tenant.as_deref(),
+        &first_non_empty(&[
+            request.tenant_id.as_str(),
+            query.tenant_id.as_deref().unwrap_or_default(),
+        ]),
+    )?;
     let rotated = manager
         .rotate(&tenant_id, &webhook_id)
         .map_err(|err| write_webhook_error(&err))?;
@@ -576,16 +586,20 @@ async fn rotate_webhook(
 /// handleWebhookRoutes "disable").
 async fn disable_webhook(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
     Query(query): Query<WebhookListQuery>,
     Path(webhook_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<webhook::Endpoint>, ApiError> {
     let manager = webhook_manager(&state)?;
     let request: WebhookTenantRequest = decode_optional_json_body(&body)?;
-    let tenant_id = webhook_tenant(&first_non_empty(&[
-        request.tenant_id.as_str(),
-        query.tenant_id.as_deref().unwrap_or_default(),
-    ]));
+    let tenant_id = webhook_tenant(
+        tenant.as_deref(),
+        &first_non_empty(&[
+            request.tenant_id.as_str(),
+            query.tenant_id.as_deref().unwrap_or_default(),
+        ]),
+    )?;
     let disabled = manager
         .disable(&tenant_id, &webhook_id)
         .map_err(|err| write_webhook_error(&err))?;
@@ -718,14 +732,11 @@ fn lifecycle_status(status: &mcp::CatalogActionStatus) -> StatusCode {
     }
 }
 
-/// Go webhookTenant: the body tenant wins; otherwise the query tenant.
-fn webhook_tenant(body_tenant: &str) -> String {
-    let trimmed = body_tenant.trim();
-    if !trimmed.is_empty() {
-        trimmed.to_string()
-    } else {
-        String::new()
-    }
+/// Go webhookTenant (the body tenant wins over the query tenant at the call
+/// sites), but the authenticated tenant wins over both: a request naming
+/// another tenant's endpoints is refused.
+fn webhook_tenant(tenant: Option<&TenantContext>, requested: &str) -> Result<String, ApiError> {
+    super::scoped_tenant(tenant, requested)
 }
 
 /// Go firstNonEmpty (trimmed).
@@ -1338,6 +1349,87 @@ mod tests {
             ),
         ).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// The authenticated tenant wins over a tenant named in the request: a
+    /// caller cannot list, read, rotate or disable another tenant's webhooks
+    /// by naming that tenant (shared-hosting.md §4.5).
+    #[tokio::test]
+    async fn webhooks_stay_inside_the_authenticated_tenant() {
+        let app = app(webhooks_state());
+
+        let body = create_webhook_body("Ship");
+        let (status, json) = send(
+            &app,
+            tenant_request("POST", "/v1/webhooks", Some(&body), "ten_webhook", vec![]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "create should be 201: {json}");
+        let webhook_id = json["endpoint"]["webhookId"]
+            .as_str()
+            .expect("webhook id")
+            .to_string();
+
+        // Creating for another tenant is refused outright.
+        let (status, _) = send(
+            &app,
+            tenant_request("POST", "/v1/webhooks", Some(&body), "ten_other", vec![]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        for (method, uri) in [
+            ("GET", "/v1/webhooks?tenantId=ten_webhook".to_string()),
+            (
+                "GET",
+                format!("/v1/webhooks/{webhook_id}?tenantId=ten_webhook"),
+            ),
+            (
+                "POST",
+                format!("/v1/webhooks/{webhook_id}/rotate?tenantId=ten_webhook"),
+            ),
+            (
+                "POST",
+                format!("/v1/webhooks/{webhook_id}/disable?tenantId=ten_webhook"),
+            ),
+        ] {
+            let (status, _) = send(
+                &app,
+                tenant_request(method, &uri, None, "ten_other", vec![]),
+            )
+            .await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
+        }
+
+        // Without naming a tenant, the caller only sees its own endpoints.
+        let (status, json) = send(
+            &app,
+            tenant_request("GET", "/v1/webhooks", None, "ten_other", vec![]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["items"].as_array().map(Vec::len), Some(0));
+        let (status, _) = send(
+            &app,
+            tenant_request(
+                "GET",
+                &format!("/v1/webhooks/{webhook_id}"),
+                None,
+                "ten_other",
+                vec![],
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // The owning tenant still works, with or without naming itself.
+        let (status, json) = send(
+            &app,
+            tenant_request("GET", "/v1/webhooks", None, "ten_webhook", vec![]),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["items"][0]["webhookId"], webhook_id);
     }
 
     /// Port of handleWebhookTrigger: signature-authenticated ingress with the

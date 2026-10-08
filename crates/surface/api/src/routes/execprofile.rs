@@ -9,7 +9,7 @@
 //! permission denied -> 403, unavailable / invalid -> 400.
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use kura_execprofile as execprofile;
 
 use crate::error::ApiError;
+use crate::middleware::TenantContext;
 use crate::state::AppState;
 
 use super::{decode_json_or_default, decode_json_required};
@@ -102,19 +103,23 @@ async fn get_profile(
 
 /// POST /v1/execution/profiles/{profile_id}/select (Go
 /// handleExecutionProfileRoutes select branch); an empty body is tolerated.
+/// The selection is recorded for the authenticated tenant; naming another
+/// tenant (body first, then query) is 403.
 async fn select_profile(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
     Path(profile_id): Path<String>,
     Query(query): Query<TenantQuery>,
     body: Bytes,
 ) -> Result<Json<execprofile::Selection>, ApiError> {
     let request: SelectExecutionProfileRequest = decode_json_or_default(&body)?;
     let manager = manager(&state)?;
-    let tenant = if request.tenant_id.trim().is_empty() {
-        query.tenant_id.trim().to_string()
+    let requested = if request.tenant_id.trim().is_empty() {
+        query.tenant_id.as_str()
     } else {
-        request.tenant_id.trim().to_string()
+        request.tenant_id.as_str()
     };
+    let tenant = super::scoped_tenant(tenant.as_deref(), requested)?;
     let selection = manager
         .select_profile(&tenant, profile_id.trim(), request.actor.trim())
         .map_err(map_exec_error)?;
@@ -134,7 +139,7 @@ async fn explain_execution(
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests_support::{request_json, test_state};
+    use super::super::tests_support::{request_json, request_json_as_tenant, test_state};
     use axum::http::StatusCode;
     use std::sync::Arc;
 
@@ -188,6 +193,42 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{explained}");
+    }
+
+    /// shared-hosting.md §4.5: a selection is recorded for the authenticated
+    /// tenant, never for a tenant named in the body or query.
+    #[tokio::test]
+    async fn select_cannot_name_another_tenant() {
+        let state = state_with_manager();
+        let uri = "/v1/execution/profiles/exec_profile_subprocess/select";
+        let (status, _) = request_json_as_tenant(
+            state.clone(),
+            "ten_a",
+            "POST",
+            uri,
+            Some(serde_json::json!({ "tenantId": "ten_b", "actor": "operator_a" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, _) = request_json_as_tenant(
+            state.clone(),
+            "ten_a",
+            "POST",
+            &format!("{uri}?tenantId=ten_b"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, selection) = request_json_as_tenant(
+            state,
+            "ten_a",
+            "POST",
+            uri,
+            Some(serde_json::json!({ "actor": "operator_a" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{selection}");
+        assert_eq!(selection["tenantId"], "ten_a", "{selection}");
     }
 
     #[tokio::test]

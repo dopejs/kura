@@ -6,13 +6,14 @@
 //! recall memory on demand. Every hit carries its source links and
 //! drill-down member ids — recalled results are evidence, never bare text.
 
-use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::routing::post;
+use axum::{Extension, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
+use crate::middleware::TenantContext;
 use crate::response::Json;
 use crate::state::AppState;
 
@@ -49,18 +50,21 @@ pub struct RetrievalQueryResponse {
 const DEFAULT_LIMIT: usize = 5;
 
 /// POST /v1/retrieval/queries — fused recall over Ready L1 atoms
-/// (private/team visibility, tenant-scoped; empty tenant = local scope).
+/// (private/team visibility, scoped to the acting tenant; empty tenant = local
+/// scope). A body `tenantId` naming another tenant is refused.
 #[allow(clippy::unused_async)]
 pub async fn query(
     State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
     body: Bytes,
 ) -> Result<Json<RetrievalQueryResponse>, ApiError> {
     let request: RetrievalQueryRequest = super::decode_json_required(&body)?;
     if request.query.trim().is_empty() {
         return Err(ApiError::BadRequest("query is required".to_string()));
     }
-    let hits = run_query(&state, &request.tenant_id, &request.query, request.limit)
-        .map_err(ApiError::internal)?;
+    let tenant_id = super::scoped_tenant(tenant.as_deref(), &request.tenant_id)?;
+    let hits =
+        run_query(&state, &tenant_id, &request.query, request.limit).map_err(ApiError::internal)?;
     Ok(Json(RetrievalQueryResponse { hits }))
 }
 
@@ -203,7 +207,7 @@ mod tests {
 
     use axum::http::StatusCode;
 
-    use super::super::tests_support::{request_json, test_state};
+    use super::super::tests_support::{request_json, request_json_as_tenant, test_state};
 
     fn seed_atom(manager: &kura_memory::Manager, content: &str) {
         manager
@@ -262,5 +266,32 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn query_cannot_name_another_tenant() {
+        let mut state = test_state();
+        state.memory = Some(Arc::new(kura_memory::Manager::new(
+            "test", None, None, None,
+        )));
+        let (status, _) = request_json_as_tenant(
+            state.clone(),
+            "ten_a",
+            "POST",
+            "/v1/retrieval/queries",
+            Some(serde_json::json!({ "query": "anything", "tenantId": "ten_b" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let (status, _) = request_json_as_tenant(
+            state,
+            "ten_a",
+            "POST",
+            "/v1/retrieval/queries",
+            Some(serde_json::json!({ "query": "anything", "tenantId": "ten_a" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "naming your own tenant still works");
     }
 }

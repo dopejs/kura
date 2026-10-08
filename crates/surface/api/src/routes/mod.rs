@@ -258,6 +258,30 @@ pub async fn metrics() -> axum::response::Response {
 // three helpers apply the same conventions the row-based `kura-tenancy`
 // accessors use.
 
+/// The tenant a request acts for, for families whose request shape carries a
+/// `tenantId` (body or query). The resolved context always wins: naming a
+/// different tenant is a 403, never a redirect into that tenant's data. With no
+/// resolved tenant (an assembly without an identity manager) the named tenant
+/// is used as before. See docs/harness/shared-hosting.md §4.5.
+pub(crate) fn scoped_tenant(
+    tenant: Option<&crate::middleware::TenantContext>,
+    requested: &str,
+) -> Result<String, ApiError> {
+    let requested = requested.trim();
+    let Some(acting) = tenant
+        .map(|tc| tc.0.tenant_id.trim())
+        .filter(|id| !id.is_empty())
+    else {
+        return Ok(requested.to_string());
+    };
+    if !requested.is_empty() && requested != acting {
+        return Err(ApiError::Forbidden(
+            "the request names a tenant other than the authenticated one".to_string(),
+        ));
+    }
+    Ok(acting.to_string())
+}
+
 /// Binds a just-persisted manager document to the acting tenant. No-op in the
 /// single-user assembly. A document owned by another tenant answers 404 rather
 /// than disclosing the conflict.

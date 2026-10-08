@@ -44,10 +44,14 @@ const GLOBAL_BY_DESIGN: &[(&str, &str)] = &[
 ];
 
 /// Source markers that count as "this family reasons about tenancy". Any one
-/// is enough; the gate checks that the question was asked, not how.
+/// is enough; the gate checks that the question was asked, not how. Each
+/// marker refers to the *resolved* tenant (the request extension or a guard
+/// built on it). A bare `tenant_id` does not count: a handler that reads
+/// `tenant_id` from the body or query trusts the client, which is exactly
+/// the gap this gate missed (shared-hosting.md G6).
 const TENANCY_MARKERS: &[&str] = &[
     "TenantContext",
-    "tenant_id",
+    "scoped_tenant",
     "for_tenant",
     "guard_document_tenant",
     "bind_document_tenant",
