@@ -42,6 +42,8 @@ authenticate is the machine's owner:
 | G10 | Skills, prompt overlays, connectors are global; connectors bind to the oldest personal tenant | `skills/src/lib.rs:230-242`, `store/src/tenancy.rs:1275-1283` | M1 (operator-only), later per tenant |
 | G11 | Egress (SSRF) checks only cover tool-profile `base_url`; not MCP http/ws, browser, sandbox; DNS rebinding open | `egress/src/lib.rs:1-24` | M3 |
 | G12 | No rate limit, concurrency cap or run-queue fairness | — | M4 |
+| G14 | Token rotate/revoke/grant-update need only `TenantManage` (every tenant owner) and then act on **any** token; rotate returns the new secret, so a tenant owner could take over the operator token. Token list with `principalId` showed any principal's tokens | `routes/auth.rs` `auth_token_rotate`/`revoke`/`grant_update`/`list` | M1 (all modes) |
+| G15 | Chat turns are offered every tenant's MCP tools: `tools_for_surface` uses `list_servers()` and `authorize_tool` takes no tenant, so tenant A's turn can call tools tenant B allowlisted for `chat`, on B's server | `mcp/src/agent_tool.rs:259-278`, `mcp/src/manager.rs:455,689-787`, `app/src/tool_host.rs:63-65` | M1 (all modes) |
 | G13 | Token auth scans all tokens under a write lock; a write per request; one SQLite writer; reader pool off; membership lookup capped at 500 | `identity/src/auth.rs:416-450`, `middleware.rs:212`, `store/src/pool.rs` | M4 |
 
 ## 3. Milestones
@@ -130,6 +132,13 @@ value is used as before. Details per family:
   ingress takes the acting tenant.
 - `PATCH /v1/principals/{id}` uses the new
   `SQLiteStore::list_principal_memberships`.
+
+Token management (G14): rotate, revoke and tenant-grant changes act only on
+the caller's own tokens or tokens of a principal whose only active membership
+is the caller's tenant; anything else is 404 before any side effect. A
+manager's token list for another principal is empty unless that principal is
+an active member of the caller's tenant. `PATCH /v1/principals/{id}` shares
+the same membership helper.
 
 Known limits:
 

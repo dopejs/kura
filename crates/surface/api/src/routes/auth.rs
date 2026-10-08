@@ -374,6 +374,77 @@ fn tenant_context(
         .ok_or(AuthApiError::TenantDenial)
 }
 
+/// Where a principal holds active memberships, relative to one tenant.
+struct PrincipalTenancy {
+    in_tenant: bool,
+    elsewhere: bool,
+}
+
+impl PrincipalTenancy {
+    /// The principal lives entirely inside the tenant, so principal-wide
+    /// changes (status, its tokens) are that tenant's to make.
+    fn confined(&self) -> bool {
+        self.in_tenant && !self.elsewhere
+    }
+}
+
+fn principal_tenancy(
+    store: &kura_store::SQLiteStore,
+    principal_id: &str,
+    tenant_id: &str,
+) -> Result<PrincipalTenancy, ApiError> {
+    let mut tenancy = PrincipalTenancy {
+        in_tenant: false,
+        elsewhere: false,
+    };
+    for membership in store
+        .list_principal_memberships(principal_id)
+        .map_err(ApiError::from_store)?
+    {
+        if membership.status != LifecycleStatus::Active {
+            continue;
+        }
+        if membership.tenant_id == tenant_id {
+            tenancy.in_tenant = true;
+        } else {
+            tenancy.elsewhere = true;
+        }
+    }
+    Ok(tenancy)
+}
+
+/// Token management (rotate, revoke, grant changes) is limited to the
+/// caller's own tokens and the tokens of principals confined to the caller's
+/// tenant. Anything else answers 404: a tenant manager used to be able to
+/// rotate any token in the daemon and receive its new secret.
+fn require_token_in_scope(
+    state: &AppState,
+    tc: &TenantContext,
+    token_id: &str,
+) -> Result<(), AuthApiError> {
+    let not_found = || AuthApiError::Api(ApiError::NotFound("not found".to_string()));
+    let token_id = token_id.trim();
+    if token_id.is_empty() {
+        return Err(not_found());
+    }
+    if token_id == tc.0.token_id {
+        return Ok(());
+    }
+    let owner = auth_manager(state)?
+        .get_token(token_id)
+        .map(|token| token.principal_id)
+        .ok_or_else(not_found)?;
+    if owner == tc.0.principal_id {
+        return Ok(());
+    }
+    if owner.is_empty()
+        || !principal_tenancy(&state.store.lock(), &owner, &tc.0.tenant_id)?.confined()
+    {
+        return Err(not_found());
+    }
+    Ok(())
+}
+
 /// Go RequirePermission: on denial writes a tenant.permission_denied audit
 /// (reasonCode "permission_denied:<permission>") and returns the 403 stable
 /// tenant denial.
@@ -909,6 +980,18 @@ async fn auth_tokens_list(
     if principal_id.is_empty() || !has_permission(&tc.0.permissions, Permission::TenantManage) {
         principal_id = tc.0.principal_id.clone();
     }
+    // A manager may list the tokens of their tenant's members only (an empty
+    // principal id here would mean "every token in the daemon").
+    if principal_id.is_empty()
+        || (principal_id != tc.0.principal_id
+            && !principal_tenancy(&state.store.lock(), &principal_id, &tc.0.tenant_id)?.in_tenant)
+    {
+        return Ok((
+            StatusCode::OK,
+            Json(ListResponse::<AccessToken> { items: Vec::new() }),
+        )
+            .into_response());
+    }
     let status = params.status.trim().to_string();
     let items = tokens
         .into_iter()
@@ -1001,6 +1084,7 @@ async fn auth_token_rotate(
 ) -> Result<Response, AuthApiError> {
     let tc = tenant_context(&tenant)?;
     require_permission(&state, &tc.0, Permission::TenantManage)?;
+    require_token_in_scope(&state, tc, &token_id)?;
     let request: RotateTokenRequest = decode_json_body(&body)?;
     let expires_at = parse_optional_time(&request.expires_at)?;
     let old_grants = state
@@ -1078,6 +1162,7 @@ async fn auth_token_revoke(
 ) -> Result<Response, AuthApiError> {
     let tc = tenant_context(&tenant)?;
     require_permission(&state, &tc.0, Permission::TenantManage)?;
+    require_token_in_scope(&state, tc, &token_id)?;
     let request: RevokeTokenRequest = decode_json_body(&body)?;
     let reason = if request.reason.trim().is_empty() {
         "token_revoked".to_string()
@@ -1115,6 +1200,7 @@ async fn auth_token_grant_update(
 ) -> Result<Response, AuthApiError> {
     let tc = tenant_context(&tenant)?;
     require_permission(&state, &tc.0, Permission::TenantManage)?;
+    require_token_in_scope(&state, tc, &token_id)?;
     let request: GrantUpdateRequest = decode_json_body(&body)?;
     let identity = identity_manager(&state)?;
     let grants = identity
@@ -1515,19 +1601,13 @@ async fn principal_update(
             "not found".to_string(),
         )));
     };
-    let active_tenants: Vec<String> = store
-        .list_principal_memberships(&principal.principal_id)
-        .map_err(ApiError::from_store)?
-        .into_iter()
-        .filter(|membership| membership.status == LifecycleStatus::Active)
-        .map(|membership| membership.tenant_id)
-        .collect();
-    if !active_tenants.contains(&tc.0.tenant_id) {
+    let tenancy = principal_tenancy(&store, &principal.principal_id, &tc.0.tenant_id)?;
+    if !tenancy.in_tenant {
         return Err(AuthApiError::Api(ApiError::NotFound(
             "not found".to_string(),
         )));
     }
-    if active_tenants.iter().any(|id| *id != tc.0.tenant_id) {
+    if tenancy.elsewhere {
         return Err(AuthApiError::Api(ApiError::Conflict(
             "the principal is also a member of another tenant; remove its membership instead"
                 .to_string(),
@@ -2882,6 +2962,125 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn token_management_stays_inside_the_callers_tenant() {
+        let h = harness(true, true);
+        let app = protected_app(h.state.clone());
+        let other = h.other_tenant.tenant_id.clone();
+        let token_of = |principal_id: &str| {
+            h.auth_manager
+                .list_tokens()
+                .into_iter()
+                .find(|token| token.principal_id == principal_id)
+                .expect("token")
+                .token_id
+        };
+
+        // A member confined to the default tenant, and the owner of another
+        // tenant (a self-serve user in shared hosting).
+        let (_member_auth, _) = h.issue_principal_token("prn_member", "Member");
+        let member_token = token_of("prn_member");
+        let (outsider_auth, _) = h.issue_principal_token("prn_outsider", "Outsider");
+        let outsider_token = token_of("prn_outsider");
+        h.set_default_membership_role("prn_outsider", Role::Viewer, LifecycleStatus::Removed);
+        {
+            let store = h.store.lock();
+            store
+                .upsert_membership(&kura_identity::Membership {
+                    membership_id: "mem_outsider_other".to_string(),
+                    tenant_id: other.clone(),
+                    principal_id: "prn_outsider".to_string(),
+                    role: Role::Owner,
+                    status: LifecycleStatus::Active,
+                    invitation_id: String::new(),
+                    created_at: h.now,
+                    updated_at: h.now,
+                    accepted_at: Some(h.now),
+                    removed_at: None,
+                })
+                .expect("upsert membership");
+            store
+                .upsert_token_tenant_grant(&kura_identity::TokenTenantGrant {
+                    grant_id: "grant_prn_outsider".to_string(),
+                    token_id: outsider_token.clone(),
+                    tenant_id: other.clone(),
+                    is_default: true,
+                    status: LifecycleStatus::Active,
+                    created_at: h.now,
+                    updated_at: h.now,
+                    revoked_at: None,
+                    granted_by_principal_id: "prn_outsider".to_string(),
+                })
+                .expect("upsert grant");
+        }
+        let as_outsider = |method: &str, uri: &str, body: Option<&str>| {
+            request_with(method, uri, body, Some(&outsider_auth), Some(&other))
+        };
+
+        // The other tenant's owner cannot touch the operator's or the
+        // member's tokens, nor list them.
+        for token_id in [h.token.token_id.as_str(), member_token.as_str()] {
+            for action in ["rotate", "revoke"] {
+                let uri = format!("/v1/auth/tokens/{token_id}/{action}");
+                let (status, json) = send(&app, as_outsider("POST", &uri, Some("{}"))).await;
+                assert_eq!(status, StatusCode::NOT_FOUND, "{action} {token_id}: {json}");
+                assert!(json.get("accessToken").is_none());
+            }
+            let uri = format!("/v1/auth/tokens/{token_id}/tenant-grants");
+            let body = format!(r#"{{"allowedTenantIds":["{other}"],"defaultTenantId":"{other}"}}"#);
+            let (status, _) = send(&app, as_outsider("PATCH", &uri, Some(&body))).await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+        }
+        let (status, json) = send(
+            &app,
+            as_outsider("GET", "/v1/auth/tokens?principalId=prn_api_local", None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        // Empty lists omit `items` (Go ListResponse).
+        assert!(json.get("items").is_none(), "{json}");
+        let (status, _) = send(
+            &app,
+            as_outsider("POST", "/v1/auth/tokens/tok_missing/revoke", Some("{}")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let operator = token_of("prn_api_local");
+        assert_eq!(
+            h.auth_manager
+                .get_token(&operator)
+                .expect("operator")
+                .status,
+            kura_identity::auth::TokenStatus::Active
+        );
+
+        // Nor can the operator reach into the other tenant.
+        let as_operator = |method: &str, uri: &str, body: Option<&str>| {
+            request_with(method, uri, body, Some(&h.auth_header), None)
+        };
+        let uri = format!("/v1/auth/tokens/{outsider_token}/revoke");
+        let (status, _) = send(&app, as_operator("POST", &uri, Some("{}"))).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // A manager still manages their own members' tokens...
+        let (status, json) = send(
+            &app,
+            as_operator("GET", "/v1/auth/tokens?principalId=prn_member", None),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["items"][0]["tokenId"], serde_json::json!(member_token));
+        let uri = format!("/v1/auth/tokens/{member_token}/revoke");
+        let (status, json) = send(&app, as_operator("POST", &uri, Some("{}"))).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+
+        // ...and everyone manages their own.
+        let uri = format!("/v1/auth/tokens/{outsider_token}/rotate");
+        let (status, json) = send(&app, as_outsider("POST", &uri, Some("{}"))).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert!(json["accessToken"].as_str().is_some_and(|s| !s.is_empty()));
     }
 
     #[tokio::test]
