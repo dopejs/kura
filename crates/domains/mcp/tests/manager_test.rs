@@ -1105,6 +1105,54 @@ fn started_server_with(tool: Tool) -> Arc<kura_mcp::Manager> {
     manager
 }
 
+fn started_server_owned_by(tenant_id: &str, tool: Tool) -> Arc<kura_mcp::Manager> {
+    let session = FakeSession::new("session-1", vec![tool]);
+    let manager = Arc::new(kura_mcp::Manager::new(
+        test_cfg("~/.kura-test"),
+        None,
+        None,
+        None,
+        Some(Arc::new(kura_policy::Engine::new())),
+        Some(Arc::new(FakeTransport { session })),
+    ));
+    let mut input = streamable_server_input("srv-1");
+    input.tenant_id = tenant_id.to_string();
+    manager.create_server(input).unwrap();
+    manager.start("srv-1", "operator").unwrap();
+    manager
+}
+
+#[test]
+fn a_turn_is_offered_only_its_own_tenants_servers() {
+    let manager = started_server_owned_by("ten_a", fake_tool("lookup"));
+    allow(&manager, "lookup", ExposureMode::Allow);
+
+    assert_eq!(
+        kura_mcp::tools_for_tenant(&manager, "ten_a", "chat", true).len(),
+        1
+    );
+    // Another tenant never sees it, whether or not unowned servers are shared.
+    assert!(kura_mcp::tools_for_tenant(&manager, "ten_b", "chat", true).is_empty());
+    assert!(kura_mcp::tools_for_tenant(&manager, "ten_b", "chat", false).is_empty());
+    // No tenant (identity off): everything, as before.
+    assert_eq!(
+        kura_mcp::tools_for_tenant(&manager, " ", "chat", false).len(),
+        1
+    );
+}
+
+#[test]
+fn unowned_servers_are_offered_only_when_asked_for() {
+    let manager = started_server_with(fake_tool("lookup"));
+    allow(&manager, "lookup", ExposureMode::Allow);
+
+    assert_eq!(
+        kura_mcp::tools_for_tenant(&manager, "ten_a", "chat", true).len(),
+        1
+    );
+    assert!(kura_mcp::tools_for_tenant(&manager, "ten_a", "chat", false).is_empty());
+}
+
 fn allow(manager: &kura_mcp::Manager, tool_name: &str, mode: ExposureMode) {
     manager
         .update_tool_exposure(

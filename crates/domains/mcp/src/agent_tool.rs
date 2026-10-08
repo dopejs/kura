@@ -255,10 +255,51 @@ impl McpTool {
 /// Built from what discovery already recorded rather than by reaching out: a
 /// server that is down should not stop a turn from starting, and its tools are
 /// simply not offered until it is back.
+///
+/// This offers every tenant's servers. A turn that acts for a tenant wants
+/// [`tools_for_tenant`].
 #[must_use]
 pub fn tools_for_surface(manager: &Arc<Manager>, runtime_surface: &str) -> Vec<Arc<dyn Tool>> {
+    collect_tools(manager, manager.list_servers(), runtime_surface)
+}
+
+/// The tools a turn acting for `tenant_id` may be offered: its own tenant's
+/// servers, plus servers no tenant owns when `include_unowned` is set (servers
+/// created before servers recorded their tenant, or with identity off).
+///
+/// Another tenant's servers are never offered. Their exposure rules are that
+/// tenant's to set, and a call would run on their server. An empty tenant id
+/// means the turn has no tenant (identity not configured) and keeps today's
+/// behavior: every server.
+#[must_use]
+pub fn tools_for_tenant(
+    manager: &Arc<Manager>,
+    tenant_id: &str,
+    runtime_surface: &str,
+    include_unowned: bool,
+) -> Vec<Arc<dyn Tool>> {
+    let tenant_id = tenant_id.trim();
+    if tenant_id.is_empty() {
+        return tools_for_surface(manager, runtime_surface);
+    }
+    let servers = manager
+        .list_servers()
+        .into_iter()
+        .filter(|server| {
+            let owner = server.server.tenant_id.trim();
+            owner == tenant_id || (include_unowned && owner.is_empty())
+        })
+        .collect();
+    collect_tools(manager, servers, runtime_surface)
+}
+
+fn collect_tools(
+    manager: &Arc<Manager>,
+    servers: Vec<crate::ServerResource>,
+    runtime_surface: &str,
+) -> Vec<Arc<dyn Tool>> {
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
-    for server in manager.list_servers() {
+    for server in servers {
         let server_id = server.server.server_id.clone();
         let Ok(published) = manager.list_tools(&server_id) else {
             continue;

@@ -140,6 +140,12 @@ manager's token list for another principal is empty unless that principal is
 an active member of the caller's tenant. `PATCH /v1/principals/{id}` shares
 the same membership helper.
 
+Chat MCP tools (G15): a turn is offered only servers owned by its tenant
+(`kura_mcp::tools_for_tenant`), plus servers with no owner — those predate
+2026-09-02, when servers began recording their tenant, so dropping them would
+silently take tools away from existing single-mode daemons. Shared mode stops
+offering unowned servers (§4.3: MCP is operator-only there).
+
 Known limits:
 
 - A connector persisted with an empty tenant id is invisible to tenant-scoped

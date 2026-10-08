@@ -4,8 +4,9 @@
 //! `Tool` trait; the chat service asks a `ToolSource` for the registry once
 //! per turn. This is that source. It composes, per turn and per tenant:
 //!
-//! - every tool the connected MCP servers publish (`kura_mcp::tools_for_surface`,
-//!   authorized under the `chat` surface's exposure rules when called);
+//! - every tool the tenant's connected MCP servers publish
+//!   (`kura_mcp::tools_for_tenant`, authorized under the `chat` surface's
+//!   exposure rules when called);
 //! - `memory.lookup`: fused recall over the tenant's Ready memory through the
 //!   same `run_query` the `/v1/retrieval/queries` route uses, so the agent
 //!   cannot recall anything the API would not return;
@@ -61,7 +62,15 @@ impl ToolSource for AppTools {
         };
         let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
         if let Some(mcp) = state.mcp.clone() {
-            tools.extend(kura_mcp::tools_for_surface(&mcp, CHAT_RUNTIME_SURFACE));
+            // Only the turn's own tenant's servers (plus unowned ones, which
+            // predate servers recording their tenant): another tenant's
+            // exposure rules are not this tenant's to use.
+            tools.extend(kura_mcp::tools_for_tenant(
+                &mcp,
+                &turn.tenant_id,
+                CHAT_RUNTIME_SURFACE,
+                true,
+            ));
         }
         if state.memory.is_some() {
             tools.push(Arc::new(MemoryLookupTool {

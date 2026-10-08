@@ -119,7 +119,7 @@ pub enum McpError {
     Store(String),
 }
 
-pub use agent_tool::{McpTool, qualified_name, tools_for_surface};
+pub use agent_tool::{McpTool, qualified_name, tools_for_surface, tools_for_tenant};
 pub use manager::{
     AttachedExecution, AttachedExecutionStarter, Manager, SecretResolver, SessionState,
 };
