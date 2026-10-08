@@ -64,6 +64,40 @@ pub fn environment_scope(environment: Environment) -> &'static str {
 /// Identifiers for the embedded deployment's single local identity. They are
 /// stable so a restart reuses the same tenant and its data stays visible.
 const LOCAL_TENANT_ID: &str = "ten_local";
+
+/// Reads the hosting mode (`KURA_HOSTING`). Shared hosting needs the embedded
+/// identity bootstrap, whose local tenant becomes the platform operator; any
+/// other environment refuses to start rather than run shared without one.
+fn hosting_mode(
+    environment: Environment,
+    value: Option<&str>,
+) -> Result<kura_api::hosting::Hosting, AppError> {
+    let hosting =
+        kura_api::hosting::Hosting::parse(value, LOCAL_TENANT_ID).map_err(AppError::Hosting)?;
+    if hosting.is_shared() && environment != Environment::Embedded {
+        return Err(AppError::Hosting(format!(
+            "{}=shared requires KURA_ENV=hosted",
+            kura_api::hosting::HOSTING_ENV
+        )));
+    }
+    Ok(hosting)
+}
+
+#[cfg(test)]
+mod hosting_mode_tests {
+    use super::*;
+
+    #[test]
+    fn shared_hosting_starts_only_on_the_hosted_environment() {
+        assert!(hosting_mode(Environment::Embedded, Some("shared")).is_ok_and(|h| h.is_shared()));
+        for environment in [Environment::Test, Environment::Prod] {
+            let err = hosting_mode(environment, Some("shared")).expect_err("refused");
+            assert!(err.to_string().contains("KURA_ENV=hosted"), "{err}");
+            assert!(hosting_mode(environment, None).is_ok_and(|h| !h.is_shared()));
+        }
+        assert!(hosting_mode(Environment::Embedded, Some("sharde")).is_err());
+    }
+}
 const LOCAL_PRINCIPAL_ID: &str = "prn_local_operator";
 
 /// Ensure the embedded workspace has an active tenant and operator, returning
@@ -239,6 +273,12 @@ impl App {
     ) -> Result<Self, AppError> {
         let data_dir = cfg.data_dir.clone();
         let env_scope = environment_scope(cfg.environment);
+        let hosting = hosting_mode(
+            cfg.environment,
+            std::env::var(kura_api::hosting::HOSTING_ENV)
+                .ok()
+                .as_deref(),
+        )?;
         // Hosted billing quotas are a multi-tenant production concern; an
         // embedded daemon is a single local host process, like test.
         let hosted = cfg.environment == Environment::Prod;
@@ -311,6 +351,7 @@ impl App {
             kura_store::StorePool::new(store.clone(), cfg.store.readers)
                 .map_err(AppError::Store)?,
         );
+        state.hosting = hosting;
         state.policy = Some(policy_engine);
         state.auth = Some(auth_manager);
         state.identity = Some(identity_manager);
@@ -498,10 +539,14 @@ impl App {
             })?;
         eprintln!("[kura] listening on http://{bind_addr}");
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-            .map_err(AppError::Serve)?;
+        // The peer address feeds the shared-hosting loopback check on pairing.
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .map_err(AppError::Serve)?;
 
         let _ = self.publish_system_event(
             "system.stopped",

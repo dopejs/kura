@@ -135,10 +135,15 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/system/info", get(system_info))
         .merge(mcp::ingress_router())
         .merge(
-            auth::open_router().route_layer(axum::middleware::from_fn_with_state(
-                state.clone(),
-                crate::middleware::with_environment,
-            )),
+            auth::open_router()
+                .route_layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::hosting::loopback_pairing,
+                ))
+                .route_layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::with_environment,
+                )),
         );
 
     let protected_routes = Router::new()
@@ -220,6 +225,12 @@ pub fn router(state: AppState) -> Router {
         // authenticates with a bearer token like any client), because the
         // exposition carries tenant ids as labels.
         .route("/metrics", get(metrics))
+        // Shared hosting: deny-by-default route policy. Added before
+        // protected() so it runs inside it, with the tenant resolved.
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::hosting::shared_route_policy,
+        ))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::middleware::protected,

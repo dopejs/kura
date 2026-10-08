@@ -62,14 +62,15 @@ impl ToolSource for AppTools {
         };
         let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
         if let Some(mcp) = state.mcp.clone() {
-            // Only the turn's own tenant's servers (plus unowned ones, which
-            // predate servers recording their tenant): another tenant's
-            // exposure rules are not this tenant's to use.
+            // Only the turn's own tenant's servers: another tenant's exposure
+            // rules are not this tenant's to use. Unowned servers predate
+            // servers recording their tenant; a shared daemon offers them to
+            // nobody, since they would run for every tenant.
             tools.extend(kura_mcp::tools_for_tenant(
                 &mcp,
                 &turn.tenant_id,
                 CHAT_RUNTIME_SURFACE,
-                true,
+                !state.hosting.is_shared(),
             ));
         }
         if state.memory.is_some() {

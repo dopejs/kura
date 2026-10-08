@@ -34,4 +34,6 @@ pub enum AppError {
     SystemEvent(String),
     #[error("upgrade rehearsal: {0}")]
     Rehearsal(String),
+    #[error("hosting mode: {0}")]
+    Hosting(String),
 }

@@ -5,6 +5,7 @@
 //! waves as modules under src/.
 
 pub mod error;
+pub mod hosting;
 pub mod middleware;
 pub mod response;
 pub mod routes;

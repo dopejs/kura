@@ -1,7 +1,7 @@
 # Shared hosting: one daemon, many tenants
 
-> Status: design; M1 boundary fixes (§4.5) done, shared mode (§4.1-4.4) in
-> progress (2026-10-08). Owner: daemon.
+> Status: M1 implemented (2026-10-08): boundary fixes (§4.5), shared mode
+> (§4.1-4.4). M2 next. Owner: daemon.
 > Replaces the "one daemon container per user" pilot in the private
 > `kura-gateway` repo as the target architecture. That pilot stays as a
 > dedicated tier; nothing here removes it.
@@ -73,11 +73,15 @@ the operator (M2) and are never the operator tenant.
 
 ### 4.2 Operator check
 
-`hosting::is_platform_operator(ctx)` = shared mode ⇒ `ctx.tenant_id ==
-ten_local && role == Owner`; single mode ⇒ unchanged (`Owner`, or no tenant).
-`require_daemon_global_operator` delegates to it, so the existing guards on
-plugins, improvement, capabilities, sandbox reload and the config file are
-correct in both modes.
+`Hosting::is_platform_operator(ctx)` = shared mode ⇒ `ctx.tenant_id ==
+ten_local && role == Owner`; single mode ⇒ always (handlers keep their own
+guards).
+
+As built, `require_daemon_global_operator` is unchanged (it takes no state).
+In shared mode every route it guards (plugins, improvement, capabilities,
+sandbox reload, config) is outside the tenant allowlist, so the route policy
+(§4.3) has already admitted only the platform operator by the time the guard
+runs.
 
 ### 4.3 Route policy (deny by default)
 
@@ -88,8 +92,21 @@ shared mode. It looks up `(method, MatchedPath)` in one table:
 - everything not listed: **operator only** (403 `hosting_operator_only`).
 
 A route added later is operator-only until someone decides otherwise, which is
-the safe failure. A test asserts every table entry names a real route, so the
-table cannot silently drift.
+the safe failure. A request with no resolved tenant is not the operator either.
+A test asserts every table entry names a real route, so the table cannot
+silently drift.
+
+As built: `kura_api::hosting::{TENANT_ROUTES, shared_route_policy}`, a
+`route_layer` added just before `protected()`. Tests:
+`every_tenant_route_reaches_its_handler_in_shared_mode` (every entry, as a
+non-operator owner, never gets the hosting 403, a fallback 404 or a 405) and
+`everything_else_is_reserved_for_the_platform_operator` (sandbox exec,
+provider/model-role writes, MCP, tenant secrets, tenant creation,
+invitations, principal PATCH, raw LLM dispatch, run creation, routines,
+memory consolidation, metrics: 403 for another tenant's owner, the operator
+tenant's admin and a tenant-less request; reachable for the operator and in
+single mode). In shared mode chat turns are also no longer offered unowned
+MCP servers (G15).
 
 M1 tenant allowlist (reads and writes on the caller's own data only):
 sessions, chat (query + stream), runs (read, cancel), events (list + stream),
@@ -105,6 +122,13 @@ setup wizard, workspace bindings, exec profiles, swarm, metrics.
 
 In shared mode `/v1/auth/pairings/*` answers 404 unless the peer address is
 loopback. `serve` switches to `into_make_service_with_connect_info`.
+
+As built (`hosting::loopback_pairing`): a request carrying `Forwarded`,
+`X-Forwarded-For` or `X-Real-IP` is refused even from loopback, because a
+reverse proxy on the same host connects from loopback too; a missing peer
+address is refused (fail closed). `KURA_HOSTING` other than unset / `single` /
+`shared` stops startup, and `shared` outside `KURA_ENV=hosted` stops startup
+(`AppError::Hosting`).
 
 ### 4.5 Boundary fixes (all modes)
 

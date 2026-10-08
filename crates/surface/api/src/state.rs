@@ -200,6 +200,9 @@ pub struct AppState {
     /// Tool provider profiles (Stage 9.1b). Credentials are not here: a
     /// profile holds a `secretRef` resolved through [`Self::secrets`].
     pub tools: Option<Arc<kura_tools::Manager>>,
+    /// Single-owner or shared daemon (`docs/harness/shared-hosting.md`).
+    /// Set by `kura-app` from `KURA_HOSTING`; not a `Config` field.
+    pub hosting: crate::hosting::Hosting,
 }
 
 impl AppState {
@@ -258,6 +261,7 @@ impl AppState {
             swarm: None,
             swarm_quota: None,
             tools: None,
+            hosting: crate::hosting::Hosting::Single,
         }
     }
 }
