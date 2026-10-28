@@ -8,6 +8,8 @@ This module defines the execution substrate above the daemon core: skills, memor
 - [sandbox-execution-plane.md](/Users/John/Code/agent-os/docs/harness/sandbox-execution-plane.md)
 - [31-skill-registry-and-prompt-support.md](/Users/John/Code/agent-os/docs/harness/skill-registry-and-prompt-support.md)
 - [agent-deepening-program.md](agent-deepening-program.md) — planning record for the Roadmap 78 second slice wave and OpenClaw follow-ups
+- [agent-runtime-program.md](agent-runtime-program.md) — current plan: shared-hosting M2–M4 and agent runtime core (context, caching, tracing, parallel tools, resume)
+- [shared-hosting.md](shared-hosting.md) — one daemon, many tenants: design and milestones
 
 ## Suggested Reading Order
 

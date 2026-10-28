@@ -306,7 +306,9 @@ permissive in the production assembly (`crates/surface/app/src/lib.rs`):
 ## Roadmap 76: Rust-Era Release Evidence Re-Run
 
 Status: `[ ] planned` — depends on Roadmaps 74 and 75 (soak must cover the
-full API surface and final wiring)
+full API surface and final wiring). Re-scoped 2026-10-28 (operator): this
+evidence gates opening the hosted tier to strangers, not a public binary
+release; see [Agent Runtime Program](../harness/agent-runtime-program.md).
 
 ### Goal
 
@@ -399,7 +401,9 @@ is Go-era and therefore void for the Rust binary.
 
 ## Roadmap 77: Public Launch Gate Execution
 
-Status: `[ ] planned` — depends on Roadmaps 74, 75, and 76
+Status: `[ ] planned` — depends on Roadmaps 74, 75, and 76. Re-scoped
+2026-10-28 with Roadmap 76 (hosted-tier gate, operator-run, non-blocking for
+the [Agent Runtime Program](../harness/agent-runtime-program.md)).
 
 ### Goal
 
@@ -501,7 +505,11 @@ engineering, agent-managed skills, and audited self-improvement
 Every program item has landed slice 1; none is closed. The second slice wave
 for all six, together with the multi-tenant assembly, built-in tool, and
 server-deployment work surfaced by the 2026-09-18 audit, is planned in
-[`../harness/agent-deepening-program.md`](../harness/agent-deepening-program.md).
+[`../harness/agent-deepening-program.md`](../harness/agent-deepening-program.md)
+(closed 2026-09-19). The work after it — shared-hosting M2–M4 and the agent
+runtime core (token budgets, prompt caching, turn tracing, parallel tools,
+turn resume) — is planned in
+[`../harness/agent-runtime-program.md`](../harness/agent-runtime-program.md).
 
 ---
 

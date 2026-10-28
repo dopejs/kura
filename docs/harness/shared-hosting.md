@@ -190,6 +190,10 @@ Known limits:
 
 ## 5. Open questions
 
+Decisions on 1 and 2 recorded 2026-10-28 in
+[agent-runtime-program.md](agent-runtime-program.md): per-user token minted by
+the provisioning API; Docker-per-run first, gVisor after measurement.
+
 1. M2: how the gateway authenticates as a user — per-user token minted by the
    provisioning API and stored encrypted by the gateway (preferred: the daemon
    keeps full authorization, a leaked gateway key is not a skeleton key) vs a
