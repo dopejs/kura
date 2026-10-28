@@ -412,6 +412,23 @@ mod tests {
         }
     }
 
+    /// Handlers fall back to a request-supplied tenant id when no tenant
+    /// context is present. A shared daemon must never reach that fallback:
+    /// without a resolved tenant, even a tenant route is refused.
+    #[tokio::test]
+    async fn tenant_routes_refuse_a_request_without_a_tenant_in_shared_mode() {
+        for (method, template) in TENANT_ROUTES {
+            let uri = probe_uri(template);
+            let (status, code, _) = send(shared_state(), None, method, &uri, |_| {}).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {template}");
+            assert_eq!(
+                code.as_deref(),
+                Some(OPERATOR_ONLY_CODE),
+                "{method} {template}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn everything_else_is_reserved_for_the_platform_operator() {
         use kura_identity::Role;

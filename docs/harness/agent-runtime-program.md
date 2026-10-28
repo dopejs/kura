@@ -66,24 +66,32 @@ Hygiene found in the same audit:
 | H1 | Test temp dirs leaked under `$TMPDIR`; fix exists uncommitted (`tempfile` in tests, `scripts/cargo-test-isolated.sh`) | working tree at planning time |
 | H2 | CI runs bare `cargo test`, local `make daemon-test` runs the isolated wrapper | `.github/workflows/ci.yml` |
 | H3 | `go.work` / `go.work.sum` still reference the deleted Go `daemon/` | repo root |
-| H4 | Route handlers fall back to a request-supplied `tenantId` when no `TenantContext` is present. Unreachable in the production assembly (auth and identity are always installed, `crates/surface/app/src/lib.rs:356`), but nothing makes that structural: a shared daemon assembled without them would trust the request | `routes/{catalog,evidence,memory,mcp}.rs` and others (296 `Option<Extension<TenantContext>>` sites) |
+| H4 | Route handlers fall back to a request-supplied `tenantId` when no `TenantContext` is present, via helpers copied per route family. Unreachable in the production assembly (auth and identity are always installed, `crates/surface/app/src/lib.rs:356`), and in shared mode `shared_route_policy` already refuses any request without a resolved tenant (`crates/surface/api/src/hosting.rs:191`); the only test of that covered operator routes, not tenant routes | `routes/{catalog,evidence,memory,mcp}.rs` and others (296 `Option<Extension<TenantContext>>` sites) |
 
 ## Stage 0 — Hygiene
 
-- [ ] **0.1** Land H1: tests own their temp dirs; `make daemon-test` /
+- [x] **0.1** Land H1: tests own their temp dirs; `make daemon-test` /
       `rs-test` / `daemon-contract-test` run through the isolated wrapper.
       Done when the full workspace passes through the wrapper and leaves no
       `kura-*` directory behind.
-- [ ] **0.2** CI uses the same wrapper (H2).
-- [ ] **0.3** Remove `go.work` / `go.work.sum` (H3).
-- [ ] **0.4** Shared mode fails closed without authentication (H4):
-      `protected` refuses every request when `KURA_HOSTING=shared` and the
-      auth or identity manager is absent, so the per-route fallback can never
-      serve a shared daemon. Collapsing the copied per-route helpers into one
-      extractor is deferred to Stage 4 (touches every route family; no
-      behavior change once 0.4 holds).
+- [x] **0.2** CI uses the same wrapper (H2).
+- [x] **0.3** Remove `go.work` / `go.work.sum` (H3).
+- [x] **0.4** Pin the shared-mode guarantee behind H4 with a test: every
+      `TENANT_ROUTES` entry, called without a resolved tenant on a shared
+      daemon, is refused with `hosting_operator_only`. No production change —
+      the policy layer already enforces it. Collapsing the copied per-route
+      helpers into one extractor is deferred to Stage 4 (touches every route
+      family; no behavior change).
 
 Rollback: each item is one commit; reverting restores the previous behavior.
+
+**Stage 0 closed 2026-10-28** (`37af95f`, `975e7c2`, `1554b3f`, and the 0.4
+commit). Verified by `make daemon-test` through the wrapper on macOS: 306 test
+binaries, 1741 passed, 0 failed; the run directory was removed afterwards. The
+first run surfaced a wrapper bug — macOS `TMPDIR` ends in `/`, so the joined
+path held `//` and `kura-sandbox`'s isolated-home test compared it against the
+canonical path — fixed in the wrapper before closure. CI's first run through
+the wrapper (Linux and macOS) is the remaining confirmation for 0.2.
 
 ## Stage 1 — Shared Hosting M2: Provisioning and BYOK
 
