@@ -1,7 +1,8 @@
 # Shared hosting: one daemon, many tenants
 
 > Status: M1 implemented (2026-10-08): boundary fixes (§4.5), shared mode
-> (§4.1-4.4). M2 next. Owner: daemon.
+> (§4.1-4.4). M2 in progress: provisioning and per-user tokens implemented
+> 2026-10-28 (§6); BYOK and gateway sign-up next. Owner: daemon.
 > Replaces the "one daemon container per user" pilot in the private
 > `kura-gateway` repo as the target architecture. That pilot stays as a
 > dedicated tier; nothing here removes it.
@@ -200,3 +201,94 @@ the provisioning API; Docker-per-run first, gVisor after measurement.
    gateway-signed identity header.
 2. M3: Docker-per-run first, or go straight to gVisor (`runsc`) on the cell host.
 3. Per-tenant skills/connectors (G10): which ones tenants actually need.
+
+## 6. M2 design — provisioning (agent-runtime-program 1.1, 1.2)
+
+### 6.1 Route
+
+`POST /v1/provisioning/users` — the only way a stranger gets an identity on a
+shared daemon. Pairing stays loopback-only and operator-only (§4.4).
+
+```json
+{ "externalSubject": "github:583231", "displayName": "Ada", "tokenLabel": "gateway", "expiresAt": "2027-01-01T00:00:00Z" }
+```
+
+- `externalSubject` (required, 1–256 chars after trimming): the gateway's
+  stable id for the user, conventionally `<idp>:<id>`. It is the idempotency
+  key.
+- `displayName` (optional): used for the principal and the personal tenant
+  ("Ada's workspace"); defaults to "User".
+- `tokenLabel` (optional, default `gateway`) and `expiresAt` (optional) shape
+  the token minted by this call.
+
+Response — `201` when the identity was created, `200` when it already existed:
+
+```json
+{ "created": true, "principal": {…}, "tenant": {…}, "membership": {…},
+  "token": {…}, "accessToken": "kura_…", "grants": [{…}] }
+```
+
+### 6.2 Who may call it
+
+- **Shared mode only.** On a single daemon the route answers `409
+  provisioning_requires_shared_hosting`: one owner has nobody to provision,
+  and the pilot tier (one container per user) pairs instead.
+- **Platform operator only** (`Hosting::is_platform_operator`). The route is
+  not in `TENANT_ROUTES`, so `shared_route_policy` already refuses everyone
+  else; the handler checks again so the guarantee does not depend on the
+  allowlist staying correct.
+
+### 6.3 Identity shape and idempotency
+
+Ids are derived from the subject rather than stored beside it, so
+idempotency needs no schema change and no lookup table:
+
+```
+h = hex(sha256("kura-provisioning:v1:" + externalSubject))[..16]
+principal = prn_<h>   tenant = ten_<h>   membership = mem_<h>
+```
+
+Same shape as random ids (`random_id(8)` is 16 hex chars); a collision with a
+random id is a 64-bit event. The subject itself is not stored, so a database
+leak does not hand out IdP account ids; the operator finds a user by
+recomputing the hash. Consequence: a subject cannot be renamed — account
+linking at the gateway must keep the original subject.
+
+- Principal: `kind = user`, `defaultTenantId = ten_<h>`.
+- Tenant: `kind = personal`, owner = the principal.
+- Membership: `role = owner`, active. The user owns their personal tenant;
+  shared mode keeps "owner" from meaning "may change the daemon" (§4.2).
+- Each row is created only if missing, in the order tenant → principal →
+  membership. The writes are not one transaction: a crash midway leaves a
+  prefix, and the next call for the same subject completes it.
+- A principal or tenant that exists but is not `active` (disabled, removed)
+  is **not** revived: `409 provisioning_identity_inactive`. Re-enabling a
+  user is an operator decision, not a side effect of a sign-in retry.
+- The operator tenant can never be the target: derived ids cannot equal it,
+  and the handler refuses if they ever did.
+
+### 6.4 The token (decision 2026-10-28: per-user token held by the gateway)
+
+Every call mints a **new** token for the principal, granted to the personal
+tenant only (`isDefault = true`). The plaintext is in this response and
+nowhere else; the gateway stores it encrypted and presents it as the user's
+bearer token. The daemon therefore authorizes each request as that user, and
+a leaked gateway credential reaches only the users whose tokens leaked with
+it. Retrying accumulates tokens; the gateway revokes the ones it discards
+(`POST /v1/auth/tokens/{id}/revoke` as the user). A token cap per principal
+belongs to M4.
+
+### 6.5 Audit
+
+`tenant.user_provisioned` (on creation, tenant = the new tenant, principal =
+the operator) and `tenant.token_issued` (every call). Both are written before
+the rows they describe, and failing to write them fails the call, as with
+every other identity mutation.
+
+### 6.6 Failure modes and rollback
+
+- Operator token leaked → attacker can mint users and tokens for any subject,
+  including existing users. Same blast radius as the operator token today;
+  mitigation is the operator token never leaving the gateway host.
+- Rollback: revert the route; provisioned rows are ordinary identity rows and
+  keep working with the tokens already issued.

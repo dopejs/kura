@@ -1291,6 +1291,14 @@ pub fn tenant_identity_contract_fixtures() -> &'static [Fixture] {
             r##"{"token":{"tokenId":"tok_2","principalId":"prn_1","label":"automation","mode":"token","tokenPreview":"kura_preview","status":"active","defaultTenantId":"ten_1","createdAt":"2026-04-24T10:00:00Z","updatedAt":"2026-04-24T10:00:00Z"},"accessToken":"kura_secret","grants":[{"grantId":"grant_2","tokenId":"tok_2","tenantId":"ten_1","isDefault":true,"status":"active","createdAt":"2026-04-24T10:00:00Z","updatedAt":"2026-04-24T10:00:00Z"}]}"##,
         ),
         (
+            r##"schemas/api/provision-user.request.schema.json"##,
+            r##"{"externalSubject":"github:583231","displayName":"Ada","tokenLabel":"gateway","expiresAt":"2027-01-01T00:00:00Z"}"##,
+        ),
+        (
+            r##"schemas/api/provision-user.response.schema.json"##,
+            r##"{"created":true,"principal":{"principalId":"prn_0123456789abcdef","principalKind":"user","displayName":"Ada","status":"active","defaultTenantId":"ten_0123456789abcdef","createdAt":"2026-10-28T10:00:00Z","updatedAt":"2026-10-28T10:00:00Z"},"tenant":{"tenantId":"ten_0123456789abcdef","tenantKind":"personal","displayName":"Ada's workspace","status":"active","createdAt":"2026-10-28T10:00:00Z","updatedAt":"2026-10-28T10:00:00Z","createdByPrincipalId":"prn_local_operator","defaultOwnerPrincipalId":"prn_0123456789abcdef"},"membership":{"membershipId":"mem_0123456789abcdef","tenantId":"ten_0123456789abcdef","principalId":"prn_0123456789abcdef","role":"owner","status":"active","createdAt":"2026-10-28T10:00:00Z","updatedAt":"2026-10-28T10:00:00Z","acceptedAt":"2026-10-28T10:00:00Z"},"token":{"tokenId":"tok_2","principalId":"prn_0123456789abcdef","label":"gateway","mode":"token","tokenPreview":"kura_preview","status":"active","defaultTenantId":"ten_0123456789abcdef","createdAt":"2026-10-28T10:00:00Z","updatedAt":"2026-10-28T10:00:00Z"},"accessToken":"kura_secret","grants":[{"grantId":"grant_2","tokenId":"tok_2","tenantId":"ten_0123456789abcdef","isDefault":true,"status":"active","createdAt":"2026-10-28T10:00:00Z","updatedAt":"2026-10-28T10:00:00Z","grantedByPrincipalId":"prn_local_operator"}]}"##,
+        ),
+        (
             r##"schemas/api/rotate-auth-token.request.schema.json"##,
             r##"{"reason":"scheduled"}"##,
         ),

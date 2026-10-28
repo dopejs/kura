@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/provision-user.request.schema.json",
+  "title": "ProvisionUserRequest",
+  "description": "POST /v1/provisioning/users. Shared daemon, platform operator only (docs/harness/shared-hosting.md §6).",
+  "type": "object",
+  "required": ["externalSubject"],
+  "additionalProperties": false,
+  "properties": {
+    "externalSubject": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "The gateway's stable id for the user, conventionally <idp>:<id>. Idempotency key; never stored."
+    },
+    "displayName": { "type": "string" },
+    "tokenLabel": { "type": "string", "description": "Label of the token minted by this call; defaults to gateway." },
+    "expiresAt": { "type": "string", "format": "date-time" }
+  }
+}

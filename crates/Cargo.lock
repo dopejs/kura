@@ -1355,6 +1355,7 @@ dependencies = [
  "kura-config",
  "kura-connectors",
  "kura-context",
+ "kura-contracts",
  "kura-core",
  "kura-delivery",
  "kura-discord",

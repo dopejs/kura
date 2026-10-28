@@ -379,6 +379,7 @@ mod tests {
         ("POST", "/v1/routines"),
         ("POST", "/v1/memory/consolidate"),
         ("GET", "/metrics"),
+        ("POST", "/v1/provisioning/users"),
     ];
 
     #[tokio::test]

@@ -192,6 +192,10 @@ pub enum IdentityError {
     UnsupportedTenant,
     #[error("tenant context required")]
     TenantContextRequired,
+    #[error("external subject must be 1-256 characters")]
+    ProvisioningSubjectInvalid,
+    #[error("the provisioned identity is not active")]
+    ProvisioningIdentityInactive,
     #[error("identity store error: {0}")]
     Store(#[source] Box<dyn std::error::Error + Send + Sync>),
 }

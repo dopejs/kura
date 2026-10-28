@@ -59,6 +59,36 @@ pub struct CreateInvitationInput {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+/// A stranger's identity on a shared daemon, keyed by the gateway's stable id
+/// for them (`docs/harness/shared-hosting.md` §6).
+#[derive(Debug, Clone, Default)]
+pub struct ProvisionUserInput {
+    pub external_subject: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProvisionedUser {
+    pub principal: Principal,
+    pub tenant: Tenant,
+    pub membership: Membership,
+    /// Whether this call created any part of the identity.
+    pub created: bool,
+}
+
+/// Longest accepted external subject, after trimming.
+pub const MAX_EXTERNAL_SUBJECT_LEN: usize = 256;
+
+/// The 16-hex-char id suffix shared by a provisioned principal, tenant and
+/// membership. Derived rather than stored so provisioning is idempotent
+/// without a lookup table, and the subject itself never reaches the store.
+#[must_use]
+pub fn provisioned_id_suffix(external_subject: &str) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(format!("kura-provisioning:v1:{external_subject}"));
+    hex::encode(digest)[..16].to_string()
+}
+
 pub struct Manager<S: Store + ?Sized> {
     store: Arc<S>,
     auditor: Auditor<S>,
@@ -533,6 +563,171 @@ impl<S: Store + ?Sized> Manager<S> {
         Ok((principal, tenant))
     }
 
+    /// Creates the principal, personal tenant and owner membership for an
+    /// external subject, or returns the ones an earlier call created. Each row
+    /// is written only if missing, so a call interrupted midway is completed
+    /// by the next one. An existing identity that is no longer active is
+    /// refused rather than revived. The caller decides who may provision; the
+    /// actor is recorded as the creator.
+    pub fn provision_user(
+        &self,
+        actor: &TenantContext,
+        input: &ProvisionUserInput,
+    ) -> Result<ProvisionedUser, IdentityError> {
+        if actor.principal_id.trim().is_empty() {
+            return Err(IdentityError::TenantContextRequired);
+        }
+        let subject = input.external_subject.trim();
+        if subject.is_empty() || subject.len() > MAX_EXTERNAL_SUBJECT_LEN {
+            return Err(IdentityError::ProvisioningSubjectInvalid);
+        }
+        let suffix = provisioned_id_suffix(subject);
+        let principal_id = format!("prn_{suffix}");
+        let tenant_id = format!("ten_{suffix}");
+        let membership_id = format!("mem_{suffix}");
+        if tenant_id == actor.tenant_id {
+            // Unreachable by construction; refusing keeps it that way.
+            return Err(IdentityError::TenantAccessDenied);
+        }
+        let display_name = match input.display_name.trim() {
+            "" => "User".to_string(),
+            name => name.to_string(),
+        };
+        let now = self.now();
+
+        let existing_tenant = self.store.get_tenant(&tenant_id)?;
+        let existing_principal = self.store.get_principal(&principal_id)?;
+        let existing_membership = self
+            .store
+            .list_memberships(&MembershipFilter {
+                tenant_id: tenant_id.clone(),
+                ..MembershipFilter::default()
+            })?
+            .into_iter()
+            .find(|membership| membership.membership_id == membership_id);
+        let inactive = existing_tenant
+            .as_ref()
+            .is_some_and(|tenant| tenant.status != LifecycleStatus::Active)
+            || existing_principal
+                .as_ref()
+                .is_some_and(|principal| principal.status != LifecycleStatus::Active)
+            || existing_membership
+                .as_ref()
+                .is_some_and(|membership| membership.status != LifecycleStatus::Active);
+        if inactive {
+            return Err(IdentityError::ProvisioningIdentityInactive);
+        }
+        let created = existing_tenant.is_none()
+            || existing_principal.is_none()
+            || existing_membership.is_none();
+        if created {
+            self.auditor.require(TenantAuditEvent {
+                audit_event_id: format!("audit_{}", random_id(8)),
+                event_kind: "tenant.user_provisioned".to_string(),
+                tenant_id: tenant_id.clone(),
+                principal_id: actor.principal_id.clone(),
+                outcome: AUDIT_OUTCOME_SUCCEEDED.to_string(),
+                reason_code: "user_provisioned".to_string(),
+                created_at: now,
+                ..TenantAuditEvent::default()
+            })?;
+        }
+
+        let tenant = match existing_tenant {
+            Some(tenant) => tenant,
+            None => {
+                let tenant = Tenant {
+                    tenant_id: tenant_id.clone(),
+                    tenant_kind: TenantKind::Personal,
+                    display_name: format!("{display_name}'s workspace"),
+                    status: LifecycleStatus::Active,
+                    created_at: now,
+                    updated_at: now,
+                    created_by_principal_id: actor.principal_id.clone(),
+                    default_owner_principal_id: principal_id.clone(),
+                    caller_membership_role: None,
+                    caller_membership_status: None,
+                    caller_permissions: Vec::new(),
+                    default_for_current_token: false,
+                    default_for_current_principal: false,
+                };
+                self.store.upsert_tenant(&tenant)?;
+                tenant
+            }
+        };
+        let principal = match existing_principal {
+            Some(principal) => principal,
+            None => {
+                let principal = Principal {
+                    principal_id: principal_id.clone(),
+                    principal_kind: PrincipalKind::User,
+                    display_name,
+                    status: LifecycleStatus::Active,
+                    default_tenant_id: tenant_id.clone(),
+                    created_at: now,
+                    updated_at: now,
+                    disabled_at: None,
+                    removed_at: None,
+                };
+                self.store.upsert_principal(&principal)?;
+                principal
+            }
+        };
+        let membership = match existing_membership {
+            Some(membership) => membership,
+            None => {
+                let membership = Membership {
+                    membership_id,
+                    tenant_id,
+                    principal_id,
+                    role: Role::Owner,
+                    status: LifecycleStatus::Active,
+                    invitation_id: String::new(),
+                    created_at: now,
+                    updated_at: now,
+                    accepted_at: Some(now),
+                    removed_at: None,
+                };
+                self.store.upsert_membership(&membership)?;
+                membership
+            }
+        };
+        Ok(ProvisionedUser {
+            principal,
+            tenant,
+            membership,
+            created,
+        })
+    }
+
+    /// Grants a token minted for a provisioned user to that user's personal
+    /// tenant, and to nothing else.
+    pub fn grant_provisioned_token(
+        &self,
+        actor: &TenantContext,
+        user: &ProvisionedUser,
+        token_id: &str,
+    ) -> Result<TokenTenantGrant, IdentityError> {
+        let token_id = token_id.trim();
+        if token_id.is_empty() {
+            return Err(IdentityError::TokenGrantInvalid);
+        }
+        let now = self.now();
+        let grant = TokenTenantGrant {
+            grant_id: format!("grant_{}", random_id(8)),
+            token_id: token_id.to_string(),
+            tenant_id: user.tenant.tenant_id.clone(),
+            is_default: true,
+            status: LifecycleStatus::Active,
+            created_at: now,
+            updated_at: now,
+            revoked_at: None,
+            granted_by_principal_id: actor.principal_id.clone(),
+        };
+        self.store.upsert_token_tenant_grant(&grant)?;
+        Ok(grant)
+    }
+
     fn ensure_token_grants(
         &self,
         principal: &Principal,
@@ -751,6 +946,145 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    fn operator() -> TenantContext {
+        owner_actor("prn_local_operator", "tok_operator", "ten_local")
+    }
+
+    fn provision(subject: &str) -> ProvisionUserInput {
+        ProvisionUserInput {
+            external_subject: subject.to_string(),
+            display_name: "Ada".to_string(),
+        }
+    }
+
+    #[test]
+    fn provisioning_creates_an_owned_personal_tenant_once() {
+        let store = Arc::new(MemoryStore::new());
+        let manager = Manager::new(store.clone());
+
+        let first = manager
+            .provision_user(&operator(), &provision("github:583231"))
+            .expect("provision");
+        assert!(first.created);
+        let suffix = provisioned_id_suffix("github:583231");
+        assert_eq!(first.principal.principal_id, format!("prn_{suffix}"));
+        assert_eq!(first.principal.principal_kind, PrincipalKind::User);
+        assert_eq!(first.principal.default_tenant_id, first.tenant.tenant_id);
+        assert_eq!(first.tenant.tenant_kind, TenantKind::Personal);
+        assert_eq!(first.tenant.display_name, "Ada's workspace");
+        assert_eq!(first.membership.role, Role::Owner);
+        assert_eq!(first.membership.principal_id, first.principal.principal_id);
+
+        // Same subject (surrounding whitespace ignored): same identity, nothing new.
+        let again = manager
+            .provision_user(&operator(), &provision("  github:583231 "))
+            .expect("re-provision");
+        assert!(!again.created);
+        assert_eq!(again.principal.principal_id, first.principal.principal_id);
+        assert_eq!(again.tenant.tenant_id, first.tenant.tenant_id);
+        assert_eq!(
+            again.membership.membership_id,
+            first.membership.membership_id
+        );
+
+        // A different subject is a different user.
+        let other = manager
+            .provision_user(&operator(), &provision("github:1"))
+            .expect("other");
+        assert_ne!(other.tenant.tenant_id, first.tenant.tenant_id);
+    }
+
+    #[test]
+    fn provisioning_completes_an_interrupted_identity() {
+        let store = Arc::new(MemoryStore::new());
+        let manager = Manager::new(store.clone());
+        let suffix = provisioned_id_suffix("github:7");
+        // An earlier call stopped after the tenant and principal.
+        store.insert_tenant(&format!("ten_{suffix}"), LifecycleStatus::Active);
+        store.insert_principal(
+            &format!("prn_{suffix}"),
+            LifecycleStatus::Active,
+            &format!("ten_{suffix}"),
+        );
+
+        let user = manager
+            .provision_user(&operator(), &provision("github:7"))
+            .expect("provision");
+        assert!(user.created);
+        assert_eq!(user.membership.membership_id, format!("mem_{suffix}"));
+        assert_eq!(user.membership.status, LifecycleStatus::Active);
+    }
+
+    #[test]
+    fn provisioning_does_not_revive_an_inactive_identity() {
+        let store = Arc::new(MemoryStore::new());
+        let manager = Manager::new(store.clone());
+        let suffix = provisioned_id_suffix("github:9");
+        store.insert_tenant(&format!("ten_{suffix}"), LifecycleStatus::Active);
+        store.insert_principal(
+            &format!("prn_{suffix}"),
+            LifecycleStatus::Disabled,
+            &format!("ten_{suffix}"),
+        );
+
+        let err = manager
+            .provision_user(&operator(), &provision("github:9"))
+            .expect_err("disabled principal");
+        assert!(matches!(err, IdentityError::ProvisioningIdentityInactive));
+    }
+
+    #[test]
+    fn provisioning_rejects_a_bad_subject_and_an_anonymous_actor() {
+        let store = Arc::new(MemoryStore::new());
+        let manager = Manager::new(store.clone());
+        for subject in ["", "   ", &"x".repeat(MAX_EXTERNAL_SUBJECT_LEN + 1)] {
+            let err = manager
+                .provision_user(&operator(), &provision(subject))
+                .expect_err("bad subject");
+            assert!(matches!(err, IdentityError::ProvisioningSubjectInvalid));
+        }
+        let err = manager
+            .provision_user(&TenantContext::default(), &provision("github:1"))
+            .expect_err("anonymous");
+        assert!(matches!(err, IdentityError::TenantContextRequired));
+    }
+
+    #[test]
+    fn provisioning_fails_closed_when_the_audit_write_fails() {
+        let store = Arc::new(MemoryStore::new());
+        let manager = Manager::new(store.clone());
+        store.fail_audits();
+        assert!(
+            manager
+                .provision_user(&operator(), &provision("github:2"))
+                .is_err()
+        );
+        let suffix = provisioned_id_suffix("github:2");
+        assert!(
+            store
+                .get_tenant(&format!("ten_{suffix}"))
+                .expect("get")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_provisioned_token_is_granted_the_personal_tenant_only() {
+        let store = Arc::new(MemoryStore::new());
+        let manager = Manager::new(store.clone());
+        let user = manager
+            .provision_user(&operator(), &provision("github:3"))
+            .expect("provision");
+        manager
+            .grant_provisioned_token(&operator(), &user, "tok_user")
+            .expect("grant");
+        let grants = store.list_token_tenant_grants("tok_user").expect("grants");
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0].tenant_id, user.tenant.tenant_id);
+        assert!(grants[0].is_default);
+        assert_eq!(grants[0].granted_by_principal_id, "prn_local_operator");
     }
 
     #[test]

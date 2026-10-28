@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/provision-user.response.schema.json",
+  "title": "ProvisionUserResponse",
+  "description": "201 when the identity was created, 200 when it already existed. Every call mints a new token; accessToken appears only here.",
+  "type": "object",
+  "required": ["created", "principal", "tenant", "membership", "token", "accessToken", "grants"],
+  "additionalProperties": false,
+  "properties": {
+    "created": { "type": "boolean" },
+    "principal": { "$ref": "./principal-resource.schema.json" },
+    "tenant": { "$ref": "./tenant-resource.schema.json" },
+    "membership": { "$ref": "./membership-resource.schema.json" },
+    "token": { "$ref": "./auth-access-token-resource.schema.json" },
+    "accessToken": { "type": "string" },
+    "grants": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": { "$ref": "./token-tenant-grant-resource.schema.json" }
+    }
+  }
+}

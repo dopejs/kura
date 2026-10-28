@@ -1187,6 +1187,189 @@ mod tests {
         app.close();
     }
 
+    /// One JSON request through a router; returns the status and the body.
+    async fn call(
+        router: &axum::Router,
+        method: &str,
+        uri: &str,
+        bearer: Option<&str>,
+        headers: &[(&str, &str)],
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut builder = Request::builder().method(method).uri(uri);
+        if let Some(secret) = bearer {
+            builder = builder.header("authorization", format!("Bearer {secret}"));
+        }
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        let request = match body {
+            Some(body) => builder
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body.to_string())),
+            None => builder.body(axum::body::Body::empty()),
+        }
+        .expect("request");
+        let response = router.clone().oneshot(request).await.expect("oneshot");
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        (status, serde_json::from_slice(&bytes).unwrap_or_default())
+    }
+
+    /// Shared hosting M2 (shared-hosting.md §6): the platform operator
+    /// provisions a stranger, whose token then acts as that stranger, in
+    /// their own tenant only.
+    #[tokio::test]
+    async fn the_operator_provisions_a_user_who_is_confined_to_their_tenant() {
+        let (_temp_dir, mut config) = test_config();
+        config.environment = Environment::Embedded;
+        let mut app = App::new(config).expect("build embedded app");
+
+        // Pair as the operator while the daemon is still single (pairing on a
+        // shared daemon needs a loopback peer, which oneshot does not carry).
+        let single = app.router();
+        let (status, started) = call(
+            &single,
+            "POST",
+            "/v1/auth/pairings/start",
+            None,
+            &[],
+            Some(r#"{"mode":"local","label":"operator","ttlSeconds":300}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let pairing_id = started["pairing"]["pairingId"].as_str().expect("id");
+        let code = started["pairingCode"].as_str().expect("code");
+        let (status, completed) = call(
+            &single,
+            "POST",
+            &format!("/v1/auth/pairings/{pairing_id}/complete"),
+            None,
+            &[],
+            Some(&format!(r#"{{"code":"{code}"}}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let operator = completed["accessToken"]
+            .as_str()
+            .expect("token")
+            .to_string();
+        let body = r#"{"externalSubject":"github:42","displayName":"Ada"}"#;
+
+        // A single daemon has nobody to provision.
+        let (status, json) = call(
+            &single,
+            "POST",
+            "/v1/provisioning/users",
+            Some(&operator),
+            &[],
+            Some(body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        assert_eq!(json["code"], "provisioning_requires_shared_hosting");
+
+        app.state.hosting = kura_api::hosting::Hosting::Shared {
+            operator_tenant_id: LOCAL_TENANT_ID.to_string(),
+        };
+        let shared = app.router();
+
+        let (status, first) = call(
+            &shared,
+            "POST",
+            "/v1/provisioning/users",
+            Some(&operator),
+            &[],
+            Some(body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{first}");
+        assert_eq!(first["created"], true);
+        // The real response, not just a fixture, honors the published contract.
+        let schemas = kura_contracts::Validator::new(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."),
+        );
+        schemas
+            .validate_relative(
+                "schemas/api/provision-user.response.schema.json",
+                first.to_string().as_bytes(),
+            )
+            .expect("response matches provision-user.response.schema.json");
+        let principal_id = first["principal"]["principalId"].as_str().expect("prn");
+        let tenant_id = first["tenant"]["tenantId"].as_str().expect("ten");
+        assert_ne!(tenant_id, LOCAL_TENANT_ID);
+        assert_eq!(first["grants"][0]["tenantId"], tenant_id);
+        let user = first["accessToken"].as_str().expect("token").to_string();
+
+        // The token acts as the new user, in the new tenant.
+        let (status, me) = call(&shared, "GET", "/v1/auth/me", Some(&user), &[], None).await;
+        assert_eq!(status, StatusCode::OK, "{me}");
+        assert_eq!(me["principal"]["principalId"], principal_id);
+        assert_eq!(me["defaultTenant"]["tenantId"], tenant_id);
+
+        // ...and cannot select the operator tenant.
+        let (status, _) = call(
+            &shared,
+            "GET",
+            "/v1/auth/me",
+            Some(&user),
+            &[("x-kura-tenant-id", LOCAL_TENANT_ID)],
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        // A user cannot provision, even though they own their tenant.
+        let (status, json) = call(
+            &shared,
+            "POST",
+            "/v1/provisioning/users",
+            Some(&user),
+            &[],
+            Some(r#"{"externalSubject":"github:43"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(json["code"], kura_api::hosting::OPERATOR_ONLY_CODE);
+
+        // Provisioning again finds the same identity and mints a second token;
+        // the first keeps working.
+        let (status, again) = call(
+            &shared,
+            "POST",
+            "/v1/provisioning/users",
+            Some(&operator),
+            &[],
+            Some(body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{again}");
+        assert_eq!(again["created"], false);
+        assert_eq!(again["principal"]["principalId"], principal_id);
+        let second = again["accessToken"].as_str().expect("token");
+        assert_ne!(second, user);
+        for token in [user.as_str(), second] {
+            let (status, _) = call(&shared, "GET", "/v1/auth/me", Some(token), &[], None).await;
+            assert_eq!(status, StatusCode::OK);
+        }
+
+        // Unknown fields are refused rather than ignored.
+        let (status, _) = call(
+            &shared,
+            "POST",
+            "/v1/provisioning/users",
+            Some(&operator),
+            &[],
+            Some(r#"{"externalSubject":"github:44","tenantId":"ten_local"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        app.close();
+    }
+
     /// End-to-end wiring proof: build the full App against a temp-dir store,
     /// serve the router in-process, and hit the introspection routes.
     #[tokio::test]

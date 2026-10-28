@@ -98,10 +98,17 @@ the wrapper (Linux and macOS) is the remaining confirmation for 0.2.
 Design detail lives in [shared-hosting.md](shared-hosting.md) §3; this stage
 schedules it.
 
-- [ ] **1.1** Operator-only provisioning API: principal + personal tenant +
+- [x] **1.1** Operator-only provisioning API: principal + personal tenant +
       membership + token in one call, idempotent on the external user id.
-- [ ] **1.2** Per-user gateway token (decision above): minted by 1.1,
-      revocable, scoped to the one tenant.
+      Closed 2026-10-28: `POST /v1/provisioning/users`, design in
+      [shared-hosting.md](shared-hosting.md) §6. Verified by identity unit
+      tests (idempotency, interrupted-identity repair, no revival of inactive
+      identities, audit fail-closed) and an app-level e2e test that validates
+      the live response against `provision-user.response.schema.json`.
+- [x] **1.2** Per-user gateway token (decision above): minted by 1.1,
+      revocable, scoped to the one tenant. Closed 2026-10-28 with 1.1: the
+      e2e test proves the token resolves as the new user, cannot select the
+      operator tenant, and cannot provision. A per-principal token cap is M4.
 - [ ] **1.3** Per-tenant LLM credentials selected at dispatch; a tenant
       without a credential gets a clear "not configured" error, never the
       operator's key.

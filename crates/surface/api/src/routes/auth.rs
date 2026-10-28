@@ -98,6 +98,7 @@ pub fn router() -> Router<AppState> {
             "/v1/auth/tokens",
             get(auth_tokens_list).post(auth_token_create),
         )
+        .route("/v1/provisioning/users", post(provision_user))
         .route("/v1/auth/tokens/{token_id}/rotate", post(auth_token_rotate))
         .route("/v1/auth/tokens/{token_id}/revoke", post(auth_token_revoke))
         .route(
@@ -166,6 +167,12 @@ enum AuthApiError {
     CredentialDenial {
         reason_code: &'static str,
     },
+    /// An error with a stable code more specific than [`ApiError`]'s.
+    Coded {
+        status: StatusCode,
+        code: &'static str,
+        message: String,
+    },
 }
 
 impl From<ApiError> for AuthApiError {
@@ -189,6 +196,19 @@ impl IntoResponse for AuthApiError {
                 })),
             )
                 .into_response(),
+            Self::Coded {
+                status,
+                code,
+                message,
+            } => (
+                status,
+                Json(serde_json::json!({
+                    "code": code,
+                    "message": message,
+                    "error": message,
+                })),
+            )
+                .into_response(),
         }
     }
 }
@@ -208,6 +228,18 @@ struct CreateTokenRequest {
     default_tenant_id: String,
     #[serde(default)]
     allowed_tenant_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProvisionUserRequest {
+    external_subject: String,
+    #[serde(default)]
+    display_name: String,
+    #[serde(default)]
+    token_label: String,
+    #[serde(default)]
+    expires_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1070,6 +1102,106 @@ async fn auth_token_create(
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "token": token, "accessToken": secret, "grants": grants })),
+    )
+        .into_response())
+}
+
+/// Stable code: provisioning was called on a daemon that is not shared.
+pub const PROVISIONING_REQUIRES_SHARED_CODE: &str = "provisioning_requires_shared_hosting";
+/// Stable code: the subject's identity exists but is disabled or removed.
+pub const PROVISIONING_IDENTITY_INACTIVE_CODE: &str = "provisioning_identity_inactive";
+
+/// POST /v1/provisioning/users - create (or find) a stranger's identity on a
+/// shared daemon and mint them a token. Platform operator only.
+/// Design: `docs/harness/shared-hosting.md` §6.
+async fn provision_user(
+    State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
+    body: Bytes,
+) -> Result<Response, AuthApiError> {
+    let tc = tenant_context(&tenant)?;
+    if !state.hosting.is_shared() {
+        return Err(AuthApiError::Coded {
+            status: StatusCode::CONFLICT,
+            code: PROVISIONING_REQUIRES_SHARED_CODE,
+            message: "user provisioning is available only on a shared daemon".to_string(),
+        });
+    }
+    // shared_route_policy already refuses non-operators here; checking again
+    // keeps the guarantee independent of the route allowlist.
+    if !state.hosting.is_platform_operator(Some(&tc.0)) {
+        return Err(AuthApiError::Coded {
+            status: StatusCode::FORBIDDEN,
+            code: crate::hosting::OPERATOR_ONLY_CODE,
+            message: "user provisioning is reserved for the platform operator".to_string(),
+        });
+    }
+    let request: ProvisionUserRequest = decode_json_body(&body)?;
+    let expires_at = parse_optional_time(&request.expires_at)?;
+    let identity = identity_manager(&state)?;
+    let user = identity
+        .provision_user(
+            &tc.0,
+            &kura_identity::ProvisionUserInput {
+                external_subject: request.external_subject.clone(),
+                display_name: request.display_name.clone(),
+            },
+        )
+        .map_err(|err| match err {
+            kura_identity::IdentityError::ProvisioningSubjectInvalid => {
+                AuthApiError::Api(ApiError::BadRequest(err.to_string()))
+            }
+            kura_identity::IdentityError::ProvisioningIdentityInactive => AuthApiError::Coded {
+                status: StatusCode::CONFLICT,
+                code: PROVISIONING_IDENTITY_INACTIVE_CODE,
+                message: err.to_string(),
+            },
+            other => AuthApiError::Api(ApiError::internal(other)),
+        })?;
+    append_token_audit(
+        &state,
+        "tenant.token_issued",
+        &user.tenant.tenant_id,
+        &tc.0.principal_id,
+        "",
+        "token_provisioned",
+    )?;
+    let label = match request.token_label.trim() {
+        "" => "gateway".to_string(),
+        label => label.to_string(),
+    };
+    let (token, secret) = auth_manager(&state)?
+        .issue_token(auth::IssueTokenInput {
+            principal_id: user.principal.principal_id.clone(),
+            label,
+            default_tenant_id: user.tenant.tenant_id.clone(),
+            expires_at,
+        })
+        .map_err(|err| AuthApiError::Api(ApiError::BadRequest(err.to_string())))?;
+    state
+        .store
+        .lock()
+        .upsert_access_token(&token)
+        .map_err(ApiError::from_store)?;
+    let grant = identity
+        .grant_provisioned_token(&tc.0, &user, &token.token_id)
+        .map_err(|err| AuthApiError::Api(ApiError::internal(err)))?;
+    let status = if user.created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        status,
+        Json(serde_json::json!({
+            "created": user.created,
+            "principal": user.principal,
+            "tenant": user.tenant,
+            "membership": user.membership,
+            "token": token,
+            "accessToken": secret,
+            "grants": [grant],
+        })),
     )
         .into_response())
 }
