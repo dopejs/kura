@@ -38,14 +38,16 @@ struct Actor {
     secret: String,
 }
 
-fn test_config() -> Config {
-    let dir = std::env::temp_dir().join(format!("kura-app-mt-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&dir).expect("create temp data dir");
-    Config {
+fn test_config() -> (tempfile::TempDir, Config) {
+    let dir = tempfile::Builder::new()
+        .prefix("kura-app-mt-")
+        .tempdir()
+        .expect("create temp data dir");
+    let config = Config {
         project_root: Default::default(),
         environment: Environment::Test,
         bind_addr: "127.0.0.1:0".to_string(),
-        data_dir: dir.to_string_lossy().into_owned(),
+        data_dir: dir.path().to_string_lossy().into_owned(),
         log_level: "info".to_string(),
         version: "dev".to_string(),
         // Echo is listed by the providers manager only when asked for by
@@ -57,7 +59,8 @@ fn test_config() -> Config {
         connectors: Default::default(),
         egress: Default::default(),
         store: kura_config::StoreConfig { readers: 2 },
-    }
+    };
+    (dir, config)
 }
 
 /// Seeds one active tenant with an active Owner principal and a token granted
@@ -172,7 +175,8 @@ async fn send(
 /// the task-local, and scope every subsequent read.
 #[tokio::test]
 async fn bearer_token_alone_resolves_and_scopes_the_tenant() {
-    let app = Arc::new(App::new(test_config()).expect("build app"));
+    let (_temp_dir, config) = test_config();
+    let app = Arc::new(App::new(config).expect("build app"));
     let alice = seed_actor(&app, "alice");
 
     // A protected route with no token is refused: the assembly really is
@@ -199,7 +203,8 @@ async fn bearer_token_alone_resolves_and_scopes_the_tenant() {
 /// data, across every family closed in Stage 8.2.
 #[tokio::test]
 async fn two_tenants_in_one_process_cannot_reach_each_other() {
-    let app = Arc::new(App::new(test_config()).expect("build app"));
+    let (_temp_dir, config) = test_config();
+    let app = Arc::new(App::new(config).expect("build app"));
     let alice = seed_actor(&app, "alice");
     let bob = seed_actor(&app, "bob");
 
@@ -317,7 +322,8 @@ async fn two_tenants_in_one_process_cannot_reach_each_other() {
 /// boundary.
 #[tokio::test]
 async fn sessions_stay_within_their_tenant() {
-    let app = Arc::new(App::new(test_config()).expect("build app"));
+    let (_temp_dir, config) = test_config();
+    let app = Arc::new(App::new(config).expect("build app"));
     let alice = seed_actor(&app, "alice");
     let bob = seed_actor(&app, "bob");
 
@@ -366,7 +372,7 @@ async fn sessions_stay_within_their_tenant() {
 /// directory accepts it; a token revoked before the restart stays revoked.
 #[tokio::test]
 async fn access_tokens_survive_a_restart_and_revocations_stick() {
-    let config = test_config();
+    let (_temp_dir, config) = test_config();
     let app = Arc::new(App::new(config.clone()).expect("build app"));
     let alice = seed_actor(&app, "alice");
 
@@ -452,7 +458,8 @@ async fn access_tokens_survive_a_restart_and_revocations_stick() {
 /// the tenant-scoped dispatch list shows them — and only them.
 #[tokio::test]
 async fn chat_dispatches_are_listed_for_their_own_tenant_only() {
-    let app = Arc::new(App::new(test_config()).expect("build app"));
+    let (_temp_dir, config) = test_config();
+    let app = Arc::new(App::new(config).expect("build app"));
     let alice = seed_actor(&app, "alice");
     let bob = seed_actor(&app, "bob");
     for (actor, n) in [(&alice, 2), (&bob, 1)] {

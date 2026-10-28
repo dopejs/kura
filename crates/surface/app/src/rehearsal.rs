@@ -236,25 +236,29 @@ mod tests {
     use super::*;
     use kura_config::Environment;
 
-    fn source_at_version(version: i64) -> Config {
-        let dir = std::env::temp_dir().join(format!("kura-rehearse-{}", uuid::Uuid::now_v7()));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let store = kura_store::SQLiteStore::new_at_version(dir.to_str().expect("path"), version)
-            .expect("store at version");
+    fn source_at_version(version: i64) -> (tempfile::TempDir, Config) {
+        let dir = tempfile::Builder::new()
+            .prefix("kura-rehearse-source-")
+            .tempdir()
+            .expect("create source data dir");
+        let store =
+            kura_store::SQLiteStore::new_at_version(dir.path().to_str().expect("path"), version)
+                .expect("store at version");
         assert_eq!(store.schema_version().expect("v"), version);
         drop(store);
-        Config {
+        let config = Config {
             project_root: Default::default(),
             store: Default::default(),
             environment: Environment::Test,
             bind_addr: "127.0.0.1:0".to_string(),
-            data_dir: dir.to_string_lossy().into_owned(),
+            data_dir: dir.path().to_string_lossy().into_owned(),
             log_level: "info".to_string(),
             version: "dev".to_string(),
             llm: Default::default(),
             connectors: Default::default(),
             egress: Default::default(),
-        }
+        };
+        (dir, config)
     }
 
     /// The whole point: the candidate migrates the snapshot to head while the
@@ -262,7 +266,7 @@ mod tests {
     #[test]
     fn rehearsal_migrates_the_snapshot_and_leaves_the_source_untouched() {
         let previous = kura_store::CURRENT_SCHEMA_VERSION - 1;
-        let config = source_at_version(previous);
+        let (_source_dir, config) = source_at_version(previous);
 
         let report = rehearse_upgrade(&config, false).expect("rehearse");
         assert!(report.passed, "{report:?}");
@@ -290,7 +294,7 @@ mod tests {
     /// inspection.
     #[test]
     fn a_broken_plugin_profile_fails_the_rehearsal_not_the_real_boot() {
-        let config = source_at_version(kura_store::CURRENT_SCHEMA_VERSION);
+        let (_source_dir, config) = source_at_version(kura_store::CURRENT_SCHEMA_VERSION);
         std::fs::write(
             Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
             "{ this is not json",

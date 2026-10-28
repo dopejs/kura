@@ -11,12 +11,18 @@ The Rust workspace `crates/` is the daemon control plane (runtime, providers, ch
 - `make daemon-run-test`: start the daemon in the default test environment (`~/.kura-test`, `127.0.0.1:19192`).
 - `make daemon-run-test-live`: start the test daemon with live connectors enabled.
 - `make daemon-test-status`: check the local test daemon health.
-- `go test ./...` (run in `daemon/`): execute all Go tests.
+- `make daemon-test`: execute the Rust workspace tests inside an isolated
+  temporary root that is removed on success, failure, or interruption.
 - `make daemon-contract-test`: validate schema and contract fixtures.
 - `pnpm test:clients`: run SDK and web client tests.
 - `pnpm build`: build client packages.
 
-**Disk hygiene (important):** the Rust `crates/target/` directory accumulates very large debug artifacts (~76 GB after a full build+test session) and can fill the disk. **After finishing any test/build session, run `cargo clean` from `crates/` (or `rm -rf crates/target`) to release that space.** Never leave a stale `crates/target/` behind across a long-running task.
+**Disk hygiene (important):** run workspace tests through `make daemon-test` or
+`make rs-test`, not a bare `cargo test`. The wrapper gives every run an isolated
+`TMPDIR`, removes it on success, failure, and interruption, and reclaims stale
+run directories after crashes. The Rust `crates/target/` directory can still
+grow across toolchain and feature changes; after a long build session, run
+`cargo clean` from `crates/` before leaving the task.
 
 ## Coding Style & Naming Conventions
 

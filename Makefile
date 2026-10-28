@@ -23,10 +23,10 @@ daemon-build:
 	cd $(RS_DIR) && cargo build --release -p kura-cli
 
 daemon-test:
-	cd $(RS_DIR) && cargo test --workspace
+	./scripts/cargo-test-isolated.sh --workspace
 
 daemon-contract-test:
-	cd $(RS_DIR) && cargo test -p kura-contracts
+	./scripts/cargo-test-isolated.sh -p kura-contracts
 
 .PHONY: rs-build rs-test rs-clippy
 
@@ -34,7 +34,7 @@ rs-build:
 	cd $(RS_DIR) && cargo build --workspace
 
 rs-test:
-	cd $(RS_DIR) && cargo test --workspace
+	./scripts/cargo-test-isolated.sh --workspace
 
 rs-clippy:
 	cd $(RS_DIR) && cargo clippy --workspace --all-targets

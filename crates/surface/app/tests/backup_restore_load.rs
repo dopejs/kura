@@ -113,8 +113,11 @@ async fn send(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn an_online_backup_taken_under_two_tenant_load_restores_with_tenant_isolation_intact() {
-    let source_dir = std::env::temp_dir().join(format!("kura-backup-src-{}", uuid::Uuid::now_v7()));
-    let app = App::new(test_config(&source_dir)).expect("build app");
+    let source_dir = tempfile::Builder::new()
+        .prefix("kura-backup-src-")
+        .tempdir()
+        .expect("create source data dir");
+    let app = App::new(test_config(source_dir.path())).expect("build app");
     let alice = seed_actor(&app, "alice");
     let bob = seed_actor(&app, "bob");
     let router = app.router();
@@ -177,9 +180,11 @@ async fn an_online_backup_taken_under_two_tenant_load_restores_with_tenant_isola
 
     // The online backup, taken while the writers are running.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let backup_dir = std::env::temp_dir().join(format!("kura-backup-dst-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&backup_dir).unwrap();
-    let backup_file = backup_dir.join("daemon.sqlite");
+    let backup_dir = tempfile::Builder::new()
+        .prefix("kura-backup-dst-")
+        .tempdir()
+        .expect("create backup data dir");
+    let backup_file = backup_dir.path().join("daemon.sqlite");
     app.state
         .store
         .lock()
@@ -197,7 +202,7 @@ async fn an_online_backup_taken_under_two_tenant_load_restores_with_tenant_isola
 
     // Restore = open the snapshot as a data directory: migrations run (a
     // no-op here, the proof is that a v5 snapshot opens), readers open too.
-    let restored_app = App::new(test_config(&backup_dir)).expect("restored assembly opens");
+    let restored_app = App::new(test_config(backup_dir.path())).expect("restored assembly opens");
     assert_eq!(
         restored_app.state.store.lock().schema_version().unwrap(),
         kura_store::CURRENT_SCHEMA_VERSION
@@ -239,7 +244,10 @@ async fn an_online_backup_taken_under_two_tenant_load_restores_with_tenant_isola
         .lock()
         .list_llm_dispatches()
         .unwrap();
-    assert!(!dispatches.is_empty(), "dispatches written under load are in the copy");
+    assert!(
+        !dispatches.is_empty(),
+        "dispatches written under load are in the copy"
+    );
     assert!(
         dispatches.len() <= total_turns,
         "{} dispatches cannot exceed the {total_turns} turns that ran",

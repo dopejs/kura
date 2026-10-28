@@ -965,15 +965,17 @@ mod tests {
     /// A test config pointing at a fresh temp data dir.
     use kura_config::LlmConfig;
 
-    fn test_config() -> Config {
-        let dir = std::env::temp_dir().join(format!("kura-app-smoke-{}", uuid::Uuid::now_v7()));
-        std::fs::create_dir_all(&dir).expect("create temp data dir");
-        Config {
+    fn test_config() -> (tempfile::TempDir, Config) {
+        let dir = tempfile::Builder::new()
+            .prefix("kura-app-smoke-")
+            .tempdir()
+            .expect("create temp data dir");
+        let config = Config {
             project_root: String::new(),
             store: Default::default(),
             environment: Environment::Test,
             bind_addr: "127.0.0.1:0".to_string(),
-            data_dir: dir.to_string_lossy().into_owned(),
+            data_dir: dir.path().to_string_lossy().into_owned(),
             log_level: "info".to_string(),
             version: "dev".to_string(),
             // These tests dispatch at `echo`, which is a fixture rather than a
@@ -986,7 +988,8 @@ mod tests {
             },
             connectors: Default::default(),
             egress: Default::default(),
-        }
+        };
+        (dir, config)
     }
 
     #[tokio::test]
@@ -995,7 +998,7 @@ mod tests {
         // resolver refuses, so every /v1 route answers 403 after a successful
         // pairing -- and surfaces that legitimately require a tenant (the setup
         // wizard) can never be reached.
-        let mut config = test_config();
+        let (_temp_dir, mut config) = test_config();
         config.environment = Environment::Embedded;
         let app = App::new(config).expect("build embedded app");
 
@@ -1023,7 +1026,7 @@ mod tests {
     async fn bootstrapping_the_local_identity_is_idempotent() {
         // A restart must reuse the tenant rather than reset it, or state
         // associated with the workspace would be orphaned.
-        let mut config = test_config();
+        let (_temp_dir, mut config) = test_config();
         config.environment = Environment::Embedded;
         let first = App::new(config.clone()).expect("first boot");
         let created_at = {
@@ -1050,7 +1053,8 @@ mod tests {
 
     #[tokio::test]
     async fn non_embedded_environments_do_not_bootstrap_a_local_identity() {
-        let app = App::new(test_config()).expect("build app");
+        let (_temp_dir, config) = test_config();
+        let app = App::new(config).expect("build app");
         assert!(app.state.identity.is_some());
         let store = app.state.store.lock();
         assert!(
@@ -1067,7 +1071,8 @@ mod tests {
         // Registering it without a base URL would put a provider in the
         // dispatcher that fails every dispatch, which reads as a broken daemon
         // rather than an unconfigured one.
-        let app = App::new(test_config()).expect("build app");
+        let (_temp_dir, config) = test_config();
+        let app = App::new(config).expect("build app");
         let dispatcher = app.state.llm.as_ref().expect("dispatcher");
         assert!(!dispatcher.has_provider("openai_compatible"));
         // The built-in fallback is always present.
@@ -1076,7 +1081,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_configured_openai_endpoint_becomes_dispatchable() {
-        let mut config = test_config();
+        let (_temp_dir, mut config) = test_config();
         config.llm.openai_compatible.base_url = "https://api.example.test/v1".to_string();
         config.llm.openai_compatible.model = "test-model".to_string();
         let app = App::new(config).expect("build app");
@@ -1095,7 +1100,7 @@ mod tests {
     /// Each link was individually plausible and individually wrong.
     #[tokio::test]
     async fn embedded_pairing_yields_a_token_that_resolves_and_authorizes() {
-        let mut config = test_config();
+        let (_temp_dir, mut config) = test_config();
         config.environment = Environment::Embedded;
         let app = App::new(config).expect("build embedded app");
         let router = app.router();
@@ -1186,7 +1191,7 @@ mod tests {
     /// serve the router in-process, and hit the introspection routes.
     #[tokio::test]
     async fn healthz_returns_ok_with_full_wiring() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         let app = App::new(config).expect("build app");
 
         // The store migrated to head schema and all managers are populated.
@@ -1269,7 +1274,7 @@ mod tests {
     /// migrations are idempotent.
     #[tokio::test]
     async fn rebuild_on_existing_store_is_idempotent() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         let app = App::new(config.clone()).expect("first build");
         app.close();
         let app2 = App::new(config).expect("second build");
@@ -1289,7 +1294,7 @@ mod tests {
     /// report records the decision.
     #[tokio::test]
     async fn disabled_leaf_plugin_leaves_manager_unwired() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         let profile = kura_plugin::PluginProfile {
             disabled: vec!["triage".to_string()],
             ..Default::default()
@@ -1313,7 +1318,7 @@ mod tests {
     /// half-wired.
     #[tokio::test]
     async fn disabling_billing_transitively_disables_dependents() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         let profile = kura_plugin::PluginProfile {
             disabled: vec!["billing".to_string()],
             ..Default::default()
@@ -1349,7 +1354,7 @@ mod tests {
     /// A profile written to <data_dir>/plugins.json is picked up by App::new.
     #[tokio::test]
     async fn profile_file_in_data_dir_is_loaded() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         std::fs::write(
             std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
             serde_json::json!({ "disabled": ["memory"] }).to_string(),
@@ -1370,7 +1375,7 @@ mod tests {
     #[tokio::test]
     async fn connector_runtimes_constructed_or_skipped_and_restore_idempotent() {
         // All connectors disabled: the four runtimes are None (skipped).
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         let app = App::new(config.clone()).expect("build app");
         let runtimes = app
             .build_connector_runtimes()
@@ -1423,7 +1428,7 @@ mod tests {
     /// config flag is on: profile wins, no network or credential is touched.
     #[tokio::test]
     async fn disabled_channel_plugin_gates_connector_runtime() {
-        let mut config = test_config();
+        let (_temp_dir, mut config) = test_config();
         config.connectors.discord.enabled = true;
         config.connectors.discord.bot_token = "test-token".to_string();
         config.connectors.discord.connector_id = "discord-test".to_string();
@@ -1450,7 +1455,7 @@ mod tests {
     /// (model-visible = logged), end to end through the real assembly.
     #[test]
     fn chat_hook_bus_is_wired_end_to_end() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         let app = App::new(config).expect("build app");
         let hooks = app.state.hooks.clone().expect("hook bus wired");
         struct Inject;
@@ -1499,7 +1504,7 @@ mod tests {
     /// plugin-registered.
     #[test]
     fn memory_capture_rides_the_turn_end_hook() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         let app = App::new(config).expect("build app");
         let hooks = app.state.hooks.as_ref().expect("hook bus");
         assert!(
@@ -1601,7 +1606,7 @@ mod tests {
     /// injected bootstrap survives as frame).
     #[tokio::test]
     async fn context_plugin_injects_memory_bootstrap_and_composes() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         std::fs::write(
             std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
             serde_json::json!({
@@ -1759,7 +1764,8 @@ mod tests {
     /// forgetting also clears derived state.
     #[tokio::test]
     async fn retrieval_caches_corpus_embeddings_and_revocation_clears_them() {
-        let app = App::new(test_config()).expect("build app");
+        let (_temp_dir, config) = test_config();
+        let app = App::new(config).expect("build app");
         let hooks = app.state.hooks.as_ref().expect("hook bus");
         let memory = app.state.memory.as_deref().expect("memory wired");
         let operator = kura_memory::Actor {
@@ -1879,7 +1885,8 @@ mod tests {
     /// `billing` as a dependency and the runtime is built.
     #[tokio::test]
     async fn the_tool_plane_assembles_with_a_real_quota_gate() {
-        let app = App::new(test_config()).expect("build app");
+        let (_temp_dir, config) = test_config();
+        let app = App::new(config).expect("build app");
 
         assert!(app.state.tools.is_some(), "profile manager wired");
         assert!(
@@ -1906,7 +1913,7 @@ mod tests {
     /// already injected is not injected a second time.
     #[tokio::test]
     async fn retrieval_reaches_l2_beyond_the_bootstrap_budget_without_double_injecting() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         // A bootstrap budget small enough that only the newest asset fits.
         std::fs::write(
             std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
@@ -2023,7 +2030,8 @@ mod tests {
     /// printed so the plan can record them; the assertion is the ordering.
     #[tokio::test]
     async fn retrieval_benchmark_10k_atoms_warm_turn_is_not_slower_than_cold() {
-        let app = App::new(test_config()).expect("build app");
+        let (_temp_dir, config) = test_config();
+        let app = App::new(config).expect("build app");
         let memory = app.state.memory.as_deref().expect("memory");
         let operator = kura_memory::Actor {
             kind: kura_memory::ActorKind::Operator,
@@ -2091,7 +2099,7 @@ mod tests {
     /// Stage 5.1: a thread's frame is injected first and survives elision.
     #[tokio::test]
     async fn session_frame_is_injected_first_and_survives_a_tight_window() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         std::fs::write(
             std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
             serde_json::json!({
@@ -2155,7 +2163,7 @@ mod tests {
     /// the real lifecycle reset; an active one does not.
     #[tokio::test]
     async fn idle_channel_thread_opens_a_new_segment_at_turn_start() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         std::fs::write(
             std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
             serde_json::json!({
@@ -2279,7 +2287,7 @@ mod tests {
     /// events. Verified against the real assembly with the echo provider.
     #[tokio::test]
     async fn swarm_runs_children_concurrently_with_structured_results_and_events() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         std::fs::write(
             std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
             serde_json::json!({ "entries": { "swarm": { "config": { "enabled": true, "maxConcurrentChildren": 2 } } } }).to_string(),
@@ -2409,7 +2417,8 @@ mod tests {
     /// Opt-in, not default-on: with no profile entry every launch is refused.
     #[tokio::test]
     async fn swarm_is_refused_until_opted_in() {
-        let mut app = App::new(test_config()).expect("build app");
+        let (_temp_dir, config) = test_config();
+        let mut app = App::new(config).expect("build app");
         app.state.auth = None;
         let request = Request::builder()
             .method("POST")
@@ -2430,7 +2439,8 @@ mod tests {
         // The echo provider returns the prompt, and guidance is placed first in
         // it — so a corrected draft given as guidance is exactly what the model
         // 'answers', which is also the real steering path.
-        let mut app = App::new(test_config()).expect("build app");
+        let (_temp_dir, config) = test_config();
+        let mut app = App::new(config).expect("build app");
         app.state.auth = None;
         let app = Arc::new(app);
 
@@ -2487,7 +2497,7 @@ mod tests {
     /// preview plus the citation; the current query is never externalized.
     #[tokio::test]
     async fn context_plugin_externalizes_oversized_content() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         let app = App::new(config).expect("build app");
         let hooks = app.state.hooks.as_ref().expect("hook bus");
         let big = "log line ".repeat(1200); // > 8000 chars
@@ -2547,7 +2557,7 @@ mod tests {
     /// current query kept.
     #[tokio::test]
     async fn session_strategy_shapes_window_with_profile_config() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         std::fs::write(
             std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
             serde_json::json!({
@@ -2637,7 +2647,7 @@ mod tests {
     /// silently running default budgets.
     #[tokio::test]
     async fn malformed_session_strategy_config_fails_boot() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         let mut entries = std::collections::BTreeMap::new();
         entries.insert(
             "session-strategy".to_string(),
@@ -2671,7 +2681,7 @@ mod tests {
     /// in-process default instead of breaking retrieval.
     #[test]
     fn external_plugin_serves_the_embedder_seam() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         let plugin_dir = std::path::Path::new(&config.data_dir).join("plugins/embedder");
         std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin");
         std::fs::write(
@@ -2712,7 +2722,7 @@ mod tests {
     /// rewrites the chat context through the real assembly.
     #[test]
     fn external_plugin_rewrites_chat_context_end_to_end() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         let plugin_dir = std::path::Path::new(&config.data_dir).join("plugins/external-window");
         std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin");
         std::fs::write(
@@ -2782,7 +2792,7 @@ mod tests {
     /// delivery connector adapter, mcp execution starter + secret resolver).
     #[test]
     fn wired_seam_adapters_are_non_none() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         let app = App::new(config).expect("build app");
         let wiring = &app.wiring;
         assert!(
@@ -2832,13 +2842,15 @@ mod tool_host_tests {
 
     use crate::App;
 
-    fn test_config() -> Config {
-        let dir = std::env::temp_dir().join(format!("kura-app-tools-{}", uuid::Uuid::now_v7()));
-        std::fs::create_dir_all(&dir).expect("create temp data dir");
-        Config {
+    fn test_config() -> (tempfile::TempDir, Config) {
+        let dir = tempfile::Builder::new()
+            .prefix("kura-app-tools-")
+            .tempdir()
+            .expect("create temp data dir");
+        let config = Config {
             environment: Environment::Test,
             bind_addr: "127.0.0.1:0".to_string(),
-            data_dir: dir.to_string_lossy().into_owned(),
+            data_dir: dir.path().to_string_lossy().into_owned(),
             log_level: "info".to_string(),
             version: "dev".to_string(),
             // A configured openai_compatible profile so the providers manager
@@ -2859,7 +2871,8 @@ mod tool_host_tests {
             egress: Default::default(),
             store: Default::default(),
             project_root: String::new(),
-        }
+        };
+        (dir, config)
     }
 
     /// Asks for `tool` with `arguments` once, then answers with the tool
@@ -2923,7 +2936,8 @@ mod tool_host_tests {
     }
 
     fn app_with_provider(tool: &str, arguments: &str) -> (App, Arc<AskOnce>) {
-        let app = App::new(test_config()).expect("build app");
+        let (_temp_dir, config) = test_config();
+        let app = App::new(config).expect("build app");
         let provider = Arc::new(AskOnce {
             tool: tool.to_string(),
             arguments: arguments.to_string(),
@@ -3112,7 +3126,8 @@ mod tool_host_tests {
             fn commit(&self, _tenant_id: &str, _operation_key: &str) {}
             fn release(&self, _tenant_id: &str, _operation_key: &str, _reason: &str) {}
         }
-        let mut app = App::new(test_config()).expect("build app");
+        let (_temp_dir, config) = test_config();
+        let mut app = App::new(config).expect("build app");
         app.state.tool_runtime = Some(Arc::new(kura_tools::ToolRuntime::new(
             Arc::new(DenyAll),
             kura_egress::EgressPolicy::default(),
@@ -3168,7 +3183,8 @@ mod tool_host_tests {
     /// model must not be shown a tool that cannot be called.
     #[test]
     fn an_mcp_backed_profile_without_a_live_server_is_not_offered() {
-        let app = App::new(test_config()).expect("build app");
+        let (_temp_dir, config) = test_config();
+        let app = App::new(config).expect("build app");
         app.state
             .tools
             .clone()
@@ -3203,21 +3219,24 @@ mod browser_driver_tests {
 
     use crate::App;
 
-    fn test_config() -> Config {
-        let dir = std::env::temp_dir().join(format!("kura-app-browser-{}", uuid::Uuid::now_v7()));
-        std::fs::create_dir_all(&dir).expect("create temp data dir");
-        Config {
+    fn test_config() -> (tempfile::TempDir, Config) {
+        let dir = tempfile::Builder::new()
+            .prefix("kura-app-browser-")
+            .tempdir()
+            .expect("create temp data dir");
+        let config = Config {
             project_root: Default::default(),
             environment: Environment::Test,
             bind_addr: "127.0.0.1:0".to_string(),
-            data_dir: dir.to_string_lossy().into_owned(),
+            data_dir: dir.path().to_string_lossy().into_owned(),
             log_level: "info".to_string(),
             version: "dev".to_string(),
             llm: Default::default(),
             connectors: Default::default(),
             egress: Default::default(),
             store: kura_config::StoreConfig { readers: 2 },
-        }
+        };
+        (dir, config)
     }
 
     /// A protocol-conformant worker in POSIX sh: answers every request
@@ -3247,7 +3266,7 @@ done
 
     #[test]
     fn subprocess_driver_is_wired_from_plugin_config_and_reports_to_the_supervisor() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         let worker = write_sh_worker(std::path::Path::new(&config.data_dir));
         std::fs::write(
             std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
@@ -3304,7 +3323,7 @@ done
 
     #[test]
     fn an_unknown_driver_name_fails_the_build_loudly() {
-        let config = test_config();
+        let (_temp_dir, config) = test_config();
         std::fs::write(
             std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
             serde_json::json!({ "entries": { "computer-use": { "config": { "driver": "chrome" } } } })

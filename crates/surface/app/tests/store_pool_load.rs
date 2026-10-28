@@ -13,14 +13,16 @@ use kura_app::App;
 use kura_config::{Config, Environment, StoreConfig};
 use tower::ServiceExt;
 
-fn test_config(readers: usize) -> Config {
-    let dir = std::env::temp_dir().join(format!("kura-app-pool-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&dir).expect("create temp data dir");
-    Config {
+fn test_config(readers: usize) -> (tempfile::TempDir, Config) {
+    let dir = tempfile::Builder::new()
+        .prefix("kura-app-pool-")
+        .tempdir()
+        .expect("create temp data dir");
+    let config = Config {
         project_root: Default::default(),
         environment: Environment::Test,
         bind_addr: "127.0.0.1:0".to_string(),
-        data_dir: dir.to_string_lossy().into_owned(),
+        data_dir: dir.path().to_string_lossy().into_owned(),
         log_level: "info".to_string(),
         version: "dev".to_string(),
         // Echo is listed by the providers manager only when asked for by
@@ -32,7 +34,8 @@ fn test_config(readers: usize) -> Config {
         connectors: Default::default(),
         egress: Default::default(),
         store: StoreConfig { readers },
-    }
+    };
+    (dir, config)
 }
 
 async fn request(
@@ -58,7 +61,8 @@ async fn request(
 /// Mixed load: `sessions` concurrent workers each doing a chat turn (a write
 /// path: dispatch rows, continuity, events) interleaved with list reads.
 async fn run_load(readers: usize, sessions: usize, rounds: usize) -> kura_store::PoolStats {
-    let mut app = App::new(test_config(readers)).expect("build app");
+    let (_temp_dir, config) = test_config(readers);
+    let mut app = App::new(config).expect("build app");
     app.state.auth = None; // single-user assembly: no bearer tokens needed
     // `App` holds a non-Sync store handle for the connector runtimes, so the
     // workers share the router (Send + Clone) and the pool, not the App.
