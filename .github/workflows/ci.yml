@@ -29,12 +29,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates
+      # Same isolated wrapper as `make daemon-test`, so CI and local runs see
+      # the same TMPDIR handling.
       - name: Test workspace
-        run: cargo test --workspace
+        run: ../scripts/cargo-test-isolated.sh --workspace
       - name: Contract tests
-        run: cargo test -p kura-contracts
+        run: ../scripts/cargo-test-isolated.sh -p kura-contracts
       - name: Route parity gate
-        run: cargo test -p kura-api --test route_parity
+        run: ../scripts/cargo-test-isolated.sh -p kura-api --test route_parity
       # The pipe used here previously took its exit code from `tail`, so a
       # clippy failure could never fail the job. Errors are now fatal; the
       # existing warning backlog is still tolerated.
