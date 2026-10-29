@@ -53,6 +53,67 @@ pub struct SessionStrategyConfig {
     /// (the prefix of `channelScopeRef`), with `"*"` as the default for any
     /// connector not listed. Personal threads are never auto-segmented.
     pub channel_segmentation: std::collections::BTreeMap<String, ChannelSegmentationPolicy>,
+    /// What the window budget is counted in (agent-runtime-program.md 2.2).
+    /// `chars` (the default this release) is unchanged behavior.
+    pub budget_unit: BudgetUnit,
+    /// Budget for personal turns in estimated tokens; 0 converts
+    /// `personal_budget_chars` (or its default) at [`CHARS_PER_TOKEN`].
+    pub personal_budget_tokens: usize,
+    /// Budget for channel-origin turns in estimated tokens; 0 converts
+    /// `thread_budget_chars` (or its default).
+    pub thread_budget_tokens: usize,
+    /// Context window per model name, in tokens, with `"*"` as the fallback.
+    /// A token budget never exceeds the target model's window less
+    /// `reserve_output_tokens`. Not built in: windows change with every
+    /// model release, so the operator states the ones they run.
+    pub model_context_windows: std::collections::BTreeMap<String, usize>,
+    /// Room left in the window for the reply and later tool rounds; 0 uses
+    /// [`DEFAULT_RESERVE_OUTPUT_TOKENS`].
+    pub reserve_output_tokens: usize,
+}
+
+/// The unit a window budget is counted in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetUnit {
+    /// Content length in bytes, as before 2.2. Kept as the explicit fallback
+    /// for one release.
+    #[default]
+    Chars,
+    /// Estimated tokens ([`estimate_tokens`]), capped by the model's window.
+    Tokens,
+    /// Shape by chars, and also work out what tokens would have done, so the
+    /// two can be compared on real traffic before switching.
+    Shadow,
+}
+
+/// The conversion from a char budget to tokens. The common rule of thumb for
+/// English with current BPE tokenizers; text that is not ASCII is counted
+/// per character by [`estimate_tokens`], not through this ratio.
+pub const CHARS_PER_TOKEN: usize = 4;
+/// Per-message overhead in tokens (role and framing), matching what chat
+/// APIs bill per message.
+pub const MESSAGE_OVERHEAD_TOKENS: usize = 4;
+/// Default room kept for the reply when a model's window is known.
+pub const DEFAULT_RESERVE_OUTPUT_TOKENS: usize = 4096;
+
+/// Estimated tokens in `text`: ASCII at [`CHARS_PER_TOKEN`] per token, every
+/// other character as one token. Deliberately conservative for CJK (current
+/// tokenizers spend roughly 0.7–1.5 tokens per Han character) and for
+/// accented Latin, which it overcounts: an estimate that runs high elides a
+/// little early, one that runs low overflows the model.
+#[must_use]
+pub fn estimate_tokens(text: &str) -> usize {
+    let (ascii, other) = text.chars().fold((0usize, 0usize), |(a, o), c| {
+        if c.is_ascii() { (a + 1, o) } else { (a, o + 1) }
+    });
+    ascii.div_ceil(CHARS_PER_TOKEN) + other
+}
+
+/// Estimated tokens one message costs in the window.
+#[must_use]
+pub fn estimate_message_tokens(message: &WindowMessage) -> usize {
+    estimate_tokens(&message.content) + MESSAGE_OVERHEAD_TOKENS
 }
 
 /// Channel-native thread segmentation policy (Stage 5.2).
@@ -116,6 +177,47 @@ impl SessionStrategyConfig {
         self.channel_segmentation.get("*")
     }
 
+    /// Effective token budget for a turn: the configured token budget (or
+    /// the char budget converted), capped by the model's window less the
+    /// output reserve when that window is known.
+    #[must_use]
+    pub fn token_budget_for(&self, source_kind: Option<&str>, model: &str) -> usize {
+        let is_channel = source_kind == Some("channel");
+        let explicit = if is_channel {
+            self.thread_budget_tokens
+        } else {
+            self.personal_budget_tokens
+        };
+        let budget = if explicit > 0 {
+            explicit
+        } else {
+            self.budget_for(source_kind).div_ceil(CHARS_PER_TOKEN)
+        };
+        match self.context_window_for(model) {
+            Some(window) => budget.min(window.saturating_sub(self.reserve_output())),
+            None => budget,
+        }
+    }
+
+    /// The model's context window, by exact name then `"*"`.
+    #[must_use]
+    pub fn context_window_for(&self, model: &str) -> Option<usize> {
+        self.model_context_windows
+            .get(model.trim())
+            .or_else(|| self.model_context_windows.get("*"))
+            .copied()
+            .filter(|window| *window > 0)
+    }
+
+    #[must_use]
+    pub fn reserve_output(&self) -> usize {
+        if self.reserve_output_tokens > 0 {
+            self.reserve_output_tokens
+        } else {
+            DEFAULT_RESERVE_OUTPUT_TOKENS
+        }
+    }
+
     #[must_use]
     pub fn keep_recent_floor(&self) -> usize {
         if self.keep_recent > 0 {
@@ -157,8 +259,33 @@ pub fn shape_window(
     budget_chars: usize,
     keep_recent: usize,
 ) -> ShapedWindow {
-    let total: usize = messages.iter().map(|m| m.content.len()).sum();
-    if total <= budget_chars {
+    shape_window_by(messages, budget_chars, keep_recent, |m| m.content.len())
+}
+
+/// [`shape_window`] in estimated tokens ([`estimate_message_tokens`]).
+#[must_use]
+pub fn shape_window_tokens(
+    messages: &[WindowMessage],
+    budget_tokens: usize,
+    keep_recent: usize,
+) -> ShapedWindow {
+    shape_window_by(
+        messages,
+        budget_tokens,
+        keep_recent,
+        estimate_message_tokens,
+    )
+}
+
+/// The shaping mechanism, with what a message costs left to the caller.
+fn shape_window_by(
+    messages: &[WindowMessage],
+    budget: usize,
+    keep_recent: usize,
+    cost: impl Fn(&WindowMessage) -> usize,
+) -> ShapedWindow {
+    let total: usize = messages.iter().map(&cost).sum();
+    if total <= budget {
         return ShapedWindow {
             messages: messages.to_vec(),
             elided: 0,
@@ -166,13 +293,13 @@ pub fn shape_window(
         };
     }
 
-    // Frame chars are mandatory; history fits in what remains.
-    let frame_chars: usize = messages
+    // The frame is mandatory; history fits in what remains.
+    let frame_cost: usize = messages
         .iter()
         .filter(|m| m.role == "system")
-        .map(|m| m.content.len())
+        .map(&cost)
         .sum();
-    let history_budget = budget_chars.saturating_sub(frame_chars);
+    let history_budget = budget.saturating_sub(frame_cost);
 
     // Walk non-system messages from newest to oldest, keeping while within
     // the history budget; `keep_recent` newest are kept unconditionally.
@@ -185,7 +312,7 @@ pub fn shape_window(
     let mut kept: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut used = 0usize;
     for (rank, &idx) in history_indices.iter().rev().enumerate() {
-        let len = messages[idx].content.len();
+        let len = cost(&messages[idx]);
         if rank < keep_recent || used + len <= history_budget {
             kept.insert(idx);
             used += len;
@@ -567,5 +694,125 @@ mod frame_and_segmentation_tests {
         assert_eq!(cfg.segmentation_for("").unwrap().idle_gap_seconds, 100);
         let none = SessionStrategyConfig::default();
         assert!(none.segmentation_for("discord-main:general").is_none());
+    }
+}
+
+#[cfg(test)]
+mod token_budget_tests {
+    use super::*;
+
+    fn msg(role: &str, content: &str) -> WindowMessage {
+        WindowMessage {
+            role: role.to_string(),
+            content: content.to_string(),
+        }
+    }
+
+    #[test]
+    fn the_estimator_counts_ascii_by_four_and_everything_else_per_character() {
+        assert_eq!(estimate_tokens(""), 0);
+        assert_eq!(estimate_tokens("abcd"), 1);
+        assert_eq!(estimate_tokens("abcde"), 2);
+        // Six Han characters are 18 bytes; the char budget counted them as
+        // 18, which is why a Chinese window held three times less than it
+        // looked. Tokens count them as six.
+        assert_eq!(estimate_tokens("你好世界朋友"), 6);
+        assert_eq!(estimate_tokens("hi 你好"), 1 + 2);
+        assert_eq!(
+            estimate_message_tokens(&msg("user", "abcd")),
+            1 + MESSAGE_OVERHEAD_TOKENS
+        );
+    }
+
+    #[test]
+    fn char_budgets_convert_and_explicit_token_budgets_win() {
+        let config = SessionStrategyConfig::default();
+        assert_eq!(
+            config.token_budget_for(None, "m"),
+            DEFAULT_PERSONAL_BUDGET_CHARS / CHARS_PER_TOKEN
+        );
+        assert_eq!(
+            config.token_budget_for(Some("channel"), "m"),
+            DEFAULT_THREAD_BUDGET_CHARS / CHARS_PER_TOKEN
+        );
+
+        let converted = SessionStrategyConfig {
+            personal_budget_chars: 1001,
+            ..SessionStrategyConfig::default()
+        };
+        assert_eq!(converted.token_budget_for(None, "m"), 251, "rounded up");
+
+        let explicit = SessionStrategyConfig {
+            personal_budget_chars: 1000,
+            personal_budget_tokens: 9000,
+            thread_budget_tokens: 700,
+            ..SessionStrategyConfig::default()
+        };
+        assert_eq!(explicit.token_budget_for(None, "m"), 9000);
+        assert_eq!(explicit.token_budget_for(Some("channel"), "m"), 700);
+    }
+
+    #[test]
+    fn a_known_window_caps_the_budget_and_leaves_room_for_the_reply() {
+        let config = SessionStrategyConfig {
+            personal_budget_tokens: 100_000,
+            model_context_windows: [("small".to_string(), 8192), ("*".to_string(), 200_000)]
+                .into_iter()
+                .collect(),
+            ..SessionStrategyConfig::default()
+        };
+        assert_eq!(
+            config.token_budget_for(None, "small"),
+            8192 - DEFAULT_RESERVE_OUTPUT_TOKENS
+        );
+        // The fallback window is larger than the budget: the budget stands.
+        assert_eq!(config.token_budget_for(None, "other"), 100_000);
+        // A window smaller than the reserve leaves nothing but the floor.
+        let tiny = SessionStrategyConfig {
+            model_context_windows: [("tiny".to_string(), 1000)].into_iter().collect(),
+            ..SessionStrategyConfig::default()
+        };
+        assert_eq!(tiny.token_budget_for(None, "tiny"), 0);
+        assert_eq!(tiny.context_window_for("unknown"), None);
+    }
+
+    #[test]
+    fn token_shaping_keeps_the_frame_and_the_floor_and_elides_oldest() {
+        let mut messages = vec![msg("system", "frame")];
+        for i in 0..6 {
+            messages.push(msg("user", &format!("{i}{}", "x".repeat(399))));
+        }
+        // Each history message is 100 + 4 tokens; the frame is 2 + 4.
+        let shaped = shape_window_tokens(&messages, 6 + 3 * 104, 1);
+        assert_eq!(shaped.elided, 3);
+        assert_eq!(shaped.messages[0].content, "frame");
+        assert!(shaped.messages[1].content.contains("elided"));
+        assert!(shaped.messages.last().unwrap().content.starts_with('5'));
+        assert_eq!(shape_window_tokens(&messages, 6 + 3 * 104, 1), shaped);
+        // Under budget: untouched.
+        assert_eq!(shape_window_tokens(&messages, 10_000, 1).elided, 0);
+    }
+
+    #[test]
+    fn the_unit_parses_from_plugin_config_and_defaults_to_chars() {
+        let config: SessionStrategyConfig = serde_json::from_value(serde_json::json!({
+            "budgetUnit": "shadow",
+            "personalBudgetTokens": 5000,
+            "modelContextWindows": {"gpt-x": 128000},
+        }))
+        .expect("config");
+        assert_eq!(config.budget_unit, BudgetUnit::Shadow);
+        assert_eq!(config.context_window_for("gpt-x"), Some(128_000));
+        assert_eq!(
+            SessionStrategyConfig::default().budget_unit,
+            BudgetUnit::Chars
+        );
+        assert!(
+            serde_json::from_value::<SessionStrategyConfig>(serde_json::json!({
+                "budgetUnit": "words"
+            }))
+            .is_err(),
+            "a typo must fail the boot, not fall back silently"
+        );
     }
 }

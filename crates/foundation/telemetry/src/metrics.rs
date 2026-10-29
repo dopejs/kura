@@ -24,6 +24,7 @@ pub const STORE_LOCK_WAIT_SECONDS: &str = "kura_store_lock_wait_seconds";
 pub const HOOK_DURATION_SECONDS: &str = "kura_hook_duration_seconds";
 pub const CHAT_TOOL_CALLS_TOTAL: &str = "kura_chat_tool_calls_total";
 pub const CHAT_TOOL_CALL_DURATION_SECONDS: &str = "kura_chat_tool_call_duration_seconds";
+pub const SESSION_WINDOW_SHADOW_TOTAL: &str = "kura_session_window_shadow_total";
 
 /// Help text per series, rendered as `# HELP`.
 const HELP: &[(&str, &str)] = &[
@@ -62,6 +63,10 @@ const HELP: &[(&str, &str)] = &[
     (
         CHAT_TOOL_CALL_DURATION_SECONDS,
         "Chat tool call duration by tool name.",
+    ),
+    (
+        SESSION_WINDOW_SHADOW_TOTAL,
+        "Session windows shaped in shadow mode, by whether a token budget would have elided the same, more or fewer messages than the char budget did.",
     ),
 ];
 

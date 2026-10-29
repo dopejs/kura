@@ -64,6 +64,8 @@ pub const KNOWN_TARGETS: &[(&str, &str)] = &[
     ("context", "vectorMinSimilarity"),
     ("session-strategy", "personalBudgetChars"),
     ("session-strategy", "threadBudgetChars"),
+    ("session-strategy", "personalBudgetTokens"),
+    ("session-strategy", "threadBudgetTokens"),
     ("session-strategy", "keepRecent"),
 ];
 

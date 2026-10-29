@@ -125,6 +125,14 @@ session-strategy 插件切片，它挂在 `chat/pre-dispatch`。
 （`entries.session-strategy.config.{personalBudgetChars,threadBudgetChars,keepRecent}`）；
 配置格式错误会让启动明确失败。禁用插件即恢复未整形的窗口。
 
+Token 预算（2026-10-29）：`budgetUnit` 决定预算的计量单位。`chars`（本版默认）
+保持上述行为——它按字节计数，所以中文只能用到看起来一半不到的窗口；`tokens`
+按估算 token 计数（ASCII 每 4 字符 1 个 token，其余每个字符 1 个，每条消息另加 4），
+使用 `personalBudgetTokens` / `threadBudgetTokens`，未设置时把字符预算按 4:1 换算；
+`modelContextWindows` 写明本轮模型的上下文窗口时（`"*"` 为兜底），token 预算不超过
+窗口减去 `reserveOutputTokens`（默认 4096）；`shadow` 仍按字符整形，同时计算 token
+的决定并计入 `kura_session_window_shadow_total`，用实测流量决定何时切换。
+
 压缩到记忆（第二片，2026-08-17）：逐出绝不直接丢弃内容。当本轮有线程时，
 被省略的片段通过受治理的记忆流水线捕获为一条 L0 引用（线程来源链接、有界
 摘录）——异步整合器在回复路径之外把它蒸馏进 L1/L2，写策略保持不变——省略

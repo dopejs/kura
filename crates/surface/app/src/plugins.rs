@@ -1220,11 +1220,12 @@ impl kura_plugin::Hook for SessionStrategyHook {
             }
         }
 
-        let mut shaped = kura_session::shape_window(
-            &messages,
-            self.config.budget_for(source_kind.as_deref()),
-            self.config.keep_recent_floor(),
-        );
+        let model = payload
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let mut shaped = shape_by_unit(&self.config, &messages, source_kind.as_deref(), &model);
         if shaped.elided == 0 {
             if frame_applied {
                 if let Ok(new_messages) = serde_json::to_value(&shaped.messages) {
@@ -1304,6 +1305,55 @@ impl kura_plugin::Hook for SessionStrategyHook {
             payload["messages"] = new_messages;
         }
         kura_plugin::HookOutcome::Continue
+    }
+}
+
+/// Shapes the window in the configured unit (agent-runtime-program.md 2.2).
+/// Shadow mode shapes by chars, as before, and counts how a token budget
+/// would have differed, so the switch is made on measured traffic.
+fn shape_by_unit(
+    config: &kura_session::SessionStrategyConfig,
+    messages: &[kura_session::WindowMessage],
+    source_kind: Option<&str>,
+    model: &str,
+) -> kura_session::ShapedWindow {
+    let keep_recent = config.keep_recent_floor();
+    let by_chars =
+        || kura_session::shape_window(messages, config.budget_for(source_kind), keep_recent);
+    let by_tokens = || {
+        kura_session::shape_window_tokens(
+            messages,
+            config.token_budget_for(source_kind, model),
+            keep_recent,
+        )
+    };
+    match config.budget_unit {
+        kura_session::BudgetUnit::Chars => by_chars(),
+        kura_session::BudgetUnit::Tokens => by_tokens(),
+        kura_session::BudgetUnit::Shadow => {
+            let chars = by_chars();
+            let tokens = by_tokens();
+            let agreement = match tokens.elided.cmp(&chars.elided) {
+                std::cmp::Ordering::Equal => "same",
+                std::cmp::Ordering::Greater => "tokens_elide_more",
+                std::cmp::Ordering::Less => "tokens_elide_fewer",
+            };
+            kura_telemetry::metrics::registry().inc(
+                kura_telemetry::metrics::SESSION_WINDOW_SHADOW_TOTAL,
+                &[("agreement", agreement)],
+            );
+            if agreement != "same" {
+                kura_telemetry::global_logger().info(&format!(
+                    "session.window.shadow model={model} chars_elided={} tokens_elided={} \
+                     char_budget={} token_budget={}",
+                    chars.elided,
+                    tokens.elided,
+                    config.budget_for(source_kind),
+                    config.token_budget_for(source_kind, model),
+                ));
+            }
+            chars
+        }
     }
 }
 
@@ -1994,4 +2044,101 @@ fn build_channel_noop(_asm: &mut Assembly) -> Result<(), AppError> {
 /// it later anyway; profile load must not fail on a fresh install).
 pub(crate) fn ensure_data_dir(data_dir: &str) {
     let _ = std::fs::create_dir_all(Path::new(data_dir));
+}
+
+#[cfg(test)]
+mod session_window_unit_tests {
+    use super::*;
+
+    /// Four Chinese history messages of 30 Han characters each: 90 bytes,
+    /// 30 + 4 estimated tokens apiece.
+    fn chinese_window() -> serde_json::Value {
+        let mut messages = vec![serde_json::json!({"role": "system", "content": "frame"})];
+        for i in 0..4 {
+            messages.push(serde_json::json!({
+                "role": if i % 2 == 0 { "user" } else { "assistant" },
+                "content": format!("{i}{}", "好".repeat(29)),
+            }));
+        }
+        serde_json::json!({ "model": "local-8k", "messages": messages })
+    }
+
+    fn shaped(config: serde_json::Value) -> Vec<String> {
+        let hook = SessionStrategyHook {
+            config: serde_json::from_value(config).expect("config"),
+            state: Arc::new(std::sync::OnceLock::new()),
+        };
+        let mut payload = chinese_window();
+        kura_plugin::Hook::handle(&hook, &mut payload);
+        payload["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    fn elided(messages: &[String]) -> bool {
+        messages
+            .iter()
+            .any(|m| m.contains("elided by the session-strategy"))
+    }
+
+    #[test]
+    fn chars_stays_the_default_and_behaves_as_before() {
+        // 200 "chars" is 200 bytes: two 90-byte Chinese messages fit.
+        let messages = shaped(serde_json::json!({"personalBudgetChars": 200, "keepRecent": 1}));
+        assert!(elided(&messages));
+        assert_eq!(messages.len(), 1 + 1 + 2, "frame, marker, two kept");
+    }
+
+    #[test]
+    fn tokens_counts_chinese_by_character_not_by_byte() {
+        // The same budget converted is 50 tokens; set it explicitly to hold
+        // all four 34-token messages.
+        let messages = shaped(serde_json::json!({
+            "budgetUnit": "tokens",
+            "personalBudgetTokens": 6 + 4 * 34,
+            "keepRecent": 1,
+        }));
+        assert!(!elided(&messages), "{messages:?}");
+    }
+
+    #[test]
+    fn tokens_never_exceeds_the_models_window() {
+        let messages = shaped(serde_json::json!({
+            "budgetUnit": "tokens",
+            "personalBudgetTokens": 100_000,
+            "modelContextWindows": { "local-8k": 4096 + 6 + 34 },
+            "keepRecent": 1,
+        }));
+        assert!(elided(&messages));
+        assert_eq!(messages.last().unwrap().chars().next(), Some('3'));
+    }
+
+    #[test]
+    fn shadow_shapes_by_chars_and_counts_the_difference() {
+        let registry = kura_telemetry::metrics::registry();
+        let labels = [("agreement", "tokens_elide_fewer")];
+        let before = registry.counter_value(
+            kura_telemetry::metrics::SESSION_WINDOW_SHADOW_TOTAL,
+            &labels,
+        );
+
+        let shadow = shaped(serde_json::json!({
+            "budgetUnit": "shadow",
+            "personalBudgetChars": 200,
+            "personalBudgetTokens": 1000,
+            "keepRecent": 1,
+        }));
+        let chars = shaped(serde_json::json!({"personalBudgetChars": 200, "keepRecent": 1}));
+
+        assert_eq!(shadow, chars, "shadow does not change what the model sees");
+        assert!(
+            registry.counter_value(
+                kura_telemetry::metrics::SESSION_WINDOW_SHADOW_TOTAL,
+                &labels
+            ) > before
+        );
+    }
 }

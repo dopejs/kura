@@ -152,6 +152,20 @@ config via the profile entry
 a malformed config fails the boot loudly. Disabling the plugin restores
 unshaped windows.
 
+Token budgets (agent-runtime-program.md 2.2, 2026-10-29): `budgetUnit`
+picks what the budget counts. `chars` (default this release) is the
+behavior above; note it counts bytes, so CJK text gets a third of the
+window it appears to. `tokens` counts estimated tokens (ASCII at 4 chars
+per token, any other character as one token, plus 4 per message), using
+`personalBudgetTokens` / `threadBudgetTokens`, or the char budgets
+converted at 4:1 when those are unset. When `modelContextWindows` names
+the turn's model (`"*"` as fallback), the token budget never exceeds that
+window less `reserveOutputTokens` (default 4096). `shadow` shapes by chars
+but also computes the token decision and counts it in
+`kura_session_window_shadow_total{agreement=same|tokens_elide_more|tokens_elide_fewer}`,
+logging each disagreement, so the switch is made on measured traffic.
+Rollback is `budgetUnit: "chars"` or removing the key.
+
 Compression-to-memory (second slice, 2026-08-17): eviction never
 plain-drops content. When the turn has a thread, the elided span is
 captured as an L0 ref (thread source link, bounded excerpt) through the

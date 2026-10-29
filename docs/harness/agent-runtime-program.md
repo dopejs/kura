@@ -162,6 +162,15 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       model's context window; count with provider-reported usage where
       available and a calibrated estimator otherwise. Existing `*_chars`
       config keeps working (converted) for one release.
+      *Session window done 2026-10-29* (plugin-architecture.md, "Token
+      budgets"): `budgetUnit: chars|tokens|shadow`, token budgets capped by
+      an operator-declared `modelContextWindows` less an output reserve,
+      char budgets converted at 4:1, `shadow` to compare on live traffic.
+      Default stays `chars` until shadow data says otherwise. **Open:** the
+      `context` plugin's memory/retrieval budgets are still chars; the
+      estimator is static (not yet corrected from provider-reported
+      `inputTokens`, which 2.1 traces now make available per dispatch); no
+      built-in model-window table, deliberately.
 - [ ] **2.3 Prompt caching (G2).** Keep the system frame + memory bootstrap a
       byte-stable prefix across rounds; emit the provider's cache marker where
       supported. Verified by 2.1 showing cache-read tokens on round ≥ 2.
