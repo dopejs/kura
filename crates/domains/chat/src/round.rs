@@ -23,6 +23,7 @@ use futures::stream::BoxStream;
 use kura_llm::{CreateDispatchInput, Dispatch, Message, MessageRole, ToolCall};
 use kura_model_provider::{ModelProvider, Prompt, ProviderError, ResponseEvent};
 use kura_protocol::{ResponseItem, Role};
+use kura_telemetry::trace::{SpanId, SpanStatus, TurnRecorder};
 use parking_lot::Mutex;
 
 use crate::types::{QueryInput, Service};
@@ -43,6 +44,8 @@ pub(crate) struct RoundContext {
     /// so cancelling stops the turn wherever it has got to -- a token created
     /// per round would leave the caller unable to stop anything.
     pub cancel: kura_llm::CancelToken,
+    /// The turn's trace: each round is a span under the turn.
+    pub trace: TurnRecorder,
 }
 
 /// What the turn produced, collected as its rounds ran.
@@ -57,6 +60,10 @@ pub(crate) struct RoundLog {
     /// the caller reports it.
     pub failure: Option<String>,
     pub rounds: usize,
+    /// The round now running, whose span the tool calls it asked for go
+    /// under. A round's span stays open through those calls and closes when
+    /// the next round starts or the turn ends.
+    pub round_span: Option<SpanId>,
 }
 
 /// Work that belongs to the first round of a turn only -- profile projection,
@@ -165,6 +172,17 @@ impl ModelProvider for DispatcherProvider {
 impl DispatcherProvider {
     async fn run_round(&self, prompt: &Prompt) -> Result<Vec<ResponseEvent>, ProviderError> {
         let context = &self.context;
+        let trace = &context.trace;
+        let round_span = {
+            let mut log = self.log.lock();
+            // The previous round, and the calls it asked for, are done.
+            if let Some(previous) = log.round_span.take() {
+                trace.close(previous, SpanStatus::Ok, "");
+            }
+            let span = trace.open(trace.root(), "round", &format!("round {}", log.rounds + 1));
+            log.round_span = Some(span);
+            span
+        };
         let mut dispatch_input = CreateDispatchInput {
             provider: context.provider.clone(),
             model: context.model.clone(),
@@ -214,6 +232,7 @@ impl DispatcherProvider {
             (self.on_first_round)(&dispatch).map_err(round_error)?;
         }
 
+        let dispatch_span = trace.open(round_span, "dispatch", &dispatch.provider);
         let (settled, failure) = match context
             .service
             .dispatcher
@@ -226,6 +245,10 @@ impl DispatcherProvider {
                 (failed.dispatch, Some(message))
             }
         };
+        record_dispatch_span(trace, dispatch_span, &settled);
+        if failure.is_some() {
+            close_like_dispatch(trace, round_span, &settled);
+        }
         context
             .service
             .record_round_settled(context, &settled)
@@ -253,6 +276,52 @@ impl DispatcherProvider {
         log.failure = failure;
         log.last = Some(settled);
         Ok(events)
+    }
+}
+
+/// Settles a dispatch span from the settled dispatch: what ran, how many
+/// attempts it took, what it cost and how it ended. Usage is added to the
+/// turn's total.
+pub(crate) fn record_dispatch_span(trace: &TurnRecorder, span: SpanId, dispatch: &Dispatch) {
+    trace.set_attribute(span, "dispatchId", dispatch.dispatch_id.clone());
+    trace.set_attribute(span, "provider", dispatch.provider.clone());
+    trace.set_attribute(span, "model", dispatch.model.clone());
+    trace.set_attribute(span, "attemptCount", dispatch.attempt_count);
+    if !dispatch.finish_reason.is_empty() {
+        trace.set_attribute(span, "finishReason", dispatch.finish_reason.clone());
+    }
+    let usage = &dispatch.usage;
+    trace.set_attribute(span, "inputTokens", usage.input_tokens);
+    trace.set_attribute(span, "outputTokens", usage.output_tokens);
+    trace.set_attribute(span, "totalTokens", usage.total_tokens);
+    trace.add_usage(usage.input_tokens, usage.output_tokens, usage.total_tokens);
+    close_like_dispatch(trace, span, dispatch);
+}
+
+/// Closes `span` with the dispatch's outcome.
+pub(crate) fn close_like_dispatch(trace: &TurnRecorder, span: SpanId, dispatch: &Dispatch) {
+    let (status, code) = dispatch_outcome(dispatch);
+    trace.close(span, status, &code);
+}
+
+/// A settled dispatch's outcome as a span status and error code.
+pub(crate) fn dispatch_outcome(dispatch: &Dispatch) -> (SpanStatus, String) {
+    let code = |fallback: &str| {
+        if dispatch.error_code.is_empty() {
+            fallback.to_string()
+        } else {
+            dispatch.error_code.clone()
+        }
+    };
+    match dispatch.status {
+        kura_llm::DispatchStatus::Completed => (SpanStatus::Ok, String::new()),
+        kura_llm::DispatchStatus::Cancelled => (SpanStatus::Cancelled, code("cancelled")),
+        kura_llm::DispatchStatus::Queued | kura_llm::DispatchStatus::Running => {
+            (SpanStatus::Error, code("dispatch_unsettled"))
+        }
+        kura_llm::DispatchStatus::PartialFailed | kura_llm::DispatchStatus::Failed => {
+            (SpanStatus::Error, code("dispatch_failed"))
+        }
     }
 }
 

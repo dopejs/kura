@@ -679,3 +679,31 @@ fn test_streaming_timeout_schemas_accept_canonical_fixtures() {
     ];
     validate_fixtures(&validator, fixtures);
 }
+
+/// One traced turn: two rounds, the first asking for a tool call that failed.
+macro_rules! traced_tool_turn {
+    () => {
+        r##"{"turnId":"turn_1","tenantId":"ten_a","requestId":"req_1","status":"ok","startedAt":"2026-10-29T12:00:00Z","endedAt":"2026-10-29T12:00:02Z","durationMs":2000,"usage":{"inputTokens":10,"outputTokens":4,"totalTokens":14},"truncated":false,"spans":[{"spanId":0,"kind":"turn","name":"chat.query","status":"ok","startedAt":"2026-10-29T12:00:00Z","endedAt":"2026-10-29T12:00:02Z","durationMs":2000,"attributes":{"provider":"openai_compatible","rounds":2,"toolCalls":1}},{"spanId":1,"parentSpanId":0,"kind":"round","name":"round 1","status":"ok","startedAt":"2026-10-29T12:00:00Z","endedAt":"2026-10-29T12:00:01Z","durationMs":1000},{"spanId":2,"parentSpanId":1,"kind":"dispatch","name":"openai_compatible","status":"ok","startedAt":"2026-10-29T12:00:00Z","endedAt":"2026-10-29T12:00:01Z","durationMs":900,"attributes":{"dispatchId":"dispatch_1","attemptCount":1,"totalTokens":7}},{"spanId":3,"parentSpanId":1,"kind":"tool_call","name":"recall","status":"error","errorCode":"tool_failed","startedAt":"2026-10-29T12:00:01Z","endedAt":"2026-10-29T12:00:01Z","durationMs":3,"attributes":{"callId":"call_1","outputBytes":12}}]}"##
+    };
+}
+const TRACED_TOOL_TURN: &str = traced_tool_turn!();
+
+#[test]
+fn test_turn_trace_schemas_accept_a_traced_tool_turn() {
+    let validator = Validator::new(schema_root_dir());
+    let fixtures: &[Fixture] = &[
+        (
+            r##"schemas/api/chat-query.response.schema.json"##,
+            r##"{"turnId":"turn_1","dispatchId":"dispatch_2","provider":"openai_compatible","model":"gpt-test","skills":[],"query":"hello","status":"completed","partial":false,"reply":"hi","usage":{"inputTokens":10,"outputTokens":4,"totalTokens":14}}"##,
+        ),
+        (
+            r##"schemas/api/turn-trace-resource.schema.json"##,
+            TRACED_TOOL_TURN,
+        ),
+        (
+            r##"schemas/api/turn-trace-list.response.schema.json"##,
+            concat!(r#"{"items":["#, traced_tool_turn!(), r#"]}"#),
+        ),
+    ];
+    validate_fixtures(&validator, fixtures);
+}

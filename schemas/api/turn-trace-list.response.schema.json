@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/turn-trace-list.response.schema.json",
+  "title": "TurnTraceListResponse",
+  "description": "GET /v1/turn-traces: recent turns the caller may read, newest first.",
+  "type": "object",
+  "required": ["items"],
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": { "$ref": "./turn-trace-resource.schema.json" }
+    }
+  }
+}

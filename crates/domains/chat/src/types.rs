@@ -60,6 +60,10 @@ pub struct QueryInput {
     /// for chat work with no runtime run.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub run_id: String,
+    /// The HTTP request this turn serves (`x-request-id`), recorded on the
+    /// turn's trace; empty for work with no request. Not part of the wire.
+    #[serde(skip)]
+    pub request_id: String,
 }
 
 /// Go `chat.QueryResult`. `continuity_status` is `None` when continuity was
@@ -67,6 +71,9 @@ pub struct QueryInput {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryResult {
+    /// The turn's trace id, readable at `GET /v1/turn-traces/{turnId}`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub turn_id: String,
     pub query: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<String>,
@@ -191,6 +198,9 @@ pub struct Service {
     /// model or a tool that always provokes another call would otherwise burn
     /// provider quota without bound.
     pub(crate) max_tool_rounds: usize,
+    /// Recent turns' span trees (agent-runtime-program.md 2.1). Always on;
+    /// bounded by turn count.
+    pub(crate) traces: Arc<kura_telemetry::trace::TraceStore>,
 }
 
 /// Rounds allowed in a single turn before the turn is failed.
@@ -237,7 +247,14 @@ impl Service {
             hooks: None,
             tools: None,
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
+            traces: Arc::new(kura_telemetry::trace::TraceStore::default()),
         }
+    }
+
+    /// The recent turns' traces, shared by every clone of this service.
+    #[must_use]
+    pub fn traces(&self) -> Arc<kura_telemetry::trace::TraceStore> {
+        Arc::clone(&self.traces)
     }
 
     /// Attaches where tools come from. Without this the pipeline offers none

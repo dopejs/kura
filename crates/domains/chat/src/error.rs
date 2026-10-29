@@ -76,6 +76,29 @@ pub enum ChatError {
 }
 
 impl ChatError {
+    /// A stable, snake_case code for the failure, for traces and logs that
+    /// must not carry the message text.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            ChatError::NotConfigured => "chat_not_configured",
+            ChatError::QueryRequired => "query_required",
+            ChatError::SkillsRegistryMissing => "skills_registry_missing",
+            ChatError::Skills(_) => "skills",
+            ChatError::BindingRepairRequired(_) => "binding_repair_required",
+            ChatError::CapabilityNotExecutable(_) => "capability_not_executable",
+            ChatError::ProviderAuthUnavailable(_) => "provider_auth_unavailable",
+            ChatError::Provider(_) => "provider",
+            ChatError::Store(_) | ChatError::StoreMethodDeferred(_) => "store",
+            ChatError::Prepare(_) => "prepare",
+            ChatError::Dispatch(_) => "dispatch",
+            ChatError::Emit(_) => "emit",
+            ChatError::Runtime(_) => "runtime",
+            ChatError::HookVetoed { .. } => "hook_vetoed",
+            ChatError::HookPayload { .. } => "hook_payload",
+        }
+    }
+
     /// Convenience wrapper for the deferred-store-method error so callers and
     /// the `kura-store` adapter share one message shape.
     #[must_use]

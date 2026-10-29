@@ -4,6 +4,7 @@
 //! writer (slog TextHandler compatible format) emitting to stdout.
 
 pub mod metrics;
+pub mod trace;
 
 use std::io::Write;
 use std::sync::OnceLock;

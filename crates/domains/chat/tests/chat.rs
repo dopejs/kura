@@ -1670,6 +1670,8 @@ fn query_input_round_trips_camel_case_wire() {
         channel_scope_ref: "chan_1".to_string(),
         account_scope_ref: "acct_1".to_string(),
         run_id: "run_9".to_string(),
+        // Not on the wire, so empty for the round trip to compare equal.
+        request_id: String::new(),
     };
     let json = serde_json::to_value(&input).expect("serialize");
     assert_eq!(json["query"], "hello");
@@ -1717,6 +1719,7 @@ fn query_result_round_trips_with_dispatch() {
         completed_at: Some(now),
     };
     let result = QueryResult {
+        turn_id: "turn_0".to_string(),
         query: "hello".to_string(),
         skills: vec!["shared".to_string()],
         skill_contracts: vec![
@@ -2576,4 +2579,195 @@ fn the_tools_are_asked_for_per_turn_rather_than_snapshotted() {
         1,
         "the second turn did not see the new tool"
     );
+}
+
+// ------------------------------------------------------------------------
+// Turn trace (agent-runtime-program.md 2.1)
+//
+// Every turn leaves a span tree -- turn, rounds, the dispatch each round sent,
+// the calls it asked for -- readable by turn id, whether it answered, failed
+// or never got as far as a dispatch.
+// ------------------------------------------------------------------------
+
+fn with_usage(mut response: ProviderResponse, input: i64, output: i64) -> ProviderResponse {
+    response.usage = kura_llm::Usage {
+        input_tokens: input,
+        output_tokens: output,
+        total_tokens: input + output,
+    };
+    response
+}
+
+fn spans_of<'a>(
+    trace: &'a kura_telemetry::trace::TurnTrace,
+    kind: &str,
+) -> Vec<&'a kura_telemetry::trace::Span> {
+    trace
+        .spans
+        .iter()
+        .filter(|span| span.kind == kind)
+        .collect()
+}
+
+#[test]
+fn a_tool_turn_is_traced_round_by_round_with_its_calls_and_usage() {
+    let tool = Arc::new(RecordingTool {
+        name: "loopforge_status".to_string(),
+        answer: "SECRET-TOOL-OUTPUT".to_string(),
+        calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
+    });
+    let (svc, _) = service_with_tool(
+        vec![
+            with_usage(
+                asked_for("call_1", "loopforge_status", "{\"q\":\"SECRET-ARG\"}"),
+                10,
+                2,
+            ),
+            with_usage(answered("done"), 15, 3),
+        ],
+        tool,
+    );
+    let mut input = base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "SECRET-QUESTION");
+    input.tenant_id = "ten_a".to_string();
+    input.request_id = "req_trace".to_string();
+
+    let execution = svc.query(input, &CancellationToken::new()).expect("query");
+
+    let turn_id = execution.result.turn_id.clone();
+    assert!(turn_id.starts_with("turn_"), "{turn_id}");
+    let trace = svc.traces().get(&turn_id).expect("the turn is traced");
+    assert_eq!(trace.status, kura_telemetry::trace::SpanStatus::Ok);
+    assert_eq!(trace.tenant_id, "ten_a");
+    assert_eq!(trace.request_id, "req_trace");
+    assert_eq!(trace.usage.total_tokens, 30, "summed over both rounds");
+
+    let rounds = spans_of(&trace, "round");
+    assert_eq!(rounds.len(), 2);
+    assert!(rounds.iter().all(|round| round.parent_span_id == Some(0)));
+    let dispatches = spans_of(&trace, "dispatch");
+    assert_eq!(dispatches.len(), 2);
+    for (round, dispatch) in rounds.iter().zip(&dispatches) {
+        assert_eq!(dispatch.parent_span_id, Some(round.span_id));
+        assert_eq!(dispatch.attributes["attemptCount"], 1);
+    }
+    assert_eq!(
+        dispatches[1].attributes["dispatchId"],
+        execution.result.dispatch.dispatch_id.as_str()
+    );
+    // The call hangs off the round that asked for it.
+    let calls = spans_of(&trace, "tool_call");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "loopforge_status");
+    assert_eq!(calls[0].parent_span_id, Some(rounds[0].span_id));
+    assert_eq!(calls[0].status, kura_telemetry::trace::SpanStatus::Ok);
+    assert_eq!(trace.spans[0].attributes["toolCalls"], 1);
+    assert!(
+        trace
+            .spans
+            .iter()
+            .all(|span| span.status != kura_telemetry::trace::SpanStatus::Running),
+        "a finished turn leaves nothing running"
+    );
+
+    // What ran, never what was said.
+    let json = serde_json::to_string(&trace).expect("serialize");
+    for secret in ["SECRET-QUESTION", "SECRET-ARG", "SECRET-TOOL-OUTPUT"] {
+        assert!(!json.contains(secret), "{secret} leaked into the trace");
+    }
+}
+
+#[test]
+fn a_failed_tool_call_is_an_error_span_in_a_turn_that_still_answers() {
+    let tool = Arc::new(RecordingTool {
+        name: "loopforge_status".to_string(),
+        answer: "ok".to_string(),
+        calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
+    });
+    let (svc, _) = service_with_tool(
+        vec![asked_for("call_1", "no_such_tool", "{}"), answered("sorry")],
+        tool,
+    );
+
+    let execution = svc
+        .query(
+            base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "do it"),
+            &CancellationToken::new(),
+        )
+        .expect("query");
+
+    let trace = svc.traces().get(&execution.result.turn_id).expect("trace");
+    assert_eq!(trace.status, kura_telemetry::trace::SpanStatus::Ok);
+    let calls = spans_of(&trace, "tool_call");
+    assert_eq!(calls[0].status, kura_telemetry::trace::SpanStatus::Error);
+    assert_eq!(calls[0].error_code, "tool_failed");
+}
+
+#[test]
+fn a_turn_that_hits_the_round_cap_is_traced_as_that() {
+    let tool = Arc::new(RecordingTool {
+        name: "loopforge_status".to_string(),
+        answer: "ok".to_string(),
+        calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
+    });
+    let rounds: Vec<ProviderResponse> = (0..10)
+        .map(|_| asked_for("call_1", "loopforge_status", "{}"))
+        .collect();
+    let (mut svc, _) = service_with_tool(rounds, tool);
+    svc.set_max_tool_rounds(2);
+    let mut input = base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "loop");
+    input.request_id = "req_cap".to_string();
+
+    svc.query(input, &CancellationToken::new())
+        .expect_err("the cap fails the turn");
+
+    // The failed turn returned no id; it is found by its request id.
+    let traces = svc.traces().list(10, |trace| trace.request_id == "req_cap");
+    assert_eq!(traces.len(), 1);
+    assert_eq!(traces[0].status, kura_telemetry::trace::SpanStatus::Error);
+    assert_eq!(traces[0].error_code, "max_tool_rounds");
+    assert_eq!(spans_of(&traces[0], "round").len(), 2);
+}
+
+#[test]
+fn a_turn_refused_before_any_dispatch_is_still_traced() {
+    let (provider, seen) = ScriptedProvider::new(vec![answered("never")]);
+    let svc = service(new_dispatcher(provider), None, None);
+    let mut input = base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "  ");
+    input.request_id = "req_empty".to_string();
+
+    let error = svc
+        .query(input, &CancellationToken::new())
+        .expect_err("an empty query is refused");
+
+    assert!(seen.read().is_empty());
+    let traces = svc
+        .traces()
+        .list(10, |trace| trace.request_id == "req_empty");
+    assert_eq!(traces.len(), 1);
+    assert_eq!(traces[0].status, kura_telemetry::trace::SpanStatus::Error);
+    assert_eq!(traces[0].error_code, error.code());
+    assert!(spans_of(&traces[0], "dispatch").is_empty());
+}
+
+#[test]
+fn a_stream_is_traced_as_one_round_of_one_dispatch() {
+    let (provider, _) = ScriptedProvider::new(vec![with_usage(answered("hi"), 4, 1)]);
+    let svc = service(new_dispatcher(provider), None, None);
+
+    let execution = svc
+        .stream(
+            base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "hello"),
+            &CancellationToken::new(),
+            Some(|_chunk: StreamChunk| Ok(())),
+        )
+        .expect("stream");
+
+    let trace = svc.traces().get(&execution.result.turn_id).expect("trace");
+    assert_eq!(trace.status, kura_telemetry::trace::SpanStatus::Ok);
+    assert_eq!(trace.spans[0].name, "chat.stream");
+    assert_eq!(spans_of(&trace, "round").len(), 1);
+    let dispatches = spans_of(&trace, "dispatch");
+    assert_eq!(dispatches.len(), 1);
+    assert_eq!(dispatches[0].status, kura_telemetry::trace::SpanStatus::Ok);
+    assert_eq!(trace.usage.total_tokens, 5);
 }

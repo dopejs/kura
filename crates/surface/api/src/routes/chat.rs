@@ -31,7 +31,7 @@ use serde::Deserialize;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::error::ApiError;
-use crate::middleware::TenantContext;
+use crate::middleware::{RequestContext, TenantContext};
 use crate::response::Json;
 use crate::state::AppState;
 use crate::types::{ChatQueryResponse, ChatQueryStreamDelta, ChatQueryStreamStarted};
@@ -88,6 +88,7 @@ pub fn router() -> Router<AppState> {
 pub async fn handle_chat_query(
     State(state): State<AppState>,
     tenant: Option<Extension<TenantContext>>,
+    correlation: Option<Extension<RequestContext>>,
     body: Bytes,
 ) -> Response {
     let Some(chat_service) = state.chat.as_deref() else {
@@ -97,7 +98,9 @@ pub async fn handle_chat_query(
         Ok(request) => request,
         Err(err) => return err.into_response(),
     };
-    let input = query_input_from_request(&request, tenant.as_ref().map(|extension| &extension.0));
+    let mut input =
+        query_input_from_request(&request, tenant.as_ref().map(|extension| &extension.0));
+    input.request_id = request_id(correlation.as_ref());
     // The chat service bridges into the async dispatcher through a per-call
     // current-thread Tokio runtime, which cannot be created on an axum worker
     // thread (tokio forbids entering a runtime inside a runtime). Run the
@@ -134,6 +137,7 @@ pub async fn handle_chat_query(
 pub async fn handle_chat_query_stream(
     State(state): State<AppState>,
     tenant: Option<Extension<TenantContext>>,
+    correlation: Option<Extension<RequestContext>>,
     body: Bytes,
 ) -> Response {
     let Some(chat_service) = state.chat.clone() else {
@@ -143,7 +147,9 @@ pub async fn handle_chat_query_stream(
         Ok(request) => request,
         Err(err) => return err.into_response(),
     };
-    let input = query_input_from_request(&request, tenant.as_ref().map(|extension| &extension.0));
+    let mut input =
+        query_input_from_request(&request, tenant.as_ref().map(|extension| &extension.0));
+    input.request_id = request_id(correlation.as_ref());
 
     let query_text = input.query.trim().to_string();
     // The chat service runs its own per-call current-thread Tokio runtime, so
@@ -298,6 +304,14 @@ fn decode_json_body<T: serde::de::DeserializeOwned>(body: &Bytes) -> Result<T, A
     serde_json::from_slice(body).map_err(|err| ApiError::BadRequest(err.to_string()))
 }
 
+/// The request id the access log and the response header carry, so the
+/// turn's trace can be found from either.
+fn request_id(correlation: Option<&Extension<RequestContext>>) -> String {
+    correlation
+        .map(|extension| extension.0.0.lock().request_id.clone())
+        .unwrap_or_default()
+}
+
 /// Maps the wire request onto `kura_chat::QueryInput`, trimming strings and
 /// taking the tenant id from the resolved `TenantContext` extension when
 /// present (Go `tenantContextFromContext`).
@@ -334,6 +348,7 @@ fn query_input_from_request(
 /// optional values.
 fn build_chat_query_response(result: &QueryResult) -> ChatQueryResponse {
     let mut response = ChatQueryResponse {
+        turn_id: result.turn_id.clone(),
         dispatch_id: result.dispatch.dispatch_id.clone(),
         provider: result.dispatch.provider.clone(),
         model: result.dispatch.model.clone(),

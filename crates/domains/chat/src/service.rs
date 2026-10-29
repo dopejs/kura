@@ -43,6 +43,8 @@ use kura_threads::{
 };
 use serde_json::{Map, Value};
 
+use kura_telemetry::trace::{SpanStatus, TurnRecorder, TurnStart};
+
 use crate::cancel::CancellationToken;
 use crate::error::ChatError;
 use crate::events::{
@@ -65,10 +67,23 @@ impl Service {
 
     /// Go `Service.Query`: prepares and executes a non-streaming dispatch,
     /// persisting the dispatch lifecycle and continuity evidence. Blocking.
+    ///
+    /// Every turn is traced, however it ends; the result carries the turn id.
     pub fn query(
         &self,
         input: QueryInput,
         cancel: &CancellationToken,
+    ) -> Result<QueryExecution, ChatError> {
+        let trace = self.start_turn_trace(&input, "chat.query");
+        let outcome = self.query_traced(input, cancel, &trace);
+        finish_turn_trace(&trace, outcome)
+    }
+
+    fn query_traced(
+        &self,
+        input: QueryInput,
+        cancel: &CancellationToken,
+        trace: &TurnRecorder,
     ) -> Result<QueryExecution, ChatError> {
         self.ensure_configured()?;
         let mut input = input;
@@ -124,6 +139,7 @@ impl Service {
             &selected_skills,
             &dispatch_input,
             cancel,
+            trace,
             Box::new({
                 let service = self.clone();
                 let input = input.clone();
@@ -187,7 +203,22 @@ impl Service {
         &self,
         input: QueryInput,
         cancel: &CancellationToken,
+        emit: Option<E>,
+    ) -> Result<QueryExecution, ChatError>
+    where
+        E: FnMut(StreamChunk) -> Result<(), ChatError> + Send,
+    {
+        let trace = self.start_turn_trace(&input, "chat.stream");
+        let outcome = self.stream_traced(input, cancel, emit, &trace);
+        finish_turn_trace(&trace, outcome)
+    }
+
+    fn stream_traced<E>(
+        &self,
+        input: QueryInput,
+        cancel: &CancellationToken,
         mut emit: Option<E>,
+        trace: &TurnRecorder,
     ) -> Result<QueryExecution, ChatError>
     where
         E: FnMut(StreamChunk) -> Result<(), ChatError> + Send,
@@ -273,6 +304,12 @@ impl Service {
         let child = cancel.child();
         let _link = child.link_to(&kura_cancel);
         let mut emit = emit.take();
+        // A stream is one round of one dispatch.
+        trace.set_attribute(trace.root(), "provider", dispatch_provider.clone());
+        trace.set_attribute(trace.root(), "model", dispatch_model.clone());
+        trace.set_attribute(trace.root(), "rounds", 1);
+        let round_span = trace.open(trace.root(), "round", "round 1");
+        let dispatch_span = trace.open(round_span, "dispatch", &dispatch_provider);
         let exec_result = runtime.block_on(async {
             let mut adapter = |chunk: kura_llm::StreamChunk| -> Result<(), ProviderError> {
                 let Some(emit) = emit.as_mut() else {
@@ -306,6 +343,8 @@ impl Service {
             Ok(d) => d.clone(),
             Err(failed) => failed.dispatch.clone(),
         };
+        crate::round::record_dispatch_span(trace, dispatch_span, &final_dispatch);
+        crate::round::close_like_dispatch(trace, round_span, &final_dispatch);
         persist_dispatch(self.store.as_deref(), &input.tenant_id, &final_dispatch)?;
         publish_dispatch_event(
             self.event_bus.as_ref(),
@@ -373,6 +412,15 @@ impl Service {
         Ok(())
     }
 
+    fn start_turn_trace(&self, input: &QueryInput, name: &str) -> TurnRecorder {
+        self.traces.start(TurnStart {
+            tenant_id: input.tenant_id.clone(),
+            request_id: input.request_id.clone(),
+            thread_id: input.thread_id.clone(),
+            name: name.to_string(),
+        })
+    }
+
     // ------------------------------------------------------------------
     // Plugin hook points (pluginization phase 2)
     // ------------------------------------------------------------------
@@ -386,6 +434,7 @@ impl Service {
     /// dispatch through this daemon -- hooked, prepared, persisted, evented.
     ///
     /// Chat briefly carried a second loop of its own. There is one.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn run_agent_turn(
         &self,
         input: &QueryInput,
@@ -393,6 +442,7 @@ impl Service {
         selected_skills: &[Skill],
         dispatch_input: &CreateDispatchInput,
         cancel: &CancellationToken,
+        trace: &TurnRecorder,
         on_first_round: crate::round::OnFirstRound,
     ) -> Result<(Dispatch, Option<String>), ChatError> {
         // The assembled conversation, split the way the loop reads it: a
@@ -419,7 +469,10 @@ impl Service {
             model: dispatch_input.model.clone(),
             timeout_ms: dispatch_input.timeout_ms,
             max_retries: dispatch_input.max_retries,
+            trace: trace.clone(),
         };
+        trace.set_attribute(trace.root(), "provider", dispatch_input.provider.clone());
+        trace.set_attribute(trace.root(), "model", dispatch_input.model.clone());
         let provider: Arc<dyn kura_model_provider::ModelProvider> = Arc::new(
             crate::round::DispatcherProvider::new(context, Arc::clone(&log), on_first_round),
         );
@@ -444,8 +497,42 @@ impl Service {
         }
 
         let runtime = bridge_runtime()?;
-        let mut emit = |_event: kura_protocol::Event| {};
+        // The loop runs calls one at a time, between rounds, and announces
+        // each; that is where a call's span opens and closes. A call belongs
+        // to the round that asked for it.
+        let mut tool_spans = std::collections::HashMap::new();
+        let mut tool_calls = 0_u64;
+        let mut emit = |event: kura_protocol::Event| match event.msg {
+            kura_protocol::EventMsg::ToolCallBegin { call_id, name, .. } => {
+                tool_calls += 1;
+                let parent = log.lock().round_span.unwrap_or_else(|| trace.root());
+                let span = trace.open(parent, "tool_call", &name);
+                trace.set_attribute(span, "callId", call_id.clone());
+                tool_spans.insert(call_id, span);
+            }
+            kura_protocol::EventMsg::ToolCallEnd {
+                call_id,
+                output,
+                success,
+            } => {
+                if let Some(span) = tool_spans.remove(&call_id) {
+                    trace.set_attribute(span, "outputBytes", output.len());
+                    if success {
+                        trace.close(span, SpanStatus::Ok, "");
+                    } else {
+                        trace.close(span, SpanStatus::Error, "tool_failed");
+                    }
+                }
+            }
+            _ => {}
+        };
         let outcome = runtime.block_on(session.run_turn(&question, &mut emit));
+        trace.set_attribute(trace.root(), "rounds", log.lock().rounds);
+        trace.set_attribute(trace.root(), "toolCalls", tool_calls);
+        if let Err(kura_core::CoreError::MaxToolRounds(_)) = &outcome {
+            // More specific than the provider error the turn reports it as.
+            trace.finish(SpanStatus::Error, "max_tool_rounds");
+        }
 
         let mut log = log.lock();
         let Some(dispatch) = log.last.take() else {
@@ -1885,6 +1972,30 @@ fn bridge_runtime() -> Result<tokio::runtime::Runtime, ChatError> {
         .enable_time()
         .build()
         .map_err(|err| ChatError::Runtime(format!("build dispatch runtime: {err}")))
+}
+
+/// Ends a turn's trace from how the turn came out, and stamps the turn id on
+/// the result.
+fn finish_turn_trace(
+    trace: &TurnRecorder,
+    outcome: Result<QueryExecution, ChatError>,
+) -> Result<QueryExecution, ChatError> {
+    match outcome {
+        Ok(mut execution) => {
+            if execution.exec_error.is_none() {
+                trace.finish(SpanStatus::Ok, "");
+            } else {
+                let (status, code) = crate::round::dispatch_outcome(&execution.result.dispatch);
+                trace.finish(status, &code);
+            }
+            execution.result.turn_id = trace.turn_id();
+            Ok(execution)
+        }
+        Err(err) => {
+            trace.finish(SpanStatus::Error, err.code());
+            Err(err)
+        }
+    }
 }
 
 #[cfg(test)]

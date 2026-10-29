@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/turn-trace-resource.schema.json",
+  "title": "TurnTraceResource",
+  "description": "One agent turn's span tree (agent-runtime-program.md 2.1). Records what ran and how it ended; never message text, tool arguments or tool output.",
+  "type": "object",
+  "required": ["turnId", "status", "startedAt", "usage", "truncated", "spans"],
+  "additionalProperties": false,
+  "properties": {
+    "turnId": { "type": "string", "minLength": 1 },
+    "tenantId": { "type": "string" },
+    "requestId": { "type": "string" },
+    "threadId": { "type": "string" },
+    "status": { "$ref": "#/$defs/status" },
+    "errorCode": { "type": "string" },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "endedAt": { "type": "string", "format": "date-time" },
+    "durationMs": { "type": "integer", "minimum": 0 },
+    "usage": {
+      "type": "object",
+      "required": ["inputTokens", "outputTokens", "totalTokens"],
+      "additionalProperties": false,
+      "properties": {
+        "inputTokens": { "type": "integer" },
+        "outputTokens": { "type": "integer" },
+        "totalTokens": { "type": "integer" }
+      }
+    },
+    "truncated": {
+      "type": "boolean",
+      "description": "True when the turn opened more spans than the per-turn cap; the first spans are kept."
+    },
+    "spans": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/span" }
+    }
+  },
+  "$defs": {
+    "status": {
+      "type": "string",
+      "enum": ["running", "ok", "error", "cancelled"]
+    },
+    "span": {
+      "type": "object",
+      "required": ["spanId", "kind", "name", "status", "startedAt"],
+      "additionalProperties": false,
+      "properties": {
+        "spanId": { "type": "integer", "minimum": 0 },
+        "parentSpanId": { "type": "integer", "minimum": 0 },
+        "kind": { "type": "string", "enum": ["turn", "round", "dispatch", "tool_call"] },
+        "name": { "type": "string" },
+        "status": { "$ref": "#/$defs/status" },
+        "errorCode": { "type": "string" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "endedAt": { "type": "string", "format": "date-time" },
+        "durationMs": { "type": "integer", "minimum": 0 },
+        "attributes": { "type": "object" }
+      }
+    }
+  }
+}

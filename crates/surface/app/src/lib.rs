@@ -1522,12 +1522,13 @@ mod tests {
             "POST",
             "/v1/chat/query",
             Some(alice),
-            &[],
+            &[("x-request-id", "req-alice")],
             Some(ask),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{json}");
         assert_eq!(json["reply"], "ok", "{json}");
+        let alice_turn = json["turnId"].as_str().expect("turn id").to_string();
         let after_alice = sent();
         assert!(!after_alice.is_empty());
         assert!(
@@ -1551,6 +1552,42 @@ mod tests {
             "{:?}",
             sent()
         );
+
+        // Each tenant reads its own turn traces; another tenant's is a 404, so
+        // ids cannot be probed. The operator reads every turn.
+        let alice_trace = format!("/v1/turn-traces/{alice_turn}");
+        let (status, json) = call(&shared, "GET", &alice_trace, Some(alice), &[], None).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["status"], "ok", "{json}");
+        assert_eq!(json["requestId"], "req-alice", "{json}");
+        let (status, json) = call(
+            &shared,
+            "GET",
+            "/v1/turn-traces?requestId=req-alice",
+            Some(alice),
+            &[],
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["items"][0]["turnId"], alice_turn.as_str(), "{json}");
+        let (status, json) = call(&shared, "GET", &alice_trace, Some(bob), &[], None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+        let (status, json) = call(&shared, "GET", "/v1/turn-traces", Some(bob), &[], None).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let bobs = json["items"].as_array().expect("items");
+        assert!(
+            bobs.iter().all(|t| t["turnId"] != alice_turn.as_str()),
+            "bob lists alice's turn: {json}"
+        );
+        // Bob's own refused turn is there, with the refusal's code.
+        assert!(
+            bobs.iter().any(|t| t["status"] == "error"
+                && t["errorCode"] == llm_credentials::KEY_NOT_CONFIGURED_CODE),
+            "{json}"
+        );
+        let (status, json) = call(&shared, "GET", &alice_trace, Some(&operator), &[], None).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
 
         // Nor may Bob name another provider to get around it.
         let (status, json) = call(

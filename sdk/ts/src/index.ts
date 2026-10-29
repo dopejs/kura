@@ -50,6 +50,8 @@ export type ChatQueryInput = {
 };
 
 export type ChatQueryResponse = {
+  /** The turn's trace id, readable at `GET /v1/turn-traces/{turnId}`. */
+  turnId?: string;
   dispatchId: string;
   provider: string;
   model: string;

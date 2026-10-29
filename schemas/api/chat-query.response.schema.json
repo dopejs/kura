@@ -16,6 +16,10 @@
   ],
   "additionalProperties": false,
   "properties": {
+    "turnId": {
+      "type": "string",
+      "description": "The turn's trace id, readable at GET /v1/turn-traces/{turnId}."
+    },
     "dispatchId": {
       "type": "string"
     },

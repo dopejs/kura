@@ -138,11 +138,26 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
 
 ## Stage 2a — Runtime Core: Measure, Then Save
 
-- [ ] **2.1 Turn trace (G6).** One span tree per turn: turn → round →
+- [x] **2.1 Turn trace (G6).** One span tree per turn: turn → round →
       dispatch → tool call, carrying `x-request-id`, tenant, token usage and
       outcome. Readable through the API by turn id. Use `tracing` with an
       optional OTLP exporter; off-by-default export, always-on in-process
       recording bounded by retention.
+      *Closed 2026-10-29.* `kura_telemetry::trace::TraceStore` records every
+      chat turn (query and stream, however it ends) in process, bounded at
+      512 turns × 256 spans. `turnId` is on the chat response;
+      `GET /v1/turn-traces/{turnId}` and `GET /v1/turn-traces?requestId=`
+      read it back, tenant-scoped (another tenant's turn is a 404; the
+      operator reads all). A round span covers its dispatch and the tool
+      calls it asked for. Traces carry no message text, tool arguments or
+      tool output. **Deviation:** no `tracing` crate: the workspace has none,
+      and the turn already has one explicit owner (`Service::run_agent_turn`)
+      to record from, so spans are written there rather than through a
+      global subscriber. The span list is flat with parent ids, so OTLP export
+      can be added over finished `TurnTrace`s without re-instrumenting; it is
+      not built (it was off-by-default anyway). Not covered: turns from
+      outside chat (workflows, scheduler) and token cache-read counts (2.3
+      adds them to `Usage`, and the dispatch span picks them up).
 - [ ] **2.2 Token budgets (G1).** Budgets in tokens, derived from the target
       model's context window; count with provider-reported usage where
       available and a calibrated estimator otherwise. Existing `*_chars`

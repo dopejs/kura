@@ -358,6 +358,10 @@ pub struct CreateIntegrationDiagnosticSmokeProbe {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatQueryResponse {
+    /// The turn's trace id (`GET /v1/turn-traces/{turnId}`); absent when the
+    /// turn was not traced.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub turn_id: String,
     pub dispatch_id: String,
     pub provider: String,
     pub model: String,
@@ -1605,6 +1609,7 @@ mod tests {
     #[test]
     fn chat_query_response_round_trip() {
         let value = ChatQueryResponse {
+            turn_id: "turn_1".to_string(),
             dispatch_id: "dispatch_1".to_string(),
             provider: "echo".to_string(),
             model: "echo-1".to_string(),
