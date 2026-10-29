@@ -1532,6 +1532,7 @@ fn sqlite_store_adapter_ports_dispatch_and_defers_continuity() {
     let store = kura_store::SQLiteStore::new(dir.path().to_str().expect("path")).expect("store");
     let now = Utc::now();
     let dispatch = Dispatch {
+        tenant_id: String::new(),
         tools: Vec::new(),
         tool_calls: Vec::new(),
         dispatch_id: "d_1".to_string(),
@@ -1684,6 +1685,7 @@ fn query_input_round_trips_camel_case_wire() {
 fn query_result_round_trips_with_dispatch() {
     let now = Utc::now();
     let dispatch = Dispatch {
+        tenant_id: String::new(),
         tools: Vec::new(),
         tool_calls: Vec::new(),
         dispatch_id: "d_1".to_string(),
@@ -1845,6 +1847,7 @@ fn inject_continuity_messages_inserts_before_first_user_message() {
 fn terminal_dispatch_event_names_match_go() {
     let now = Utc::now();
     let base = Dispatch {
+        tenant_id: String::new(),
         tools: Vec::new(),
         tool_calls: Vec::new(),
         dispatch_id: "d".to_string(),

@@ -235,10 +235,12 @@ impl Service {
         };
         self.run_pre_dispatch_hooks(&input, &agent_profile_id, &mut dispatch_input)?;
 
-        let dispatch = self
+        let mut dispatch = self
             .dispatcher
             .prepare(dispatch_input, true)
             .map_err(ChatError::Prepare)?;
+        // Selects whose credential the turn runs on (shared-hosting.md §7).
+        dispatch.tenant_id = input.tenant_id.trim().to_string();
         let dispatch_id = dispatch.dispatch_id.clone();
         let dispatch_provider = dispatch.provider.clone();
         let dispatch_model = dispatch.model.clone();

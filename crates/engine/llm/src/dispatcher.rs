@@ -10,6 +10,7 @@ use chrono::Utc;
 use parking_lot::RwLock;
 use uuid::Uuid;
 
+use crate::credential::{ApiKey, CredentialDecision, CredentialPolicy};
 use crate::echo::EchoProvider;
 use crate::provider::{
     CancelToken, Provider, ProviderError, ProviderRequest, ProviderResponse, StreamEmitter,
@@ -50,6 +51,7 @@ struct Inner {
     default_model: String,
     default_timeout: Duration,
     default_retries: i64,
+    credential_policy: Option<Arc<dyn CredentialPolicy>>,
 }
 
 impl Default for Dispatcher {
@@ -67,6 +69,7 @@ impl Dispatcher {
                 default_model: String::new(),
                 default_timeout: Duration::from_secs(30),
                 default_retries: 0,
+                credential_policy: None,
             }),
         };
         dispatcher.register_provider(Arc::new(EchoProvider::new()));
@@ -108,6 +111,12 @@ impl Dispatcher {
     /// Negative values clamp to zero, matching the Go setter.
     pub fn set_default_retries(&self, retries: i64) {
         self.inner.write().default_retries = retries.max(0);
+    }
+
+    /// Every dispatch from here on asks `policy` which credential to use.
+    /// Without one, each provider uses its own configured credential.
+    pub fn set_credential_policy(&self, policy: Arc<dyn CredentialPolicy>) {
+        self.inner.write().credential_policy = Some(policy);
     }
 
     /// Validates the input, applies defaults, and returns a queued dispatch.
@@ -167,6 +176,7 @@ impl Dispatcher {
         let now = Utc::now();
         Ok(Dispatch {
             dispatch_id: Uuid::new_v4().to_string(),
+            tenant_id: String::new(),
             provider: provider_name,
             model: model_name,
             messages: input.messages,
@@ -255,9 +265,19 @@ impl Dispatcher {
     ) -> Result<Dispatch, FailedDispatch> {
         let provider_name = dispatch.provider.clone();
         let clock = std::time::Instant::now();
-        let result = self
-            .execute_attempts(dispatch, provider, emit, cancel)
-            .await;
+        let result = match self.credential_for(&dispatch).await {
+            Ok(credential) => {
+                self.execute_attempts(dispatch, provider, credential, emit, cancel)
+                    .await
+            }
+            Err((code, message)) => {
+                let dispatch = fail_prepared_dispatch(dispatch, &code, &message);
+                Err(FailedDispatch {
+                    dispatch,
+                    error: ProviderError::provider(code, message, false),
+                })
+            }
+        };
         let outcome = match &result {
             Ok(_) => "completed",
             Err(failed) => match failed.dispatch.status {
@@ -277,10 +297,31 @@ impl Dispatcher {
         result
     }
 
+    /// Asks the policy, once per dispatch rather than per attempt: a retry
+    /// must not switch credentials halfway through.
+    async fn credential_for(
+        &self,
+        dispatch: &Dispatch,
+    ) -> Result<Option<ApiKey>, (String, String)> {
+        let policy = self.inner.read().credential_policy.clone();
+        let Some(policy) = policy else {
+            return Ok(None);
+        };
+        match policy
+            .decide(dispatch.tenant_id.trim(), &dispatch.provider)
+            .await
+        {
+            CredentialDecision::ProviderDefault => Ok(None),
+            CredentialDecision::Key(key) => Ok(Some(key)),
+            CredentialDecision::Refuse { code, message } => Err((code, message)),
+        }
+    }
+
     async fn execute_attempts(
         &self,
         mut dispatch: Dispatch,
         provider: Arc<dyn Provider>,
+        credential: Option<ApiKey>,
         emit: Option<StreamEmitter<'_>>,
         cancel: &CancelToken,
     ) -> Result<Dispatch, FailedDispatch> {
@@ -310,6 +351,7 @@ impl Dispatcher {
                 attempt,
                 timeout_ms: dispatch.timeout_ms,
                 cancel: cancel.clone(),
+                credential: credential.clone(),
                 ..ProviderRequest::default()
             };
 

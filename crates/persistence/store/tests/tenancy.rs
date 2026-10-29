@@ -93,6 +93,7 @@ fn make_session(id: &str) -> Session {
 fn make_dispatch(id: &str) -> Dispatch {
     let now = Utc::now();
     Dispatch {
+        tenant_id: String::new(),
         tools: Vec::new(),
         tool_calls: Vec::new(),
         dispatch_id: id.to_string(),

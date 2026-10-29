@@ -41,6 +41,7 @@ use kura_telegram::{
 mod adapters;
 mod error;
 mod external;
+mod llm_credentials;
 mod plugins;
 pub mod rehearsal;
 mod restore;
@@ -1366,6 +1367,266 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        app.close();
+    }
+
+    /// An OpenAI-compatible endpoint that answers "ok" to every request and
+    /// records the `Authorization` header each one carried.
+    fn spawn_model_endpoint() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = std::sync::Arc::clone(&seen);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut buffer = [0u8; 65536];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let text = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let authorization = text
+                    .lines()
+                    .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+                    .map(|line| line["authorization:".len()..].trim().to_string())
+                    .unwrap_or_default();
+                recorded.lock().expect("lock").push(authorization);
+                let body =
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    /// Shared hosting M2 (shared-hosting.md §7): on a shared daemon each
+    /// tenant's chat runs on the key it stored itself; a tenant without one is
+    /// refused rather than given the operator's, and the operator keeps the
+    /// configured key.
+    #[tokio::test]
+    async fn each_tenant_chats_on_its_own_key_and_never_on_the_operators() {
+        let (endpoint, seen) = spawn_model_endpoint();
+        let (_temp_dir, mut config) = test_config();
+        config.environment = Environment::Embedded;
+        config.llm.default_provider = "openai_compatible".to_string();
+        config.llm.default_model = "m".to_string();
+        config.llm.openai_compatible.base_url = endpoint.clone();
+        config.llm.openai_compatible.model = "m".to_string();
+        config.llm.openai_compatible.api_key = "sk-operator".to_string();
+        // A subscription the operator signed into; tenants must not reach it.
+        config
+            .llm
+            .accounts
+            .push(kura_config::AccountProviderConfig {
+                id: "operator_account".to_string(),
+                protocol: kura_config::AccountProtocol::OpenAiCompatible,
+                base_url: endpoint,
+                model: "m".to_string(),
+                access_token: "sk-operator-account".to_string(),
+                ..Default::default()
+            });
+        let mut app = App::new(config).expect("build embedded app");
+
+        let single = app.router();
+        let (_, started) = call(
+            &single,
+            "POST",
+            "/v1/auth/pairings/start",
+            None,
+            &[],
+            Some(r#"{"mode":"local","label":"operator","ttlSeconds":300}"#),
+        )
+        .await;
+        let pairing_id = started["pairing"]["pairingId"].as_str().expect("id");
+        let code = started["pairingCode"].as_str().expect("code");
+        let (_, completed) = call(
+            &single,
+            "POST",
+            &format!("/v1/auth/pairings/{pairing_id}/complete"),
+            None,
+            &[],
+            Some(&format!(r#"{{"code":"{code}"}}"#)),
+        )
+        .await;
+        let operator = completed["accessToken"]
+            .as_str()
+            .expect("token")
+            .to_string();
+
+        // What a shared boot does: the mode, then the policy it installs.
+        app.state.hosting = kura_api::hosting::Hosting::Shared {
+            operator_tenant_id: LOCAL_TENANT_ID.to_string(),
+        };
+        llm_credentials::install(
+            app.state.llm.as_ref().expect("llm"),
+            &app.state.hosting,
+            app.state.secrets.as_ref(),
+        )
+        .expect("install policy");
+        let shared = app.router();
+
+        let mut users = Vec::new();
+        for subject in ["github:1", "github:2"] {
+            let (status, json) = call(
+                &shared,
+                "POST",
+                "/v1/provisioning/users",
+                Some(&operator),
+                &[],
+                Some(&format!(r#"{{"externalSubject":"{subject}"}}"#)),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CREATED, "{json}");
+            users.push(json["accessToken"].as_str().expect("token").to_string());
+        }
+        let (alice, bob) = (&users[0], &users[1]);
+
+        // Alice stores her key through the tenant-secret routes, now open to
+        // tenants; the value never comes back.
+        let (status, json) = call(
+            &shared,
+            "POST",
+            "/v1/tenant-secrets",
+            Some(alice),
+            &[],
+            Some(&format!(
+                r#"{{"secretRef":"{}","value":"sk-alice"}}"#,
+                llm_credentials::TENANT_LLM_KEY_REF
+            )),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{json}");
+        assert!(!json.to_string().contains("sk-alice"), "{json}");
+        let (status, json) = call(&shared, "GET", "/v1/tenant-secrets", Some(bob), &[], None).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert!(
+            !json
+                .to_string()
+                .contains(llm_credentials::TENANT_LLM_KEY_REF),
+            "bob sees alice's secret: {json}"
+        );
+
+        // Counts are not asserted: a turn may also trigger memory
+        // consolidation for the same tenant in the background, which must run
+        // on that tenant's key too. What is asserted is whose key went out.
+        let sent = || seen.lock().expect("lock").clone();
+        let ask = r#"{"query":"hi"}"#;
+        let (status, json) = call(
+            &shared,
+            "POST",
+            "/v1/chat/query",
+            Some(alice),
+            &[],
+            Some(ask),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["reply"], "ok", "{json}");
+        let after_alice = sent();
+        assert!(!after_alice.is_empty());
+        assert!(
+            after_alice.iter().all(|h| h == "Bearer sk-alice"),
+            "{after_alice:?}"
+        );
+
+        // Bob has no key: refused with a stable code, and nothing is sent.
+        let (status, json) =
+            call(&shared, "POST", "/v1/chat/query", Some(bob), &[], Some(ask)).await;
+        // The same shape as any failed dispatch, with a code a client can act on.
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{json}");
+        assert_eq!(json["status"], "failed", "{json}");
+        assert_eq!(
+            json["errorCode"],
+            llm_credentials::KEY_NOT_CONFIGURED_CODE,
+            "{json}"
+        );
+        assert!(
+            sent().iter().all(|h| h == "Bearer sk-alice"),
+            "{:?}",
+            sent()
+        );
+
+        // Nor may Bob name another provider to get around it.
+        let (status, json) = call(
+            &shared,
+            "POST",
+            "/v1/chat/query",
+            Some(bob),
+            &[],
+            Some(r#"{"query":"hi","provider":"operator_account"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{json}");
+        assert_eq!(
+            json["errorCode"],
+            llm_credentials::PROVIDER_NOT_AVAILABLE_CODE,
+            "{json}"
+        );
+        assert!(
+            sent().iter().all(|h| h == "Bearer sk-alice"),
+            "{:?}",
+            sent()
+        );
+
+        // The streaming route, which the web client uses, selects the same way.
+        let stream = |token: String| {
+            let router = shared.clone();
+            async move {
+                let response = router
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/v1/chat/query/stream")
+                            .header("authorization", format!("Bearer {token}"))
+                            .header("content-type", "application/json")
+                            .body(axum::body::Body::from(r#"{"query":"hi"}"#))
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("oneshot");
+                let bytes = to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("body");
+                String::from_utf8_lossy(&bytes).into_owned()
+            }
+        };
+        let body = stream(alice.clone()).await;
+        assert!(body.contains("\"ok\""), "{body}");
+        let body = stream(bob.clone()).await;
+        assert!(
+            body.contains(llm_credentials::KEY_NOT_CONFIGURED_CODE),
+            "{body}"
+        );
+        assert!(
+            sent().iter().all(|h| h == "Bearer sk-alice"),
+            "{:?}",
+            sent()
+        );
+
+        // The operator still runs on the configured key.
+        let (status, json) = call(
+            &shared,
+            "POST",
+            "/v1/chat/query",
+            Some(&operator),
+            &[],
+            Some(ask),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let all = sent();
+        assert!(all.contains(&"Bearer sk-operator".to_string()), "{all:?}");
+        assert!(
+            all.iter()
+                .all(|h| h == "Bearer sk-alice" || h == "Bearer sk-operator"),
+            "{all:?}"
+        );
 
         app.close();
     }

@@ -12,6 +12,7 @@ use kura_protocol::ToolSpec;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
+use crate::credential::ApiKey;
 use crate::types::{Message, StreamChunk, Usage};
 
 /// Cancellation signal shared with providers, analogous to `context.Context`
@@ -160,6 +161,10 @@ pub struct ProviderRequest {
     pub stream_idle_timeout_ms: i64,
     pub stream_max_duration_ms: i64,
     pub cancel: CancelToken,
+    /// A key to use instead of the provider's configured one (see
+    /// [`crate::CredentialPolicy`]). A provider that cannot honor it must fail
+    /// the request rather than send its own credential.
+    pub credential: Option<ApiKey>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -625,6 +625,8 @@ fn build_llm(asm: &mut Assembly) -> Result<(), AppError> {
     };
     let _ = llm.set_default_provider(&default_provider);
 
+    crate::llm_credentials::install(&llm, &asm.state.hosting, asm.state.secrets.as_ref())?;
+
     asm.seams.put(ManagedRegistrySeam(managed_registry));
     asm.state.llm = Some(llm);
     Ok(())

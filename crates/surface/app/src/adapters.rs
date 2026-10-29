@@ -1083,7 +1083,14 @@ impl LlmConsolidator {
         Self { dispatcher }
     }
 
-    fn dispatch_json(&self, system: &str, user: String) -> Result<serde_json::Value, String> {
+    /// Runs on `tenant_id`'s credential: consolidating a tenant's memory is
+    /// that tenant's model usage, not the platform's (shared-hosting.md §7).
+    fn dispatch_json(
+        &self,
+        tenant_id: &str,
+        system: &str,
+        user: String,
+    ) -> Result<serde_json::Value, String> {
         let input = kura_llm::CreateDispatchInput {
             provider: String::new(),
             model: String::new(),
@@ -1101,10 +1108,11 @@ impl LlmConsolidator {
             ],
             ..kura_llm::CreateDispatchInput::default()
         };
-        let dispatch = self
+        let mut dispatch = self
             .dispatcher
             .prepare(input, false)
             .map_err(|err| format!("prepare consolidation dispatch: {err}"))?;
+        dispatch.tenant_id = tenant_id.trim().to_string();
         let cancel = kura_llm::CancelToken::new();
         let dispatcher = Arc::clone(&self.dispatcher);
         let settled = consolidator_runtime()?
@@ -1188,7 +1196,7 @@ profile of durable preferences, constraints, and patterns}.";
 impl kura_memory::Consolidator for LlmConsolidator {
     fn extract_l1(
         &self,
-        _tenant_id: &str,
+        tenant_id: &str,
         window: &[kura_memory::L0Item],
     ) -> Result<Vec<kura_memory::AtomDraft>, String> {
         if window.is_empty() {
@@ -1204,7 +1212,7 @@ impl kura_memory::Consolidator for LlmConsolidator {
                 item.text.replace('\n', " "),
             ));
         }
-        let value = self.dispatch_json(EXTRACT_SYSTEM_PROMPT, lines)?;
+        let value = self.dispatch_json(tenant_id, EXTRACT_SYSTEM_PROMPT, lines)?;
         let Some(items) = value.as_array() else {
             return Err("extraction reply is not a JSON array".to_string());
         };
@@ -1249,7 +1257,7 @@ impl kura_memory::Consolidator for LlmConsolidator {
 
     fn aggregate_l2(
         &self,
-        _tenant_id: &str,
+        tenant_id: &str,
         atoms: &[kura_memory::MemoryAsset],
     ) -> Result<Vec<kura_memory::AtomDraft>, String> {
         if atoms.is_empty() {
@@ -1264,7 +1272,7 @@ impl kura_memory::Consolidator for LlmConsolidator {
                 atom.content.replace('\n', " "),
             ));
         }
-        let value = self.dispatch_json(SCENARIO_SYSTEM_PROMPT, lines)?;
+        let value = self.dispatch_json(tenant_id, SCENARIO_SYSTEM_PROMPT, lines)?;
         let Some(items) = value.as_array() else {
             return Err("scenario reply is not a JSON array".to_string());
         };
@@ -1287,7 +1295,7 @@ impl kura_memory::Consolidator for LlmConsolidator {
 
     fn distill_l3(
         &self,
-        _tenant_id: &str,
+        tenant_id: &str,
         scenarios: &[kura_memory::MemoryAsset],
     ) -> Result<Option<kura_memory::AtomDraft>, String> {
         if scenarios.is_empty() {
@@ -1297,7 +1305,7 @@ impl kura_memory::Consolidator for LlmConsolidator {
         for scenario in scenarios {
             lines.push_str(&format!("## {}\n{}\n\n", scenario.title, scenario.content));
         }
-        let value = self.dispatch_json(PERSONA_SYSTEM_PROMPT, lines)?;
+        let value = self.dispatch_json(tenant_id, PERSONA_SYSTEM_PROMPT, lines)?;
         let content = value["content"].as_str().unwrap_or("").trim().to_string();
         if content.is_empty() {
             return Ok(None);

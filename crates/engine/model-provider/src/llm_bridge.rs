@@ -160,7 +160,21 @@ impl<M: ModelProvider> ModelProviderBridge<M> {
         emit: StreamEmitter<'_>,
     ) -> Result<ProviderResponse, LlmError> {
         let prompt = to_prompt(&request.messages, &request.tools);
-        let mut events = self.client.stream(&prompt);
+        let mut events = match &request.credential {
+            None => self.client.stream(&prompt),
+            // Refused rather than sent with the configured credential: that one
+            // belongs to whoever configured the provider, not to the caller.
+            Some(key) => self
+                .client
+                .stream_with_api_key(&prompt, key.expose())
+                .ok_or_else(|| {
+                    LlmError::provider(
+                        "credential_unsupported",
+                        format!("provider {} cannot use a caller-supplied key", self.name),
+                        false,
+                    )
+                })?,
+        };
         let mut output = String::new();
         let mut tool_calls = Vec::new();
         let mut finish_reason = String::new();
@@ -232,6 +246,7 @@ mod tests {
             stream_idle_timeout_ms: 30_000,
             stream_max_duration_ms: 60_000,
             cancel: CancelToken::new(),
+            credential: None,
         }
     }
 
@@ -548,6 +563,43 @@ mod tests {
                 assert_eq!(code, "http_400");
             }
             other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    /// A client that cannot take a caller's key, like every client but the
+    /// OpenAI-compatible one. Panics if it is asked to stream at all.
+    struct NoCallerKeys;
+
+    impl ModelProvider for NoCallerKeys {
+        fn stream<'a>(
+            &'a self,
+            _prompt: &'a Prompt,
+        ) -> futures::stream::BoxStream<'a, Result<ResponseEvent, ProviderError>> {
+            panic!("must not stream on the configured credential")
+        }
+    }
+
+    #[tokio::test]
+    async fn a_caller_key_the_client_cannot_use_fails_closed() {
+        // Sending the request on the configured credential instead would spend
+        // the operator's account on the caller's behalf.
+        let provider = ModelProviderBridge::new("account", NoCallerKeys);
+        let mut with_key = request(vec![Message {
+            role: MessageRole::User,
+            content: "hi".into(),
+            ..Default::default()
+        }]);
+        with_key.credential = kura_llm::ApiKey::new("tenant-key");
+        let mut sink = |_: StreamChunk| Ok(());
+
+        match provider.run(with_key, &mut sink).await {
+            Err(LlmError::Provider {
+                code, retryable, ..
+            }) => {
+                assert_eq!(code, "credential_unsupported");
+                assert!(!retryable);
+            }
+            other => panic!("unexpected result: {other:?}"),
         }
     }
 

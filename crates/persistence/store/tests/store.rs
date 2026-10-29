@@ -307,6 +307,7 @@ fn a_dispatch_remembers_the_tools_it_was_given_and_asked_for() {
         arguments: "{}".to_string(),
     }];
     let dispatch = Dispatch {
+        tenant_id: String::new(),
         tools: tools.clone(),
         tool_calls: tool_calls.clone(),
         dispatch_id: "disp_tools".to_string(),
@@ -376,6 +377,7 @@ fn llm_dispatch_round_trips_through_sqlite() {
     let store = SQLiteStore::new(&dir).unwrap();
     let now = Utc::now();
     let dispatch = Dispatch {
+        tenant_id: String::new(),
         tools: Vec::new(),
         tool_calls: Vec::new(),
         dispatch_id: "disp_1".to_string(),

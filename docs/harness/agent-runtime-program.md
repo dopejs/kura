@@ -109,13 +109,27 @@ schedules it.
       revocable, scoped to the one tenant. Closed 2026-10-28 with 1.1: the
       e2e test proves the token resolves as the new user, cannot select the
       operator tenant, and cannot provision. A per-principal token cap is M4.
-- [ ] **1.3** Per-tenant LLM credentials selected at dispatch; a tenant
+- [x] **1.3** Per-tenant LLM credentials selected at dispatch; a tenant
       without a credential gets a clear "not configured" error, never the
-      operator's key.
+      operator's key. Closed 2026-10-29: design in
+      [shared-hosting.md](shared-hosting.md) §7 (dispatcher credential
+      policy; key stored as the tenant secret `llm.openai_compatible.api_key`
+      through the tenant-secret routes; other operator providers refused to
+      tenants). The billing-boundary test is the app e2e
+      `each_tenant_chats_on_its_own_key_and_never_on_the_operators`.
+      `kura_llm_tokens_total{tenant}` already labels the requesting tenant,
+      which is now also the key owner.
 - [ ] **1.4** Gateway OAuth sign-up wired to 1.1.
-- [ ] **1.5** G11 DNS rebinding: pin the checked address through to the
-      connection for every egress client. Tenants reach outbound fetches via
-      web search and MCP-backed tools once they can sign up.
+- ~~**1.5** G11 DNS rebinding~~ — **moved to Stage 3 (3.5) on 2026-10-28.**
+      The premise was wrong: in M2 no tenant controls an outbound
+      destination. The resolving egress check fires only for networked tool
+      families and none is networked today (MCP-backed tools network inside
+      the MCP server process, `crates/domains/tools/src/lib.rs:108-115`); the
+      daemon's own clients (LLM providers, MCP http/ws transports, channels)
+      reach operator-configured or fixed hosts, and MCP server creation is
+      operator-only in shared mode. Pinning inside the daemon's HTTP client
+      would also not cover MCP servers, which resolve for themselves. 1.3 keeps
+      it that way by giving tenants a key, never a base URL.
 
 Done when two strangers sign up through the gateway, each runs chat, memory,
 reminders and retrieval on their own key, the two-tenant e2e suite covers the
@@ -151,6 +165,11 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       plane.
 - [ ] **3.4** Measure gVisor on the cell hosts; adopt as a second backend only
       if overhead fits.
+- [ ] **3.5** G11 DNS rebinding (from 1.5): tenant workloads reach the network
+      only through an egress proxy that resolves once, checks the address
+      with `kura-egress`, and connects to that address. Daemon-side clients
+      that take a tenant-influenced URL (none in M2) resolve through a
+      policy-checking resolver for the same reason.
 
 Done when a tenant can run code and MCP tools, a hostile workload cannot read
 another tenant's workspace or the daemon's data dir (test proves it), and

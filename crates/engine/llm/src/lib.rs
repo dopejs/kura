@@ -5,11 +5,13 @@
 //! ported: `kura-model-provider`'s `OpenAiCompatibleClient` already
 //! implements OpenAI-compatible streaming for the Rust workspace.
 
+mod credential;
 mod dispatcher;
 mod echo;
 mod provider;
 mod types;
 
+pub use credential::{ApiKey, CredentialDecision, CredentialPolicy};
 pub use dispatcher::{Dispatcher, FailedDispatch, PrepareError};
 pub use echo::EchoProvider;
 pub use provider::{

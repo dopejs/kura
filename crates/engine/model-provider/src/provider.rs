@@ -44,6 +44,19 @@ pub trait ModelProvider: Send + Sync {
         &'a self,
         prompt: &'a Prompt,
     ) -> BoxStream<'a, Result<ResponseEvent, ProviderError>>;
+
+    /// Streams with `api_key` in place of the configured credential, for a
+    /// dispatch that runs on someone else's key (a tenant's own, on a shared
+    /// daemon). `None` means this client cannot, and the caller must refuse
+    /// the request: falling back to the configured credential would spend
+    /// the operator's account on the tenant's behalf.
+    fn stream_with_api_key<'a>(
+        &'a self,
+        _prompt: &'a Prompt,
+        _api_key: &'a str,
+    ) -> Option<BoxStream<'a, Result<ResponseEvent, ProviderError>>> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------

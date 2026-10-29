@@ -682,3 +682,215 @@ async fn a_message_that_says_nothing_at_all_is_still_refused() {
 
     assert!(matches!(prepared, Err(PrepareError::MessagesRequired)));
 }
+
+// ---------------------------------------------------------------------------
+// Credential policy (shared-hosting.md §7)
+// ---------------------------------------------------------------------------
+
+/// Answers with a fixed decision and records what it was asked.
+struct FixedPolicy {
+    decision: kura_llm::CredentialDecision,
+    asked: parking_lot::Mutex<Vec<(String, String)>>,
+}
+
+impl FixedPolicy {
+    fn new(decision: kura_llm::CredentialDecision) -> Arc<Self> {
+        Arc::new(Self {
+            decision,
+            asked: parking_lot::Mutex::new(Vec::new()),
+        })
+    }
+}
+
+impl kura_llm::CredentialPolicy for FixedPolicy {
+    fn decide<'a>(
+        &'a self,
+        tenant_id: &'a str,
+        provider: &'a str,
+    ) -> BoxFuture<'a, kura_llm::CredentialDecision> {
+        self.asked
+            .lock()
+            .push((tenant_id.to_string(), provider.to_string()));
+        let decision = self.decision.clone();
+        Box::pin(async move { decision })
+    }
+}
+
+/// Fails retryably on the first attempt and succeeds on the second,
+/// recording the key each attempt carried.
+fn key_recording_provider(seen: Arc<parking_lot::Mutex<Vec<Option<String>>>>) -> TestProvider {
+    TestProvider::new(
+        "test",
+        Box::new(move |request| {
+            let seen = Arc::clone(&seen);
+            Box::pin(async move {
+                let attempt = {
+                    let mut seen = seen.lock();
+                    seen.push(
+                        request
+                            .credential
+                            .as_ref()
+                            .map(|key| key.expose().to_string()),
+                    );
+                    seen.len()
+                };
+                if attempt == 1 {
+                    return Err(ProviderError::provider("http_503", "busy", true));
+                }
+                Ok(ProviderResponse {
+                    output: "done".into(),
+                    ..Default::default()
+                })
+            })
+        }),
+        unused_stream(),
+    )
+}
+
+fn tenant_dispatch(dispatcher: &Dispatcher, tenant_id: &str) -> Dispatch {
+    let mut dispatch = dispatcher
+        .prepare(
+            CreateDispatchInput {
+                provider: "test".into(),
+                model: "m".into(),
+                messages: vec![user_message("hi")],
+                max_retries: 1,
+                ..Default::default()
+            },
+            false,
+        )
+        .expect("prepare");
+    dispatch.tenant_id = tenant_id.to_string();
+    dispatch
+}
+
+#[tokio::test]
+async fn without_a_policy_a_dispatch_carries_no_key() {
+    let dispatcher = Dispatcher::new();
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    dispatcher.register_provider(Arc::new(key_recording_provider(Arc::clone(&seen))));
+
+    let dispatch = tenant_dispatch(&dispatcher, "ten_a");
+    dispatcher
+        .dispatch(dispatch, &CancelToken::new())
+        .await
+        .expect("completed");
+
+    assert_eq!(*seen.lock(), vec![None, None]);
+}
+
+#[tokio::test]
+async fn the_policy_key_goes_out_on_every_attempt_and_is_chosen_once() {
+    let dispatcher = Dispatcher::new();
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    dispatcher.register_provider(Arc::new(key_recording_provider(Arc::clone(&seen))));
+    let policy = FixedPolicy::new(kura_llm::CredentialDecision::Key(
+        kura_llm::ApiKey::new("sk-tenant-a").expect("key"),
+    ));
+    dispatcher.set_credential_policy(policy.clone());
+
+    let dispatch = tenant_dispatch(&dispatcher, "ten_a");
+    let settled = dispatcher
+        .dispatch(dispatch, &CancelToken::new())
+        .await
+        .expect("completed");
+
+    assert_eq!(settled.attempt_count, 2);
+    assert_eq!(
+        *seen.lock(),
+        vec![
+            Some("sk-tenant-a".to_string()),
+            Some("sk-tenant-a".to_string())
+        ]
+    );
+    // Asked once per dispatch, with the dispatch's tenant and provider: a
+    // retry must not switch credentials.
+    assert_eq!(
+        *policy.asked.lock(),
+        vec![("ten_a".to_string(), "test".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn a_refused_dispatch_never_reaches_the_provider() {
+    let dispatcher = Dispatcher::new();
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let provider = Arc::new(key_recording_provider(Arc::clone(&seen)));
+    dispatcher.register_provider(provider.clone());
+    dispatcher.set_credential_policy(FixedPolicy::new(kura_llm::CredentialDecision::Refuse {
+        code: "tenant_llm_key_not_configured".into(),
+        message: "no key".into(),
+    }));
+
+    let failure = failed(
+        dispatcher
+            .dispatch(tenant_dispatch(&dispatcher, "ten_a"), &CancelToken::new())
+            .await,
+    );
+
+    assert_eq!(failure.dispatch.status, DispatchStatus::Failed);
+    assert_eq!(failure.dispatch.error_code, "tenant_llm_key_not_configured");
+    assert_eq!(failure.dispatch.error, "no key");
+    assert!(!failure.error.is_retryable());
+    assert!(failure.dispatch.completed_at.is_some());
+    assert_eq!(provider.complete_calls.load(Ordering::SeqCst), 0);
+    assert!(seen.lock().is_empty());
+}
+
+#[tokio::test]
+async fn a_refused_stream_never_reaches_the_provider() {
+    let dispatcher = Dispatcher::new();
+    let provider = Arc::new(TestProvider::new(
+        "test",
+        unused_complete(),
+        unused_stream(),
+    ));
+    dispatcher.register_provider(provider.clone());
+    dispatcher.set_credential_policy(FixedPolicy::new(kura_llm::CredentialDecision::Refuse {
+        code: "provider_not_available_to_tenant".into(),
+        message: "no".into(),
+    }));
+    let mut dispatch = dispatcher
+        .prepare(
+            CreateDispatchInput {
+                provider: "test".into(),
+                model: "m".into(),
+                messages: vec![user_message("hi")],
+                ..Default::default()
+            },
+            true,
+        )
+        .expect("prepare");
+    dispatch.tenant_id = "ten_a".into();
+
+    let mut emitted = 0;
+    let mut emit = |_chunk: StreamChunk| {
+        emitted += 1;
+        Ok(())
+    };
+    let failure = failed(
+        dispatcher
+            .dispatch_stream(dispatch, &CancelToken::new(), &mut emit)
+            .await,
+    );
+
+    assert_eq!(
+        failure.dispatch.error_code,
+        "provider_not_available_to_tenant"
+    );
+    assert_eq!(provider.stream_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(emitted, 0);
+}
+
+#[test]
+fn an_api_key_is_never_printed() {
+    let key = kura_llm::ApiKey::new(" sk-secret ").expect("key");
+    assert_eq!(key.expose(), "sk-secret");
+    assert!(!format!("{key:?}").contains("sk-secret"));
+    let request = ProviderRequest {
+        credential: Some(key),
+        ..Default::default()
+    };
+    assert!(!format!("{request:?}").contains("sk-secret"));
+    assert!(kura_llm::ApiKey::new("   ").is_none());
+}

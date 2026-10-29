@@ -161,7 +161,16 @@ pub const TENANT_ROUTES: &[(&str, &str)] = &[
     ("GET", "/v1/policy/approvals"),
     ("GET", "/v1/policy/approvals/{approval_id}"),
     ("POST", "/v1/policy/approvals/{approval_id}/resolve"),
-    // Providers and models, read only: the dispatcher is global until BYOK.
+    // The tenant's own secrets, chiefly its model API key (§7). Every handler
+    // acts on the caller's tenant only, and values never leave the manager.
+    ("GET", "/v1/tenant-secrets"),
+    ("POST", "/v1/tenant-secrets"),
+    ("GET", "/v1/tenant-secrets/{secret_ref}"),
+    ("PATCH", "/v1/tenant-secrets/{secret_ref}"),
+    ("POST", "/v1/tenant-secrets/{secret_ref}/rotate"),
+    ("POST", "/v1/tenant-secrets/{secret_ref}/disable"),
+    // Providers and models, read only: provider configuration is the
+    // operator's; a tenant brings only its key (§7).
     ("GET", "/v1/providers"),
     ("GET", "/v1/providers/{provider_id}"),
     ("GET", "/v1/providers/{provider_id}/models"),
@@ -370,7 +379,6 @@ mod tests {
         ("PUT", "/v1/providers/probe/account"),
         ("PUT", "/v1/model-roles/probe"),
         ("POST", "/v1/mcp/servers"),
-        ("GET", "/v1/tenant-secrets"),
         ("POST", "/v1/tenants"),
         ("POST", "/v1/tenants/probe/invitations"),
         ("PATCH", "/v1/principals/probe"),

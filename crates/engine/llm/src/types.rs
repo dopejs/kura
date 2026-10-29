@@ -69,6 +69,12 @@ pub enum DispatchStatus {
 #[serde(rename_all = "camelCase")]
 pub struct Dispatch {
     pub dispatch_id: String,
+    /// The tenant this dispatch runs for; empty for the daemon's own work.
+    /// Selects the credential (see [`crate::CredentialPolicy`]). Set by the
+    /// caller after `prepare`, never read from a request body, and not
+    /// serialized: the store keeps the tenant in its own column.
+    #[serde(skip)]
+    pub tenant_id: String,
     pub provider: String,
     pub model: String,
     pub messages: Vec<Message>,
@@ -216,6 +222,7 @@ mod tests {
     fn dispatch_omits_empty_optional_fields_like_go() {
         let now = Utc::now();
         let dispatch = Dispatch {
+            tenant_id: String::new(),
             tools: Vec::new(),
             tool_calls: Vec::new(),
             dispatch_id: "d-1".into(),

@@ -187,11 +187,14 @@ impl DispatcherProvider {
             )
             .map_err(round_error)?;
 
-        let dispatch = context
+        let mut dispatch = context
             .service
             .dispatcher
             .prepare(dispatch_input, false)
             .map_err(|error| round_error(crate::error::ChatError::Prepare(error)))?;
+        // Every round runs on the turn's tenant's credential, not only the
+        // first (shared-hosting.md §7).
+        dispatch.tenant_id = context.input.tenant_id.trim().to_string();
 
         let first = {
             let mut log = self.log.lock();

@@ -2,7 +2,8 @@
 
 > Status: M1 implemented (2026-10-08): boundary fixes (§4.5), shared mode
 > (§4.1-4.4). M2 in progress: provisioning and per-user tokens implemented
-> 2026-10-28 (§6); BYOK and gateway sign-up next. Owner: daemon.
+> 2026-10-28 (§6); per-tenant LLM credentials 2026-10-29 (§7); gateway
+> sign-up next. Owner: daemon.
 > Replaces the "one daemon container per user" pilot in the private
 > `kura-gateway` repo as the target architecture. That pilot stays as a
 > dedicated tier; nothing here removes it.
@@ -102,12 +103,12 @@ As built: `kura_api::hosting::{TENANT_ROUTES, shared_route_policy}`, a
 `every_tenant_route_reaches_its_handler_in_shared_mode` (every entry, as a
 non-operator owner, never gets the hosting 403, a fallback 404 or a 405) and
 `everything_else_is_reserved_for_the_platform_operator` (sandbox exec,
-provider/model-role writes, MCP, tenant secrets, tenant creation,
+provider/model-role writes, MCP, tenant creation,
 invitations, principal PATCH, raw LLM dispatch, run creation, routines,
 memory consolidation, metrics: 403 for another tenant's owner, the operator
 tenant's admin and a tenant-less request; reachable for the operator and in
 single mode). In shared mode chat turns are also no longer offered unowned
-MCP servers (G15).
+MCP servers (G15). M2 opened the tenant-secret routes (§7.3).
 
 M1 tenant allowlist (reads and writes on the caller's own data only):
 sessions, chat (query + stream), runs (read, cancel), events (list + stream),
@@ -292,3 +293,99 @@ every other identity mutation.
   mitigation is the operator token never leaving the gateway host.
 - Rollback: revert the route; provisioned rows are ordinary identity rows and
   keep working with the tokens already issued.
+
+## 7. M2 design — per-tenant LLM credentials (agent-runtime-program 1.3)
+
+Before this, every dispatch on a shared daemon went out on the credentials the
+operator configured. A tenant's chat was billed to the operator, and a tenant
+could name any registered provider, including subscription accounts and CLI
+bridges the operator signed into. The rule now: **a tenant's model usage runs
+on the tenant's own key or not at all.**
+
+### 7.1 Where the credential is chosen
+
+The dispatcher asks a `kura_llm::CredentialPolicy` once per dispatch, before
+the first attempt, with the dispatch's tenant and provider (once, so a retry
+cannot switch credentials). The answer is one of:
+
+- `ProviderDefault`: the provider's configured credential (today's behavior);
+- `Key(ApiKey)`: this key instead, carried on `ProviderRequest.credential`.
+  `ApiKey`'s `Debug` is redacted;
+- `Refuse { code, message }`: the dispatch fails before any provider is
+  called, non-retryable, with `errorCode = code`.
+
+The tenant is `Dispatch.tenant_id`. The caller sets it after `prepare` from the
+resolved tenant context. It is never read from a request body, and it is
+`serde(skip)`: `CreateDispatchInput` is also the `POST /v1/llm/dispatches`
+body and passes through plugin hooks, so neither must be able to set or drop
+it. Set by the chat service (stream and every tool-loop round) and by the memory
+consolidator (which already received the tenant). Daemon work with no tenant
+(operator routes, provider probes) stays empty.
+
+A provider honors a key only if its client can. `ModelProvider` has
+`stream_with_api_key`. Only `OpenAiCompatibleClient` implements it, sending the
+key and leaving off the operator's configured key **and gateway headers**. Any
+other client returns `None`, and the bridge fails the dispatch with
+`credential_unsupported` instead of falling back to its own credential.
+
+### 7.2 Policy (installed only when `KURA_HOSTING=shared`)
+
+| Tenant | Provider | Decision |
+|---|---|---|
+| none (daemon work) or the operator tenant | any | `ProviderDefault` |
+| any other | `openai_compatible` | the tenant secret `llm.openai_compatible.api_key`, else refused |
+| any other | `echo` | `ProviderDefault` (no credential involved) |
+| any other | anything else (accounts, CLI bridges) | refused: `provider_not_available_to_tenant` |
+
+Refusal codes: `tenant_llm_key_not_configured`, `tenant_llm_key_disabled`,
+`tenant_llm_key_unavailable` (secret backend error, logged on the daemon
+without the value), `provider_not_available_to_tenant`. Chat returns them as
+any failed dispatch: 502 with `status: failed` and `errorCode`. Single mode
+installs no policy and is unchanged. A shared boot without the secret manager
+fails rather than running without the policy.
+
+### 7.3 Storing the key
+
+Tenants store the key through the existing tenant-secret routes, now in
+`TENANT_ROUTES`: `GET|POST /v1/tenant-secrets`,
+`GET|PATCH /v1/tenant-secrets/{ref}`, `POST .../rotate`, `POST .../disable`.
+Every handler acts on the resolved tenant only and requires `secrets.manage`,
+and values never leave the manager. Audit is the existing credential audit.
+A dedicated route was not added: the secret routes already give create,
+rotate, disable and audit, and a second write path would have to repeat them.
+
+The base URL and model stay the operator's (`llm.openAICompatible`): a tenant
+supplies a key, never a destination, so the daemon makes no request to a
+tenant-chosen host (this is why G11 stays in M3, agent-runtime-program 3.5).
+
+### 7.4 Failure modes, residual risk, rollback
+
+- A tenant without a key gets a 502 with `tenant_llm_key_not_configured` on
+  every chat turn. Turn-triggered memory consolidation fails the same way and
+  logs `memory: turn-trigger consolidation failed` per due window. Expected,
+  not an incident.
+- The tenant's key goes to the operator-configured base URL. If that URL is a
+  proxy the operator runs, the operator can see tenant keys; tenants must
+  trust the platform anyway.
+- A dispatch site that forgets to set `tenant_id` falls back to the operator's
+  credential. Today's sites are chat (stream + rounds) and consolidation, and
+  each is covered by the e2e test below. A new tenant-facing dispatch site
+  must set it.
+- MCP and connector secrets resolve in the *oldest personal tenant*
+  (`resolve_default_personal_tenant_id`), which on a shared daemon is the
+  bootstrapped operator tenant. Tenants can now write their own secrets, so
+  that lookup must stay pinned to the operator tenant (G10).
+- Rollback: revert the commit. Stored tenant secrets stay as inert rows. Or
+  unset `KURA_HOSTING`.
+
+Tests: dispatcher (`engine/llm/tests/dispatcher.rs`: no policy → no key; the key
+goes out on every attempt, chosen once; a refusal never reaches the provider,
+complete or stream; the key is never printed), OpenAI client (the caller's key
+goes out without the operator's key or headers), bridge (an unsupported client
+fails closed), policy unit tests (`surface/app/src/llm_credentials.rs`), and an
+app e2e: `each_tenant_chats_on_its_own_key_and_never_on_the_operators`. In it,
+two provisioned tenants and the operator share a mock endpoint that records
+`Authorization`. Alice's query, stream and background consolidation carry only
+her key. Bob, with no key, gets `tenant_llm_key_not_configured` on query and
+stream and cannot reach the operator's account provider by naming it. The
+operator still uses the configured key.

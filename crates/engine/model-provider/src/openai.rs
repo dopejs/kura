@@ -137,11 +137,10 @@ impl ModelProvider for OpenAiCompatibleClient {
         &'a self,
         prompt: &'a Prompt,
     ) -> BoxStream<'a, Result<ResponseEvent, ProviderError>> {
-        let body = build_request(&self.model, prompt, self.sampling);
         let mut request = self
             .http
             .post(format!("{}/chat/completions", self.base_url))
-            .json(&body);
+            .json(&build_request(&self.model, prompt, self.sampling));
         for (name, value) in &self.headers {
             request = request.header(name, value);
         }
@@ -151,7 +150,31 @@ impl ModelProvider for OpenAiCompatibleClient {
             Some(key) => request.bearer_auth(key),
             None => request,
         };
-        Box::pin(try_stream! {
+        stream_chat_completions(request)
+    }
+
+    /// The configured gateway headers are left off as well as the configured
+    /// key: they are the operator's (an org id, a gateway token) and must not
+    /// ride along on a request billed to someone else.
+    fn stream_with_api_key<'a>(
+        &'a self,
+        prompt: &'a Prompt,
+        api_key: &'a str,
+    ) -> Option<BoxStream<'a, Result<ResponseEvent, ProviderError>>> {
+        let request = self
+            .http
+            .post(format!("{}/chat/completions", self.base_url))
+            .json(&build_request(&self.model, prompt, self.sampling))
+            .bearer_auth(api_key);
+        Some(stream_chat_completions(request))
+    }
+}
+
+/// Sends a built `/chat/completions` request and reads its SSE stream.
+fn stream_chat_completions(
+    request: reqwest::RequestBuilder,
+) -> BoxStream<'static, Result<ResponseEvent, ProviderError>> {
+    Box::pin(try_stream! {
             let response = request.send().await?;
             let mut bytes = checked_bytes_stream(response).await?;
 
@@ -192,8 +215,7 @@ impl ModelProvider for OpenAiCompatibleClient {
                 };
             }
             yield ResponseEvent::Completed;
-        })
-    }
+    })
 }
 
 fn non_empty_or(value: String, fallback: String) -> String {
@@ -728,6 +750,81 @@ mod tests {
         drain(&client).await;
 
         assert_eq!(seen.lock().expect("lock").as_slice(), &["".to_string()]);
+    }
+
+    /// Serves `connections` requests and records each one's raw head,
+    /// lowercased, so a test can check every header that went out.
+    fn spawn_head_recording_endpoint(
+        connections: usize,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = std::sync::Arc::clone(&seen);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(connections) {
+                let Ok(mut stream) = stream else { continue };
+                let mut buffer = [0u8; 8192];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let text = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let head = text.split("\r\n\r\n").next().unwrap_or("").to_lowercase();
+                recorded.lock().expect("lock").push(head);
+                let body = "data: [DONE]\n\n";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    #[tokio::test]
+    async fn a_caller_key_goes_out_without_the_operators_key_or_headers() {
+        // A shared daemon dispatches a tenant's turn on the tenant's key. The
+        // configured key and gateway headers are the operator's; neither may
+        // ride along on that request, and the next ordinary request must still
+        // carry both.
+        use futures::StreamExt;
+        let (base_url, seen) = spawn_head_recording_endpoint(2);
+        let client = OpenAiCompatibleClient::new(base_url, "m", Some("operator-key".to_string()))
+            .with_headers(BTreeMap::from([(
+                "x-gateway-token".to_string(),
+                "operator-gateway".to_string(),
+            )]));
+        let prompt = Prompt::default();
+
+        let mut stream = client
+            .stream_with_api_key(&prompt, "tenant-key")
+            .expect("supported");
+        while stream.next().await.is_some() {}
+        drop(stream);
+        drain(&client).await;
+
+        let heads = seen.lock().expect("lock").clone();
+        assert_eq!(heads.len(), 2, "both requests were served");
+        assert!(
+            heads[0].contains("authorization: bearer tenant-key"),
+            "{}",
+            heads[0]
+        );
+        assert!(!heads[0].contains("operator-key"), "{}", heads[0]);
+        assert!(!heads[0].contains("x-gateway-token"), "{}", heads[0]);
+        assert!(
+            heads[1].contains("authorization: bearer operator-key"),
+            "{}",
+            heads[1]
+        );
+        assert!(
+            heads[1].contains("x-gateway-token: operator-gateway"),
+            "{}",
+            heads[1]
+        );
     }
 
     #[test]
