@@ -54,6 +54,11 @@
     "maxTimeoutMs": { "type": "integer", "minimum": 1 },
     "restartable": { "type": "boolean" },
     "source": { "type": "string", "enum": ["builtin"] },
-    "active": { "type": "boolean" }
+    "active": { "type": "boolean" },
+    "isolation": {
+      "description": "tenant: each run gets its own container built from the acting tenant alone (only its workspace, a per-tenant non-root uid, no capabilities, read-only root filesystem, cgroup limits, no network); request mounts and network are refused. Absent means none.",
+      "type": "string",
+      "enum": ["none", "tenant"]
+    }
   }
 }

@@ -37,6 +37,17 @@ jobs:
         run: ../scripts/cargo-test-isolated.sh -p kura-contracts
       - name: Route parity gate
         run: ../scripts/cargo-test-isolated.sh -p kura-api --test route_parity
+      # Stage 3.1: tenant isolation proven against real containers (cross-
+      # tenant reads, the daemon's data dir, root, network, cgroup limits,
+      # container cleanup on cancel). Linux runners have docker; the sandbox
+      # only selects the backend when its image is already present.
+      - name: Isolated execution (real containers)
+        if: runner.os == 'Linux'
+        env:
+          KURA_DOCKER_TESTS: "1"
+        run: |
+          docker pull alpine:3.20
+          ../scripts/cargo-test-isolated.sh -p kura-sandbox --test isolation
       # The pipe used here previously took its exit code from `tail`, so a
       # clippy failure could never fail the job. Errors are now fatal; the
       # existing warning backlog is still tolerated.

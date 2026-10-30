@@ -70,6 +70,13 @@ pub struct LaunchSpec {
     pub docker_image: String,
     pub docker_network: String,
     pub docker_mounts: Vec<DockerMount>,
+    /// Docker container name (`kura-exec-<execution id>`), so cancellation
+    /// and timeout can remove the container itself: killing the `docker run`
+    /// client does not stop the container it started.
+    pub container_name: String,
+    /// Set for a tenant-isolated run: the container is built from this
+    /// instead of `docker_network`/`docker_mounts` (see `isolation`).
+    pub isolation: Option<crate::isolation::IsolatedRun>,
 }
 
 /// Go `dockerMount`: a bind mount for docker executions.
@@ -379,12 +386,14 @@ pub(crate) fn read_pipe_into(mut pipe: impl Read, capture: Arc<Mutex<CaptureBuff
 /// Go `executeDocker`: builds the docker CLI invocation and delegates to
 /// executeSubprocess, then decorates the backend metadata.
 #[must_use]
-pub fn execute_docker(
-    launch: &LaunchSpec,
-    cancel: &CancellationToken,
-    timed_out: &AtomicBool,
-) -> SubprocessResult {
+/// The `docker run` arguments of a non-isolated run, up to the image: the
+/// request's network and mounts, as before Stage 3.1.
+fn legacy_docker_args(launch: &LaunchSpec) -> Vec<String> {
     let mut args: Vec<String> = vec!["run".to_string(), "--rm".to_string(), "-i".to_string()];
+    if !launch.container_name.is_empty() {
+        args.push("--name".to_string());
+        args.push(launch.container_name.clone());
+    }
     if !launch.docker_network.is_empty() {
         args.push("--network".to_string());
         args.push(launch.docker_network.clone());
@@ -406,6 +415,158 @@ pub fn execute_docker(
         args.push(item.clone());
     }
     args.push(launch.docker_image.clone());
+    args
+}
+
+/// Force-remove a container after its run was cancelled or timed out. Best
+/// effort: a failure is logged, and `--rm` still removes the container once
+/// its process exits on its own.
+fn remove_container(name: &str) {
+    match std::process::Command::new("docker")
+        .args(["rm", "-f", name])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+    {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Already gone is the outcome we wanted.
+            if !stderr.contains("No such container") {
+                eprintln!(
+                    "[kura] sandbox: removing container {name} failed: {}",
+                    stderr.trim()
+                );
+            }
+        }
+        Err(err) => eprintln!("[kura] sandbox: removing container {name} failed: {err}"),
+    }
+}
+
+/// The seam an execution runs through. Each backend states whether it
+/// isolates tenants from each other and from the daemon's data dir — the
+/// property shared hosting must require (Stage 3.2) — rather than callers
+/// inferring it from a backend kind.
+pub trait ExecutionBackend: Send + Sync {
+    fn kind(&self) -> BackendKind;
+    /// True only when a run cannot read another tenant's workspace or the
+    /// daemon's data dir, and its resource use is capped.
+    fn tenant_isolated(&self) -> bool;
+    fn execute(
+        &self,
+        launch: &LaunchSpec,
+        cancel: &CancellationToken,
+        timed_out: &AtomicBool,
+    ) -> SubprocessResult;
+}
+
+/// A host process with the profile's declared (not enforced) limits.
+pub struct SubprocessBackend;
+/// A container shaped by the request's mounts and network.
+pub struct DockerBackend;
+/// A container per run, shaped only by the acting tenant (`isolation`).
+pub struct IsolatedDockerBackend;
+
+impl ExecutionBackend for SubprocessBackend {
+    fn kind(&self) -> BackendKind {
+        BackendKind::Subprocess
+    }
+    fn tenant_isolated(&self) -> bool {
+        false
+    }
+    fn execute(
+        &self,
+        launch: &LaunchSpec,
+        cancel: &CancellationToken,
+        timed_out: &AtomicBool,
+    ) -> SubprocessResult {
+        execute_subprocess(launch, cancel, timed_out)
+    }
+}
+
+impl ExecutionBackend for DockerBackend {
+    fn kind(&self) -> BackendKind {
+        BackendKind::Docker
+    }
+    fn tenant_isolated(&self) -> bool {
+        false
+    }
+    fn execute(
+        &self,
+        launch: &LaunchSpec,
+        cancel: &CancellationToken,
+        timed_out: &AtomicBool,
+    ) -> SubprocessResult {
+        execute_docker(launch, cancel, timed_out)
+    }
+}
+
+impl ExecutionBackend for IsolatedDockerBackend {
+    fn kind(&self) -> BackendKind {
+        BackendKind::Docker
+    }
+    fn tenant_isolated(&self) -> bool {
+        true
+    }
+    fn execute(
+        &self,
+        launch: &LaunchSpec,
+        cancel: &CancellationToken,
+        timed_out: &AtomicBool,
+    ) -> SubprocessResult {
+        let Some(run) = &launch.isolation else {
+            // backend_for only routes here with an isolation; refuse rather
+            // than fall through to an unconfined container.
+            return launch_failed("isolated run without an isolation spec".to_string());
+        };
+        if let Err(err) = crate::isolation::ensure_workspace(run) {
+            return launch_failed(err.to_string());
+        }
+        execute_docker(launch, cancel, timed_out)
+    }
+}
+
+fn launch_failed(error: String) -> SubprocessResult {
+    let mut metadata = serde_json::Map::new();
+    metadata.insert(
+        "backend".to_string(),
+        serde_json::json!(BackendKind::Docker.as_str()),
+    );
+    SubprocessResult {
+        status: ExecutionStatus::Failed,
+        error_class: ErrorClass::LaunchFailed,
+        error_code: "sandbox_launch_failed".to_string(),
+        error,
+        backend_metadata: metadata,
+        ..SubprocessResult::default()
+    }
+}
+
+/// The backend a prepared launch runs on. Ssh/Remote have no executor and
+/// run as subprocesses, as they always have.
+#[must_use]
+pub fn backend_for(launch: &LaunchSpec) -> &'static dyn ExecutionBackend {
+    match (launch.backend_kind, launch.isolation.is_some()) {
+        (BackendKind::Docker, true) => &IsolatedDockerBackend,
+        (BackendKind::Docker, false) => &DockerBackend,
+        _ => &SubprocessBackend,
+    }
+}
+
+pub fn execute_docker(
+    launch: &LaunchSpec,
+    cancel: &CancellationToken,
+    timed_out: &AtomicBool,
+) -> SubprocessResult {
+    let mut args: Vec<String> = match &launch.isolation {
+        Some(run) => crate::isolation::isolated_docker_args(
+            run,
+            &launch.container_name,
+            &launch.docker_image,
+            &launch.env,
+        ),
+        None => legacy_docker_args(launch),
+    };
     args.push(launch.command.clone());
     args.extend(launch.args.iter().cloned());
 
@@ -416,22 +577,43 @@ pub fn execute_docker(
     };
 
     let mut result = execute_subprocess(&docker_launch, cancel, timed_out);
+    if cancel.is_cancelled() && !launch.container_name.is_empty() {
+        remove_container(&launch.container_name);
+    }
     result.backend_metadata.insert(
         "backend".to_string(),
         serde_json::json!(BackendKind::Docker.as_str()),
     );
+    if let Some(run) = &launch.isolation {
+        result
+            .backend_metadata
+            .insert("isolation".to_string(), serde_json::json!("tenant"));
+        result
+            .backend_metadata
+            .insert("containerUid".to_string(), serde_json::json!(run.uid));
+        result.backend_metadata.insert(
+            "limits".to_string(),
+            serde_json::json!({
+                "cpus": run.limits.cpus,
+                "memoryMb": run.limits.memory_mb,
+                "pids": run.limits.pids,
+            }),
+        );
+    }
     result.backend_metadata.insert(
         "dockerImage".to_string(),
         serde_json::json!(launch.docker_image),
     );
-    result.backend_metadata.insert(
-        "dockerNetwork".to_string(),
-        serde_json::json!(launch.docker_network),
-    );
-    result.backend_metadata.insert(
-        "mountCount".to_string(),
-        serde_json::json!(launch.docker_mounts.len()),
-    );
+    let (network, mounts) = match &launch.isolation {
+        Some(_) => ("none", 1),
+        None => (launch.docker_network.as_str(), launch.docker_mounts.len()),
+    };
+    result
+        .backend_metadata
+        .insert("dockerNetwork".to_string(), serde_json::json!(network));
+    result
+        .backend_metadata
+        .insert("mountCount".to_string(), serde_json::json!(mounts));
     result.backend_metadata.insert(
         "processType".to_string(),
         serde_json::json!(BACKEND_META_PROCESS_KIND_CONTAINER),
@@ -879,16 +1061,10 @@ impl Manager {
             });
         }
 
-        let result = match launch.backend_kind {
-            BackendKind::Docker => crate::redaction::redact_subprocess_result(
-                execute_docker(&launch, &cancel, &timed_out),
-                &launch.secret_values,
-            ),
-            _ => crate::redaction::redact_subprocess_result(
-                execute_subprocess(&launch, &cancel, &timed_out),
-                &launch.secret_values,
-            ),
-        };
+        let result = crate::redaction::redact_subprocess_result(
+            backend_for(&launch).execute(&launch, &cancel, &timed_out),
+            &launch.secret_values,
+        );
 
         let completed_at = Utc::now();
         execution.status = result.status;

@@ -12,10 +12,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub mod execution;
+pub mod isolation;
 pub mod manager;
 pub mod redaction;
 
 pub use execution::*;
+pub use isolation::*;
 pub use manager::*;
 pub use redaction::*;
 
@@ -221,6 +223,8 @@ pub const PROFILE_ID_SUBPROCESS_DEFAULT: &str = "subprocess_default";
 /// handing it the path on its command line.
 pub const PROFILE_ID_PROJECT_TOOLS: &str = "project_tools";
 pub const PROFILE_ID_DOCKER_DEFAULT: &str = "docker_default";
+/// One container per run, scoped to the acting tenant (Stage 3.1).
+pub const PROFILE_ID_TENANT_ISOLATED: &str = "tenant_isolated";
 pub const PROFILE_ID_MANAGED_PROVIDER_CLAUDE: &str = "managed_provider_claude";
 pub const PROFILE_ID_MANAGED_PROVIDER_CODEX: &str = "managed_provider_codex";
 
@@ -538,6 +542,10 @@ pub struct Profile {
     pub restartable: bool,
     pub source: Source,
     pub active: bool,
+    /// `tenant` runs each execution in a container built from the acting
+    /// tenant alone (see `isolation`); absent means `none`.
+    #[serde(default, skip_serializing_if = "IsolationMode::is_none")]
+    pub isolation: IsolationMode,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

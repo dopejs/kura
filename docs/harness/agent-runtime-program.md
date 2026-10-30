@@ -232,9 +232,16 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
 
 ## Stage 3 — Shared Hosting M3: Isolated Execution
 
-- [ ] **3.1** Execution backend interface; Docker-per-run backend: own uid,
+- [x] **3.1** Execution backend interface; Docker-per-run backend: own uid,
       only the tenant's workspace mounted, cgroup CPU/memory/pids limits,
       egress through `kura-egress`, DNS pinned, no host network.
+      *Done 2026-10-30:* `ExecutionBackend` seam with `tenant_isolated()`,
+      and the `tenant_isolated` profile
+      (`crates/domains/sandbox/src/isolation.rs`; details in
+      `sandbox-execution-plane.md` §5). Deviation: isolated runs get **no**
+      network. A network request is denied rather than routed, and egress
+      plus DNS pinning move to 3.5, which builds the proxy they need. Proven
+      by real-container tests in CI's Linux job.
 - [ ] **3.2** Shared mode refuses to start execution on any backend that is
       not isolated (no plain subprocess path for tenants).
 - [ ] **3.3** MCP stdio servers and per-tenant browser contexts in the same

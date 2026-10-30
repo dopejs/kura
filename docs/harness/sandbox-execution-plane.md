@@ -636,6 +636,50 @@ What is still deferred:
 - additional stronger backends such as SSH or remote execution
 - VM-grade hardening beyond the current subprocess/container split
 
+### 5. Tenant-Isolated Container Backend (Agent Runtime Program 3.1, 2026-10-30)
+
+`docker_default` takes its mounts and network from the request and runs as
+the image's user. That is a stronger local sandbox, not tenant isolation. The
+`tenant_isolated` profile (`isolation: "tenant"`) builds each run's container
+from the acting tenant alone (`crates/domains/sandbox/src/isolation.rs`):
+
+- **Filesystem:** only `<data_dir>/tenants/<tenant>/workspace`, mounted at
+  `/workspace`. The root filesystem is read-only, `/tmp` is a 64 MB
+  `noexec` tmpfs, and nothing of the daemon's data dir is mounted.
+  `KURA_SANDBOX_TENANT_HOST_ROOT` maps the tenants directory to the docker
+  host's path when the daemon itself runs in a container.
+- **Identity:** a per-tenant uid (FNV of the tenant id into
+  `[100000, 100000+2^30)`), `--cap-drop ALL` and `no-new-privileges`. The
+  tenant directory is 0700 and its workspace 0777: the daemon need not be
+  root to hand the workspace to the container uid.
+- **Resources:** `--cpus 1`, `--memory 512m` with no extra swap, and
+  `--pids-limit 256`, overridable through `KURA_SANDBOX_TENANT_{CPUS,MEMORY_MB,PIDS,TMPFS_MB}`.
+- **Network:** `none`. A request for network, extra roots, loopback, or a
+  working dir outside `/workspace` is denied with an `isolation:*` rule,
+  never silently narrowed. Egress through the policy-checking proxy, and
+  the DNS that goes with it, belong to 3.5.
+- **Tenant:** taken from the request's tenant context. With no tenant, or an
+  id that cannot be a path component, the run is denied.
+- **Lifecycle:** every docker run is named `kura-exec-<execution id>`, so
+  cancel and timeout `docker rm -f` the container. Killing the `docker run`
+  client never stopped it. This fixes `docker_default` too.
+
+Runs go through the `ExecutionBackend` seam (`backend_for`). Each backend
+reports `tenant_isolated()`, which is the property Stage 3.2 will require in
+shared mode. Explain stays a dry run; the workspace is created when the run
+starts.
+
+Proof: `crates/domains/sandbox/tests/isolation.rs`. The denial tests run
+everywhere. The container tests run in CI's Linux job
+(`KURA_DOCKER_TESTS=1`): tenant B cannot find tenant A's file or read the
+daemon's data dir, is not root, cannot write the root filesystem, has no
+network, and runs under the cgroup v2 limits. A cancelled run leaves no
+container.
+
+Not yet: MCP stdio servers still run as host subprocesses, because attached
+executions refuse docker (3.3). No consumer selects `tenant_isolated` on its
+own yet, and shared mode does not yet require it (3.2).
+
 ## Explicit Prerequisites Before MCP
 
 The next roadmap should not be "MCP immediately" without these prerequisites being explicit:

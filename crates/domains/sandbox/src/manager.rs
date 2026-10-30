@@ -763,21 +763,28 @@ impl Manager {
                 policy_record.sandbox_execution_id = execution.execution_id.clone();
             }
         }
-        let (denied_rule, denied_reason) = match execution.consumer.as_mut() {
+        let (mut denied_rule, mut denied_reason) = match execution.consumer.as_mut() {
             Some(consumer) => self.resolve_tenant_secret_scope(consumer, &mut request_env),
             None => (String::new(), String::new()),
         };
+        let mut denied_class = "secret_resolution_denied";
+        let mut isolated_run = None;
+        if denied_reason.is_empty() && profile.isolation == crate::IsolationMode::Tenant {
+            match self.isolation_for(&execution) {
+                Ok(run) => isolated_run = Some(run),
+                Err((rule, reason)) => {
+                    denied_rule = rule.to_string();
+                    denied_reason = reason;
+                    denied_class = "isolation_denied";
+                }
+            }
+        }
         if !denied_reason.is_empty() {
             let mut decision =
                 evaluate_access_decision(&profile, &execution.cwd, &execution.access);
             decision.execution_id = execution_id;
             decision.consumer = clone_consumer_contract_view(execution.consumer.as_ref());
-            mark_decision_denied(
-                &mut decision,
-                &denied_rule,
-                &denied_reason,
-                "secret_resolution_denied",
-            );
+            mark_decision_denied(&mut decision, &denied_rule, &denied_reason, denied_class);
             execution.decision = decision.clone();
             execution.result.consumer = clone_consumer_contract_view(execution.consumer.as_ref());
             if let Some(consumer) = &mut execution.consumer {
@@ -825,11 +832,25 @@ impl Manager {
             docker_image: String::new(),
             docker_network: String::new(),
             docker_mounts: Vec::new(),
+            container_name: String::new(),
+            isolation: None,
         };
         if execution.backend_kind == BackendKind::Docker {
+            launch.container_name = format!("kura-exec-{}", execution.execution_id);
             launch.docker_image = docker_image_for_execution();
-            launch.docker_network = docker_network_mode(&request.access);
-            launch.docker_mounts = docker_mounts_for_execution(&execution.cwd, &request.access);
+            match isolated_run {
+                Some(run) => {
+                    execution
+                        .metadata
+                        .insert("tenantId".to_string(), run.tenant_id.clone());
+                    launch.isolation = Some(run);
+                }
+                None => {
+                    launch.docker_network = docker_network_mode(&request.access);
+                    launch.docker_mounts =
+                        docker_mounts_for_execution(&execution.cwd, &request.access);
+                }
+            }
         }
         Ok(PrepareOutcome {
             execution,
@@ -838,6 +859,59 @@ impl Manager {
             approval_id,
             created_decision,
         })
+    }
+
+    /// Stage 3.1: the container an isolated run gets, or why it gets none.
+    /// The request may not widen it: mounts, network and a working dir
+    /// outside the workspace are refused with the reason, never silently
+    /// dropped — a caller that asked for network must learn it has none.
+    fn isolation_for(
+        &self,
+        execution: &Execution,
+    ) -> Result<crate::IsolatedRun, (&'static str, String)> {
+        let access = &execution.access;
+        if !matches!(access.network_mode, None | Some(NetworkMode::Deny))
+            || !access.allowed_hosts.is_empty()
+            || !access.allowed_ports.is_empty()
+            || access.allow_loopback
+        {
+            return Err((
+                "isolation:network",
+                "isolated runs have no network until tenant egress goes through the \
+                 policy-checking proxy (Stage 3.5)"
+                    .to_string(),
+            ));
+        }
+        if !access.read_roots.is_empty() || !access.write_roots.is_empty() {
+            return Err((
+                "isolation:mounts",
+                format!(
+                    "isolated runs see only the tenant workspace at {}; extra roots are not mounted",
+                    crate::CONTAINER_WORKSPACE
+                ),
+            ));
+        }
+        let cwd = execution.cwd.trim_end_matches('/');
+        let workspace = crate::CONTAINER_WORKSPACE;
+        if cwd != workspace && !cwd.starts_with(&format!("{workspace}/")) {
+            return Err((
+                "isolation:cwd",
+                format!("the working directory must be inside {workspace}"),
+            ));
+        }
+        let tenant_id = kura_identity::tenantctx::from_context()
+            .map(|tc| tc.tenant_id)
+            .unwrap_or_default();
+        crate::WorkspaceRoots::for_data_dir(&self.cfg.data_dir)
+            .resolve(&tenant_id, crate::IsolationLimits::from_env())
+            .map_err(|err| {
+                let rule = match err {
+                    crate::IsolationError::TenantRequired => "isolation:tenant_required",
+                    crate::IsolationError::InvalidTenantId(_) => "isolation:tenant_invalid",
+                    crate::IsolationError::Workspace(_) => "isolation:workspace",
+                };
+                (rule, err.to_string())
+            })
     }
 
     /// Go `evaluate`: applies the access decision, backend requirement
@@ -2786,6 +2860,65 @@ fn builtin_profiles(cfg: &kura_config::Config) -> Vec<Profile> {
             restartable: false,
             source: Source::Builtin,
             active: true,
+            ..Profile::default()
+        },
+
+        // Stage 3.1: what a tenant's code runs under on a shared daemon. Paths
+        // here are container paths; the container is built from the acting
+        // tenant (crate::isolation), not from these roots or the request.
+        Profile {
+            profile_id: crate::PROFILE_ID_TENANT_ISOLATED.to_string(),
+            title: "Tenant-Isolated Container".to_string(),
+            description: "One container per run: only the acting tenant's workspace, a per-tenant non-root uid, no capabilities, a read-only root filesystem, cgroup CPU/memory/pids limits and no network.".to_string(),
+            backend_kind: BackendKind::Docker,
+            default_work_dir: crate::CONTAINER_WORKSPACE.to_string(),
+            filesystem_policy: crate::FilesystemPolicy {
+                mode: FilesystemMode::Scoped,
+                read_roots: vec![crate::CONTAINER_WORKSPACE.to_string()],
+                write_roots: vec![crate::CONTAINER_WORKSPACE.to_string()],
+                temp_roots: vec!["/tmp".to_string()],
+                allow_data_dir: false,
+                allow_user_agents_dir: false,
+                allow_home_read: false,
+                allow_home_write: false,
+            },
+            network_policy: crate::NetworkPolicy {
+                mode: NetworkMode::Deny,
+                allowed_hosts: Vec::new(),
+                allowed_ports: Vec::new(),
+                allow_loopback: false,
+                enforcement_mode: "container_runtime".to_string(),
+            },
+            env_policy: crate::EnvironmentPolicy {
+                mode: EnvironmentMode::Clean,
+                allowed_vars: Vec::new(),
+                // Nothing about the daemon: no data dir, no environment name.
+                injected_vars: HashMap::new(),
+                redacted_vars: Vec::new(),
+            },
+            approval_policy: crate::ApprovalPolicy {
+                mode: ApprovalMode::Allow,
+                required_for_commands: Vec::new(),
+                required_for_writes_outside_roots: true,
+                required_for_network: true,
+                required_for_unknown_backends: false,
+            },
+            process_policy: crate::ProcessPolicy {
+                timeout_ms: 30000,
+                max_timeout_ms: 300000,
+                kill_grace_ms: 1000,
+                capture_stdout: true,
+                capture_stderr: true,
+                max_output_bytes: 65536,
+                allow_streaming: false,
+                restart_on_failure: false,
+            },
+            default_timeout_ms: 30000,
+            max_timeout_ms: 300000,
+            restartable: false,
+            source: Source::Builtin,
+            active: true,
+            isolation: crate::IsolationMode::Tenant,
             ..Profile::default()
         },
 
