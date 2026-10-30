@@ -3,6 +3,7 @@
 //! Mirrors `codex-rs/model-provider`: the core talks to `dyn ModelProvider`
 //! and never to HTTP directly, so provider quirks stay in this crate.
 
+mod embeddings;
 mod llm_bridge;
 mod openai;
 mod provider;
@@ -12,6 +13,7 @@ mod test_support;
 pub mod anthropic;
 pub mod responses;
 pub use anthropic::AnthropicClient;
+pub use embeddings::OpenAiCompatibleEmbeddingClient;
 pub use llm_bridge::{ModelProviderBridge, OpenAiCompatibleProvider};
 pub use openai::{Credential, OpenAiCompatibleClient, OpenAiCompatibleImageClient, Sampling};
 pub use provider::{

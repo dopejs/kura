@@ -26,6 +26,8 @@ pub const CHAT_TOOL_CALLS_TOTAL: &str = "kura_chat_tool_calls_total";
 pub const CHAT_TOOL_CALL_DURATION_SECONDS: &str = "kura_chat_tool_call_duration_seconds";
 pub const SESSION_WINDOW_SHADOW_TOTAL: &str = "kura_session_window_shadow_total";
 pub const TOKEN_ESTIMATE_INPUT_TOKENS_TOTAL: &str = "kura_token_estimate_input_tokens_total";
+pub const RETRIEVAL_EMBEDDINGS_TOTAL: &str = "kura_retrieval_embeddings_total";
+pub const EMBEDDER_REQUESTS_TOTAL: &str = "kura_embedder_requests_total";
 
 /// Help text per series, rendered as `# HELP`.
 const HELP: &[(&str, &str)] = &[
@@ -72,6 +74,14 @@ const HELP: &[(&str, &str)] = &[
     (
         TOKEN_ESTIMATE_INPUT_TOKENS_TOTAL,
         "Input tokens of completed dispatches the provider reported usage for, by provider and source (estimated|reported). estimated/reported is the token estimator's calibration factor.",
+    ),
+    (
+        RETRIEVAL_EMBEDDINGS_TOTAL,
+        "Retrieval corpus docs by embedder and outcome (cached|embedded|failed|deferred). deferred docs were past the reply-path embed bound and ranked BM25-only.",
+    ),
+    (
+        EMBEDDER_REQUESTS_TOTAL,
+        "Requests to a model-backed embedder by embedder and outcome (ok|error).",
     ),
 ];
 

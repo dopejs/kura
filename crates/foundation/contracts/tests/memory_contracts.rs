@@ -33,6 +33,10 @@ fn test_memory_schemas_accept_canonical_fixtures() {
             r##"schemas/api/memory-index-rebuild.schema.json"##,
             r##"{"tenantId":"ten_a","clearedEmbeddings":12}"##,
         ),
+        (
+            r##"schemas/api/memory-index-rebuild.schema.json"##,
+            r##"{"tenantId":"ten_a","clearedEmbeddings":12,"reembed":{"embedder":"acct/text-embedding-3-small","fingerprint":"role-embed/acct/text-embedding-3-small/v1","corpus":12,"embedded":11,"failed":1}}"##,
+        ),
     ];
     validate_fixtures(&validator, fixtures);
 }

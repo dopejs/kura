@@ -236,6 +236,24 @@ widens to BM25>0 OR cosine ≥ 0.25; below the threshold, hash noise never
 leaks unrelated memory into context. A neural embedding provider replaces
 the default through the seam without touching the fusion.
 
+Built-in model embedder (G10, 2026-10-30): when the `embed` model role is
+routed to a provider on the OpenAI-compatible wire (the
+`openai_compatible` slot or an `openai_compatible` account) with a
+non-empty model, the daemon serves the seam itself from that model's
+`/embeddings` endpoint — vectors L2-normalized, cached under
+`role-embed/<provider>/<model>/v1`. An external `context.embedder` plugin
+still wins (logged). The binding is resolved at boot, so a role change
+applies on restart. On the reply path a retrieval embeds at most 16
+uncached docs, newest first, in one batch; the rest stay BM25-only
+(`kura_retrieval_embeddings_total{outcome="deferred"}`) until the
+operator runs `POST /v1/memory/indexes/rebuild?reembed=true`, which embeds
+the whole recallable corpus off the async workers and reports
+`embedded`/`failed`. A failed embed yields no vector — never a vector
+from the hashed space — so the doc is BM25-only and is not cached; an
+empty query vector skips the vector ranker for that retrieval. The 0.25
+candidacy threshold was tuned on hashed trigrams; tune
+`context.vectorMinSimilarity` for a neural model.
+
 Symbolic compression (fourth slice, 2026-08-17, `92191d5`): non-frame
 messages over `refThresholdChars` (default 8000) externalize at
 `chat/pre-dispatch` — the full content persists as an L0 ref and the window
@@ -316,8 +334,10 @@ ride the same line-JSON channel as hooks (point `seam:<name>:<op>`). The
 first served seam is `context.embedder`: install an external embedding
 process (neural or otherwise) and the vector ranker in both the context
 plugin and `/v1/retrieval/queries` switches to it — no daemon change, no
-fusion change. Failures fall back to the deterministic in-process
-embedder (availability first, logged). First declaration wins; duplicate
+fusion change. A failed call yields no vector (logged): the doc stays
+BM25-only and nothing is cached. (It used to answer with a hashed vector,
+which was then cached under the plugin's fingerprint — two vector spaces
+in one index.) First declaration wins; duplicate
 providers warn and are ignored (deterministic assembly).
 
 Remaining for later slices: more seams over the process protocol (the

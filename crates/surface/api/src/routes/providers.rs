@@ -373,6 +373,19 @@ fn resolve_roles(state: &AppState) -> Result<Vec<ModelRoleResource>, ApiError> {
     Ok(items)
 }
 
+/// The `(provider id, model)` serving `role`, resolved exactly as
+/// `GET /v1/models/roles` reports it; `None` when the role is unrouted.
+pub fn resolve_role(
+    state: &AppState,
+    role: kura_config::ModelRole,
+) -> Result<Option<(String, String)>, String> {
+    let items = resolve_roles(state).map_err(|err| err.to_string())?;
+    Ok(items
+        .into_iter()
+        .find(|item| item.role == role.as_str() && item.routed)
+        .map(|item| (item.provider_id, item.model)))
+}
+
 async fn list_model_roles(
     State(state): State<AppState>,
 ) -> Result<Json<ModelRoleListResponse>, ApiError> {

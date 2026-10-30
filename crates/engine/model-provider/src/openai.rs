@@ -88,7 +88,7 @@ pub struct Sampling {
 /// Headers a caller may not override: the API key is supplied separately, so
 /// letting a header map replace it would silently bypass the configured
 /// credential and any redaction applied to it.
-const RESERVED_HEADERS: [&str; 1] = ["authorization"];
+pub(crate) const RESERVED_HEADERS: [&str; 1] = ["authorization"];
 
 impl OpenAiCompatibleClient {
     pub fn new(

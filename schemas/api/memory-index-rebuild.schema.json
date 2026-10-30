@@ -2,12 +2,25 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kura.local/schemas/api/memory-index-rebuild.schema.json",
   "title": "MemoryIndexRebuildResult",
-  "description": "Result of dropping a tenant's derived retrieval index. Conversation truth and the memory assets themselves are untouched; the vectors are recomputed lazily by subsequent retrievals.",
+  "description": "Result of dropping a tenant's derived retrieval index. Conversation truth and the memory assets themselves are untouched; without reembed the vectors are recomputed lazily by subsequent retrievals (a model-backed embedder only embeds a few per retrieval).",
   "type": "object",
   "required": ["tenantId", "clearedEmbeddings"],
   "additionalProperties": false,
   "properties": {
     "tenantId": { "type": "string" },
-    "clearedEmbeddings": { "type": "integer", "minimum": 0 }
+    "clearedEmbeddings": { "type": "integer", "minimum": 0 },
+    "reembed": {
+      "description": "Present when the request asked for reembed=true: the recallable corpus was embedded with the active embedder before the reply.",
+      "type": "object",
+      "required": ["embedder", "fingerprint", "corpus", "embedded", "failed"],
+      "additionalProperties": false,
+      "properties": {
+        "embedder": { "type": "string", "description": "Name of the embedder that wrote the vectors." },
+        "fingerprint": { "type": "string", "description": "Vector space the vectors are cached under." },
+        "corpus": { "type": "integer", "minimum": 0 },
+        "embedded": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0, "description": "Docs the embedder had no vector for; they stay BM25-only until a later re-embed." }
+      }
+    }
   }
 }

@@ -91,4 +91,14 @@ describe("memory plane SDK methods (Roadmap 78, spec 058)", () => {
     expect(String(fetchMock.mock.calls[1][0])).toContain("/v1/memory/indexes/rebuild?tenantId=ten_1");
     expect(fetchMock.mock.calls[1][1].method).toBe("POST");
   });
+
+  it("asks the daemon to re-embed the corpus only when told to", async () => {
+    const summary = { embedder: "acct/embed-m", fingerprint: "role-embed/acct/embed-m/v1", corpus: 3, embedded: 3, failed: 0 };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ tenantId: "", clearedEmbeddings: 3, reembed: summary }));
+    const client = createKuraClient({ baseURL: "https://daemon.test", fetchImpl: fetchMock });
+
+    const rebuilt = await client.rebuildMemoryIndexes({ reembed: true });
+    expect(rebuilt.reembed?.fingerprint).toBe("role-embed/acct/embed-m/v1");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/v1/memory/indexes/rebuild?reembed=true");
+  });
 });

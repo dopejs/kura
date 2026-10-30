@@ -80,45 +80,10 @@ pub fn run_query(
     let Some(memory) = state.memory.as_deref() else {
         return Err("memory manager is not configured".to_string());
     };
-    // L1 atoms plus L2/L3: the same corpus the context plugin ranks over, so
-    // the API and the turn-time path cannot disagree about what is recallable.
-    let mut atoms: Vec<kura_memory::MemoryAsset> = [
-        kura_memory::MemoryLayer::L1,
-        kura_memory::MemoryLayer::L2,
-        kura_memory::MemoryLayer::L3,
-    ]
-    .into_iter()
-    .flat_map(|layer| {
-        memory.list(
-            tenant_id,
-            Some(layer),
-            Some(kura_memory::AssetStatus::Ready),
-        )
-    })
-    .collect();
-    atoms.retain(|asset| {
-        matches!(
-            asset.visibility,
-            kura_memory::Visibility::Private | kura_memory::Visibility::Team
-        )
-    });
-    // Newest first: the corpus index doubles as the recency rank.
-    atoms.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    atoms.truncate(kura_context::RETRIEVAL_MAX_CORPUS);
-    let docs: Vec<kura_context::RetrievalDoc> = atoms
-        .iter()
-        .map(|asset| kura_context::RetrievalDoc {
-            asset_id: asset.asset_id.clone(),
-            layer: asset.layer.as_str().to_string(),
-            title: asset.title.clone(),
-            content: asset.content.clone(),
-        })
-        .collect();
+    let atoms = recall_atoms(memory, tenant_id);
+    let docs = retrieval_docs(&atoms);
     let default_embedder = kura_context::HashedNgramEmbedder::default();
-    let embedder: &dyn kura_context::Embedder = match state.embedder.as_deref() {
-        Some(external) => external,
-        None => &default_embedder,
-    };
+    let embedder = active_embedder(state, &default_embedder);
     // Same persisted derived index as the turn-time path: this route used to
     // re-embed the whole corpus per request, which Stage 1.1 fixed for the
     // context plugin and missed here.
@@ -145,13 +110,81 @@ pub fn run_query(
     )
 }
 
+/// The recallable corpus for `tenant_id`: Ready L1–L3 assets with private
+/// or team visibility, newest first, bounded by
+/// [`kura_context::RETRIEVAL_MAX_CORPUS`]. Shared by the query route and the
+/// operator re-embed so both see the same docs.
+#[must_use]
+pub fn recall_atoms(
+    memory: &kura_memory::Manager,
+    tenant_id: &str,
+) -> Vec<kura_memory::MemoryAsset> {
+    // L1 atoms plus L2/L3: the same corpus the context plugin ranks over, so
+    // the API and the turn-time path cannot disagree about what is recallable.
+    let mut atoms: Vec<kura_memory::MemoryAsset> = [
+        kura_memory::MemoryLayer::L1,
+        kura_memory::MemoryLayer::L2,
+        kura_memory::MemoryLayer::L3,
+    ]
+    .into_iter()
+    .flat_map(|layer| {
+        memory.list(
+            tenant_id,
+            Some(layer),
+            Some(kura_memory::AssetStatus::Ready),
+        )
+    })
+    .collect();
+    atoms.retain(|asset| {
+        matches!(
+            asset.visibility,
+            kura_memory::Visibility::Private | kura_memory::Visibility::Team
+        )
+    });
+    // Newest first: the corpus index doubles as the recency rank.
+    atoms.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    atoms.truncate(kura_context::RETRIEVAL_MAX_CORPUS);
+    atoms
+}
+
+/// The ranker's view of `atoms`, positionally aligned.
+#[must_use]
+pub fn retrieval_docs(atoms: &[kura_memory::MemoryAsset]) -> Vec<kura_context::RetrievalDoc> {
+    atoms
+        .iter()
+        .map(|asset| kura_context::RetrievalDoc {
+            asset_id: asset.asset_id.clone(),
+            layer: asset.layer.as_str().to_string(),
+            title: asset.title.clone(),
+            content: asset.content.clone(),
+        })
+        .collect()
+}
+
+/// The embedder retrieval ranks with: an installed one (external plugin or
+/// the routed `embed` role), else `default` — the hashed n-gram.
+#[must_use]
+pub fn active_embedder<'a>(
+    state: &'a AppState,
+    default: &'a kura_context::HashedNgramEmbedder,
+) -> &'a dyn kura_context::Embedder {
+    match state.embedder.as_deref() {
+        Some(installed) => installed,
+        None => default,
+    }
+}
+
 /// Vectors for a retrieval corpus, positionally aligned with `docs`.
 ///
 /// Cache hits come from `memory_asset_embeddings`; misses are embedded once
 /// and written back, so a corpus is embedded once rather than once per
 /// request. A store failure degrades to computing in-process for this call
-/// rather than dropping the vector ranker — availability first, as with the
-/// external-embedder fallback.
+/// rather than dropping the vector ranker — availability first.
+///
+/// Misses past the embedder's [`kura_context::Embedder::inline_embed_limit`]
+/// are left empty (BM25-only) rather than embedded on the reply path; the
+/// newest docs come first, so the bound defers the oldest. Re-embedding the
+/// whole corpus is the operator's `POST /v1/memory/indexes/rebuild?reembed=true`.
 ///
 /// Lives here rather than in `kura-context` because it needs the store, and
 /// the context crate is persistence-free by the workspace's inversion rule.
@@ -163,6 +196,35 @@ pub fn corpus_vectors(
     embedder: &dyn kura_context::Embedder,
     docs: &[kura_context::RetrievalDoc],
 ) -> Vec<Vec<f32>> {
+    embed_corpus(state, embedder, docs, embedder.inline_embed_limit()).vectors
+}
+
+/// Texts per embedding request when filling misses.
+const EMBED_BATCH: usize = 64;
+
+/// What [`embed_corpus`] did, per doc.
+#[derive(Debug, Default)]
+pub struct CorpusEmbedding {
+    /// Positionally aligned with the docs; empty = no vector (BM25-only).
+    pub vectors: Vec<Vec<f32>>,
+    /// Served from the derived index.
+    pub cached: usize,
+    /// Embedded by this call (and written back).
+    pub embedded: usize,
+    /// The embedder had no vector for them.
+    pub failed: usize,
+    /// Left for a later call by `limit`.
+    pub deferred: usize,
+}
+
+/// [`corpus_vectors`] with an explicit miss bound (`None` = embed every
+/// miss, the operator re-embed) and the per-outcome counts.
+pub fn embed_corpus(
+    state: &AppState,
+    embedder: &dyn kura_context::Embedder,
+    docs: &[kura_context::RetrievalDoc],
+    limit: Option<usize>,
+) -> CorpusEmbedding {
     let fingerprint = embedder.fingerprint();
     let ids: Vec<String> = docs.iter().map(|d| d.asset_id.clone()).collect();
     let cached = state
@@ -171,31 +233,85 @@ pub fn corpus_vectors(
         .get_memory_asset_embeddings(&fingerprint, &ids)
         .unwrap_or_default();
 
-    let mut out = Vec::with_capacity(docs.len());
-    for doc in docs {
+    let mut out = CorpusEmbedding {
+        vectors: vec![Vec::new(); docs.len()],
+        ..CorpusEmbedding::default()
+    };
+    let mut misses: Vec<usize> = Vec::new();
+    for (i, doc) in docs.iter().enumerate() {
         if let Some(vector) = cached.get(&doc.asset_id) {
-            out.push(vector.clone());
-            continue;
+            out.vectors[i] = vector.clone();
+            out.cached += 1;
+        } else {
+            misses.push(i);
         }
-        let vector = embedder.embed(&format!("{} {}", doc.title, doc.content));
-        if !vector.is_empty() {
-            if let Err(err) =
-                state
-                    .store
-                    .lock()
-                    .put_memory_asset_embedding(&doc.asset_id, &fingerprint, &vector)
-            {
+    }
+    if let Some(limit) = limit
+        && misses.len() > limit
+    {
+        out.deferred = misses.len() - limit;
+        misses.truncate(limit);
+    }
+
+    for chunk in misses.chunks(EMBED_BATCH) {
+        let texts: Vec<String> = chunk
+            .iter()
+            .map(|&i| format!("{} {}", docs[i].title, docs[i].content))
+            .collect();
+        let vectors = embedder.embed_batch(&texts);
+        for (position, &i) in chunk.iter().enumerate() {
+            let vector = vectors.get(position).cloned().unwrap_or_default();
+            if vector.is_empty() {
+                out.failed += 1;
+                continue;
+            }
+            out.embedded += 1;
+            if let Err(err) = state.store.lock().put_memory_asset_embedding(
+                &docs[i].asset_id,
+                &fingerprint,
+                &vector,
+            ) {
                 eprintln!(
                     "[kura] retrieval: caching the embedding for {} failed ({err}); \
                      recomputing it every call until this is fixed",
-                    doc.asset_id
+                    docs[i].asset_id
                 );
             }
+            out.vectors[i] = vector;
         }
-        out.push(vector);
     }
+
+    record_corpus_embedding(embedder.name(), &out);
     out
 }
+
+fn record_corpus_embedding(embedder: &str, outcome: &CorpusEmbedding) {
+    use kura_telemetry::metrics::{RETRIEVAL_EMBEDDINGS_TOTAL, registry};
+    for (kind, count) in [
+        ("cached", outcome.cached),
+        ("embedded", outcome.embedded),
+        ("failed", outcome.failed),
+        ("deferred", outcome.deferred),
+    ] {
+        if count > 0 {
+            registry().add(
+                RETRIEVAL_EMBEDDINGS_TOTAL,
+                &[("embedder", embedder), ("outcome", kind)],
+                count as u64,
+            );
+        }
+    }
+    if outcome.deferred > 0 && !DEFERRAL_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        eprintln!(
+            "[kura] retrieval: {} memory docs have no {embedder} vector and were left \
+             BM25-only; run POST /v1/memory/indexes/rebuild?reembed=true to embed the corpus \
+             (logged once; kura_retrieval_embeddings_total{{outcome=\"deferred\"}} keeps count)",
+            outcome.deferred
+        );
+    }
+}
+
+static DEFERRAL_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/v1/retrieval/queries", post(query))

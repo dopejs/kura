@@ -206,19 +206,18 @@ impl Hook for ExternalHook {
 /// The `context.embedder` seam served by an external plugin process:
 /// `embed` round-trips over the line-JSON channel (point
 /// `seam:context.embedder:embed`, payload `{text}` → `{payload: {vector}}`).
-/// Failures fall back to the deterministic in-process embedder — retrieval
-/// quality degrades, availability does not (the fallback is logged).
+/// A failure yields an empty vector (logged): the doc is not cached and
+/// stays a BM25-only candidate, and an empty query vector skips the vector
+/// ranker. It used to answer with a hashed n-gram vector instead, which was
+/// then cached under this plugin's fingerprint — a vector from another space
+/// persisted in the index, scored by cosine against the plugin's own.
 pub(crate) struct ExternalEmbedder {
     host: Arc<ExternalProcessHost>,
-    fallback: kura_context::HashedNgramEmbedder,
 }
 
 impl ExternalEmbedder {
     pub fn new(host: Arc<ExternalProcessHost>) -> Self {
-        ExternalEmbedder {
-            host,
-            fallback: kura_context::HashedNgramEmbedder::default(),
-        }
+        ExternalEmbedder { host }
     }
 }
 
@@ -238,19 +237,19 @@ impl kura_context::Embedder for ExternalEmbedder {
                     Some(vector) if !vector.is_empty() => vector,
                     _ => {
                         eprintln!(
-                            "[kura] external embedder {} returned no vector; using fallback",
+                            "[kura] external embedder {} returned no vector; ranking without it",
                             self.host.id
                         );
-                        kura_context::Embedder::embed(&self.fallback, text)
+                        Vec::new()
                     }
                 }
             }
             Err(err) => {
                 eprintln!(
-                    "[kura] external embedder {} failed ({err}); using fallback",
+                    "[kura] external embedder {} failed ({err}); ranking without it",
                     self.host.id
                 );
-                kura_context::Embedder::embed(&self.fallback, text)
+                Vec::new()
             }
         }
     }

@@ -456,6 +456,27 @@ pub trait Embedder: Send + Sync {
     fn fingerprint(&self) -> String {
         self.name().to_string()
     }
+
+    /// Embed several texts, positionally aligned with `texts`. An empty
+    /// vector marks a text this provider could not embed: callers must not
+    /// cache it and treat the doc as BM25-only. A provider must never answer
+    /// a failure with a vector from another space (a fallback embedder) —
+    /// cosine across spaces is silent nonsense.
+    ///
+    /// Defaults to one [`Embedder::embed`] per text; a remote provider
+    /// overrides it to batch.
+    fn embed_batch(&self, texts: &[String]) -> Vec<Vec<f32>> {
+        texts.iter().map(|text| self.embed(text)).collect()
+    }
+
+    /// How many uncached corpus docs one retrieval may embed on the reply
+    /// path. `None` (the default) is unbounded, right for an in-process
+    /// embedder; a remote one bounds it so a model switch over a large
+    /// corpus cannot turn one chat turn into thousands of requests. Docs
+    /// past the bound stay BM25-only until an operator re-embeds the corpus.
+    fn inline_embed_limit(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// Deterministic character-trigram feature-hashing embedder (256-dim FNV,

@@ -45,6 +45,7 @@ mod llm_credentials;
 mod plugins;
 pub mod rehearsal;
 mod restore;
+mod role_embedder;
 pub mod tool_host;
 
 pub use error::AppError;
@@ -460,6 +461,20 @@ impl App {
             external_hosts.push(host);
         }
         asm.state.plugins = Some(Arc::new(report));
+
+        // The routed `embed` role serves the vector ranker (G10) unless an
+        // external plugin already claimed the seam: that is an explicit
+        // install, and replacing it silently would switch vector spaces.
+        if asm.state.embedder.is_none() {
+            asm.state.embedder = role_embedder::from_role(&asm.state);
+        } else if matches!(
+            kura_api::routes::providers::resolve_role(&asm.state, kura_config::ModelRole::Embed),
+            Ok(Some(_))
+        ) {
+            eprintln!(
+                "[kura] embed role is routed but a plugin serves context.embedder; the plugin wins"
+            );
+        }
 
         // Restore persisted in-memory state from SQLite (Go
         // recoverPersistedStateWithSecrets). Idempotent: every Restore
@@ -2239,6 +2254,164 @@ mod tests {
         app.close();
     }
 
+    /// G10: a routed `embed` role becomes the retrieval embedder. Recall
+    /// sends the corpus miss and the query to the role's `/embeddings`
+    /// endpoint and caches the doc vector under the model's own fingerprint.
+    #[test]
+    fn the_embed_role_serves_retrieval_vectors() {
+        let (base_url, seen) = spawn_embeddings_endpoint(2);
+        let (_temp_dir, mut config) = test_config();
+        config
+            .llm
+            .accounts
+            .push(kura_config::AccountProviderConfig {
+                id: "embedder-acct".to_string(),
+                title: "embeddings".to_string(),
+                protocol: kura_config::AccountProtocol::OpenAiCompatible,
+                base_url,
+                model: "chat-m".to_string(),
+                access_token: "acct-token".to_string(),
+                headers: Default::default(),
+            });
+        config.llm.roles.embed = kura_config::ModelRoleBinding {
+            provider: "embedder-acct".to_string(),
+            model: "embed-m".to_string(),
+        };
+        let app = App::new(config).expect("build app");
+        let embedder = app.state.embedder.as_deref().expect("embed role served");
+        assert_eq!(embedder.name(), "embedder-acct/embed-m");
+        let fingerprint = embedder.fingerprint();
+        assert_eq!(fingerprint, "role-embed/embedder-acct/embed-m/v1");
+
+        let memory = app.state.memory.as_deref().expect("memory wired");
+        let (atom, _) = memory
+            .create(kura_memory::CreateAssetInput {
+                kind: kura_memory::AssetKind::ChatMemory,
+                layer: kura_memory::MemoryLayer::L1,
+                owner: kura_memory::Actor {
+                    kind: kura_memory::ActorKind::Operator,
+                    id: "op".to_string(),
+                },
+                visibility: kura_memory::Visibility::Private,
+                atom_type: Some(kura_memory::AtomType::Fact),
+                title: "tooling".to_string(),
+                content: "web projects use pnpm".to_string(),
+                source_links: vec![kura_memory::SourceLink {
+                    kind: kura_memory::SourceKind::Thread,
+                    id: "thr_seed".to_string(),
+                    ..kura_memory::SourceLink::default()
+                }],
+                ..kura_memory::CreateAssetInput::default()
+            })
+            .expect("seed atom");
+        kura_api::routes::memory::persist_capture(&app.state, &atom);
+
+        let hits = kura_api::routes::retrieval::run_query(&app.state, "", "package manager", 5)
+            .expect("query");
+        assert_eq!(hits.len(), 1, "the vector ranker admits the doc: {hits:?}");
+
+        let requests = seen.lock().expect("lock").clone();
+        assert_eq!(requests.len(), 2, "one corpus batch, one query");
+        assert!(
+            requests[0].contains(r#""model":"embed-m""#),
+            "{}",
+            requests[0]
+        );
+        assert!(requests[0].contains("web projects use pnpm"));
+        assert!(requests[1].contains("package manager"));
+        assert!(requests[0].to_lowercase().contains("bearer acct-token"));
+        let cached = app
+            .state
+            .store
+            .lock()
+            .get_memory_asset_embeddings(&fingerprint, &[atom.asset_id.clone()])
+            .expect("read cache");
+        assert_eq!(cached.get(&atom.asset_id), Some(&vec![1.0, 0.0]));
+        app.close();
+    }
+
+    /// A role routed to a provider with no embeddings wire leaves the hashed
+    /// n-gram in charge instead of failing the boot.
+    #[test]
+    fn an_unservable_embed_role_keeps_the_default_embedder() {
+        let (_temp_dir, mut config) = test_config();
+        config
+            .llm
+            .accounts
+            .push(kura_config::AccountProviderConfig {
+                id: "claude-acct".to_string(),
+                title: "claude".to_string(),
+                protocol: kura_config::AccountProtocol::AnthropicMessages,
+                base_url: "http://127.0.0.1:9".to_string(),
+                model: "m".to_string(),
+                access_token: String::new(),
+                headers: Default::default(),
+            });
+        config.llm.roles.embed = kura_config::ModelRoleBinding {
+            provider: "claude-acct".to_string(),
+            model: "embed-m".to_string(),
+        };
+        let app = App::new(config).expect("build app");
+        assert!(app.state.embedder.is_none());
+        app.close();
+    }
+
+    /// Answers `responses` embedding requests with the unit vector [1, 0]
+    /// per input, recording each raw request.
+    fn spawn_embeddings_endpoint(responses: usize) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&seen);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(responses) {
+                let Ok(mut stream) = stream else { continue };
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 4096];
+                let body = loop {
+                    let read = stream.read(&mut buffer).unwrap_or(0);
+                    if read == 0 {
+                        break String::new();
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    let text = String::from_utf8_lossy(&request).to_string();
+                    if let Some(head_end) = text.find("\r\n\r\n") {
+                        let length = text[..head_end]
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().ok())?
+                            })
+                            .unwrap_or(0);
+                        if request.len() >= head_end + 4 + length {
+                            break text[head_end + 4..].to_string();
+                        }
+                    }
+                };
+                let inputs = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|v| v["input"].as_array().map(Vec::len))
+                    .unwrap_or(0);
+                let data: Vec<serde_json::Value> = (0..inputs)
+                    .map(|i| serde_json::json!({"index": i, "embedding": [1.0, 0.0]}))
+                    .collect();
+                let reply = serde_json::json!({ "data": data }).to_string();
+                recorded
+                    .lock()
+                    .expect("lock")
+                    .push(String::from_utf8_lossy(&request).to_string());
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (format!("http://{addr}"), seen)
+    }
+
     /// Stage 1.1 + 2.3: corpus vectors are computed once and persisted, so a
     /// turn embeds only the query; and a revoked asset's cached vector is
     /// cleared, because persisting the index removed the free guarantee that
@@ -3275,8 +3448,8 @@ mod tests {
 
     /// Seam-RPC slice 1: an external plugin declaring the
     /// `context.embedder` seam serves the embedding provider — embed calls
-    /// round-trip over the process protocol, and failures fall back to the
-    /// in-process default instead of breaking retrieval.
+    /// round-trip over the process protocol; a failure yields no vector
+    /// (BM25-only) instead of breaking retrieval.
     #[test]
     fn external_plugin_serves_the_embedder_seam() {
         let (_temp_dir, config) = test_config();

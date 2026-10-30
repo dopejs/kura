@@ -713,9 +713,27 @@ async fn overview(
 #[serde(rename_all = "camelCase")]
 pub struct RebuildIndexesResponse {
     pub tenant_id: String,
-    /// Derived rows dropped. They are recomputed lazily by the next
-    /// retrievals, so this is the repair, not a second step.
+    /// Derived rows dropped. Without `reembed` they are recomputed lazily by
+    /// the next retrievals (up to the embedder's reply-path bound).
     pub cleared_embeddings: usize,
+    /// Present when `reembed=true` asked for the corpus to be embedded now.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reembed: Option<ReembedSummary>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReembedSummary {
+    /// The embedder that wrote the vectors, and the space they are cached
+    /// under.
+    pub embedder: String,
+    pub fingerprint: String,
+    /// Docs in the recallable corpus.
+    pub corpus: usize,
+    pub embedded: usize,
+    /// Docs the embedder had no vector for; they stay BM25-only. Non-zero
+    /// means run this again once the provider is healthy.
+    pub failed: usize,
 }
 
 /// POST /v1/memory/indexes/rebuild — drops this tenant's derived retrieval
@@ -726,20 +744,67 @@ pub struct RebuildIndexesResponse {
 /// the repair path a persisted index needs — without it, a corrupt or stale
 /// index has no remedy short of deleting the memory plane, which is exactly
 /// the trade `memory reset` exists to avoid.
+///
+/// `reembed=true` then embeds the whole recallable corpus with the active
+/// embedder before answering. That is the explicit re-embed a model-backed
+/// embedder needs after its model changes: the reply path embeds only a few
+/// misses per turn, so a corpus is never re-embedded as a side effect of
+/// boot or of a chat turn. It makes provider requests (in batches) and can
+/// take a while on a large corpus; it runs off the async workers.
 async fn rebuild_indexes(
     State(state): State<AppState>,
     tenant: Option<Extension<TenantContext>>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<RebuildIndexesResponse>, ApiError> {
     let tenant_id = context_tenant(&tenant, params.get("tenantId").map_or("", String::as_str));
+    let reembed = match params.get("reembed").map(String::as_str) {
+        None | Some("false" | "0" | "") => false,
+        Some("true" | "1") => true,
+        Some(other) => {
+            return Err(ApiError::BadRequest(format!(
+                "reembed must be true or false, got {other}"
+            )));
+        }
+    };
+    if reembed {
+        // Refuse before clearing: a re-embed that cannot run must not leave
+        // the operator with an emptied index they did not ask for alone.
+        manager(&state)?;
+    }
     let cleared = state
         .store
         .lock()
         .clear_memory_asset_embeddings_for_tenant(&tenant_id)
         .map_err(ApiError::from_store)?;
+    let reembed = if reembed {
+        let state = state.clone();
+        let tenant_id = tenant_id.clone();
+        let summary = tokio::task::spawn_blocking(move || {
+            let memory = manager(&state)?;
+            let docs = super::retrieval::retrieval_docs(&super::retrieval::recall_atoms(
+                memory, &tenant_id,
+            ));
+            let default_embedder = kura_context::HashedNgramEmbedder::default();
+            let embedder = super::retrieval::active_embedder(&state, &default_embedder);
+            let outcome = super::retrieval::embed_corpus(&state, embedder, &docs, None);
+            Ok::<_, ApiError>(ReembedSummary {
+                embedder: embedder.name().to_string(),
+                fingerprint: embedder.fingerprint(),
+                corpus: docs.len(),
+                embedded: outcome.embedded,
+                failed: outcome.failed,
+            })
+        })
+        .await
+        .map_err(|err| ApiError::internal(format!("re-embed task: {err}")))??;
+        Some(summary)
+    } else {
+        None
+    };
     Ok(Json(RebuildIndexesResponse {
         tenant_id,
         cleared_embeddings: cleared,
+        reembed,
     }))
 }
 
@@ -1044,6 +1109,164 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "{asset}");
         assert_eq!(asset["status"], "ready");
+    }
+
+    async fn create_atom(state: &crate::state::AppState, content: &str) -> String {
+        let (status, created) = request_json(
+            state.clone(),
+            "POST",
+            "/v1/memory/assets",
+            Some(atom_body(content)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{created}");
+        created["asset"]["assetId"]
+            .as_str()
+            .expect("assetId")
+            .to_string()
+    }
+
+    /// G10: `reembed=true` is the operator's explicit re-embed — the whole
+    /// recallable corpus is embedded with the active embedder before the
+    /// reply, and the summary names the space it was written in.
+    #[tokio::test]
+    async fn index_rebuild_reembeds_the_corpus_when_asked() {
+        let state = state_with_manager();
+        create_atom(&state, "prefers Chinese replies").await;
+        create_atom(&state, "uses pnpm for web projects").await;
+
+        let (status, rebuilt) = request_json(
+            state.clone(),
+            "POST",
+            "/v1/memory/indexes/rebuild?reembed=true",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{rebuilt}");
+        assert_eq!(rebuilt["reembed"]["embedder"], "hashed-ngram-256");
+        assert_eq!(rebuilt["reembed"]["fingerprint"], "hashed-ngram/3/256/v1");
+        assert_eq!(rebuilt["reembed"]["corpus"], 2);
+        assert_eq!(rebuilt["reembed"]["embedded"], 2);
+        assert_eq!(rebuilt["reembed"]["failed"], 0);
+        assert_eq!(
+            state
+                .store
+                .lock()
+                .count_memory_asset_embeddings_for_tenant("")
+                .expect("count"),
+            2
+        );
+
+        // Without the flag the reply shape is unchanged.
+        let (_, plain) =
+            request_json(state.clone(), "POST", "/v1/memory/indexes/rebuild", None).await;
+        assert!(plain.get("reembed").is_none(), "{plain}");
+
+        let (status, _) = request_json(
+            state.clone(),
+            "POST",
+            "/v1/memory/indexes/rebuild?reembed=maybe",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// A model-backed embedder: batches, a reply-path bound, and a text it
+    /// cannot embed.
+    struct BoundedEmbedder {
+        batches: std::sync::Mutex<Vec<usize>>,
+    }
+
+    impl kura_context::Embedder for BoundedEmbedder {
+        fn embed(&self, text: &str) -> Vec<f32> {
+            if text.contains("unembeddable") {
+                Vec::new()
+            } else {
+                vec![1.0, 0.0]
+            }
+        }
+        fn embed_batch(&self, texts: &[String]) -> Vec<Vec<f32>> {
+            self.batches.lock().expect("lock").push(texts.len());
+            texts.iter().map(|text| self.embed(text)).collect()
+        }
+        fn name(&self) -> &str {
+            "bounded"
+        }
+        fn inline_embed_limit(&self) -> Option<usize> {
+            Some(2)
+        }
+    }
+
+    /// The reply path embeds at most the embedder's bound of misses, in one
+    /// batch, newest first; a failed doc is not cached, and the rest wait
+    /// for the operator's re-embed instead of costing this turn a request
+    /// each.
+    #[tokio::test]
+    async fn corpus_vectors_bound_reply_path_embedding_and_never_cache_a_failure() {
+        let state = state_with_manager();
+        for content in [
+            "oldest fact",
+            "older fact",
+            "unembeddable fact",
+            "newest fact",
+        ] {
+            create_atom(&state, content).await;
+            // updated_at orders the corpus; keep it strictly increasing.
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let atoms =
+            super::super::retrieval::recall_atoms(state.memory.as_deref().expect("memory"), "");
+        let docs = super::super::retrieval::retrieval_docs(&atoms);
+        assert!(docs[0].content.contains("newest"), "newest first");
+        let embedder = BoundedEmbedder {
+            batches: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let first = super::super::retrieval::embed_corpus(
+            &state,
+            &embedder,
+            &docs,
+            kura_context::Embedder::inline_embed_limit(&embedder),
+        );
+        assert_eq!(
+            *embedder.batches.lock().expect("lock"),
+            vec![2],
+            "one batch"
+        );
+        assert_eq!(
+            (first.cached, first.embedded, first.failed, first.deferred),
+            (0, 1, 1, 2)
+        );
+        assert_eq!(first.vectors[0], vec![1.0, 0.0], "newest embedded");
+        assert!(first.vectors[1].is_empty(), "failure is BM25-only");
+        assert!(first.vectors[3].is_empty(), "deferred is BM25-only");
+
+        // The failure was not cached, so it is a miss again: the next bounded
+        // call retries it alongside the next-newest miss, and serves the
+        // cached doc without a request.
+        let second = super::super::retrieval::embed_corpus(&state, &embedder, &docs, Some(2));
+        assert_eq!(
+            (
+                second.cached,
+                second.embedded,
+                second.failed,
+                second.deferred
+            ),
+            (1, 1, 1, 1)
+        );
+        assert_eq!(second.vectors[2], vec![1.0, 0.0], "older embedded now");
+        let unbounded = super::super::retrieval::embed_corpus(&state, &embedder, &docs, None);
+        assert_eq!(
+            (
+                unbounded.cached,
+                unbounded.embedded,
+                unbounded.failed,
+                unbounded.deferred
+            ),
+            (2, 1, 1, 0),
+            "the operator path embeds every remaining miss"
+        );
     }
 
     /// A rebuild must repair the caller's own index, never every tenant's.

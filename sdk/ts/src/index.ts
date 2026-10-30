@@ -3337,6 +3337,18 @@ export interface MemoryOverview {
 export interface MemoryIndexRebuildResult {
   tenantId: string;
   clearedEmbeddings: number;
+  /** Present when the request asked for `reembed: true`. */
+  reembed?: MemoryReembedSummary;
+}
+
+export interface MemoryReembedSummary {
+  /** The embedder that wrote the vectors, and the space they are cached under. */
+  embedder: string;
+  fingerprint: string;
+  corpus: number;
+  embedded: number;
+  /** Docs the embedder had no vector for; they stay BM25-only. */
+  failed: number;
 }
 
 export type ToolCapability = "web.search" | "image.generate" | "video.generate" | "browser.session";
@@ -4746,10 +4758,15 @@ export class KuraClient {
    * Drops the tenant's derived retrieval index so it is recomputed from the
    * assets. Conversation truth and the assets themselves are untouched — this
    * is the repair path, not a reset.
+   *
+   * `reembed: true` also embeds the whole recallable corpus with the active
+   * embedder before answering — the explicit re-embed after the `embed` role
+   * changes model. It makes provider requests and can take a while.
    */
-  async rebuildMemoryIndexes(query?: { tenantId?: string }, tenantOptions?: TenantRequestOptions): Promise<MemoryIndexRebuildResult> {
+  async rebuildMemoryIndexes(query?: { tenantId?: string; reembed?: boolean }, tenantOptions?: TenantRequestOptions): Promise<MemoryIndexRebuildResult> {
     const params = new URLSearchParams();
     if (query?.tenantId) params.set("tenantId", query.tenantId);
+    if (query?.reembed) params.set("reembed", "true");
     const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return this.requestJSON<MemoryIndexRebuildResult>(`/v1/memory/indexes/rebuild${suffix}`, { method: "POST", tenant: tenantOptions });
   }

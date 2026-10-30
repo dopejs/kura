@@ -214,9 +214,21 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       history and changes with each query, so across turns only the frame is
       reused; moving recall after the history would let the history cache
       too, but changes what the model sees and needs its own evaluation.
-- [ ] **2.4 Built-in embedder (G10).** When the `embed` role is routed, use
+- [x] **2.4 Built-in embedder (G10).** When the `embed` role is routed, use
       it as the embedder; hashed n-gram stays the fallback. Re-embedding the
       corpus is an explicit operator action, not a boot side effect.
+      *Done 2026-10-30:* `OpenAiCompatibleEmbeddingClient`
+      (`crates/engine/model-provider/src/embeddings.rs`) and `RoleEmbedder`
+      (`crates/surface/app/src/role_embedder.rs`), resolved at boot from the
+      same store-then-config binding `GET /v1/models/roles` reports. The
+      reply path embeds ≤16 misses per retrieval; the operator re-embed is
+      `POST /v1/memory/indexes/rebuild?reembed=true`. Metrics
+      `kura_retrieval_embeddings_total`, `kura_embedder_requests_total`.
+      Fixed on the way: the external embedder's failure fallback cached
+      hashed vectors under the plugin's fingerprint. Limits: OpenAI-compatible
+      wire only (Anthropic has no embeddings API; Responses/Codex accounts are
+      refused with a log); a role change needs a restart; the 0.25 vector
+      threshold is untuned for neural models.
 
 ## Stage 3 — Shared Hosting M3: Isolated Execution
 
