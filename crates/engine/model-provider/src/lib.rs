@@ -6,6 +6,8 @@
 mod llm_bridge;
 mod openai;
 mod provider;
+#[cfg(test)]
+mod test_support;
 
 pub mod anthropic;
 pub mod responses;

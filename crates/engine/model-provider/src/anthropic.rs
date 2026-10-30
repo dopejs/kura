@@ -14,6 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_stream::try_stream;
 use futures::StreamExt;
@@ -71,6 +72,10 @@ pub struct AnthropicClient {
     /// Extra headers. The credential and the API version cannot be replaced.
     headers: BTreeMap<String, String>,
     max_tokens: i64,
+    /// Whether requests carry `cache_control` breakpoints. Starts on; cleared
+    /// for the life of this client the first time the endpoint rejects the
+    /// field (an Anthropic-compatible gateway that does not implement it).
+    prompt_cache: AtomicBool,
     http: reqwest::Client,
 }
 
@@ -93,6 +98,7 @@ impl AnthropicClient {
             credential: Credential::new(token),
             headers: BTreeMap::new(),
             max_tokens: DEFAULT_MAX_TOKENS,
+            prompt_cache: AtomicBool::new(true),
             http: reqwest::Client::new(),
         }
     }
@@ -141,25 +147,40 @@ impl ModelProvider for AnthropicClient {
             .credential
             .get()
             .is_none_or(|token| !token.trim_start().starts_with(API_KEY_PREFIX));
-        let body = build_request(&self.model, prompt, self.max_tokens, subscription);
-        let mut request = self
-            .http
-            .post(format!("{}/v1/messages", self.base_url))
-            .header("anthropic-version", API_VERSION)
-            .header("anthropic-beta", OAUTH_BETAS)
-            .json(&body);
-        for (name, value) in &self.headers {
-            request = request.header(name, value);
-        }
-        // Read per request, not captured at construction: an access token
-        // refreshed since the last dispatch has to be the one that goes out.
-        let request = match self.credential.get() {
-            Some(token) => request.bearer_auth(token),
-            None => request,
+        let build = move |cache: bool| {
+            let body = build_request(&self.model, prompt, self.max_tokens, subscription, cache);
+            let mut request = self
+                .http
+                .post(format!("{}/v1/messages", self.base_url))
+                .header("anthropic-version", API_VERSION)
+                .header("anthropic-beta", OAUTH_BETAS)
+                .json(&body);
+            for (name, value) in &self.headers {
+                request = request.header(name, value);
+            }
+            // Read per request, not captured at construction: an access token
+            // refreshed since the last dispatch has to be the one that goes
+            // out.
+            match self.credential.get() {
+                Some(token) => request.bearer_auth(token),
+                None => request,
+            }
         };
 
         Box::pin(try_stream! {
-            let response = request.send().await?;
+            // A 400 naming `cache_control` is a compatible endpoint without
+            // prompt caching: send once more without the breakpoints and stop
+            // adding them, so caching never costs a working endpoint a reply.
+            let with_cache = self.prompt_cache.load(Ordering::Relaxed);
+            let mut response = build(with_cache).send().await?;
+            if with_cache && response.status() == reqwest::StatusCode::BAD_REQUEST {
+                let body = response.text().await.unwrap_or_default();
+                if !body.contains("cache_control") {
+                    Err(ProviderError::Status { status: 400, body })?;
+                }
+                self.prompt_cache.store(false, Ordering::Relaxed);
+                response = build(false).send().await?;
+            }
             let mut bytes = checked_bytes_stream(response).await?;
 
             let mut buffer = String::new();
@@ -320,7 +341,13 @@ fn anthropic_usage(usage: &Value) -> Option<TokenUsage> {
 /// instructions are a top-level `system` rather than a message, `max_tokens` is
 /// required, and a tool result is a block inside a *user* message rather than a
 /// message with its own role.
-fn build_request(model: &str, prompt: &Prompt, max_tokens: i64, subscription: bool) -> Value {
+fn build_request(
+    model: &str,
+    prompt: &Prompt,
+    max_tokens: i64,
+    subscription: bool,
+    cache: bool,
+) -> Value {
     let mut messages: Vec<Value> = Vec::new();
 
     for item in &prompt.input {
@@ -413,7 +440,59 @@ fn build_request(model: &str, prompt: &Prompt, max_tokens: i64, subscription: bo
                 .collect(),
         );
     }
+    if cache {
+        mark_cache_breakpoints(&mut body, !prompt.tools.is_empty());
+    }
     body
+}
+
+/// The ephemeral cache marker a content block or tool definition carries.
+fn cache_marker() -> Value {
+    json!({"type": "ephemeral"})
+}
+
+/// Places prompt-cache breakpoints. The cached prefix runs tools, then
+/// `system`, then messages, so:
+///
+/// - The last `system` block (or, with no system prompt, the last tool)
+///   caches the frame. It is the same request after request — deterministic
+///   and free of timestamps — so it is read across turns.
+/// - The last message block, only when tools are offered: another round may
+///   follow, and it resends everything up to here. A turn without tools is a
+///   single dispatch, and writing its tail to the cache (which costs more
+///   than plain input) would buy nothing. Later turns do not reuse it either:
+///   recalled memory sits ahead of the history and changes with the query.
+///
+/// A prefix shorter than the model's minimum is not cached and the marker is
+/// ignored, so marking a short prompt is harmless.
+fn mark_cache_breakpoints(body: &mut Value, rolling: bool) {
+    // `get_mut`, not indexing: indexing a missing key on a mutable `Value`
+    // inserts it as null, and `"system": null` is a request the endpoint
+    // rejects.
+    let frame_key = if body.get("system").is_some() {
+        "system"
+    } else {
+        "tools"
+    };
+    if let Some(block) = last_item(body, frame_key) {
+        block["cache_control"] = cache_marker();
+    }
+    if rolling {
+        let last_block = last_item(body, "messages")
+            .and_then(|message| message.get_mut("content"))
+            .and_then(Value::as_array_mut)
+            .and_then(|content| content.last_mut());
+        if let Some(block) = last_block {
+            block["cache_control"] = cache_marker();
+        }
+    }
+}
+
+/// The last element of the array at `key`, if there is one.
+fn last_item<'a>(body: &'a mut Value, key: &str) -> Option<&'a mut Value> {
+    body.get_mut(key)
+        .and_then(Value::as_array_mut)
+        .and_then(|items| items.last_mut())
 }
 
 #[cfg(test)]
@@ -506,6 +585,90 @@ mod tests {
                 ResponseEvent::OutputTextDelta("lo".into()),
                 ResponseEvent::Completed,
             ]
+        );
+    }
+
+    fn tool(name: &str) -> ToolSpec {
+        ToolSpec {
+            name: name.into(),
+            description: "d".into(),
+            parameters: json!({"type": "object"}),
+        }
+    }
+
+    fn marked(value: &Value) -> bool {
+        value["cache_control"] == json!({"type": "ephemeral"})
+    }
+
+    #[test]
+    fn the_frame_is_a_cache_breakpoint_and_the_tail_only_in_a_tool_loop() {
+        let mut prompt = Prompt {
+            instructions: Some("be brief".into()),
+            ..user("hi")
+        };
+        let body = build_request("m", &prompt, 10, false, true);
+        assert!(marked(&body["system"][0]), "{body}");
+        assert!(
+            !marked(&body["messages"][0]["content"][0]),
+            "no tools: a single dispatch, nothing to re-read: {body}"
+        );
+
+        prompt.tools = vec![tool("a"), tool("b")];
+        let body = build_request("m", &prompt, 10, true, true);
+        let system = body["system"].as_array().expect("system");
+        assert!(!marked(&system[0]), "only the last system block: {body}");
+        assert!(marked(&system[1]), "{body}");
+        assert!(
+            !marked(&body["tools"][1]),
+            "system covers the tools: {body}"
+        );
+        assert!(marked(&body["messages"][0]["content"][0]), "{body}");
+
+        // No system prompt: the last tool carries the frame breakpoint.
+        prompt.instructions = None;
+        let body = build_request("m", &prompt, 10, false, true);
+        assert!(body.get("system").is_none());
+        assert!(marked(&body["tools"][1]), "{body}");
+        assert!(!marked(&body["tools"][0]), "{body}");
+
+        // Off means no marker anywhere.
+        let body = build_request("m", &prompt, 10, false, false);
+        assert!(!body.to_string().contains("cache_control"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_without_prompt_caching_still_answers() {
+        let (base, seen) = crate::test_support::spawn_scripted_endpoint(vec![
+            (
+                400,
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"system.0.cache_control: Extra inputs are not permitted"}}"#,
+            ),
+            (200, "data: {\"type\":\"message_stop\"}\n\n"),
+            (200, "data: {\"type\":\"message_stop\"}\n\n"),
+        ]);
+        let client = AnthropicClient::new(base, "m", Some("sk-ant-api03-x".into()));
+        let prompt = Prompt {
+            instructions: Some("be brief".into()),
+            ..user("hi")
+        };
+
+        assert_eq!(
+            collect(&client, &prompt).await,
+            vec![ResponseEvent::Completed]
+        );
+        assert_eq!(
+            collect(&client, &prompt).await,
+            vec![ResponseEvent::Completed]
+        );
+
+        let requests = seen.lock().expect("lock").clone();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[0].contains("cache_control"), "{}", requests[0]);
+        assert!(!requests[1].contains("cache_control"), "{}", requests[1]);
+        assert!(
+            !requests[2].contains("cache_control"),
+            "remembered: {}",
+            requests[2]
         );
     }
 

@@ -197,8 +197,23 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       to the whole prompt), omitted when zero so existing payloads are
       unchanged. Dispatch spans, turn usage and `kura_llm_tokens_total{kind=
       cache_read|cache_write}` carry them. Not covered: the borrowed Claude
-      CLI path still reports input/output only. **Open:** cache markers and
-      prefix stability.
+      CLI path still reports input/output only.
+      *Cache markers 2026-10-30.* OpenAI-shaped wires cache prefixes
+      automatically and need no marker; the cached part now shows in usage.
+      Anthropic gets two `cache_control` breakpoints: the last `system` block
+      (or the last tool with no system prompt), whose prefix — tools, then
+      the deterministic, timestamp-free frame — repeats across turns; and the
+      last message block when tools are offered, so each tool-loop round
+      re-reads the one before. Without tools a turn is one dispatch and the
+      tail is not marked: a cache write costs more than plain input and
+      nothing would read it. A 400 naming `cache_control` (a compatible
+      gateway without caching) is retried once unmarked and the client stops
+      marking. **Not verified live:** the round ≥ 2 cache-read check needs a
+      real Anthropic key and is the operator's to run (the dispatch span's
+      `cacheReadInputTokens`). **Open:** recalled memory sits ahead of the
+      history and changes with each query, so across turns only the frame is
+      reused; moving recall after the history would let the history cache
+      too, but changes what the model sees and needs its own evaluation.
 - [ ] **2.4 Built-in embedder (G10).** When the `embed` role is routed, use
       it as the embedder; hashed n-gram stays the fallback. Re-embedding the
       corpus is an explicit operator action, not a boot side effect.
