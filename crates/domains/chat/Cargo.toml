@@ -21,6 +21,7 @@ kura-bindings.workspace = true
 kura-skills.workspace = true
 kura-providers.workspace = true
 kura-setupwizard.workspace = true
+kura-session.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true

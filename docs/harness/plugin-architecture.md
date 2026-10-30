@@ -214,6 +214,12 @@ next to used chars, and `tokens` per included item, so comparing the two is
 a query over `context.assembled` events rather than a separate shadow
 path. Rollback is `budgetUnit: "chars"` or removing the key.
 
+The estimator is checked, not trusted: each dispatch span in a turn trace
+carries `estimatedInputTokens` beside the provider's `inputTokens`, and
+`kura_token_estimate_input_tokens_total{provider,source}` sums the two for
+completed dispatches whose provider reported usage. Their ratio is how far
+the estimate is off for that provider; size token budgets with it.
+
 Query-time retrieval (second slice, 2026-08-17): the turn's last user
 message recalls Ready L1 atoms through BM25 + recency rankers fused with
 reciprocal-rank fusion (k=60). Atoms with no lexical overlap are never

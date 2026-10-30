@@ -2650,6 +2650,16 @@ fn a_tool_turn_is_traced_round_by_round_with_its_calls_and_usage() {
         assert_eq!(dispatch.parent_span_id, Some(round.span_id));
         assert_eq!(dispatch.attributes["attemptCount"], 1);
     }
+    // The estimator's prediction sits next to what the provider reported;
+    // round 2 carries round 1's call and result, so it predicts more.
+    let estimated = |span: &kura_telemetry::trace::Span| {
+        span.attributes["estimatedInputTokens"]
+            .as_u64()
+            .expect("estimatedInputTokens")
+    };
+    assert!(estimated(dispatches[0]) > 0);
+    assert!(estimated(dispatches[1]) > estimated(dispatches[0]));
+    assert_eq!(dispatches[0].attributes["inputTokens"], 10);
     assert_eq!(
         dispatches[1].attributes["dispatchId"],
         execution.result.dispatch.dispatch_id.as_str()

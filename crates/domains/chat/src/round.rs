@@ -291,11 +291,63 @@ pub(crate) fn record_dispatch_span(trace: &TurnRecorder, span: SpanId, dispatch:
         trace.set_attribute(span, "finishReason", dispatch.finish_reason.clone());
     }
     let usage = &dispatch.usage;
+    let estimated = estimate_input_tokens(dispatch);
+    trace.set_attribute(span, "estimatedInputTokens", estimated);
+    record_estimate_calibration(dispatch, estimated);
     trace.set_attribute(span, "inputTokens", usage.input_tokens);
     trace.set_attribute(span, "outputTokens", usage.output_tokens);
     trace.set_attribute(span, "totalTokens", usage.total_tokens);
     trace.add_usage(usage.input_tokens, usage.output_tokens, usage.total_tokens);
     close_like_dispatch(trace, span, dispatch);
+}
+
+/// What the context budgets' estimator (`kura_session::estimate_tokens`)
+/// predicts this dispatch's input costs: every message with its per-message
+/// overhead, the calls an assistant message carries, and the offered tools
+/// as their JSON. Compared with the provider's `inputTokens` it is how the
+/// estimator gets calibrated rather than trusted.
+pub(crate) fn estimate_input_tokens(dispatch: &Dispatch) -> u64 {
+    use kura_session::{MESSAGE_OVERHEAD_TOKENS, estimate_tokens};
+    let messages: usize = dispatch
+        .messages
+        .iter()
+        .map(|message| {
+            let calls: usize = message
+                .tool_calls
+                .iter()
+                .map(|call| estimate_tokens(&call.name) + estimate_tokens(&call.arguments))
+                .sum();
+            estimate_tokens(&message.content) + calls + MESSAGE_OVERHEAD_TOKENS
+        })
+        .sum();
+    let tools: usize = dispatch
+        .tools
+        .iter()
+        .map(|tool| serde_json::to_string(tool).map_or(0, |json| estimate_tokens(&json)))
+        .sum();
+    (messages + tools) as u64
+}
+
+/// Adds one dispatch to the estimator's calibration series. Only completed
+/// dispatches whose provider reported input tokens count: a provider that
+/// reports nothing (the echo provider, some local servers) would otherwise
+/// pull the ratio towards zero.
+fn record_estimate_calibration(dispatch: &Dispatch, estimated: u64) {
+    if dispatch.status != kura_llm::DispatchStatus::Completed || dispatch.usage.input_tokens <= 0 {
+        return;
+    }
+    let metrics = kura_telemetry::metrics::registry();
+    let provider = dispatch.provider.as_str();
+    for (source, tokens) in [
+        ("estimated", estimated),
+        ("reported", dispatch.usage.input_tokens as u64),
+    ] {
+        metrics.add(
+            kura_telemetry::metrics::TOKEN_ESTIMATE_INPUT_TOKENS_TOTAL,
+            &[("provider", provider), ("source", source)],
+            tokens,
+        );
+    }
 }
 
 /// Closes `span` with the dispatch's outcome.
@@ -333,4 +385,71 @@ pub(crate) fn dispatch_outcome(dispatch: &Dispatch) -> (SpanStatus, String) {
 /// is carried verbatim rather than flattened.
 fn round_error(error: crate::error::ChatError) -> ProviderError {
     ProviderError::Malformed(error.to_string())
+}
+
+#[cfg(test)]
+mod estimate_tests {
+    use super::*;
+    use kura_telemetry::metrics::{TOKEN_ESTIMATE_INPUT_TOKENS_TOTAL, registry};
+
+    fn message(role: MessageRole, content: &str) -> Message {
+        Message {
+            role,
+            content: content.to_string(),
+            tool_calls: Vec::new(),
+            tool_call_id: String::new(),
+        }
+    }
+
+    #[test]
+    fn the_estimate_counts_messages_calls_and_tools() {
+        let mut dispatch = Dispatch {
+            messages: vec![message(MessageRole::User, "abcdefgh")],
+            ..Dispatch::default()
+        };
+        // 8 ASCII chars = 2 tokens, plus the message overhead.
+        assert_eq!(estimate_input_tokens(&dispatch), 2 + 4);
+
+        let mut assistant = message(MessageRole::Assistant, "");
+        assistant.tool_calls.push(ToolCall {
+            call_id: "c".to_string(),
+            name: "abcd".to_string(),
+            arguments: "{\"q\":1}".to_string(),
+        });
+        dispatch.messages.push(assistant);
+        assert_eq!(estimate_input_tokens(&dispatch), 6 + (1 + 2) + 4);
+
+        let before = estimate_input_tokens(&dispatch);
+        dispatch.tools.push(kura_protocol::ToolSpec {
+            name: "status".to_string(),
+            description: "reports status".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+        });
+        assert!(estimate_input_tokens(&dispatch) > before);
+    }
+
+    #[test]
+    fn only_completed_dispatches_with_reported_usage_calibrate() {
+        let provider = "calibration-test-provider";
+        let labels = |source| [("provider", provider), ("source", source)];
+        let count =
+            |source| registry().counter_value(TOKEN_ESTIMATE_INPUT_TOKENS_TOTAL, &labels(source));
+        let mut dispatch = Dispatch {
+            provider: provider.to_string(),
+            status: kura_llm::DispatchStatus::Completed,
+            ..Dispatch::default()
+        };
+        record_estimate_calibration(&dispatch, 10);
+        assert_eq!(count("estimated"), 0, "no reported usage, no sample");
+
+        dispatch.usage.input_tokens = 12;
+        dispatch.status = kura_llm::DispatchStatus::Failed;
+        record_estimate_calibration(&dispatch, 10);
+        assert_eq!(count("estimated"), 0, "a failed dispatch is not a sample");
+
+        dispatch.status = kura_llm::DispatchStatus::Completed;
+        record_estimate_calibration(&dispatch, 10);
+        assert_eq!(count("estimated"), 10);
+        assert_eq!(count("reported"), 12);
+    }
 }

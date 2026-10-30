@@ -25,6 +25,7 @@ pub const HOOK_DURATION_SECONDS: &str = "kura_hook_duration_seconds";
 pub const CHAT_TOOL_CALLS_TOTAL: &str = "kura_chat_tool_calls_total";
 pub const CHAT_TOOL_CALL_DURATION_SECONDS: &str = "kura_chat_tool_call_duration_seconds";
 pub const SESSION_WINDOW_SHADOW_TOTAL: &str = "kura_session_window_shadow_total";
+pub const TOKEN_ESTIMATE_INPUT_TOKENS_TOTAL: &str = "kura_token_estimate_input_tokens_total";
 
 /// Help text per series, rendered as `# HELP`.
 const HELP: &[(&str, &str)] = &[
@@ -67,6 +68,10 @@ const HELP: &[(&str, &str)] = &[
     (
         SESSION_WINDOW_SHADOW_TOTAL,
         "Session windows shaped in shadow mode, by whether a token budget would have elided the same, more or fewer messages than the char budget did.",
+    ),
+    (
+        TOKEN_ESTIMATE_INPUT_TOKENS_TOTAL,
+        "Input tokens of completed dispatches the provider reported usage for, by provider and source (estimated|reported). estimated/reported is the token estimator's calibration factor.",
     ),
 ];
 

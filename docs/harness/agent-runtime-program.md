@@ -158,7 +158,7 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       not built (it was off-by-default anyway). Not covered: turns from
       outside chat (workflows, scheduler) and token cache-read counts (2.3
       adds them to `Usage`, and the dispatch span picks them up).
-- [ ] **2.2 Token budgets (G1).** Budgets in tokens, derived from the target
+- [x] **2.2 Token budgets (G1).** Budgets in tokens, derived from the target
       model's context window; count with provider-reported usage where
       available and a calibrated estimator otherwise. Existing `*_chars`
       config keeps working (converted) for one release.
@@ -171,10 +171,16 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       budgets" under the context plugin): the same `budgetUnit` with
       `memoryBudgetTokens` / `retrievalBudgetTokens`, each injected message
       charged at its rendered size, and every `AssemblyRecord` carrying
-      token usage in all modes. **Open:** the estimator is static (not yet
-      calibrated against provider-reported `inputTokens`, which 2.1 traces
-      now make available per dispatch); no built-in model-window table,
-      deliberately.
+      token usage in all modes. *Estimator calibration 2026-10-30:* every
+      dispatch span carries `estimatedInputTokens` next to the provider's
+      `inputTokens`, and `kura_token_estimate_input_tokens_total{provider,
+      source=estimated|reported}` sums both over completed dispatches with
+      reported usage, so estimated/reported is the per-provider correction
+      factor. **Deviation:** the factor is measured, not applied
+      automatically. A self-adjusting estimator would move elision points
+      between turns with no config change to explain it; the operator
+      applies it through the token budgets instead. No built-in model-window
+      table, deliberately.
 - [ ] **2.3 Prompt caching (G2).** Keep the system frame + memory bootstrap a
       byte-stable prefix across rounds; emit the provider's cache marker where
       supported. Verified by 2.1 showing cache-read tokens on round ≥ 2.
