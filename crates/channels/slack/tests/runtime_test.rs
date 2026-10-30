@@ -71,6 +71,7 @@ impl Provider for EchoTestProvider {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
+                    ..Default::default()
                 },
             })
         })
@@ -100,6 +101,7 @@ impl Provider for EchoTestProvider {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
+                    ..Default::default()
                 }),
             })?;
             Ok(ProviderResponse {
@@ -110,6 +112,7 @@ impl Provider for EchoTestProvider {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
+                    ..Default::default()
                 },
             })
         })

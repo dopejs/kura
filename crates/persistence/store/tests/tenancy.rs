@@ -112,6 +112,7 @@ fn make_dispatch(id: &str) -> Dispatch {
             input_tokens: 3,
             output_tokens: 1,
             total_tokens: 4,
+            ..Default::default()
         },
         error_code: String::new(),
         error: String::new(),

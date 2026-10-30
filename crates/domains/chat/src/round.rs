@@ -298,6 +298,18 @@ pub(crate) fn record_dispatch_span(trace: &TurnRecorder, span: SpanId, dispatch:
     trace.set_attribute(span, "outputTokens", usage.output_tokens);
     trace.set_attribute(span, "totalTokens", usage.total_tokens);
     trace.add_usage(usage.input_tokens, usage.output_tokens, usage.total_tokens);
+    if usage.cache_read_input_tokens > 0 || usage.cache_creation_input_tokens > 0 {
+        trace.set_attribute(span, "cacheReadInputTokens", usage.cache_read_input_tokens);
+        trace.set_attribute(
+            span,
+            "cacheCreationInputTokens",
+            usage.cache_creation_input_tokens,
+        );
+        trace.add_cache_usage(
+            usage.cache_read_input_tokens,
+            usage.cache_creation_input_tokens,
+        );
+    }
     close_like_dispatch(trace, span, dispatch);
 }
 

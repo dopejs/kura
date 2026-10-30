@@ -47,7 +47,7 @@ const HELP: &[(&str, &str)] = &[
     ),
     (
         LLM_TOKENS_TOTAL,
-        "LLM tokens by tenant, provider and kind (input|output).",
+        "LLM tokens by tenant, provider and kind (input|output|cache_read|cache_write). cache_read and cache_write are parts of input.",
     ),
     (
         STORE_LOCK_WAIT_SECONDS,

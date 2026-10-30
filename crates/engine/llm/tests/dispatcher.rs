@@ -108,6 +108,7 @@ async fn dispatches_successfully() {
                         input_tokens: 3,
                         output_tokens: 1,
                         total_tokens: 0,
+                        ..Default::default()
                     },
                 })
             })
@@ -162,6 +163,7 @@ async fn retries_retryable_failure() {
                         input_tokens: 2,
                         output_tokens: 1,
                         total_tokens: 0,
+                        ..Default::default()
                     },
                 })
             })
@@ -258,6 +260,7 @@ async fn streams_successfully() {
                         input_tokens: 2,
                         output_tokens: 2,
                         total_tokens: 0,
+                        ..Default::default()
                     },
                 })
             })

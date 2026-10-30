@@ -81,6 +81,10 @@ pub struct TraceUsage {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub total_tokens: i64,
+    /// Parts of `input_tokens` read from / written to the provider's prompt
+    /// cache. Read rising from round 2 on is what a working cache looks like.
+    pub cache_read_input_tokens: i64,
+    pub cache_creation_input_tokens: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -272,6 +276,13 @@ impl TurnRecorder {
         trace.usage.total_tokens += total_tokens;
     }
 
+    /// Adds one dispatch's prompt-cache reads and writes to the turn total.
+    pub fn add_cache_usage(&self, read_tokens: i64, creation_tokens: i64) {
+        let mut trace = self.trace.lock();
+        trace.usage.cache_read_input_tokens += read_tokens;
+        trace.usage.cache_creation_input_tokens += creation_tokens;
+    }
+
     /// Ends the turn. Spans still running end with the turn's status: they
     /// were cut short by however the turn ended.
     pub fn finish(&self, status: SpanStatus, error_code: &str) {
@@ -324,6 +335,7 @@ mod tests {
         let dispatch = turn.open(round, "dispatch", "openai_compatible");
         turn.set_attribute(dispatch, "attemptCount", 1);
         turn.add_usage(2, 3, 5);
+        turn.add_cache_usage(1, 0);
         turn.close(dispatch, SpanStatus::Ok, "");
 
         let running = store.get(&turn.turn_id()).expect("running turn");

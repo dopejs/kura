@@ -184,6 +184,21 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
 - [ ] **2.3 Prompt caching (G2).** Keep the system frame + memory bootstrap a
       byte-stable prefix across rounds; emit the provider's cache marker where
       supported. Verified by 2.1 showing cache-read tokens on round ≥ 2.
+      *Usage plumbing done 2026-10-30.* Found on the way: none of the three
+      HTTP wires surfaced usage at all, so on a real provider every dispatch
+      recorded zero tokens, 2.1 traces showed none, and 2.2's calibration
+      metric had no samples. Now Anthropic (`message_start` /
+      `message_delta`), chat-completions (`stream_options.include_usage`,
+      dropped for the client's lifetime the first time a gateway answers 400
+      naming it) and Responses (`response.completed`) report input, output
+      and the cache split through a `ResponseEvent::Usage`. `Usage` gains
+      `cacheReadInputTokens` / `cacheCreationInputTokens`, parts of
+      `inputTokens` (Anthropic's uncached-only `input_tokens` is summed back
+      to the whole prompt), omitted when zero so existing payloads are
+      unchanged. Dispatch spans, turn usage and `kura_llm_tokens_total{kind=
+      cache_read|cache_write}` carry them. Not covered: the borrowed Claude
+      CLI path still reports input/output only. **Open:** cache markers and
+      prefix stability.
 - [ ] **2.4 Built-in embedder (G10).** When the `embed` role is routed, use
       it as the embedder; hashed n-gram stays the fallback. Re-embedding the
       corpus is an explicit operator action, not a boot side effect.

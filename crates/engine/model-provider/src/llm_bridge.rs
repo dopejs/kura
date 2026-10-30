@@ -15,7 +15,7 @@ use kura_llm::{
 use kura_protocol::{ResponseItem, Role, ToolSpec};
 
 use crate::openai::OpenAiCompatibleClient;
-use crate::provider::{ModelProvider, Prompt, ProviderError, ResponseEvent};
+use crate::provider::{ModelProvider, Prompt, ProviderError, ResponseEvent, TokenUsage};
 
 /// Registers an OpenAI-compatible endpoint with the dispatcher.
 /// Adapts any [`ModelProvider`] to the dispatcher's `Provider`.
@@ -178,6 +178,7 @@ impl<M: ModelProvider> ModelProviderBridge<M> {
         let mut output = String::new();
         let mut tool_calls = Vec::new();
         let mut finish_reason = String::new();
+        let mut usage = TokenUsage::default();
 
         while let Some(event) = events.next().await {
             // Cancellation is checked between chunks so a cancelled dispatch
@@ -210,6 +211,7 @@ impl<M: ModelProvider> ModelProviderBridge<M> {
                         arguments,
                     });
                 }
+                ResponseEvent::Usage(reported) => usage.merge(reported),
                 ResponseEvent::Completed => {
                     finish_reason = "stop".to_string();
                 }
@@ -220,10 +222,15 @@ impl<M: ModelProvider> ModelProviderBridge<M> {
             output,
             tool_calls,
             finish_reason,
-            // The endpoint reports usage only in a trailing frame this client
-            // does not surface; leaving it zero lets the dispatcher normalize
-            // rather than inventing counts.
-            usage: Usage::default(),
+            // Whatever the wire reported; zero where it reported nothing, and
+            // the dispatcher derives the total rather than inventing counts.
+            usage: Usage {
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                total_tokens: 0,
+                cache_read_input_tokens: usage.cache_read_input_tokens,
+                cache_creation_input_tokens: usage.cache_creation_input_tokens,
+            },
         })
     }
 }
@@ -371,6 +378,49 @@ mod tests {
 
         assert_eq!(response.output, "checking");
         assert_eq!(response.tool_calls.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn reported_usage_reaches_the_dispatcher_merged() {
+        // Input at the start, output at the end: neither report erases the
+        // other's count.
+        let bridge = ModelProviderBridge::new(
+            "scripted",
+            ScriptedProvider(vec![
+                ResponseEvent::Usage(TokenUsage {
+                    input_tokens: 120,
+                    output_tokens: 1,
+                    cache_read_input_tokens: 100,
+                    cache_creation_input_tokens: 0,
+                }),
+                ResponseEvent::OutputTextDelta("hi".into()),
+                ResponseEvent::Usage(TokenUsage {
+                    output_tokens: 9,
+                    ..TokenUsage::default()
+                }),
+                ResponseEvent::Completed,
+            ]),
+        );
+
+        let response = bridge
+            .complete(request(vec![Message {
+                role: MessageRole::User,
+                content: "hi".into(),
+                ..Default::default()
+            }]))
+            .await
+            .expect("dispatch");
+
+        assert_eq!(
+            response.usage,
+            Usage {
+                input_tokens: 120,
+                output_tokens: 9,
+                total_tokens: 0,
+                cache_read_input_tokens: 100,
+                cache_creation_input_tokens: 0,
+            }
+        );
     }
 
     #[tokio::test]

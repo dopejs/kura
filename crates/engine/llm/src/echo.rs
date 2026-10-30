@@ -68,6 +68,7 @@ fn echo_response(messages: &[Message]) -> ProviderResponse {
             input_tokens: approximate_tokens(&compose_echo_output(messages)),
             output_tokens: approximate_tokens(&output),
             total_tokens: 0,
+            ..Default::default()
         },
         finish_reason: "stop".into(),
         output,

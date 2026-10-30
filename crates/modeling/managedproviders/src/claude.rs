@@ -630,6 +630,7 @@ pub fn parse_claude_result(
                 input_tokens: payload.usage.input_tokens,
                 output_tokens: payload.usage.output_tokens,
                 total_tokens: payload.usage.input_tokens + payload.usage.output_tokens,
+                ..Default::default()
             },
         });
     }

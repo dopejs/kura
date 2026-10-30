@@ -23,7 +23,7 @@ use kura_protocol::{ResponseItem, Role};
 use serde_json::{Value, json};
 
 use crate::openai::{Credential, checked_bytes_stream};
-use crate::provider::{ModelProvider, Prompt, ProviderError, ResponseEvent};
+use crate::provider::{ModelProvider, Prompt, ProviderError, ResponseEvent, TokenUsage, tokens};
 
 /// Streaming client for `/responses`.
 pub struct ResponsesClient {
@@ -207,7 +207,21 @@ fn accumulate_event(
                 });
             }
         }
-        "response.completed" | "response.done" => *done = true,
+        "response.completed" | "response.done" => {
+            // `input_tokens` already includes the cached part here.
+            let usage = &value["response"]["usage"];
+            if usage.is_object() {
+                events.push(ResponseEvent::Usage(TokenUsage {
+                    input_tokens: tokens(&usage["input_tokens"]),
+                    output_tokens: tokens(&usage["output_tokens"]),
+                    cache_read_input_tokens: tokens(
+                        &usage["input_tokens_details"]["cached_tokens"],
+                    ),
+                    cache_creation_input_tokens: 0,
+                }));
+            }
+            *done = true;
+        }
         // Reported inside a 200 stream rather than as a status, so ignoring it
         // would end the turn as though the model had simply stopped.
         "response.failed" | "error" => {
@@ -387,6 +401,28 @@ mod tests {
             vec![
                 ResponseEvent::OutputTextDelta("Hel".into()),
                 ResponseEvent::OutputTextDelta("lo".into()),
+                ResponseEvent::Completed,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn usage_arrives_with_the_completed_response() {
+        let sse = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":40,\"input_tokens_details\":{\"cached_tokens\":32},\"output_tokens\":3}}}\n\n";
+        let (base, _) = spawn(sse);
+        let client = ResponsesClient::new(base, "m", Some("t".into()));
+
+        let events = collect(&client, &user("hi")).await;
+
+        assert_eq!(
+            events,
+            vec![
+                ResponseEvent::Usage(TokenUsage {
+                    input_tokens: 40,
+                    output_tokens: 3,
+                    cache_read_input_tokens: 32,
+                    cache_creation_input_tokens: 0,
+                }),
                 ResponseEvent::Completed,
             ]
         );

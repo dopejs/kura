@@ -42,12 +42,26 @@ pub struct Message {
 
 /// Token accounting for one dispatch. `total_tokens` is normalized to
 /// `input + output` by the dispatcher when a provider leaves it zero.
+///
+/// `input_tokens` is the whole prompt, cached or not. The two cache counts
+/// say how much of it was read from, or written to, the provider's prompt
+/// cache; they are parts of `input_tokens`, not additions to it. Omitted
+/// when zero, so a dispatch that touched no cache serializes as before.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub total_tokens: i64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cache_read_input_tokens: i64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cache_creation_input_tokens: i64,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(value: &i64) -> bool {
+    *value == 0
 }
 
 /// Dispatch lifecycle state; wire values match the Go `DispatchStatus`
@@ -210,12 +224,25 @@ mod tests {
             input_tokens: 3,
             output_tokens: 1,
             total_tokens: 4,
+            ..Usage::default()
         };
         let json = serde_json::to_value(usage).unwrap();
         assert_eq!(
             json,
             serde_json::json!({"inputTokens": 3, "outputTokens": 1, "totalTokens": 4})
         );
+        let cached = Usage {
+            cache_read_input_tokens: 2,
+            ..usage
+        };
+        assert_eq!(
+            serde_json::to_value(cached).unwrap()["cacheReadInputTokens"],
+            2
+        );
+        // A record written before the cache counts existed still reads.
+        let old: Usage =
+            serde_json::from_str(r#"{"inputTokens":3,"outputTokens":1,"totalTokens":4}"#).unwrap();
+        assert_eq!(old, usage);
     }
 
     #[test]

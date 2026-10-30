@@ -65,6 +65,10 @@ export type ChatQueryResponse = {
     inputTokens: number;
     outputTokens: number;
     totalTokens: number;
+    /** Part of inputTokens read from the provider's prompt cache; absent when zero. */
+    cacheReadInputTokens?: number;
+    /** Part of inputTokens written to the provider's prompt cache; absent when zero. */
+    cacheCreationInputTokens?: number;
   };
   errorCode?: string;
   error?: string;

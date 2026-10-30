@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
 use async_stream::try_stream;
@@ -19,6 +20,8 @@ use crate::provider::ModelProvider;
 use crate::provider::Prompt;
 use crate::provider::ProviderError;
 use crate::provider::ResponseEvent;
+use crate::provider::TokenUsage;
+use crate::provider::tokens;
 
 /// Streaming client for OpenAI-compatible `/chat/completions` endpoints
 /// (OpenAI, local vLLM/Ollama gateways, openai-compatible providers in the
@@ -67,6 +70,10 @@ pub struct OpenAiCompatibleClient {
     headers: BTreeMap<String, String>,
     /// Sampling parameters; `None` fields are omitted from the body.
     sampling: Sampling,
+    /// Whether to ask for usage with `stream_options.include_usage`. Starts
+    /// on; cleared for the life of this client the first time the endpoint
+    /// rejects the field, so a gateway that predates it keeps working.
+    stream_usage: AtomicBool,
     http: reqwest::Client,
 }
 
@@ -95,6 +102,7 @@ impl OpenAiCompatibleClient {
             api_key: Credential::new(api_key),
             headers: BTreeMap::new(),
             sampling: Sampling::default(),
+            stream_usage: AtomicBool::new(true),
             http: reqwest::Client::new(),
         }
     }
@@ -137,20 +145,28 @@ impl ModelProvider for OpenAiCompatibleClient {
         &'a self,
         prompt: &'a Prompt,
     ) -> BoxStream<'a, Result<ResponseEvent, ProviderError>> {
-        let mut request = self
-            .http
-            .post(format!("{}/chat/completions", self.base_url))
-            .json(&build_request(&self.model, prompt, self.sampling));
-        for (name, value) in &self.headers {
-            request = request.header(name, value);
-        }
-        // Read per request, not captured at construction: a token refreshed
-        // since the last dispatch has to be the one that goes out.
-        let request = match self.api_key.get() {
-            Some(key) => request.bearer_auth(key),
-            None => request,
+        let build = move |stream_usage: bool| {
+            let mut request = self
+                .http
+                .post(format!("{}/chat/completions", self.base_url))
+                .json(&build_request(
+                    &self.model,
+                    prompt,
+                    self.sampling,
+                    stream_usage,
+                ));
+            for (name, value) in &self.headers {
+                request = request.header(name, value);
+            }
+            // Read per request, not captured at construction: a token
+            // refreshed since the last dispatch has to be the one that goes
+            // out.
+            match self.api_key.get() {
+                Some(key) => request.bearer_auth(key),
+                None => request,
+            }
         };
-        stream_chat_completions(request)
+        stream_chat_completions(build, &self.stream_usage)
     }
 
     /// The configured gateway headers are left off as well as the configured
@@ -161,21 +177,42 @@ impl ModelProvider for OpenAiCompatibleClient {
         prompt: &'a Prompt,
         api_key: &'a str,
     ) -> Option<BoxStream<'a, Result<ResponseEvent, ProviderError>>> {
-        let request = self
-            .http
-            .post(format!("{}/chat/completions", self.base_url))
-            .json(&build_request(&self.model, prompt, self.sampling))
-            .bearer_auth(api_key);
-        Some(stream_chat_completions(request))
+        let build = move |stream_usage: bool| {
+            self.http
+                .post(format!("{}/chat/completions", self.base_url))
+                .json(&build_request(
+                    &self.model,
+                    prompt,
+                    self.sampling,
+                    stream_usage,
+                ))
+                .bearer_auth(api_key)
+        };
+        Some(stream_chat_completions(build, &self.stream_usage))
     }
 }
 
-/// Sends a built `/chat/completions` request and reads its SSE stream.
-fn stream_chat_completions(
-    request: reqwest::RequestBuilder,
-) -> BoxStream<'static, Result<ResponseEvent, ProviderError>> {
+/// Sends a `/chat/completions` request and reads its SSE stream.
+///
+/// `build` makes the request with or without `stream_options`. A 400 that
+/// names `stream_options` is a gateway that does not know the field: the
+/// request is sent once more without it and `stream_usage` is cleared, so
+/// asking for usage never costs a working endpoint a reply.
+fn stream_chat_completions<'a>(
+    build: impl Fn(bool) -> reqwest::RequestBuilder + Send + 'a,
+    stream_usage: &'a AtomicBool,
+) -> BoxStream<'a, Result<ResponseEvent, ProviderError>> {
     Box::pin(try_stream! {
-            let response = request.send().await?;
+            let with_usage = stream_usage.load(Ordering::Relaxed);
+            let mut response = build(with_usage).send().await?;
+            if with_usage && response.status() == reqwest::StatusCode::BAD_REQUEST {
+                let body = response.text().await.unwrap_or_default();
+                if !body.contains("stream_options") {
+                    Err(ProviderError::Status { status: 400, body })?;
+                }
+                stream_usage.store(false, Ordering::Relaxed);
+                response = build(false).send().await?;
+            }
             let mut bytes = checked_bytes_stream(response).await?;
 
             let mut buffer = String::new();
@@ -245,6 +282,17 @@ fn accumulate_chunk(
     let chunk: Value = serde_json::from_str(data)
         .map_err(|err| ProviderError::Malformed(format!("invalid chunk json: {err}")))?;
     let mut events = Vec::new();
+    // Sent in a final chunk with no choices when `include_usage` was asked
+    // for; `prompt_tokens` already includes the cached part.
+    let usage = &chunk["usage"];
+    if usage.is_object() {
+        events.push(ResponseEvent::Usage(TokenUsage {
+            input_tokens: tokens(&usage["prompt_tokens"]),
+            output_tokens: tokens(&usage["completion_tokens"]),
+            cache_read_input_tokens: tokens(&usage["prompt_tokens_details"]["cached_tokens"]),
+            cache_creation_input_tokens: 0,
+        }));
+    }
     let Some(choices) = chunk["choices"].as_array() else {
         return Ok(events);
     };
@@ -279,7 +327,7 @@ fn accumulate_chunk(
 
 /// Build the `/chat/completions` request body, mapping conversation history
 /// into OpenAI message shapes.
-fn build_request(model: &str, prompt: &Prompt, sampling: Sampling) -> Value {
+fn build_request(model: &str, prompt: &Prompt, sampling: Sampling, stream_usage: bool) -> Value {
     let mut messages = Vec::new();
     if let Some(instructions) = &prompt.instructions {
         messages.push(json!({"role": "system", "content": instructions}));
@@ -324,6 +372,9 @@ fn build_request(model: &str, prompt: &Prompt, sampling: Sampling) -> Value {
         "messages": messages,
         "stream": true,
     });
+    if stream_usage {
+        body["stream_options"] = json!({"include_usage": true});
+    }
     if !prompt.tools.is_empty() {
         let tools: Vec<Value> = prompt
             .tools
@@ -483,7 +534,7 @@ mod tests {
             tools: vec![],
         };
 
-        let bare = build_request("m", &prompt, Sampling::default());
+        let bare = build_request("m", &prompt, Sampling::default(), false);
         assert!(bare.get("temperature").is_none());
         assert!(bare.get("top_p").is_none());
 
@@ -495,6 +546,7 @@ mod tests {
                 temperature: Some(0.0),
                 top_p: Some(0.95),
             },
+            false,
         );
         assert_eq!(tuned["temperature"], json!(0.0));
         assert_eq!(tuned["top_p"], json!(0.95));
@@ -602,9 +654,10 @@ mod tests {
                 parameters: json!({"type": "object"}),
             }],
         };
-        let body = build_request("test-model", &prompt, Sampling::default());
+        let body = build_request("test-model", &prompt, Sampling::default(), true);
         assert_eq!(body["model"], "test-model");
         assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(
             messages[0],
@@ -652,10 +705,24 @@ mod tests {
     }
 
     #[test]
-    fn usage_only_chunks_are_ignored() {
+    fn a_usage_chunk_reports_the_prompt_with_its_cached_part() {
         let mut pending = Vec::new();
-        let events =
-            accumulate_chunk(r#"{"choices":[],"usage":{"total_tokens":3}}"#, &mut pending).unwrap();
+        let events = accumulate_chunk(
+            r#"{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"prompt_tokens_details":{"cached_tokens":8}}}"#,
+            &mut pending,
+        )
+        .unwrap();
+        assert_eq!(
+            events,
+            vec![ResponseEvent::Usage(TokenUsage {
+                input_tokens: 10,
+                output_tokens: 2,
+                cache_read_input_tokens: 8,
+                cache_creation_input_tokens: 0,
+            })]
+        );
+        // A chunk without usage reports none.
+        let events = accumulate_chunk(r#"{"choices":[]}"#, &mut pending).unwrap();
         assert!(events.is_empty());
     }
 
@@ -703,6 +770,124 @@ mod tests {
             }
         });
         (format!("http://{addr}"), seen)
+    }
+
+    /// Serves one scripted `(status, body)` per connection, in order, and
+    /// records each raw request.
+    fn spawn_scripted_endpoint(
+        script: Vec<(u16, &'static str)>,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = std::sync::Arc::clone(&seen);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            for (stream, (status, body)) in listener.incoming().zip(script) {
+                let Ok(mut stream) = stream else { continue };
+                // Read the whole request: the body can arrive in a later
+                // segment than the head, and the test asserts on the body.
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 4096];
+                loop {
+                    let read = stream.read(&mut buffer).unwrap_or(0);
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    let text = String::from_utf8_lossy(&request);
+                    if let Some(head_end) = text.find("\r\n\r\n") {
+                        let length = text[..head_end]
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().ok())?
+                            })
+                            .unwrap_or(0);
+                        if request.len() >= head_end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                recorded
+                    .lock()
+                    .expect("lock")
+                    .push(String::from_utf8_lossy(&request).to_string());
+                let reason = if status == 200 { "OK" } else { "Bad Request" };
+                let response = format!(
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    async fn collect(client: &OpenAiCompatibleClient) -> Result<Vec<ResponseEvent>, ProviderError> {
+        use futures::StreamExt;
+        let prompt = Prompt::default();
+        let mut stream = client.stream(&prompt);
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event?);
+        }
+        Ok(events)
+    }
+
+    #[tokio::test]
+    async fn a_gateway_that_rejects_stream_options_still_answers() {
+        let usage = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n";
+        let (base_url, seen) = spawn_scripted_endpoint(vec![
+            (
+                400,
+                r#"{"error":{"message":"Unrecognized request argument supplied: stream_options"}}"#,
+            ),
+            (200, "data: [DONE]\n\n"),
+            (200, usage),
+        ]);
+        let client = OpenAiCompatibleClient::new(base_url, "m", None);
+
+        let first = collect(&client).await.expect("answered after the retry");
+        assert_eq!(first, vec![ResponseEvent::Completed]);
+        // Remembered: the next request does not ask again, and usage a
+        // server sends on its own is still read.
+        let second = collect(&client).await.expect("answered");
+        assert!(second.contains(&ResponseEvent::Usage(TokenUsage {
+            input_tokens: 5,
+            output_tokens: 1,
+            ..TokenUsage::default()
+        })));
+
+        let requests = seen.lock().expect("lock").clone();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[0].contains("stream_options"), "{}", requests[0]);
+        assert!(!requests[1].contains("stream_options"), "{}", requests[1]);
+        assert!(!requests[2].contains("stream_options"), "{}", requests[2]);
+    }
+
+    #[tokio::test]
+    async fn any_other_bad_request_is_not_retried() {
+        let (base_url, seen) =
+            spawn_scripted_endpoint(vec![(400, r#"{"error":{"message":"unknown model"}}"#)]);
+        let client = OpenAiCompatibleClient::new(base_url, "m", None);
+
+        match collect(&client).await {
+            Err(ProviderError::Status { status, body }) => {
+                assert_eq!(status, 400);
+                assert!(body.contains("unknown model"), "{body}");
+            }
+            other => panic!("expected the 400, got {other:?}"),
+        }
+        assert_eq!(seen.lock().expect("lock").len(), 1);
+        assert!(
+            client.stream_usage.load(Ordering::Relaxed),
+            "still asked for"
+        );
     }
 
     async fn drain(client: &OpenAiCompatibleClient) {

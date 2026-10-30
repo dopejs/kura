@@ -22,7 +22,7 @@ use kura_protocol::{ResponseItem, Role};
 use serde_json::{Value, json};
 
 use crate::openai::{Credential, checked_bytes_stream};
-use crate::provider::{ModelProvider, Prompt, ProviderError, ResponseEvent};
+use crate::provider::{ModelProvider, Prompt, ProviderError, ResponseEvent, TokenUsage, tokens};
 
 /// The version header the Messages API requires.
 const API_VERSION: &str = "2023-06-01";
@@ -271,6 +271,18 @@ fn accumulate_event(
                 });
             }
         }
+        // Input (and the cache split) comes with the start, output with the
+        // closing delta.
+        "message_start" => {
+            if let Some(usage) = anthropic_usage(&value["message"]["usage"]) {
+                events.push(ResponseEvent::Usage(usage));
+            }
+        }
+        "message_delta" => {
+            if let Some(usage) = anthropic_usage(&value["usage"]) {
+                events.push(ResponseEvent::Usage(usage));
+            }
+        }
         "message_stop" => *done = true,
         // The stream carries its own failures rather than a status code, so a
         // mid-stream error has to end the turn instead of being skipped.
@@ -283,6 +295,23 @@ fn accumulate_event(
         _ => {}
     }
     Ok(events)
+}
+
+/// Anthropic's usage object as normalized counts. Its `input_tokens` is only
+/// the uncached part, so the cache reads and writes are added back to give
+/// the whole prompt, as every other wire reports it.
+fn anthropic_usage(usage: &Value) -> Option<TokenUsage> {
+    if !usage.is_object() {
+        return None;
+    }
+    let cache_read = tokens(&usage["cache_read_input_tokens"]);
+    let cache_creation = tokens(&usage["cache_creation_input_tokens"]);
+    Some(TokenUsage {
+        input_tokens: tokens(&usage["input_tokens"]) + cache_read + cache_creation,
+        output_tokens: tokens(&usage["output_tokens"]),
+        cache_read_input_tokens: cache_read,
+        cache_creation_input_tokens: cache_creation,
+    })
 }
 
 /// Build the `/v1/messages` body from a prompt.
@@ -478,6 +507,34 @@ mod tests {
                 ResponseEvent::Completed,
             ]
         );
+    }
+
+    /// Anthropic's `input_tokens` excludes the cached part; the reported
+    /// input is the whole prompt, as on every other wire.
+    #[tokio::test]
+    async fn usage_is_reported_with_the_cache_split_folded_into_input() {
+        let sse = "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"cache_read_input_tokens\":100,\"cache_creation_input_tokens\":20,\"output_tokens\":1}}}\n\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\ndata: {\"type\":\"message_stop\"}\n\n";
+        let (base, _) = spawn(sse);
+        let client = AnthropicClient::new(base, "m", Some("t".into()));
+
+        let events = collect(&client, &user("hi")).await;
+
+        let mut usage = TokenUsage::default();
+        for event in &events {
+            if let ResponseEvent::Usage(reported) = event {
+                usage.merge(*reported);
+            }
+        }
+        assert_eq!(
+            usage,
+            TokenUsage {
+                input_tokens: 125,
+                output_tokens: 7,
+                cache_read_input_tokens: 100,
+                cache_creation_input_tokens: 20,
+            }
+        );
+        assert_eq!(events.last(), Some(&ResponseEvent::Completed));
     }
 
     #[tokio::test]

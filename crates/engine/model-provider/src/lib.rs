@@ -14,6 +14,6 @@ pub use llm_bridge::{ModelProviderBridge, OpenAiCompatibleProvider};
 pub use openai::{Credential, OpenAiCompatibleClient, OpenAiCompatibleImageClient, Sampling};
 pub use provider::{
     GeneratedAsset, GenerationModality, GenerationProvider, GenerationRequest, GenerationStatus,
-    ModelProvider, Prompt, ProviderError, ResponseEvent, ToolSpec,
+    ModelProvider, Prompt, ProviderError, ResponseEvent, TokenUsage, ToolSpec,
 };
 pub use responses::ResponsesClient;

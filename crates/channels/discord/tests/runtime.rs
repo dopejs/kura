@@ -53,6 +53,7 @@ impl Provider for ReplyEchoProvider {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
+                    ..Default::default()
                 },
             })
         })
@@ -82,6 +83,7 @@ impl Provider for ReplyEchoProvider {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
+                    ..Default::default()
                 },
             })
         })

@@ -26,7 +26,43 @@ pub enum ResponseEvent {
         name: String,
         arguments: String,
     },
+    /// Token counts the provider reported for this response. May arrive more
+    /// than once (Anthropic reports input at the start and output at the
+    /// end); every count is cumulative, so a later value replaces an earlier
+    /// one and a zero means "not reported here".
+    Usage(TokenUsage),
     Completed,
+}
+
+/// Provider-reported token counts, normalized across wires. `input_tokens`
+/// is the whole prompt including any cached part; the cache counts are
+/// parts of it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_input_tokens: i64,
+    pub cache_creation_input_tokens: i64,
+}
+
+impl TokenUsage {
+    /// Folds a later report into this one: each count takes the larger
+    /// value, so a report that omits a count does not erase it.
+    pub fn merge(&mut self, later: TokenUsage) {
+        self.input_tokens = self.input_tokens.max(later.input_tokens);
+        self.output_tokens = self.output_tokens.max(later.output_tokens);
+        self.cache_read_input_tokens = self
+            .cache_read_input_tokens
+            .max(later.cache_read_input_tokens);
+        self.cache_creation_input_tokens = self
+            .cache_creation_input_tokens
+            .max(later.cache_creation_input_tokens);
+    }
+}
+
+/// Reads a JSON number as a token count; absent or malformed is zero.
+pub(crate) fn tokens(value: &serde_json::Value) -> i64 {
+    value.as_i64().unwrap_or(0).max(0)
 }
 
 #[derive(Debug, thiserror::Error)]

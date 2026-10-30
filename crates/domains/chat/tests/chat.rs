@@ -89,6 +89,7 @@ impl Provider for TestProvider {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
+                    ..Default::default()
                 },
             })
         })
@@ -115,6 +116,7 @@ impl Provider for TestProvider {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
+                    ..Default::default()
                 }),
                 ..Default::default()
             })?;
@@ -126,6 +128,7 @@ impl Provider for TestProvider {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
+                    ..Default::default()
                 },
             })
         })
@@ -1416,7 +1419,8 @@ fn stream_emits_selected_skill_contracts_on_chunks() {
         Some(Usage {
             input_tokens: 1,
             output_tokens: 1,
-            total_tokens: 2
+            total_tokens: 2,
+            ..Default::default()
         })
     );
 }
@@ -1551,6 +1555,7 @@ fn sqlite_store_adapter_ports_dispatch_and_defers_continuity() {
             input_tokens: 1,
             output_tokens: 1,
             total_tokens: 2,
+            ..Default::default()
         },
         error_code: String::new(),
         error: String::new(),
@@ -1706,6 +1711,7 @@ fn query_result_round_trips_with_dispatch() {
             input_tokens: 1,
             output_tokens: 1,
             total_tokens: 2,
+            ..Default::default()
         },
         error_code: String::new(),
         error: String::new(),
@@ -1761,6 +1767,7 @@ fn stream_chunk_round_trips_camel_case_wire() {
             input_tokens: 1,
             output_tokens: 1,
             total_tokens: 2,
+            ..Default::default()
         }),
         thread_id: "thr".to_string(),
         session_segment_id: "seg".to_string(),
@@ -2594,6 +2601,7 @@ fn with_usage(mut response: ProviderResponse, input: i64, output: i64) -> Provid
         input_tokens: input,
         output_tokens: output,
         total_tokens: input + output,
+        ..Default::default()
     };
     response
 }
@@ -2623,7 +2631,12 @@ fn a_tool_turn_is_traced_round_by_round_with_its_calls_and_usage() {
                 10,
                 2,
             ),
-            with_usage(answered("done"), 15, 3),
+            {
+                // Round 2 resends round 1's prefix, which the provider cached.
+                let mut response = with_usage(answered("done"), 15, 3);
+                response.usage.cache_read_input_tokens = 12;
+                response
+            },
         ],
         tool,
     );
@@ -2660,6 +2673,13 @@ fn a_tool_turn_is_traced_round_by_round_with_its_calls_and_usage() {
     assert!(estimated(dispatches[0]) > 0);
     assert!(estimated(dispatches[1]) > estimated(dispatches[0]));
     assert_eq!(dispatches[0].attributes["inputTokens"], 10);
+    assert!(
+        !dispatches[0]
+            .attributes
+            .contains_key("cacheReadInputTokens")
+    );
+    assert_eq!(dispatches[1].attributes["cacheReadInputTokens"], 12);
+    assert_eq!(trace.usage.cache_read_input_tokens, 12);
     assert_eq!(
         dispatches[1].attributes["dispatchId"],
         execution.result.dispatch.dispatch_id.as_str()

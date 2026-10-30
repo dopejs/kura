@@ -1652,9 +1652,13 @@ fn record_token_spend(tenant_id: &str, dispatch: &Dispatch) {
         return;
     }
     let metrics = kura_telemetry::metrics::registry();
+    // `cache_read` and `cache_write` are parts of `input`, not additions:
+    // summing every kind would count cached tokens twice.
     for (kind, tokens) in [
         ("input", dispatch.usage.input_tokens),
         ("output", dispatch.usage.output_tokens),
+        ("cache_read", dispatch.usage.cache_read_input_tokens),
+        ("cache_write", dispatch.usage.cache_creation_input_tokens),
     ] {
         if tokens > 0 {
             metrics.add(

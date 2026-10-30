@@ -396,6 +396,7 @@ fn llm_dispatch_round_trips_through_sqlite() {
             input_tokens: 3,
             output_tokens: 1,
             total_tokens: 4,
+            ..Default::default()
         },
         error_code: String::new(),
         error: String::new(),
@@ -452,6 +453,7 @@ fn provider_check_and_auth_state_round_trip() {
             input_tokens: 5,
             output_tokens: 5,
             total_tokens: 10,
+            ..Default::default()
         },
         created_at: now,
         completed_at: now,

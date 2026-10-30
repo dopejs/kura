@@ -60,6 +60,7 @@ impl Provider for EchoTestProvider {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
+                    ..Default::default()
                 },
             })
         })
@@ -89,6 +90,7 @@ impl Provider for EchoTestProvider {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
+                    ..Default::default()
                 }),
                 ..Default::default()
             })?;
@@ -100,6 +102,7 @@ impl Provider for EchoTestProvider {
                     input_tokens: 1,
                     output_tokens: 1,
                     total_tokens: 2,
+                    ..Default::default()
                 },
             })
         })
@@ -133,6 +136,7 @@ impl Provider for LongTestProvider {
                     input_tokens: 1,
                     output_tokens: runes,
                     total_tokens: runes + 1,
+                    ..Default::default()
                 },
             })
         })
@@ -170,6 +174,7 @@ impl Provider for LongTestProvider {
                     input_tokens: 1,
                     output_tokens: count,
                     total_tokens: count + 1,
+                    ..Default::default()
                 },
             })
         })

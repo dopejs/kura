@@ -138,7 +138,9 @@ impl Session {
                         name,
                         arguments,
                     } => pending_calls.push((call_id, name, arguments)),
-                    ResponseEvent::Completed => {}
+                    // Counted by the dispatcher, which owns the dispatch
+                    // record; the loop has nothing to do with it.
+                    ResponseEvent::Usage(_) | ResponseEvent::Completed => {}
                 }
             }
 
