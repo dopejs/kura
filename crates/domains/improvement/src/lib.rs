@@ -59,6 +59,8 @@ impl EvaluationEvidence {
 pub const KNOWN_TARGETS: &[(&str, &str)] = &[
     ("context", "memoryBudgetChars"),
     ("context", "retrievalBudgetChars"),
+    ("context", "memoryBudgetTokens"),
+    ("context", "retrievalBudgetTokens"),
     ("context", "refThresholdChars"),
     ("context", "retrievalMaxCorpus"),
     ("context", "vectorMinSimilarity"),

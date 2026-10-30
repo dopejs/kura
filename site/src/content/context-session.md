@@ -19,6 +19,10 @@ Runs first in the waterfall. Deterministic, budgeted, always cited:
    lexical or vector affinity are never recalled. Budget:
    `retrievalBudgetChars` (default 2000). Injected as
    `Memory[l1 …] (recalled): …`.
+   Both budgets can count estimated tokens instead: set `budgetUnit:
+   "tokens"` with `memoryBudgetTokens` / `retrievalBudgetTokens` (unset,
+   they are the char budgets divided by 4). Every assembly record shows
+   chars and tokens used either way.
 3. **Symbolic compression** — oversized non-frame messages (default >8000
    chars) externalize to a full-content L0 memory ref; the window keeps a
    200-char preview plus the citation. Token cost drops; the evidence path

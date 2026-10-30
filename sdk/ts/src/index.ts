@@ -3442,12 +3442,18 @@ export interface ContextAssembly {
   threadId?: string;
   recordedAt: string;
   record: {
-    included: Array<{ assetId: string; layer: string; chars: number; source: string }>;
+    included: Array<{ assetId: string; layer: string; chars: number; tokens?: number; source: string }>;
     excluded: Array<{ assetId: string; layer: string; reason: string; source: string }>;
     budgetChars: number;
     usedChars: number;
     retrievalBudgetChars?: number;
     retrievalUsedChars?: number;
+    /** Which budget decided inclusion; absent on records written before token budgets. */
+    budgetUnit?: "chars" | "tokens" | "shadow";
+    budgetTokens?: number;
+    usedTokens?: number;
+    retrievalBudgetTokens?: number;
+    retrievalUsedTokens?: number;
   };
 }
 

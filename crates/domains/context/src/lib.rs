@@ -18,6 +18,8 @@
 //! injection (memory bootstrap messages are system-frame and survive
 //! elision), and any later builtin or external hook may rewrite or veto.
 
+pub use kura_session::BudgetUnit;
+use kura_session::{CHARS_PER_TOKEN, MESSAGE_OVERHEAD_TOKENS, estimate_tokens};
 use serde::{Deserialize, Serialize};
 
 /// One candidate memory asset for bootstrap injection (a structural subset
@@ -50,6 +52,16 @@ pub struct ContextConfig {
     /// Minimum cosine similarity for vector-only candidacy; 0 uses
     /// [`VECTOR_MIN_SIMILARITY`].
     pub vector_min_similarity: f32,
+    /// Which budget is enforced. `chars` (the default) keeps the pre-2.2
+    /// behaviour; `tokens` enforces the token budgets below. `shadow`
+    /// enforces chars: the record carries the estimated token usage in every
+    /// mode, so there is nothing extra to shadow here.
+    pub budget_unit: BudgetUnit,
+    /// Token budget for bootstrap content; 0 derives it from
+    /// `memory_budget_chars` (or its default) at [`CHARS_PER_TOKEN`].
+    pub memory_budget_tokens: usize,
+    /// Token budget for recall; 0 derives it from `retrieval_budget_chars`.
+    pub retrieval_budget_tokens: usize,
 }
 
 impl ContextConfig {
@@ -106,6 +118,22 @@ impl ContextConfig {
         }
     }
 
+    /// The bootstrap budget in the configured unit.
+    #[must_use]
+    pub fn bootstrap_budget(&self) -> Budget {
+        Budget::new(self.budget_unit, self.budget(), self.memory_budget_tokens)
+    }
+
+    /// The recall budget in the configured unit.
+    #[must_use]
+    pub fn recall_budget(&self) -> Budget {
+        Budget::new(
+            self.budget_unit,
+            self.retrieval_budget(),
+            self.retrieval_budget_tokens,
+        )
+    }
+
     #[must_use]
     pub fn ref_threshold(&self) -> usize {
         if self.ref_threshold_chars > 0 {
@@ -114,6 +142,59 @@ impl ContextConfig {
             DEFAULT_REF_THRESHOLD_CHARS
         }
     }
+}
+
+/// One assembly budget: the char limit, the token limit, and which of the
+/// two is enforced. Both are always known so the record can report usage in
+/// both units whichever one decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Budget {
+    pub unit: BudgetUnit,
+    pub chars: usize,
+    pub tokens: usize,
+}
+
+impl Budget {
+    /// `tokens == 0` derives the token limit from `chars`.
+    #[must_use]
+    pub fn new(unit: BudgetUnit, chars: usize, tokens: usize) -> Self {
+        let tokens = if tokens > 0 {
+            tokens
+        } else {
+            chars.div_ceil(CHARS_PER_TOKEN)
+        };
+        Self {
+            unit,
+            chars,
+            tokens,
+        }
+    }
+
+    /// A char budget, as every caller had before 2.2.
+    #[must_use]
+    pub fn chars(chars: usize) -> Self {
+        Self::new(BudgetUnit::Chars, chars, 0)
+    }
+
+    fn enforces_tokens(self) -> bool {
+        self.unit == BudgetUnit::Tokens
+    }
+
+    /// Whether an item costing `chars`/`tokens` fits on top of what is used.
+    fn fits(self, used_chars: usize, used_tokens: usize, chars: usize, tokens: usize) -> bool {
+        if self.enforces_tokens() {
+            used_tokens + tokens <= self.tokens
+        } else {
+            used_chars + chars <= self.chars
+        }
+    }
+}
+
+/// Estimated tokens one injected message costs: its rendered text (citation
+/// included) plus the per-message overhead, the same rule the session
+/// window uses.
+fn injected_tokens(rendered: &str) -> usize {
+    estimate_tokens(rendered) + MESSAGE_OVERHEAD_TOKENS
 }
 
 /// A message to inject (role is always `system` for bootstrap content).
@@ -136,6 +217,9 @@ pub struct IncludedItem {
     pub asset_id: String,
     pub layer: String,
     pub chars: usize,
+    /// Estimated tokens of the injected message, citation included.
+    #[serde(default)]
+    pub tokens: usize,
     /// `bootstrap` | `retrieval`.
     #[serde(default = "default_source")]
     pub source: String,
@@ -166,6 +250,18 @@ pub struct AssemblyRecord {
     pub retrieval_budget_chars: usize,
     #[serde(default)]
     pub retrieval_used_chars: usize,
+    /// Which budget decided inclusion. The char fields are always filled;
+    /// the token fields too, so the two can be compared before switching.
+    #[serde(default)]
+    pub budget_unit: BudgetUnit,
+    #[serde(default)]
+    pub budget_tokens: usize,
+    #[serde(default)]
+    pub used_tokens: usize,
+    #[serde(default)]
+    pub retrieval_budget_tokens: usize,
+    #[serde(default)]
+    pub retrieval_used_tokens: usize,
 }
 
 impl AssemblyRecord {
@@ -211,9 +307,20 @@ pub fn assemble(
     assets: &[BootstrapAsset],
     budget_chars: usize,
 ) -> (Vec<ContextMessage>, AssemblyRecord) {
+    assemble_within(assets, Budget::chars(budget_chars))
+}
+
+/// [`assemble`] under a budget in either unit.
+#[must_use]
+pub fn assemble_within(
+    assets: &[BootstrapAsset],
+    budget: Budget,
+) -> (Vec<ContextMessage>, AssemblyRecord) {
     let mut messages = Vec::new();
     let mut record = AssemblyRecord {
-        budget_chars,
+        budget_chars: budget.chars,
+        budget_tokens: budget.tokens,
+        budget_unit: budget.unit,
         ..AssemblyRecord::default()
     };
     for asset in assets {
@@ -227,7 +334,9 @@ pub fn assemble(
             });
             continue;
         }
-        if record.used_chars + content_len > budget_chars {
+        let rendered = render_bootstrap_message(asset);
+        let tokens = injected_tokens(&rendered);
+        if !budget.fits(record.used_chars, record.used_tokens, content_len, tokens) {
             record.excluded.push(ExcludedItem {
                 asset_id: asset.asset_id.clone(),
                 layer: asset.layer.clone(),
@@ -237,15 +346,17 @@ pub fn assemble(
             continue;
         }
         record.used_chars += content_len;
+        record.used_tokens += tokens;
         record.included.push(IncludedItem {
             asset_id: asset.asset_id.clone(),
             layer: asset.layer.clone(),
             chars: content_len,
+            tokens,
             source: default_source(),
         });
         messages.push(ContextMessage {
             role: "system".to_string(),
-            content: render_bootstrap_message(asset),
+            content: rendered,
         });
     }
     (messages, record)
@@ -643,7 +754,33 @@ pub fn retrieve_and_assemble_with_options(
     messages: &mut Vec<ContextMessage>,
     record: &mut AssemblyRecord,
 ) {
-    record.retrieval_budget_chars = budget_chars;
+    retrieve_and_assemble_within(
+        query,
+        docs,
+        embedder,
+        doc_vectors,
+        Budget::chars(budget_chars),
+        min_similarity,
+        messages,
+        record,
+    );
+}
+
+/// [`retrieve_and_assemble_with_options`] under a budget in either unit.
+#[allow(clippy::too_many_arguments)]
+pub fn retrieve_and_assemble_within(
+    query: &str,
+    docs: &[RetrievalDoc],
+    embedder: Option<&dyn Embedder>,
+    doc_vectors: Option<&[Vec<f32>]>,
+    budget: Budget,
+    min_similarity: f32,
+    messages: &mut Vec<ContextMessage>,
+    record: &mut AssemblyRecord,
+) {
+    record.retrieval_budget_chars = budget.chars;
+    record.retrieval_budget_tokens = budget.tokens;
+    record.budget_unit = budget.unit;
     let ranked = match doc_vectors {
         Some(vectors) => {
             retrieve_fused_with_options(query, docs, embedder, Some(vectors), min_similarity)
@@ -656,7 +793,14 @@ pub fn retrieve_and_assemble_with_options(
         if content_len == 0 {
             continue;
         }
-        if record.retrieval_used_chars + content_len > budget_chars {
+        let rendered = render_recall_message(doc);
+        let tokens = injected_tokens(&rendered);
+        if !budget.fits(
+            record.retrieval_used_chars,
+            record.retrieval_used_tokens,
+            content_len,
+            tokens,
+        ) {
             record.excluded.push(ExcludedItem {
                 asset_id: doc.asset_id.clone(),
                 layer: doc.layer.clone(),
@@ -666,15 +810,17 @@ pub fn retrieve_and_assemble_with_options(
             continue;
         }
         record.retrieval_used_chars += content_len;
+        record.retrieval_used_tokens += tokens;
         record.included.push(IncludedItem {
             asset_id: doc.asset_id.clone(),
             layer: doc.layer.clone(),
             chars: content_len,
+            tokens,
             source: "retrieval".to_string(),
         });
         messages.push(ContextMessage {
             role: "system".to_string(),
-            content: render_recall_message(doc),
+            content: rendered,
         });
     }
 }
@@ -992,5 +1138,106 @@ mod tests {
             .expect("recorded");
         assert_eq!(excluded.layer, "l3");
         assert_eq!(excluded.reason, "over_budget");
+    }
+
+    fn long(id: &str, layer: &str, words: usize) -> BootstrapAsset {
+        asset(id, layer, &"word ".repeat(words))
+    }
+
+    #[test]
+    fn token_budget_decides_when_configured_and_chars_stay_the_default() {
+        // Two ~500-byte assets: each ~125 tokens of content plus citation
+        // and overhead, so a 150-token budget fits exactly one while the
+        // 4000-char default fits both.
+        let assets = vec![long("a", "l3", 100), long("b", "l2", 100)];
+        let chars = ContextConfig::default();
+        let (messages, record) = assemble_within(&assets, chars.bootstrap_budget());
+        assert_eq!(messages.len(), 2);
+        assert_eq!(record.budget_unit, BudgetUnit::Chars);
+        assert_eq!(record.budget_chars, DEFAULT_MEMORY_BUDGET_CHARS);
+        assert_eq!(
+            record.budget_tokens,
+            DEFAULT_MEMORY_BUDGET_CHARS / CHARS_PER_TOKEN
+        );
+        // Token usage is recorded even when chars decide.
+        let per_item: usize = record.included.iter().map(|i| i.tokens).sum();
+        assert_eq!(record.used_tokens, per_item);
+        assert!(record.used_tokens > 2 * 125);
+
+        let tokens: ContextConfig = serde_json::from_value(serde_json::json!({
+            "budgetUnit": "tokens",
+            "memoryBudgetTokens": 150
+        }))
+        .expect("parse");
+        let (messages, record) = assemble_within(&assets, tokens.bootstrap_budget());
+        assert_eq!(messages.len(), 1);
+        assert_eq!(record.budget_unit, BudgetUnit::Tokens);
+        assert_eq!(record.budget_tokens, 150);
+        assert!(record.used_tokens <= 150);
+        assert_eq!(record.excluded[0].asset_id, "b");
+        assert_eq!(record.excluded[0].reason, "over_budget");
+    }
+
+    /// Chars are bytes, so CJK content is charged 3 per character by the
+    /// char budget and about 1 per character by the token estimate: the
+    /// token budget lets in what the byte count wrongly kept out.
+    #[test]
+    fn token_budget_charges_cjk_by_estimate_not_bytes() {
+        let assets = vec![asset("zh", "l3", &"中".repeat(100))];
+        let chars = Budget::chars(200);
+        assert!(assemble_within(&assets, chars).0.is_empty());
+        let tokens = Budget::new(BudgetUnit::Tokens, 200, 0);
+        assert_eq!(tokens.tokens, 50);
+        assert!(assemble_within(&assets, tokens).0.is_empty());
+        let tokens = Budget::new(BudgetUnit::Tokens, 200, 130);
+        assert_eq!(assemble_within(&assets, tokens).0.len(), 1);
+    }
+
+    #[test]
+    fn shadow_enforces_chars() {
+        let assets = vec![long("a", "l3", 100), long("b", "l2", 100)];
+        let (messages, record) =
+            assemble_within(&assets, Budget::new(BudgetUnit::Shadow, 4000, 150));
+        assert_eq!(messages.len(), 2);
+        assert_eq!(record.budget_unit, BudgetUnit::Shadow);
+        assert!(record.used_tokens > record.budget_tokens);
+    }
+
+    #[test]
+    fn recall_respects_the_token_budget() {
+        let docs = vec![
+            doc("mem_a", &format!("pnpm {}", "word ".repeat(40))),
+            doc("mem_b", &format!("pnpm {}", "word ".repeat(40))),
+        ];
+        let mut messages = Vec::new();
+        let mut record = AssemblyRecord::default();
+        retrieve_and_assemble_within(
+            "pnpm",
+            &docs,
+            None,
+            None,
+            Budget::new(BudgetUnit::Tokens, 10_000, 80),
+            VECTOR_MIN_SIMILARITY,
+            &mut messages,
+            &mut record,
+        );
+        assert_eq!(messages.len(), 1);
+        assert_eq!(record.retrieval_budget_tokens, 80);
+        assert!(record.retrieval_used_tokens <= 80);
+        assert_eq!(record.excluded.len(), 1);
+        assert_eq!(record.excluded[0].source, "retrieval");
+    }
+
+    #[test]
+    fn a_pre_token_record_still_parses() {
+        let record: AssemblyRecord = serde_json::from_value(serde_json::json!({
+            "included": [{"assetId": "m", "layer": "l3", "chars": 3, "source": "bootstrap"}],
+            "excluded": [],
+            "budgetChars": 4000,
+            "usedChars": 3
+        }))
+        .expect("parse");
+        assert_eq!(record.budget_unit, BudgetUnit::Chars);
+        assert_eq!(record.included[0].tokens, 0);
     }
 }

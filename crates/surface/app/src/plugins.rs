@@ -977,7 +977,8 @@ impl kura_plugin::Hook for ContextHook {
             kura_memory::MemoryLayer::L2,
             &mut visibility_excluded,
         ));
-        let (mut injected, mut record) = kura_context::assemble(&candidates, self.config.budget());
+        let (mut injected, mut record) =
+            kura_context::assemble_within(&candidates, self.config.bootstrap_budget());
         record.excluded.extend(visibility_excluded);
 
         // Query-time recall of L1 atoms (BM25 + recency, RRF fusion) over
@@ -1085,12 +1086,12 @@ impl kura_plugin::Hook for ContextHook {
             // whole corpus — one RPC per atom per turn for an external
             // provider, synchronously on the reply path.
             let doc_vectors = Self::corpus_vectors(state, embedder, &docs);
-            kura_context::retrieve_and_assemble_with_options(
+            kura_context::retrieve_and_assemble_within(
                 &query,
                 &docs,
                 Some(embedder),
                 Some(&doc_vectors),
-                self.config.retrieval_budget(),
+                self.config.recall_budget(),
                 self.config.min_similarity(),
                 &mut injected,
                 &mut record,

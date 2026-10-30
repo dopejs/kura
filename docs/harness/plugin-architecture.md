@@ -203,6 +203,17 @@ what memory the model saw for any dispatch. Because injection happens
 before the dispatch is prepared, the persisted dispatch record carries
 the bootstrap verbatim (model-visible = logged holds).
 
+Token budgets (agent-runtime-program.md 2.2, 2026-10-30): the context
+config takes the same `budgetUnit` as session-strategy. `tokens` enforces
+`memoryBudgetTokens` / `retrievalBudgetTokens` (unset: the char budgets
+converted at 4:1), charging each injected message its estimated tokens as
+rendered, citation included, plus the 4-token message overhead. `chars`
+(default) and `shadow` enforce the char budgets as before. Whatever the
+unit, the `AssemblyRecord` carries `budgetUnit`, both budgets, used tokens
+next to used chars, and `tokens` per included item, so comparing the two is
+a query over `context.assembled` events rather than a separate shadow
+path. Rollback is `budgetUnit: "chars"` or removing the key.
+
 Query-time retrieval (second slice, 2026-08-17): the turn's last user
 message recalls Ready L1 atoms through BM25 + recency rankers fused with
 reciprocal-rank fusion (k=60). Atoms with no lexical overlap are never

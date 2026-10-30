@@ -2505,6 +2505,123 @@ mod tests {
         app.close();
     }
 
+    /// Stage 2.2: with `budgetUnit: tokens` the bootstrap is cut by the
+    /// estimated token cost of each injected message, not by its byte
+    /// length, and the recorded decision says which budget decided.
+    #[tokio::test]
+    async fn context_bootstrap_honours_a_token_budget_and_records_it() {
+        let (_temp_dir, config) = test_config();
+        // ~200 bytes each: both fit the 4000-char default, but only one fits
+        // 80 estimated tokens (~50 of content plus citation and overhead).
+        std::fs::write(
+            std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
+            serde_json::json!({
+                "entries": { "context": { "config": {
+                    "budgetUnit": "tokens",
+                    "memoryBudgetTokens": 80
+                } } }
+            })
+            .to_string(),
+        )
+        .expect("write profile");
+        let app = App::new(config).expect("build app");
+        let memory = app.state.memory.as_deref().expect("memory wired");
+        let operator = kura_memory::Actor {
+            kind: kura_memory::ActorKind::Operator,
+            id: "op".to_string(),
+        };
+        let scenario = |title: &str, content: &str| {
+            let (atom, _) = memory
+                .create(kura_memory::CreateAssetInput {
+                    kind: kura_memory::AssetKind::ChatMemory,
+                    layer: kura_memory::MemoryLayer::L1,
+                    owner: operator.clone(),
+                    visibility: kura_memory::Visibility::Private,
+                    atom_type: Some(kura_memory::AtomType::Preference),
+                    title: title.to_string(),
+                    content: content.to_string(),
+                    source_links: vec![kura_memory::SourceLink {
+                        kind: kura_memory::SourceKind::Thread,
+                        id: format!("thr_{title}"),
+                        ..kura_memory::SourceLink::default()
+                    }],
+                    ..kura_memory::CreateAssetInput::default()
+                })
+                .expect("seed L1");
+            memory
+                .create(kura_memory::CreateAssetInput {
+                    kind: kura_memory::AssetKind::ChatMemory,
+                    layer: kura_memory::MemoryLayer::L2,
+                    owner: operator.clone(),
+                    visibility: kura_memory::Visibility::Private,
+                    title: title.to_string(),
+                    content: content.to_string(),
+                    member_asset_ids: vec![atom.asset_id],
+                    ..kura_memory::CreateAssetInput::default()
+                })
+                .expect("seed L2")
+                .0
+        };
+        let older = scenario("garden", &"tomatoes need water daily ".repeat(8));
+        let newest = scenario("kitchen", &"renovation budget notes here ".repeat(7));
+
+        let mut payload = serde_json::json!({
+            "tenantId": "",
+            "sourceKind": "chat",
+            "provider": "echo",
+            "model": "",
+            "messages": [{ "role": "user", "content": "hi" }]
+        });
+        let hooks = app.state.hooks.as_ref().expect("hook bus");
+        assert!(
+            hooks
+                .run(kura_plugin::points::CHAT_PRE_DISPATCH, &mut payload)
+                .allowed()
+        );
+
+        let events = app
+            .state
+            .store
+            .lock()
+            .list_events(&kura_events::Filter::default())
+            .expect("list events");
+        let record = &events
+            .iter()
+            .find(|e| e.name == "context.assembled")
+            .expect("context.assembled recorded")
+            .payload["record"];
+        assert_eq!(record["budgetUnit"], "tokens", "{record}");
+        assert_eq!(record["budgetTokens"], 80, "{record}");
+        assert_eq!(
+            record["budgetChars"],
+            kura_context::DEFAULT_MEMORY_BUDGET_CHARS
+        );
+        let used_tokens = record["usedTokens"].as_u64().expect("usedTokens");
+        assert!(used_tokens > 0 && used_tokens <= 80, "{record}");
+        let bootstrap_included: Vec<&serde_json::Value> = record["included"]
+            .as_array()
+            .expect("included")
+            .iter()
+            .filter(|item| item["source"] == "bootstrap")
+            .collect();
+        assert_eq!(bootstrap_included.len(), 1, "{record}");
+        assert_eq!(bootstrap_included[0]["assetId"], newest.asset_id.as_str());
+        assert_eq!(bootstrap_included[0]["tokens"], used_tokens);
+        assert!(
+            record["excluded"]
+                .as_array()
+                .expect("excluded")
+                .iter()
+                .any(|item| {
+                    item["assetId"] == older.asset_id.as_str()
+                        && item["reason"] == "over_budget"
+                        && item["source"] == "bootstrap"
+                }),
+            "{record}"
+        );
+        app.close();
+    }
+
     /// Stage 1's own verification requirement (audit F1): the retrieval
     /// benchmark at 10k Ready atoms. Cold turn embeds the whole corpus once;
     /// warm turn must reuse the persisted index and be no slower. Numbers are

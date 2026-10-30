@@ -24,6 +24,7 @@
               "assetId": { "type": "string" },
               "layer": { "type": "string" },
               "chars": { "type": "integer", "minimum": 0 },
+              "tokens": { "type": "integer", "minimum": 0, "description": "Estimated tokens of the injected message, citation included." },
               "source": { "type": "string" }
             }
           }
@@ -44,7 +45,12 @@
         "budgetChars": { "type": "integer", "minimum": 0 },
         "usedChars": { "type": "integer", "minimum": 0 },
         "retrievalBudgetChars": { "type": "integer", "minimum": 0 },
-        "retrievalUsedChars": { "type": "integer", "minimum": 0 }
+        "retrievalUsedChars": { "type": "integer", "minimum": 0 },
+        "budgetUnit": { "type": "string", "enum": ["chars", "tokens", "shadow"], "description": "Which budget decided inclusion. Char and token usage are both recorded in every mode; shadow enforces chars." },
+        "budgetTokens": { "type": "integer", "minimum": 0 },
+        "usedTokens": { "type": "integer", "minimum": 0 },
+        "retrievalBudgetTokens": { "type": "integer", "minimum": 0 },
+        "retrievalUsedTokens": { "type": "integer", "minimum": 0 }
       }
     }
   }

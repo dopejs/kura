@@ -166,11 +166,15 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       budgets"): `budgetUnit: chars|tokens|shadow`, token budgets capped by
       an operator-declared `modelContextWindows` less an output reserve,
       char budgets converted at 4:1, `shadow` to compare on live traffic.
-      Default stays `chars` until shadow data says otherwise. **Open:** the
-      `context` plugin's memory/retrieval budgets are still chars; the
-      estimator is static (not yet corrected from provider-reported
-      `inputTokens`, which 2.1 traces now make available per dispatch); no
-      built-in model-window table, deliberately.
+      Default stays `chars` until shadow data says otherwise.
+      *Context plugin done 2026-10-30* (plugin-architecture.md, "Token
+      budgets" under the context plugin): the same `budgetUnit` with
+      `memoryBudgetTokens` / `retrievalBudgetTokens`, each injected message
+      charged at its rendered size, and every `AssemblyRecord` carrying
+      token usage in all modes. **Open:** the estimator is static (not yet
+      calibrated against provider-reported `inputTokens`, which 2.1 traces
+      now make available per dispatch); no built-in model-window table,
+      deliberately.
 - [ ] **2.3 Prompt caching (G2).** Keep the system frame + memory bootstrap a
       byte-stable prefix across rounds; emit the provider's cache marker where
       supported. Verified by 2.1 showing cache-read tokens on round ≥ 2.

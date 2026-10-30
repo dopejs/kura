@@ -1591,6 +1591,7 @@ dependencies = [
 name = "kura-context"
 version = "0.3.0"
 dependencies = [
+ "kura-session",
  "serde",
  "serde_json",
 ]

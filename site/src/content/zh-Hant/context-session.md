@@ -16,6 +16,9 @@
    原子：BM25 + 時近性 + 字元三元組向量，以倒數排名融合（RRF）合併。沒有
    詞法或向量關聯的原子絕不會被召回。預算：`retrievalBudgetChars`（預設
    2000）。以 `Memory[l1 …] (recalled): …` 形式注入。
+   兩個預算也可以按估算 token 計：設 `budgetUnit: "tokens"`，配合
+   `memoryBudgetTokens` / `retrievalBudgetTokens`（不設時取字元預算除以 4）。
+   無論哪種單位，每筆裝配紀錄都同時給出已用字元與已用 token。
 3. **符號壓縮**——過大的非框架訊息（預設 >8000 字元）外接為一條全文的 L0
    記憶引用；視窗裡保留 200 字元預覽加引用。token 開銷下降，證據路徑仍在
    （`GET /v1/memory/assets/{id}`）。
