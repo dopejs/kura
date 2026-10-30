@@ -553,6 +553,24 @@ pub fn backend_for(launch: &LaunchSpec) -> &'static dyn ExecutionBackend {
     }
 }
 
+/// The host process that runs `docker run`. For an isolated run the cwd is
+/// a container path (`/workspace`, passed as `--workdir`) that does not exist
+/// on the host, so the client starts in the daemon's own directory instead;
+/// spawning it there failed with ENOENT before the container ever started.
+fn docker_client_launch(launch: &LaunchSpec, args: Vec<String>) -> LaunchSpec {
+    let cwd = if launch.isolation.is_some() {
+        String::new()
+    } else {
+        launch.cwd.clone()
+    };
+    LaunchSpec {
+        command: "docker".to_string(),
+        args,
+        cwd,
+        ..launch.clone()
+    }
+}
+
 pub fn execute_docker(
     launch: &LaunchSpec,
     cancel: &CancellationToken,
@@ -570,11 +588,7 @@ pub fn execute_docker(
     args.push(launch.command.clone());
     args.extend(launch.args.iter().cloned());
 
-    let docker_launch = LaunchSpec {
-        command: "docker".to_string(),
-        args,
-        ..launch.clone()
-    };
+    let docker_launch = docker_client_launch(launch, args);
 
     let mut result = execute_subprocess(&docker_launch, cancel, timed_out);
     if cancel.is_cancelled() && !launch.container_name.is_empty() {
@@ -1295,5 +1309,49 @@ impl Manager {
         {
             let _ = self.publish_execution_terminal(&execution);
         }
+    }
+}
+
+#[cfg(test)]
+mod docker_client_tests {
+    use super::*;
+
+    fn launch(isolation: Option<crate::isolation::IsolatedRun>) -> LaunchSpec {
+        LaunchSpec {
+            backend_kind: BackendKind::Docker,
+            command: "sh".to_string(),
+            args: Vec::new(),
+            cwd: "/workspace".to_string(),
+            env: Vec::new(),
+            secret_values: Vec::new(),
+            stdin: String::new(),
+            timeout: Duration::ZERO,
+            kill_grace: Duration::ZERO,
+            capture_stdout: true,
+            capture_stderr: true,
+            max_output_bytes: 0,
+            docker_image: "img".to_string(),
+            docker_network: String::new(),
+            docker_mounts: Vec::new(),
+            container_name: "kura-exec-1".to_string(),
+            isolation,
+        }
+    }
+
+    #[test]
+    fn an_isolated_client_does_not_start_in_the_container_path() {
+        let run = crate::isolation::IsolatedRun {
+            tenant_id: "ten_a".to_string(),
+            uid: 100_001,
+            workspace_local: std::path::PathBuf::from("/data/tenants/ten_a/workspace"),
+            workspace_source: "/data/tenants/ten_a/workspace".to_string(),
+            limits: crate::isolation::IsolationLimits::default(),
+        };
+        let client = docker_client_launch(&launch(Some(run)), vec!["run".to_string()]);
+        assert_eq!(client.command, "docker");
+        assert!(client.cwd.is_empty(), "{}", client.cwd);
+        // A non-isolated run keeps its host cwd, as before.
+        let legacy = docker_client_launch(&launch(None), vec!["run".to_string()]);
+        assert_eq!(legacy.cwd, "/workspace");
     }
 }

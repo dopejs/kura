@@ -272,19 +272,44 @@ fn cancelling_an_isolated_run_removes_its_container() {
     let manager = manager(&data_dir);
     let started =
         as_tenant("ten_a", || manager.start_execution(request("sleep 60"))).expect("start");
-    // Let the container come up before cancelling it.
-    std::thread::sleep(Duration::from_secs(2));
+    let name = format!("kura-exec-{}", started.execution_id);
+    let listed = |all: bool| {
+        let mut args = vec!["ps", "-q"];
+        if all {
+            args.push("-a");
+        }
+        let filter = format!("name={name}");
+        args.extend(["--filter", filter.as_str()]);
+        let output = std::process::Command::new("docker")
+            .args(&args)
+            .output()
+            .expect("docker ps");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+    // The container must really be running, or the cleanup below proves
+    // nothing (a launch that failed outright would also leave none).
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while listed(false).is_empty() {
+        let execution = manager
+            .get_execution(&started.execution_id)
+            .expect("execution");
+        assert!(
+            !is_terminal(execution.status),
+            "run ended before its container came up: {:?}",
+            execution.result
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "container {name} never started"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
     manager
         .cancel_execution(&started.execution_id)
         .expect("cancel");
     wait(&manager, &started.execution_id, Duration::from_secs(30));
-    let name = format!("kura-exec-{}", started.execution_id);
-    let listed = std::process::Command::new("docker")
-        .args(["ps", "-aq", "--filter", &format!("name={name}")])
-        .output()
-        .expect("docker ps");
     assert!(
-        String::from_utf8_lossy(&listed.stdout).trim().is_empty(),
+        listed(true).is_empty(),
         "container {name} survived its cancellation"
     );
 }
