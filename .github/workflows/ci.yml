@@ -37,17 +37,24 @@ jobs:
         run: ../scripts/cargo-test-isolated.sh -p kura-contracts
       - name: Route parity gate
         run: ../scripts/cargo-test-isolated.sh -p kura-api --test route_parity
-      # Stage 3.1: tenant isolation proven against real containers (cross-
+      # Stage 3.1-3.5: tenant isolation proven against real containers (cross-
       # tenant reads, the daemon's data dir, root, network, cgroup limits,
-      # container cleanup on cancel). Linux runners have docker; the sandbox
-      # only selects the backend when its image is already present.
+      # container cleanup, live stdio, egress only via the proxy). Linux
+      # runners have docker; the sandbox only selects the backend when its
+      # image is already present.
       - name: Isolated execution (real containers)
         if: runner.os == 'Linux'
         env:
           KURA_DOCKER_TESTS: "1"
+        # The egress test runs the real `kura egress-proxy` as the sidecar of
+        # an --internal tenant network (Stage 3.5), from ubuntu:24.04 to
+        # match the runner's glibc.
         run: |
           docker pull alpine:3.20
-          ../scripts/cargo-test-isolated.sh -p kura-sandbox --test isolation
+          docker pull ubuntu:24.04
+          cargo build -p kura-cli
+          KURA_EGRESS_PROXY_BIN="$PWD/target/debug/kura" \
+            ../scripts/cargo-test-isolated.sh -p kura-sandbox --test isolation
       # The pipe used here previously took its exit code from `tail`, so a
       # clippy failure could never fail the job. Errors are now fatal; the
       # existing warning backlog is still tolerated.

@@ -642,7 +642,12 @@ pub fn execute_docker(
         serde_json::json!(launch.docker_image),
     );
     let (network, mounts) = match &launch.isolation {
-        Some(_) => ("none", 1),
+        Some(run) => (
+            run.egress
+                .as_ref()
+                .map_or("none", |egress| egress.network.as_str()),
+            1,
+        ),
         None => (launch.docker_network.as_str(), launch.docker_mounts.len()),
     };
     result
@@ -1384,6 +1389,7 @@ mod docker_client_tests {
             workspace_local: std::path::PathBuf::from("/data/tenants/ten_a/workspace"),
             workspace_source: "/data/tenants/ten_a/workspace".to_string(),
             limits: crate::isolation::IsolationLimits::default(),
+            egress: None,
         };
         let client = docker_client_launch(&launch(Some(run)), vec!["run".to_string()]);
         assert_eq!(client.command, "docker");

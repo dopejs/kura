@@ -293,6 +293,83 @@ fn a_single_tenant_daemon_has_no_floor() {
     assert_eq!(floor_rule(&decision), None, "{:?}", decision.matched_rules);
 }
 
+// --- Stage 3.5: network through the tenant egress proxy -------------------
+
+fn networked(script: &str) -> ExecutionRequest {
+    ExecutionRequest {
+        access: AccessRequest {
+            network_mode: Some(NetworkMode::Full),
+            ..AccessRequest::default()
+        },
+        ..request(script)
+    }
+}
+
+#[test]
+fn tenant_egress_needs_an_internal_network() {
+    let manager = manager(&temp_dir("egress_config"));
+    let err = manager
+        .configure_tenant_egress_with("bridge", "http://proxy:3128", &|_| Ok(false))
+        .expect_err("a routed network is refused");
+    assert!(err.contains("not --internal"), "{err}");
+    assert!(
+        manager
+            .configure_tenant_egress_with("", "http://proxy:3128", &|_| Ok(true))
+            .is_err()
+    );
+    assert!(
+        manager
+            .configure_tenant_egress_with("net", "http://proxy:3128", &|_| Err("gone".into()))
+            .is_err()
+    );
+    // Still offline: nothing was configured.
+    let decision = as_tenant("ten_a", || manager.explain(networked("true"))).expect("explain");
+    assert_eq!(denial(&decision), Some("isolation:network"));
+}
+
+#[test]
+fn a_networked_run_goes_through_the_configured_proxy_without_approval() {
+    let manager = manager(&temp_dir("egress_on"));
+    manager
+        .configure_tenant_egress_with("kura-tenant", "http://kura-egress-proxy:3128", &|n| {
+            Ok(n == "kura-tenant")
+        })
+        .expect("configured");
+    let decision = as_tenant("ten_a", || manager.explain(networked("true"))).expect("explain");
+    assert_eq!(denial(&decision), None, "{:?}", decision.matched_rules);
+    assert!(
+        !decision
+            .matched_rules
+            .iter()
+            .any(|rule| rule.starts_with("network:approval")),
+        "the proxy is the policy; no operator approval: {:?}",
+        decision.matched_rules
+    );
+
+    // What the proxy cannot enforce per run is still refused.
+    for access in [
+        AccessRequest {
+            network_mode: Some(NetworkMode::AllowList),
+            allowed_hosts: vec!["example.com".to_string()],
+            ..AccessRequest::default()
+        },
+        AccessRequest {
+            network_mode: Some(NetworkMode::Full),
+            allow_loopback: true,
+            ..AccessRequest::default()
+        },
+    ] {
+        let decision = as_tenant("ten_a", || {
+            manager.explain(ExecutionRequest {
+                access: access.clone(),
+                ..request("true")
+            })
+        })
+        .expect("explain");
+        assert_eq!(denial(&decision), Some("isolation:network"), "{access:?}");
+    }
+}
+
 fn docker_tests_enabled(test: &str) -> bool {
     let enabled = std::env::var("KURA_DOCKER_TESTS").is_ok_and(|v| v == "1");
     if !enabled {
@@ -506,4 +583,117 @@ fn an_isolated_container_serves_a_live_stdio_session() {
         .output()
         .expect("docker ps");
     assert!(String::from_utf8_lossy(&listed.stdout).trim().is_empty());
+}
+
+/// Removes the test's docker network and proxy container however the test
+/// ends.
+struct EgressFixture {
+    network: String,
+    proxy: String,
+}
+
+impl Drop for EgressFixture {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("docker")
+            .args(["rm", "-f", &self.proxy])
+            .output();
+        let _ = std::process::Command::new("docker")
+            .args(["network", "rm", &self.network])
+            .output();
+    }
+}
+
+fn docker(args: &[&str]) -> String {
+    let output = std::process::Command::new("docker")
+        .args(args)
+        .output()
+        .expect("docker");
+    assert!(
+        output.status.success(),
+        "docker {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// Stage 3.5 end to end: a tenant container on the `--internal` tenant
+/// network reaches the world only through `kura egress-proxy`. Plain HTTP
+/// through the proxy works; the metadata address is refused by the proxy;
+/// bypassing the proxy finds no route; DNS for outside names goes nowhere.
+/// Needs `KURA_EGRESS_PROXY_BIN`: a `kura` binary runnable in ubuntu:24.04.
+#[test]
+fn a_tenant_container_reaches_the_network_only_through_the_egress_proxy() {
+    if !docker_tests_enabled("a_tenant_container_reaches_the_network_only_through_the_egress_proxy")
+    {
+        return;
+    }
+    let Ok(binary) = std::env::var("KURA_EGRESS_PROXY_BIN") else {
+        eprintln!("skipping: set KURA_EGRESS_PROXY_BIN to a kura binary");
+        return;
+    };
+    let fixture = EgressFixture {
+        network: format!("kura-tenant-test-{}", std::process::id()),
+        proxy: format!("kura-egress-proxy-test-{}", std::process::id()),
+    };
+    docker(&["network", "create", "--internal", &fixture.network]);
+    docker(&[
+        "run",
+        "-d",
+        "--name",
+        &fixture.proxy,
+        "--mount",
+        &format!("type=bind,src={binary},dst=/kura,readonly"),
+        "ubuntu:24.04",
+        "/kura",
+        "egress-proxy",
+        "--listen",
+        "0.0.0.0:3128",
+    ]);
+    docker(&["network", "connect", &fixture.network, &fixture.proxy]);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let proxy_logs = || {
+        let output = std::process::Command::new("docker")
+            .args(["logs", &fixture.proxy])
+            .output()
+            .expect("docker logs");
+        // The proxy logs to stderr.
+        String::from_utf8_lossy(&output.stderr).to_string()
+    };
+    while !proxy_logs().contains("listening") {
+        assert!(std::time::Instant::now() < deadline, "proxy never started");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    let manager = manager(&temp_dir("docker_egress"));
+    manager
+        .configure_tenant_egress(&fixture.network, &format!("http://{}:3128", fixture.proxy))
+        .expect("the test network is internal");
+    let script = r#"
+        wget -q -T 15 -O /dev/null http://example.com/ && echo PROXIED_OK
+        wget -q -T 5 -O /dev/null http://169.254.169.254/ || echo METADATA_REFUSED
+        env -u http_proxy -u HTTP_PROXY wget -q -T 5 -O /dev/null http://93.184.216.34/ || echo DIRECT_BLOCKED
+        nslookup example.com >/dev/null 2>&1 || echo DNS_BLOCKED
+    "#;
+    let started = as_tenant("ten_a", || manager.start_execution(networked(script))).expect("start");
+    assert_eq!(
+        started.decision.resolution,
+        DecisionResolution::Allow,
+        "{:?}",
+        started.decision
+    );
+    let run = wait(&manager, &started.execution_id, Duration::from_secs(90));
+    let lines: Vec<&str> = run.result.stdout.lines().map(str::trim).collect();
+    assert_eq!(
+        lines,
+        [
+            "PROXIED_OK",
+            "METADATA_REFUSED",
+            "DIRECT_BLOCKED",
+            "DNS_BLOCKED"
+        ],
+        "stderr: {}",
+        run.result.stderr
+    );
+    let logs = proxy_logs();
+    assert!(logs.contains("refused 169.254.169.254:80"), "{logs}");
 }

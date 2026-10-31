@@ -11,9 +11,10 @@
 //! - **Identity:** a per-tenant uid ([`tenant_uid`]), never root, no
 //!   capabilities, `no-new-privileges`.
 //! - **Resources:** cgroup CPU, memory (swap included) and pids limits.
-//! - **Network:** none. Tenant egress arrives with the policy-checking proxy
-//!   (Stage 3.5); until then a request for network is refused, not quietly
-//!   downgraded.
+//! - **Network:** none, unless the run asks for it and the daemon has a
+//!   tenant egress path (Stage 3.5): then a docker `--internal` network whose
+//!   only exit is the policy-checking proxy, with DNS to a dead upstream.
+//!   Without that path a request for network is refused, not downgraded.
 //!
 //! Cross-tenant isolation rests on the mounts: another tenant's workspace is
 //! not in the container's filesystem at all. The distinct uid is defence in
@@ -123,6 +124,18 @@ pub struct IsolatedRun {
     /// The workspace as the docker daemon sees it (bind mount source).
     pub workspace_source: String,
     pub limits: IsolationLimits,
+    /// Set when the run asked for network and the daemon has a tenant egress
+    /// path: the container joins that network and reaches the world only
+    /// through its proxy. `None` is `--network none`.
+    pub egress: Option<TenantEgress>,
+}
+
+/// The tenant egress path (Stage 3.5): a docker `--internal` network whose
+/// only exit is the egress proxy reachable at `proxy_url` on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TenantEgress {
+    pub network: String,
+    pub proxy_url: String,
 }
 
 /// Why a tenant cannot run isolated work.
@@ -212,6 +225,7 @@ impl WorkspaceRoots {
                 .to_string_lossy()
                 .into_owned(),
             limits,
+            egress: None,
         })
     }
 }
@@ -274,7 +288,9 @@ pub fn isolated_docker_args(
         "--tmpfs".into(),
         format!("/tmp:rw,noexec,nosuid,nodev,size={}m", run.limits.tmpfs_mb),
         "--network".into(),
-        "none".into(),
+        run.egress
+            .as_ref()
+            .map_or_else(|| "none".to_string(), |egress| egress.network.clone()),
         "--ipc".into(),
         "private".into(),
         "--init".into(),
@@ -297,6 +313,21 @@ pub fn isolated_docker_args(
         "-e".into(),
         format!("HOME={CONTAINER_WORKSPACE}"),
     ];
+    if let Some(egress) = &run.egress {
+        // Every route out is the proxy. DNS for anything but container names
+        // goes to a dead upstream, so lookups cannot carry data out either;
+        // the proxy's own name still resolves through docker's embedded DNS.
+        args.extend(["--dns".into(), "127.0.0.1".into()]);
+        for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            args.extend(["-e".into(), format!("{key}={}", egress.proxy_url)]);
+        }
+        args.extend([
+            "-e".into(),
+            "NO_PROXY=".into(),
+            "-e".into(),
+            "no_proxy=".into(),
+        ]);
+    }
     args.extend(container_env_args(env));
     args.push(image.into());
     args
@@ -365,6 +396,7 @@ mod tests {
             workspace_local: PathBuf::from("/data/tenants/ten_a/workspace"),
             workspace_source: "/srv/kura/tenants/ten_a/workspace".into(),
             limits: IsolationLimits::default(),
+            egress: None,
         }
     }
 
@@ -486,5 +518,25 @@ mod tests {
                 .any(|item| item.contains("attacker") || item.contains("/opt/tool")),
             "the tenant cannot steer the docker client: {client:?}"
         );
+    }
+
+    #[test]
+    fn a_networked_run_joins_the_tenant_network_with_only_the_proxy() {
+        let mut run = run();
+        run.egress = Some(TenantEgress {
+            network: "kura-tenant".to_string(),
+            proxy_url: "http://kura-egress-proxy:3128".to_string(),
+        });
+        let args = isolated_docker_args(&run, "n", "img", &[]);
+        assert_eq!(flag_value(&args, "--network"), ["kura-tenant"]);
+        assert_eq!(flag_value(&args, "--dns"), ["127.0.0.1"]);
+        let env = flag_value(&args, "-e");
+        assert!(env.contains(&"HTTPS_PROXY=http://kura-egress-proxy:3128"));
+        assert!(env.contains(&"http_proxy=http://kura-egress-proxy:3128"));
+        assert!(env.contains(&"NO_PROXY="));
+        // Without egress the run stays off every network.
+        let offline = isolated_docker_args(&self::tests::run(), "n", "img", &[]);
+        assert_eq!(flag_value(&offline, "--network"), ["none"]);
+        assert!(flag_value(&offline, "--dns").is_empty());
     }
 }

@@ -102,6 +102,8 @@ pub(crate) struct ManagerInner {
     /// Shared hosting (Stage 3.2): the operator tenant. When set, work not
     /// provably the operator's runs only on a tenant-isolated backend.
     pub(crate) shared_operator_tenant: Option<String>,
+    /// Stage 3.5: the tenant egress path; `None` keeps isolated runs offline.
+    pub(crate) tenant_egress: Option<crate::TenantEgress>,
 }
 
 /// Thread-safe sandbox manager mirroring the Go `Manager`: an in-memory
@@ -145,6 +147,44 @@ impl Manager {
     /// subprocess path for tenants, including MCP stdio servers.
     pub fn require_tenant_isolation(&self, operator_tenant_id: &str) {
         self.inner.write().shared_operator_tenant = Some(operator_tenant_id.trim().to_string());
+    }
+
+    /// Stage 3.5: give isolated runs that ask for network a way out —
+    /// `network`, which must be a docker `--internal` network, with the
+    /// egress proxy reachable on it at `proxy_url`.
+    ///
+    /// Refused (and isolated runs stay offline) unless docker reports the
+    /// network as internal: a normal bridge would route a container straight
+    /// out, around the proxy and its policy.
+    pub fn configure_tenant_egress(&self, network: &str, proxy_url: &str) -> Result<(), String> {
+        self.configure_tenant_egress_with(network, proxy_url, &docker_network_is_internal)
+    }
+
+    /// [`Self::configure_tenant_egress`] with the internal-network check
+    /// supplied by the caller (a container runtime other than the docker
+    /// CLI, or a test).
+    pub fn configure_tenant_egress_with(
+        &self,
+        network: &str,
+        proxy_url: &str,
+        is_internal: &dyn Fn(&str) -> Result<bool, String>,
+    ) -> Result<(), String> {
+        let network = network.trim();
+        let proxy_url = proxy_url.trim();
+        if network.is_empty() || proxy_url.is_empty() {
+            return Err("tenant egress needs both a network and a proxy URL".to_string());
+        }
+        if !is_internal(network)? {
+            return Err(format!(
+                "docker network {network} is not --internal; tenant containers on it \
+                 could bypass the egress proxy"
+            ));
+        }
+        self.inner.write().tenant_egress = Some(crate::TenantEgress {
+            network: network.to_string(),
+            proxy_url: proxy_url.to_string(),
+        });
+        Ok(())
     }
 
     /// Go `SetSecretManager`.
@@ -944,18 +984,36 @@ impl Manager {
         tenant_id: &str,
     ) -> Result<crate::IsolatedRun, (&'static str, String)> {
         let access = &execution.access;
-        if !matches!(access.network_mode, None | Some(NetworkMode::Deny))
-            || !access.allowed_hosts.is_empty()
+        // Per-run host/port lists and loopback cannot be honoured: the proxy
+        // enforces one tenant-wide policy by destination.
+        if !access.allowed_hosts.is_empty()
             || !access.allowed_ports.is_empty()
             || access.allow_loopback
+            || access.network_mode == Some(NetworkMode::AllowList)
         {
             return Err((
                 "isolation:network",
-                "isolated runs have no network until tenant egress goes through the \
-                 policy-checking proxy (Stage 3.5)"
+                "isolated runs get either no network or the tenant egress proxy; \
+                 per-run host lists, ports and loopback are not available"
                     .to_string(),
             ));
         }
+        let egress = if access.network_mode == Some(NetworkMode::Full) {
+            match self.inner.read().tenant_egress.clone() {
+                Some(egress) => Some(egress),
+                None => {
+                    return Err((
+                        "isolation:network",
+                        "this daemon has no tenant egress configured \
+                         (KURA_SANDBOX_TENANT_NETWORK + KURA_SANDBOX_EGRESS_PROXY); \
+                         isolated runs have no network"
+                            .to_string(),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
         if !access.read_roots.is_empty() || !access.write_roots.is_empty() {
             return Err((
                 "isolation:mounts",
@@ -975,6 +1033,7 @@ impl Manager {
         }
         crate::WorkspaceRoots::for_data_dir(&self.cfg.data_dir)
             .resolve(tenant_id, crate::IsolationLimits::from_env())
+            .map(|run| crate::IsolatedRun { egress, ..run })
             .map_err(|err| {
                 let rule = match err {
                     crate::IsolationError::TenantRequired => "isolation:tenant_required",
@@ -1941,6 +2000,21 @@ pub fn docker_access_mismatch(access: &AccessRequest) -> String {
 }
 
 /// Go `markDecisionUnsupported`.
+/// Whether docker reports `network` as `--internal` (no route out).
+fn docker_network_is_internal(network: &str) -> Result<bool, String> {
+    let output = std::process::Command::new("docker")
+        .args(["network", "inspect", "--format", "{{.Internal}}", network])
+        .output()
+        .map_err(|err| format!("inspecting docker network {network}: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "docker network {network} is not available: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim() == "true")
+}
+
 /// Who an execution runs for: the request context (installed by the API
 /// middleware) and/or the owner an in-process caller named.
 #[derive(Debug, Clone, Default)]
@@ -2989,7 +3063,7 @@ fn builtin_profiles(cfg: &kura_config::Config) -> Vec<Profile> {
         Profile {
             profile_id: crate::PROFILE_ID_TENANT_ISOLATED.to_string(),
             title: "Tenant-Isolated Container".to_string(),
-            description: "One container per run: only the acting tenant's workspace, a per-tenant non-root uid, no capabilities, a read-only root filesystem, cgroup CPU/memory/pids limits and no network.".to_string(),
+            description: "One container per run: only the acting tenant's workspace, a per-tenant non-root uid, no capabilities, a read-only root filesystem, cgroup CPU/memory/pids limits, and network only through the tenant egress proxy.".to_string(),
             backend_kind: BackendKind::Docker,
             default_work_dir: crate::CONTAINER_WORKSPACE.to_string(),
             filesystem_policy: crate::FilesystemPolicy {
@@ -3003,11 +3077,14 @@ fn builtin_profiles(cfg: &kura_config::Config) -> Vec<Profile> {
                 allow_home_write: false,
             },
             network_policy: crate::NetworkPolicy {
-                mode: NetworkMode::Deny,
+                // Full *through the tenant egress proxy*, which enforces the
+                // destination policy; without a configured egress path the
+                // isolation gate refuses network instead (Stage 3.5).
+                mode: NetworkMode::Full,
                 allowed_hosts: Vec::new(),
                 allowed_ports: Vec::new(),
                 allow_loopback: false,
-                enforcement_mode: "container_runtime".to_string(),
+                enforcement_mode: "egress_proxy".to_string(),
             },
             env_policy: crate::EnvironmentPolicy {
                 mode: EnvironmentMode::Clean,
@@ -3020,7 +3097,7 @@ fn builtin_profiles(cfg: &kura_config::Config) -> Vec<Profile> {
                 mode: ApprovalMode::Allow,
                 required_for_commands: Vec::new(),
                 required_for_writes_outside_roots: true,
-                required_for_network: true,
+                required_for_network: false,
                 required_for_unknown_backends: false,
             },
             process_policy: crate::ProcessPolicy {

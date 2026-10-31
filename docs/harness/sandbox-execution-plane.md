@@ -747,10 +747,34 @@ reason. The policy is the strict default, deliberately not the daemon's
 integrations, and tenants must not inherit that. The proxy cannot see
 inside TLS, so policy is by destination only.
 
-What makes it the only exit is topology, which is not wired yet: tenant
-containers on a docker `--internal` network (kernel-enforced, no route
-out), with the proxy as a sidecar attached to that network and to the
-outside one.
+What makes it the only exit is topology. The operator creates a docker
+`--internal` network, which the kernel enforces with no route out. The
+operator runs `kura egress-proxy` as a sidecar attached to that network and
+to an outside one, and gives the daemon both settings:
+
+```
+KURA_SANDBOX_TENANT_NETWORK=kura-tenant
+KURA_SANDBOX_EGRESS_PROXY=http://kura-egress-proxy:3128
+```
+
+At boot the daemon asks docker whether the network is internal. If it is
+not, or only one variable is set, tenant network stays off and the reason
+is logged; a routed bridge would let containers walk around the proxy.
+
+An isolated run that asks for full network joins that network with
+`HTTP_PROXY`/`HTTPS_PROXY` (both cases) set to the proxy, an empty
+`NO_PROXY`, and `--dns 127.0.0.1`. Container names (the proxy) still
+resolve through docker's embedded DNS; outside names go to a dead upstream,
+so DNS cannot carry data out. The `tenant_isolated` profile declares
+network `full` with enforcement `egress_proxy` and no approval for
+network, because the proxy is the policy. Per-run host lists, ports and
+loopback are still refused, since the proxy cannot enforce them per run.
+An MCP stdio server declaring network on `tenant_isolated` now goes
+through the proxy.
+
+The CI Linux job proves it with the real binary as the sidecar: proxied
+HTTP works, the metadata address is refused by the proxy, a request that
+bypasses the proxy has no route, and an outside DNS lookup fails.
 
 ## Explicit Prerequisites Before MCP
 

@@ -281,7 +281,7 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       `POST /v1/runs`. The operator's browser worker remains a host process.
 - [ ] **3.4** Measure gVisor on the cell hosts; adopt as a second backend only
       if overhead fits.
-- [ ] **3.5** G11 DNS rebinding (from 1.5): tenant workloads reach the network
+- [x] **3.5** G11 DNS rebinding (from 1.5): tenant workloads reach the network
       only through an egress proxy that resolves once, checks the address
       with `kura-egress`, and connects to that address. Daemon-side clients
       that take a tenant-influenced URL (none in M2) resolve through a
@@ -292,10 +292,19 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       address. It refuses ports off the allow list (default 80/443), strips
       proxy credentials, and bounds head size, head time and connections.
       Metric `kura_egress_proxy_requests_total`. Its policy is the strict
-      default, never the operator's `egress` config. *Open:* the topology
-      that makes it the only exit (tenant containers on an `--internal`
-      docker network, the proxy as the sidecar bridging it), and isolated
-      runs that ask for network being routed there instead of refused.
+      default, never the operator's `egress` config. *Topology done
+      2026-10-31:* `KURA_SANDBOX_TENANT_NETWORK` (must be docker
+      `--internal`, checked at boot, or tenant network stays off) plus
+      `KURA_SANDBOX_EGRESS_PROXY`. An isolated run asking for full network
+      joins that network, gets `HTTP(S)_PROXY` set to the proxy and DNS
+      pointed at a dead upstream, and needs no operator approval because
+      the proxy is the policy. Per-run host lists, ports and loopback stay
+      refused. Proven in CI with the real binary as the sidecar: proxied
+      HTTP works, metadata is refused by the proxy, bypassing the proxy has
+      no route, and outside DNS fails. *Not covered:* daemon-side clients
+      that fetch a tenant-influenced URL still resolve twice (none exist
+      yet); the proxy enforces one policy for all tenants, with no
+      per-tenant allow lists or attribution.
 
 Done when a tenant can run code and MCP tools, a hostile workload cannot read
 another tenant's workspace or the daemon's data dir (test proves it), and

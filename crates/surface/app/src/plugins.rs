@@ -677,6 +677,36 @@ pub(crate) fn apply_hosting_floor(
     }
 }
 
+/// Stage 3.5: the tenant egress path, from `KURA_SANDBOX_TENANT_NETWORK`
+/// (a docker `--internal` network) and `KURA_SANDBOX_EGRESS_PROXY` (the
+/// `kura egress-proxy` URL on it). Any problem leaves isolated runs offline
+/// and says why; it never fails the boot, and never opens network around
+/// the proxy.
+fn configure_tenant_egress(sandboxes: &SandboxManager) {
+    let read = |key: &str| {
+        std::env::var(key)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    match (
+        read("KURA_SANDBOX_TENANT_NETWORK"),
+        read("KURA_SANDBOX_EGRESS_PROXY"),
+    ) {
+        (None, None) => {}
+        (Some(network), Some(proxy)) => match sandboxes.configure_tenant_egress(&network, &proxy) {
+            Ok(()) => eprintln!(
+                "[kura] sandbox: tenant egress through {proxy} on internal network {network}"
+            ),
+            Err(err) => eprintln!("[kura] sandbox: tenant egress disabled: {err}"),
+        },
+        _ => eprintln!(
+            "[kura] sandbox: tenant egress disabled: set both KURA_SANDBOX_TENANT_NETWORK \
+             and KURA_SANDBOX_EGRESS_PROXY"
+        ),
+    }
+}
+
 fn build_sandbox(asm: &mut Assembly) -> Result<(), AppError> {
     let sandboxes = Arc::new(SandboxManager::new(
         asm.cfg.clone(),
@@ -698,6 +728,7 @@ fn build_sandbox(asm: &mut Assembly) -> Result<(), AppError> {
         .0;
     sandboxes.set_secret_manager(SecretsManager::new(secret_store, secret_backend));
     apply_hosting_floor(&sandboxes, &asm.state.hosting);
+    configure_tenant_egress(&sandboxes);
     asm.state.sandboxes = Some(sandboxes);
     asm.lifecycle.on_close(
         "sandbox",
