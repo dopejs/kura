@@ -40,10 +40,15 @@ fn manager(data_dir: &str) -> Manager {
 }
 
 fn as_tenant<R>(tenant_id: &str, f: impl FnOnce() -> R) -> R {
+    as_member(tenant_id, None, f)
+}
+
+fn as_member<R>(tenant_id: &str, role: Option<kura_identity::Role>, f: impl FnOnce() -> R) -> R {
     kura_identity::tenantctx::with_context(
         kura_identity::TenantContext {
             tenant_id: tenant_id.to_string(),
             principal_id: format!("prn_{tenant_id}"),
+            role,
             ..kura_identity::TenantContext::default()
         },
         f,
@@ -163,6 +168,129 @@ fn a_valid_isolated_request_passes_the_gate_without_side_effects() {
         profile.env_policy.injected_vars.is_empty(),
         "nothing of the daemon leaks in"
     );
+}
+
+// --- Stage 3.2: the shared-hosting floor -----------------------------------
+
+const OPERATOR: &str = "ten_operator";
+
+fn shared_manager(name: &str) -> Manager {
+    let manager = manager(&temp_dir(name));
+    manager.require_tenant_isolation(OPERATOR);
+    manager
+}
+
+fn subprocess(script: &str) -> ExecutionRequest {
+    ExecutionRequest {
+        profile_id: kura_sandbox::PROFILE_ID_SUBPROCESS_DEFAULT.to_string(),
+        ..request(script)
+    }
+}
+
+fn floor_rule(decision: &kura_sandbox::Decision) -> Option<&str> {
+    decision
+        .matched_rules
+        .iter()
+        .find(|rule| rule.starts_with("hosting:") || rule.starts_with("tenant:"))
+        .map(String::as_str)
+}
+
+#[test]
+fn a_shared_daemon_refuses_tenant_work_on_a_backend_that_does_not_isolate() {
+    let manager = shared_manager("floor_tenant");
+    let decision = as_tenant("ten_a", || manager.explain(subprocess("true"))).expect("explain");
+    assert_eq!(decision.resolution, DecisionResolution::Deny);
+    assert_eq!(floor_rule(&decision), Some("hosting:isolation_required"));
+    assert!(decision.explanation.contains(PROFILE_ID_TENANT_ISOLATED));
+
+    // A member of the operator tenant who is not its owner is a tenant too.
+    let decision = as_member(OPERATOR, Some(kura_identity::Role::Admin), || {
+        manager.explain(subprocess("true"))
+    })
+    .expect("explain");
+    assert_eq!(floor_rule(&decision), Some("hosting:isolation_required"));
+
+    // The tenant's way in is the isolated profile: past the floor.
+    let decision = as_tenant("ten_a", || manager.explain(request("true"))).expect("explain");
+    assert_eq!(floor_rule(&decision), None, "{:?}", decision.matched_rules);
+    assert_eq!(denial(&decision), None);
+}
+
+/// Work nobody can attribute is not the operator's: it gets the tenant
+/// rule, which is the fail-closed direction.
+#[test]
+fn a_shared_daemon_treats_unowned_work_as_a_tenants() {
+    let manager = shared_manager("floor_unowned");
+    let decision = manager.explain(subprocess("true")).expect("explain");
+    assert_eq!(floor_rule(&decision), Some("hosting:isolation_required"));
+}
+
+#[test]
+fn the_operator_keeps_host_execution_on_a_shared_daemon() {
+    let manager = shared_manager("floor_operator");
+    let decision = as_member(OPERATOR, Some(kura_identity::Role::Owner), || {
+        manager.explain(subprocess("true"))
+    })
+    .expect("explain");
+    assert_eq!(floor_rule(&decision), None, "{:?}", decision.matched_rules);
+
+    // In-process work the operator owns (its MCP server), with no request.
+    let decision = manager
+        .explain(ExecutionRequest {
+            owner_tenant_id: OPERATOR.to_string(),
+            ..subprocess("true")
+        })
+        .expect("explain");
+    assert_eq!(floor_rule(&decision), None, "{:?}", decision.matched_rules);
+}
+
+/// The owner an in-process caller names cannot launder a request acting for
+/// another tenant, and an API body cannot claim an owner at all.
+#[test]
+fn the_owner_tenant_cannot_override_the_request_context() {
+    let manager = shared_manager("floor_mismatch");
+    let decision = as_tenant("ten_a", || {
+        manager.explain(ExecutionRequest {
+            owner_tenant_id: OPERATOR.to_string(),
+            ..subprocess("true")
+        })
+    })
+    .expect("explain");
+    assert_eq!(decision.resolution, DecisionResolution::Deny);
+    assert_eq!(floor_rule(&decision), Some("tenant:mismatch"));
+
+    let decoded: ExecutionRequest = serde_json::from_str(
+        r#"{"command":"true","access":{},"ownerTenantId":"ten_operator","owner_tenant_id":"ten_operator"}"#,
+    )
+    .expect("decode");
+    assert!(decoded.owner_tenant_id.is_empty());
+}
+
+/// MCP stdio servers start through the attached path: a tenant's server is
+/// refused there too until it can run isolated (Stage 3.3).
+#[test]
+fn a_tenants_attached_process_is_refused_on_a_shared_daemon() {
+    let manager = shared_manager("floor_attached");
+    let (execution, attached) = manager
+        .start_attached_execution(ExecutionRequest {
+            owner_tenant_id: "ten_a".to_string(),
+            ..subprocess("cat")
+        })
+        .expect("attached");
+    assert!(attached.is_none(), "no process was started");
+    assert_eq!(execution.status, ExecutionStatus::Denied);
+    assert_eq!(
+        floor_rule(&execution.decision),
+        Some("hosting:isolation_required")
+    );
+}
+
+/// A single-tenant daemon is unchanged: tenants' subprocess work runs.
+#[test]
+fn a_single_tenant_daemon_has_no_floor() {
+    let manager = manager(&temp_dir("floor_single"));
+    let decision = as_tenant("ten_a", || manager.explain(subprocess("true"))).expect("explain");
+    assert_eq!(floor_rule(&decision), None, "{:?}", decision.matched_rules);
 }
 
 fn docker_tests_enabled(test: &str) -> bool {

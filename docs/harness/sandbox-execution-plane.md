@@ -680,6 +680,32 @@ Not yet: MCP stdio servers still run as host subprocesses, because attached
 executions refuse docker (3.3). No consumer selects `tenant_isolated` on its
 own yet, and shared mode does not yet require it (3.2).
 
+### 6. Shared-Hosting Floor (Agent Runtime Program 3.2, 2026-10-31)
+
+On a shared daemon (`KURA_HOSTING=shared`), the sandbox manager is told
+the operator tenant at boot (`require_tenant_isolation`). From then on,
+`prepare` sends work to a non-isolating backend (`subprocess_default`,
+`docker_default`, the managed-provider profiles) only when the work is
+provably the operator's:
+
+- **The operator acting through a request:** the request context names the
+  operator tenant with the owner role, as `Hosting::is_platform_operator`
+  requires.
+- **In-process work the operator owns:** the caller sets
+  `ExecutionRequest.owner_tenant_id` to the operator tenant, as MCP does
+  for a server the operator owns.
+
+Everything else gets `hosting:isolation_required` with no process started:
+tenants, non-owner members of the operator tenant, and work nobody owns.
+Unknown ownership is treated as tenant work; that is the fail-closed
+direction. `owner_tenant_id` is `#[serde(skip)]`, so an API body cannot
+claim it. When a request context is also present the two must agree, or
+the request is denied with `tenant:mismatch`.
+
+The floor asks the backend seam (`backend_for_profile(..).tenant_isolated()`)
+rather than matching profile ids, so a future isolated backend (gVisor,
+3.4) passes without changes here.
+
 ## Explicit Prerequisites Before MCP
 
 The next roadmap should not be "MCP immediately" without these prerequisites being explicit:

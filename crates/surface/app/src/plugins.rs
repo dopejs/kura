@@ -667,6 +667,16 @@ fn build_skills(asm: &mut Assembly) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Stage 3.2: a shared daemon gives tenants no plain subprocess path.
+pub(crate) fn apply_hosting_floor(
+    sandboxes: &SandboxManager,
+    hosting: &kura_api::hosting::Hosting,
+) {
+    if let kura_api::hosting::Hosting::Shared { operator_tenant_id } = hosting {
+        sandboxes.require_tenant_isolation(operator_tenant_id);
+    }
+}
+
 fn build_sandbox(asm: &mut Assembly) -> Result<(), AppError> {
     let sandboxes = Arc::new(SandboxManager::new(
         asm.cfg.clone(),
@@ -687,6 +697,7 @@ fn build_sandbox(asm: &mut Assembly) -> Result<(), AppError> {
         .expect("kernel secret backend")
         .0;
     sandboxes.set_secret_manager(SecretsManager::new(secret_store, secret_backend));
+    apply_hosting_floor(&sandboxes, &asm.state.hosting);
     asm.state.sandboxes = Some(sandboxes);
     asm.lifecycle.on_close(
         "sandbox",

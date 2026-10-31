@@ -242,8 +242,22 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       network. A network request is denied rather than routed, and egress
       plus DNS pinning move to 3.5, which builds the proxy they need. Proven
       by real-container tests in CI's Linux job.
-- [ ] **3.2** Shared mode refuses to start execution on any backend that is
+- [x] **3.2** Shared mode refuses to start execution on any backend that is
       not isolated (no plain subprocess path for tenants).
+      *Done 2026-10-31:* `Manager::require_tenant_isolation`, installed at boot
+      when `KURA_HOSTING=shared`. Any work not provably the operator's goes
+      only to a backend whose `tenant_isolated()` is true, or is denied with
+      `hosting:isolation_required`. "Provably the operator's" means the
+      operator tenant's owner acting through a request, or in-process work
+      owned by the operator tenant. A tenant's work, a non-owner member of
+      the operator tenant, and work with no tenant all count as tenant work.
+      The check is in `prepare`, so it covers the attached path (MCP stdio)
+      as well. In-process callers name the owner with
+      `ExecutionRequest.owner_tenant_id`, which is never read from JSON and
+      must agree with the request context (`tenant:mismatch`). MCP passes the
+      server's owner. Consequence until 3.3: on a shared daemon, a tenant's
+      MCP stdio server and any unowned server are refused rather than run on
+      the host.
 - [ ] **3.3** MCP stdio servers and per-tenant browser contexts in the same
       plane.
 - [ ] **3.4** Measure gVisor on the cell hosts; adopt as a second backend only

@@ -2841,6 +2841,10 @@ impl Manager {
             args: clone_strings(&server.args),
             cwd: server.working_dir.clone(),
             env,
+            // The server's owner: MCP starts run outside any request, so
+            // without this the sandbox could not tell a tenant's server
+            // from the operator's (Stage 3.2).
+            owner_tenant_id: server.tenant_id.clone(),
             requested_by: "mcp".to_string(),
             resource_kind: RESOURCE_KIND_SERVER.to_string(),
             resource_id: server.server_id.clone(),

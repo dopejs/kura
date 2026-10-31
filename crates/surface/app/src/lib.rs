@@ -2254,6 +2254,40 @@ mod tests {
         app.close();
     }
 
+    /// Stage 3.2: a shared daemon's sandbox refuses a tenant's work on a
+    /// backend that does not isolate it; a single-tenant one does not.
+    #[test]
+    fn shared_hosting_installs_the_sandbox_isolation_floor() {
+        let (_temp_dir, config) = test_config();
+        let app = App::new(config).expect("build app");
+        let sandboxes = app.state.sandboxes.clone().expect("sandbox manager");
+        let request = || kura_sandbox::ExecutionRequest {
+            profile_id: kura_sandbox::PROFILE_ID_SUBPROCESS_DEFAULT.to_string(),
+            command: "true".to_string(),
+            owner_tenant_id: "ten_a".to_string(),
+            ..kura_sandbox::ExecutionRequest::default()
+        };
+        let floor = |decision: &kura_sandbox::Decision| {
+            decision
+                .matched_rules
+                .iter()
+                .any(|rule| rule == "hosting:isolation_required")
+        };
+
+        plugins::apply_hosting_floor(&sandboxes, &kura_api::hosting::Hosting::Single);
+        assert!(!floor(&sandboxes.explain(request()).expect("explain")));
+
+        plugins::apply_hosting_floor(
+            &sandboxes,
+            &kura_api::hosting::Hosting::Shared {
+                operator_tenant_id: "ten_operator".to_string(),
+            },
+        );
+        let decision = sandboxes.explain(request()).expect("explain");
+        assert!(floor(&decision), "{:?}", decision.matched_rules);
+        app.close();
+    }
+
     /// G10: a routed `embed` role becomes the retrieval embedder. Recall
     /// sends the corpus miss and the query to the role's `/embeddings`
     /// endpoint and caches the doc vector under the model's own fingerprint.

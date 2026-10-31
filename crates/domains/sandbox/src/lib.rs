@@ -606,6 +606,12 @@ pub struct ExecutionRequest {
     pub access: AccessRequest,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consumer: Option<ConsumerContractView>,
+    /// The tenant that owns this work, named by an in-process caller whose
+    /// work runs outside any request (an MCP server's owner). Never read from
+    /// or written to JSON: an API caller cannot claim a tenant this way. When
+    /// a request context is also present the two must agree.
+    #[serde(skip)]
+    pub owner_tenant_id: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -546,7 +546,21 @@ fn launch_failed(error: String) -> SubprocessResult {
 /// run as subprocesses, as they always have.
 #[must_use]
 pub fn backend_for(launch: &LaunchSpec) -> &'static dyn ExecutionBackend {
-    match (launch.backend_kind, launch.isolation.is_some()) {
+    select_backend(launch.backend_kind, launch.isolation.is_some())
+}
+
+/// The backend a profile's runs will use — what the shared-hosting floor
+/// (Stage 3.2) asks before anything is launched.
+#[must_use]
+pub fn backend_for_profile(profile: &crate::Profile) -> &'static dyn ExecutionBackend {
+    select_backend(
+        profile.backend_kind,
+        profile.isolation == crate::IsolationMode::Tenant,
+    )
+}
+
+fn select_backend(kind: BackendKind, isolated: bool) -> &'static dyn ExecutionBackend {
+    match (kind, isolated) {
         (BackendKind::Docker, true) => &IsolatedDockerBackend,
         (BackendKind::Docker, false) => &DockerBackend,
         _ => &SubprocessBackend,

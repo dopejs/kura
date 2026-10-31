@@ -99,6 +99,9 @@ pub(crate) struct ManagerInner {
     pub(crate) cancels: HashMap<String, CancellationToken>,
     pub(crate) pending_final: HashSet<String>,
     pub(crate) secrets: Option<Arc<kura_secrets::Manager>>,
+    /// Shared hosting (Stage 3.2): the operator tenant. When set, work not
+    /// provably the operator's runs only on a tenant-isolated backend.
+    pub(crate) shared_operator_tenant: Option<String>,
 }
 
 /// Thread-safe sandbox manager mirroring the Go `Manager`: an in-memory
@@ -133,6 +136,15 @@ impl Manager {
         };
         manager.reload_builtins();
         manager
+    }
+
+    /// Stage 3.2: this daemon hosts several tenants. From now on every
+    /// execution that is not provably the operator's — a tenant's, or one
+    /// with no tenant at all — is denied unless its backend isolates tenants
+    /// ([`crate::ExecutionBackend::tenant_isolated`]). There is no plain
+    /// subprocess path for tenants, including MCP stdio servers.
+    pub fn require_tenant_isolation(&self, operator_tenant_id: &str) {
+        self.inner.write().shared_operator_tenant = Some(operator_tenant_id.trim().to_string());
     }
 
     /// Go `SetSecretManager`.
@@ -769,13 +781,25 @@ impl Manager {
         };
         let mut denied_class = "secret_resolution_denied";
         let mut isolated_run = None;
-        if denied_reason.is_empty() && profile.isolation == crate::IsolationMode::Tenant {
-            match self.isolation_for(&execution) {
-                Ok(run) => isolated_run = Some(run),
+        if denied_reason.is_empty() {
+            let gate = acting_tenant(&request.owner_tenant_id).and_then(|acting| {
+                self.hosting_floor(&profile, &acting)?;
+                if profile.isolation == crate::IsolationMode::Tenant {
+                    self.isolation_for(&execution, &acting.tenant_id).map(Some)
+                } else {
+                    Ok(None)
+                }
+            });
+            match gate {
+                Ok(run) => isolated_run = run,
                 Err((rule, reason)) => {
+                    denied_class = if rule.starts_with("hosting:") {
+                        "hosting_isolation_required"
+                    } else {
+                        "isolation_denied"
+                    };
                     denied_rule = rule.to_string();
                     denied_reason = reason;
-                    denied_class = "isolation_denied";
                 }
             }
         }
@@ -861,6 +885,34 @@ impl Manager {
         })
     }
 
+    /// Stage 3.2: on a shared daemon, anything not provably the operator's
+    /// must run on a tenant-isolated backend. Unknown ownership is treated
+    /// as a tenant, not as the operator: that is the fail-closed direction.
+    fn hosting_floor(
+        &self,
+        profile: &Profile,
+        acting: &ActingTenant,
+    ) -> Result<(), (&'static str, String)> {
+        let Some(operator) = self.inner.read().shared_operator_tenant.clone() else {
+            return Ok(());
+        };
+        if acting.is_operator(&operator) {
+            return Ok(());
+        }
+        if crate::execution::backend_for_profile(profile).tenant_isolated() {
+            return Ok(());
+        }
+        Err((
+            "hosting:isolation_required",
+            format!(
+                "this daemon is shared: tenant work runs only on a tenant-isolated backend \
+                 (profile {}), and profile {} is not one",
+                crate::PROFILE_ID_TENANT_ISOLATED,
+                profile.profile_id
+            ),
+        ))
+    }
+
     /// Stage 3.1: the container an isolated run gets, or why it gets none.
     /// The request may not widen it: mounts, network and a working dir
     /// outside the workspace are refused with the reason, never silently
@@ -868,6 +920,7 @@ impl Manager {
     fn isolation_for(
         &self,
         execution: &Execution,
+        tenant_id: &str,
     ) -> Result<crate::IsolatedRun, (&'static str, String)> {
         let access = &execution.access;
         if !matches!(access.network_mode, None | Some(NetworkMode::Deny))
@@ -899,11 +952,8 @@ impl Manager {
                 format!("the working directory must be inside {workspace}"),
             ));
         }
-        let tenant_id = kura_identity::tenantctx::from_context()
-            .map(|tc| tc.tenant_id)
-            .unwrap_or_default();
         crate::WorkspaceRoots::for_data_dir(&self.cfg.data_dir)
-            .resolve(&tenant_id, crate::IsolationLimits::from_env())
+            .resolve(tenant_id, crate::IsolationLimits::from_env())
             .map_err(|err| {
                 let rule = match err {
                     crate::IsolationError::TenantRequired => "isolation:tenant_required",
@@ -1870,6 +1920,55 @@ pub fn docker_access_mismatch(access: &AccessRequest) -> String {
 }
 
 /// Go `markDecisionUnsupported`.
+/// Who an execution runs for: the request context (installed by the API
+/// middleware) and/or the owner an in-process caller named.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ActingTenant {
+    pub(crate) tenant_id: String,
+    /// The context's role; `None` when there is no request context.
+    role: Option<kura_identity::Role>,
+    from_context: bool,
+}
+
+impl ActingTenant {
+    /// The operator is its tenant's owner acting through a request, or work
+    /// an in-process caller attributes to the operator tenant (an MCP
+    /// server the operator owns). Matches `Hosting::is_platform_operator`.
+    fn is_operator(&self, operator_tenant_id: &str) -> bool {
+        if operator_tenant_id.is_empty() || self.tenant_id != operator_tenant_id {
+            return false;
+        }
+        !self.from_context || self.role == Some(kura_identity::Role::Owner)
+    }
+}
+
+fn acting_tenant(owner_tenant_id: &str) -> Result<ActingTenant, (&'static str, String)> {
+    let owner = owner_tenant_id.trim();
+    match kura_identity::tenantctx::from_context() {
+        Some(context) if !context.tenant_id.is_empty() => {
+            if !owner.is_empty() && owner != context.tenant_id {
+                return Err((
+                    "tenant:mismatch",
+                    format!(
+                        "the work belongs to tenant {owner} but the request acts for {}",
+                        context.tenant_id
+                    ),
+                ));
+            }
+            Ok(ActingTenant {
+                tenant_id: context.tenant_id,
+                role: context.role,
+                from_context: true,
+            })
+        }
+        _ => Ok(ActingTenant {
+            tenant_id: owner.to_string(),
+            role: None,
+            from_context: false,
+        }),
+    }
+}
+
 pub fn mark_decision_unsupported(
     decision: &mut Decision,
     rule: &str,
