@@ -627,10 +627,11 @@ fn a_tenant_container_reaches_the_network_only_through_the_egress_proxy() {
     {
         return;
     }
-    let Ok(binary) = std::env::var("KURA_EGRESS_PROXY_BIN") else {
-        eprintln!("skipping: set KURA_EGRESS_PROXY_BIN to a kura binary");
-        return;
-    };
+    // With docker tests on, a missing binary is a failure, not a skip: a
+    // skipped test reports `ok`, and this is the test that proves the only
+    // network exit.
+    let binary = std::env::var("KURA_EGRESS_PROXY_BIN")
+        .expect("KURA_DOCKER_TESTS=1 needs KURA_EGRESS_PROXY_BIN (a kura binary for ubuntu:24.04)");
     let fixture = EgressFixture {
         network: format!("kura-tenant-test-{}", std::process::id()),
         proxy: format!("kura-egress-proxy-test-{}", std::process::id()),
