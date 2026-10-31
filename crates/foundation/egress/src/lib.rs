@@ -16,14 +16,16 @@
 //! checking every address. Call-time egress must use it. It still does not
 //! stop DNS rebinding (resolve to a safe address, then return a blocked one
 //! for the connection's own lookup); defeating that requires pinning the
-//! checked address through to the socket, which belongs in the HTTP client
-//! layer and is recorded as an open gap rather than implied here.
+//! checked address through to the socket: [`EgressPolicy::resolve_pinned`]
+//! returns that address, and the tenant egress proxy (`kura-egress-proxy`)
+//! connects to it. A daemon-side HTTP client that fetches a URL still has the
+//! gap, because its own connector resolves again.
 //!
 //! The split is deliberate: a single `check()` that sometimes resolves and
 //! sometimes does not is how a validation call gets mistaken for a security
 //! boundary.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 
 use serde::{Deserialize, Serialize};
 
@@ -139,6 +141,45 @@ impl EgressPolicy {
             });
         }
         Ok(parsed)
+    }
+
+    /// Resolve `host:port` **once** and return the address to connect to.
+    ///
+    /// This is the pinning half that [`Self::check_url_resolved`] lacks: the
+    /// caller connects to the returned address, never to the name, so a
+    /// resolver that answers a safe address here and a blocked one later
+    /// (DNS rebinding) has nothing left to rebind. Every resolved address
+    /// must pass, as in [`Self::check_url_resolved`]; the first is returned.
+    /// The hostname blocklist applies to `host` before anything resolves.
+    pub fn resolve_pinned(&self, host: &str, port: u16) -> Result<SocketAddr, EgressDenial> {
+        let host = host.trim().trim_matches(['[', ']']).to_ascii_lowercase();
+        if host.is_empty() {
+            return Err(EgressDenial::HostMissing);
+        }
+        if self.is_hostname_blocked(&host) {
+            return Err(EgressDenial::HostBlocked { host });
+        }
+        if let Some(ip) = parse_ip_literal(&host) {
+            self.check_addr(&host, ip)?;
+            return Ok(SocketAddr::new(ip, port));
+        }
+        let addrs: Vec<SocketAddr> = (host.as_str(), port)
+            .to_socket_addrs()
+            .map_err(|err| EgressDenial::Unresolvable {
+                host: host.clone(),
+                detail: err.to_string(),
+            })?
+            .collect();
+        let Some(first) = addrs.first().copied() else {
+            return Err(EgressDenial::Unresolvable {
+                host,
+                detail: "no addresses".to_string(),
+            });
+        };
+        for addr in &addrs {
+            self.check_addr(&host, addr.ip())?;
+        }
+        Ok(first)
     }
 
     fn parse_and_screen(&self, raw: &str) -> Result<(CheckedUrl, String), EgressDenial> {
@@ -425,5 +466,53 @@ mod tests {
             policy.check_url("https:///internal"),
             Err(EgressDenial::HostBlocked { .. })
         ));
+    }
+
+    #[test]
+    fn resolve_pinned_returns_a_checked_address_for_the_socket() {
+        let policy = EgressPolicy::default();
+        assert_eq!(
+            policy.resolve_pinned("93.184.216.34", 443),
+            Ok("93.184.216.34:443".parse().unwrap())
+        );
+        assert!(matches!(
+            policy.resolve_pinned("169.254.169.254", 80),
+            Err(EgressDenial::AddressBlocked { .. })
+        ));
+        assert!(matches!(
+            policy.resolve_pinned("127.0.0.1", 80),
+            Err(EgressDenial::AddressBlocked { .. })
+        ));
+        assert!(matches!(
+            policy.resolve_pinned("[::1]", 80),
+            Err(EgressDenial::AddressBlocked { .. })
+        ));
+        // A name resolving to loopback is refused as its address, not its name.
+        assert!(matches!(
+            policy.resolve_pinned("localhost", 80),
+            Err(EgressDenial::AddressBlocked { .. })
+        ));
+        assert_eq!(
+            policy.resolve_pinned("  ", 80),
+            Err(EgressDenial::HostMissing)
+        );
+
+        let blocking = EgressPolicy {
+            blocked_hostnames: vec!["example.com".to_string()],
+            ..EgressPolicy::default()
+        };
+        assert!(matches!(
+            blocking.resolve_pinned("api.example.com", 443),
+            Err(EgressDenial::HostBlocked { .. })
+        ));
+
+        let loopback_ok = EgressPolicy {
+            allow_loopback: true,
+            ..EgressPolicy::default()
+        };
+        assert_eq!(
+            loopback_ok.resolve_pinned("127.0.0.1", 8080),
+            Ok("127.0.0.1:8080".parse().unwrap())
+        );
     }
 }

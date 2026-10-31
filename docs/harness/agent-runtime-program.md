@@ -286,6 +286,16 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       with `kura-egress`, and connects to that address. Daemon-side clients
       that take a tenant-influenced URL (none in M2) resolve through a
       policy-checking resolver for the same reason.
+      *Proxy core done 2026-10-31:* `kura-egress-proxy` (CONNECT and
+      absolute-form HTTP) and `kura egress-proxy`. It resolves once through
+      `EgressPolicy::resolve_pinned`, checks every address, and dials that
+      address. It refuses ports off the allow list (default 80/443), strips
+      proxy credentials, and bounds head size, head time and connections.
+      Metric `kura_egress_proxy_requests_total`. Its policy is the strict
+      default, never the operator's `egress` config. *Open:* the topology
+      that makes it the only exit (tenant containers on an `--internal`
+      docker network, the proxy as the sidecar bridging it), and isolated
+      runs that ask for network being routed there instead of refused.
 
 Done when a tenant can run code and MCP tools, a hostile workload cannot read
 another tenant's workspace or the daemon's data dir (test proves it), and

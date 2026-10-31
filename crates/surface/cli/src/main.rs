@@ -58,6 +58,20 @@ enum Command {
     /// Inspect and edit configuration
     #[command(subcommand)]
     Config(ConfigCommand),
+    /// Run the tenant egress proxy: the one network exit of tenant-isolated
+    /// containers. Resolves each destination once, checks it, and connects
+    /// to that address (no loopback, private, link-local/metadata ranges)
+    EgressProxy {
+        /// Address to listen on (the proxy side of the tenant network)
+        #[arg(long, default_value = "0.0.0.0:3128")]
+        listen: std::net::SocketAddr,
+        /// Destination ports tenants may reach (default: 80 and 443)
+        #[arg(long = "allow-port")]
+        allow_ports: Vec<u16>,
+        /// Hostnames (and their subdomains) tenants may not reach
+        #[arg(long = "block-host")]
+        block_hosts: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -108,6 +122,11 @@ fn main() -> ExitCode {
         Command::Config(ConfigCommand::Path) => config_path(),
         Command::Config(ConfigCommand::Set { key, value }) => config_set(&key, &value),
         Command::Config(ConfigCommand::Edit) => config_edit(),
+        Command::EgressProxy {
+            listen,
+            allow_ports,
+            block_hosts,
+        } => egress_proxy(listen, allow_ports, block_hosts),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -130,6 +149,36 @@ fn daemon_run() -> Result<(), AnyError> {
         let config = kura_config::load()?;
         let app = Arc::new(kura_app::App::new(config)?);
         app.serve().await?;
+        Ok::<(), AnyError>(())
+    })
+}
+
+/// The tenant egress proxy. Its policy is the strict default, deliberately
+/// not the daemon's `egress` config: that is the operator's outbound policy
+/// and may admit private networks for the operator's own integrations,
+/// which tenants must not inherit.
+fn egress_proxy(
+    listen: std::net::SocketAddr,
+    allow_ports: Vec<u16>,
+    block_hosts: Vec<String>,
+) -> Result<(), AnyError> {
+    let mut config = kura_egress_proxy::ProxyConfig::new(kura_egress::EgressPolicy {
+        blocked_hostnames: block_hosts,
+        ..kura_egress::EgressPolicy::default()
+    });
+    if !allow_ports.is_empty() {
+        config.allowed_ports = allow_ports;
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async move {
+        let listener = tokio::net::TcpListener::bind(listen).await?;
+        eprintln!(
+            "[kura] egress-proxy: listening on {listen}, ports {:?}",
+            config.allowed_ports
+        );
+        kura_egress_proxy::serve(listener, Arc::new(config)).await?;
         Ok::<(), AnyError>(())
     })
 }

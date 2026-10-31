@@ -14,6 +14,8 @@ axum = { workspace = true }
 clap = { workspace = true }
 kura-app = { workspace = true }
 kura-config = { workspace = true }
+kura-egress = { workspace = true }
+kura-egress-proxy = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 ureq = { workspace = true }

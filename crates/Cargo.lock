@@ -1543,6 +1543,8 @@ dependencies = [
  "clap",
  "kura-app",
  "kura-config",
+ "kura-egress",
+ "kura-egress-proxy",
  "serde_json",
  "tokio",
  "ureq",
@@ -1678,6 +1680,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "url",
+]
+
+[[package]]
+name = "kura-egress-proxy"
+version = "0.3.0"
+dependencies = [
+ "kura-egress",
+ "kura-telemetry",
+ "tokio",
  "url",
 ]
 

@@ -28,6 +28,7 @@ pub const SESSION_WINDOW_SHADOW_TOTAL: &str = "kura_session_window_shadow_total"
 pub const TOKEN_ESTIMATE_INPUT_TOKENS_TOTAL: &str = "kura_token_estimate_input_tokens_total";
 pub const RETRIEVAL_EMBEDDINGS_TOTAL: &str = "kura_retrieval_embeddings_total";
 pub const EMBEDDER_REQUESTS_TOTAL: &str = "kura_embedder_requests_total";
+pub const EGRESS_PROXY_REQUESTS_TOTAL: &str = "kura_egress_proxy_requests_total";
 
 /// Help text per series, rendered as `# HELP`.
 const HELP: &[(&str, &str)] = &[
@@ -82,6 +83,10 @@ const HELP: &[(&str, &str)] = &[
     (
         EMBEDDER_REQUESTS_TOTAL,
         "Requests to a model-backed embedder by embedder and outcome (ok|error).",
+    ),
+    (
+        EGRESS_PROXY_REQUESTS_TOTAL,
+        "Tenant egress proxy requests by method (connect|http|any) and outcome (allowed|denied|bad_request|head_timeout|upstream_failed|over_capacity).",
     ),
 ];
 

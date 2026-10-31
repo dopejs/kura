@@ -1,0 +1,15 @@
+[package]
+license.workspace = true
+name = "kura-egress-proxy"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+kura-egress.workspace = true
+kura-telemetry.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+url = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread"] }

@@ -726,6 +726,32 @@ can read through `ps`. Names that steer the client (`PATH`, `HOME`,
 `XDG_RUNTIME_DIR`, `DOCKER_*`) go inline, to the container only. This
 applies to every isolated run.
 
+### 8. Tenant Egress Proxy (Agent Runtime Program 3.5, 2026-10-31)
+
+`kura egress-proxy` (`crates/foundation/egress-proxy`) is the network exit
+for tenant containers. It speaks HTTP/1.1 forward proxying: `CONNECT
+host:port` tunnels TLS byte-for-byte, and absolute-form `GET
+http://host/...` is rewritten to origin form, with `Proxy-Authorization`
+and `Proxy-Connection` stripped. Each request:
+
+1. needs a port on the allow list (`--allow-port`, default 80 and 443);
+2. is resolved once by `EgressPolicy::resolve_pinned`, and every address
+   must pass (no loopback, RFC 1918, link-local/metadata, unique-local,
+   or `--block-host` names);
+3. is dialled at that resolved address. The name is never looked up again,
+   which closes DNS rebinding for this path.
+
+A refusal is a `403` with `X-Kura-Egress-Denial: <code>` and a logged
+reason. The policy is the strict default, deliberately not the daemon's
+`egress` config: the operator may admit private networks for their own
+integrations, and tenants must not inherit that. The proxy cannot see
+inside TLS, so policy is by destination only.
+
+What makes it the only exit is topology, which is not wired yet: tenant
+containers on a docker `--internal` network (kernel-enforced, no route
+out), with the proxy as a sidecar attached to that network and to the
+outside one.
+
 ## Explicit Prerequisites Before MCP
 
 The next roadmap should not be "MCP immediately" without these prerequisites being explicit:
