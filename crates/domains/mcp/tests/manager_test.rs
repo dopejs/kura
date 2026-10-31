@@ -115,16 +115,20 @@ impl Transport for FakeTransport {
 /// Test-only sandbox execution starter: spawns the `fake-mcp-server` bin as the
 /// attached process, tracks children by execution id, and kills them on cancel so the
 /// stdio session read loop terminates (mirroring the real sandbox execution plane).
+#[derive(Default)]
 struct FakeAttachedExecutionStarter {
     next_id: AtomicU64,
     children: Mutex<HashMap<String, std::process::Child>>,
+    /// Every request the manager asked the sandbox to start.
+    requests: Mutex<Vec<kura_sandbox::ExecutionRequest>>,
 }
 
 impl kura_mcp::AttachedExecutionStarter for FakeAttachedExecutionStarter {
     fn start_attached_execution(
         &self,
-        _request: &kura_sandbox::ExecutionRequest,
+        request: &kura_sandbox::ExecutionRequest,
     ) -> Result<(kura_sandbox::Execution, Option<kura_mcp::AttachedExecution>), String> {
+        self.requests.lock().unwrap().push(request.clone());
         let mut child = std::process::Command::new(common::fake_mcp_server_bin())
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -481,7 +485,7 @@ fn manager_start_fails_when_transport_open_fails() {
 fn manager_stdio_start_discovers_tools_and_calls_tool() {
     let starter = Arc::new(FakeAttachedExecutionStarter {
         next_id: AtomicU64::new(1),
-        children: Mutex::new(HashMap::new()),
+        ..FakeAttachedExecutionStarter::default()
     });
     let manager = kura_mcp::Manager::new(
         test_cfg("~/.kura-test"),
@@ -1554,4 +1558,61 @@ fn a_server_created_without_a_tenant_stays_visible_to_everyone() {
     assert!(manager.get_server_for_tenant("srv-1", "tenant-1").is_none());
     assert!(manager.get_server("srv-1").is_some());
     assert_eq!(manager.list_servers().len(), 1);
+}
+
+/// Stage 3.2/3.3: the sandbox learns who owns a server, and a server on the
+/// tenant-isolated profile does not hand its host working dir over as
+/// mounts or a cwd — its container has only the tenant workspace.
+#[test]
+fn stdio_requests_carry_the_owner_and_isolated_servers_send_no_host_paths() {
+    let starter = Arc::new(FakeAttachedExecutionStarter {
+        next_id: AtomicU64::new(1),
+        ..FakeAttachedExecutionStarter::default()
+    });
+    let manager = kura_mcp::Manager::new(
+        test_cfg("~/.kura-test"),
+        None,
+        None,
+        Some(starter.clone()),
+        None,
+        None,
+    );
+    for (server_id, profile) in [
+        ("srv-host", kura_sandbox::PROFILE_ID_SUBPROCESS_DEFAULT),
+        ("srv-isolated", kura_sandbox::PROFILE_ID_TENANT_ISOLATED),
+    ] {
+        manager
+            .create_server(CreateServerInput {
+                server_id: server_id.to_string(),
+                display_name: server_id.to_string(),
+                enabled: true,
+                sandbox_profile_id: profile.to_string(),
+                declaration_id: "d".to_string(),
+                transport_kind: TransportKind::Stdio,
+                command: common::fake_mcp_server_bin().to_string(),
+                working_dir: "/host/project".to_string(),
+                tenant_id: "ten_a".to_string(),
+                ..CreateServerInput::default()
+            })
+            .unwrap();
+        let _ = manager.start(server_id, "operator");
+        let _ = manager.stop(server_id);
+    }
+    let requests = starter.requests.lock().unwrap().clone();
+    let host = requests
+        .iter()
+        .find(|r| r.resource_id == "srv-host")
+        .expect("host request");
+    assert_eq!(host.owner_tenant_id, "ten_a");
+    assert_eq!(host.cwd, "/host/project");
+    assert_eq!(host.access.read_roots, ["/host/project"]);
+
+    let isolated = requests
+        .iter()
+        .find(|r| r.resource_id == "srv-isolated")
+        .expect("isolated request");
+    assert_eq!(isolated.owner_tenant_id, "ten_a");
+    assert!(isolated.cwd.is_empty(), "{}", isolated.cwd);
+    assert!(isolated.access.read_roots.is_empty());
+    assert!(isolated.access.write_roots.is_empty());
 }

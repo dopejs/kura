@@ -441,3 +441,69 @@ fn cancelling_an_isolated_run_removes_its_container() {
         "container {name} survived its cancellation"
     );
 }
+
+/// Stage 3.3: an isolated container serves a live stdio session (how MCP
+/// stdio servers run for tenants): bytes in through stdin come back on
+/// stdout, the process sees only the tenant workspace, a secret passed as
+/// env reaches the process without appearing in any host argv, and closing
+/// stdin ends the run with the container gone.
+#[test]
+fn an_isolated_container_serves_a_live_stdio_session() {
+    if !docker_tests_enabled("an_isolated_container_serves_a_live_stdio_session") {
+        return;
+    }
+    use std::io::{BufRead, Write};
+    let data_dir = temp_dir("docker_attached");
+    let manager = manager(&data_dir);
+    let secret = "sk-attached-secret-value";
+    let mut request =
+        request(r#"while read line; do echo "got:$line:$(pwd):$API_TOKEN:$(id -u)"; done"#);
+    request
+        .env
+        .insert("API_TOKEN".to_string(), secret.to_string());
+    let (execution, attached) =
+        as_tenant("ten_a", || manager.start_attached_execution(request)).expect("attached");
+    assert_eq!(
+        execution.status,
+        ExecutionStatus::Running,
+        "{:?}",
+        execution.result
+    );
+    let mut attached = attached.expect("live session");
+    let name = format!("kura-exec-{}", execution.execution_id);
+
+    // The secret is in the container, not on any host command line.
+    let ps = std::process::Command::new("ps")
+        .args(["-eo", "args"])
+        .output()
+        .expect("ps");
+    assert!(
+        !String::from_utf8_lossy(&ps.stdout).contains(secret),
+        "a host argv carries the secret"
+    );
+
+    let mut stdin = attached.stdin.take().expect("stdin");
+    let mut stdout = std::io::BufReader::new(attached.stdout.take().expect("stdout"));
+    writeln!(stdin, "ping").expect("write");
+    stdin.flush().expect("flush");
+    let mut line = String::new();
+    stdout.read_line(&mut line).expect("read");
+    assert_eq!(
+        line.trim(),
+        format!("got:ping:/workspace:{secret}:{}", tenant_uid("ten_a"))
+    );
+
+    drop(stdin);
+    let finished = wait(&manager, &execution.execution_id, Duration::from_secs(30));
+    assert_eq!(
+        finished.status,
+        ExecutionStatus::Completed,
+        "{:?}",
+        finished.result
+    );
+    let listed = std::process::Command::new("docker")
+        .args(["ps", "-aq", "--filter", &format!("name={name}")])
+        .output()
+        .expect("docker ps");
+    assert!(String::from_utf8_lossy(&listed.stdout).trim().is_empty());
+}

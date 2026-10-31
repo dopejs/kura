@@ -421,7 +421,7 @@ fn legacy_docker_args(launch: &LaunchSpec) -> Vec<String> {
 /// Force-remove a container after its run was cancelled or timed out. Best
 /// effort: a failure is logged, and `--rm` still removes the container once
 /// its process exits on its own.
-fn remove_container(name: &str) {
+pub(crate) fn remove_container(name: &str) {
     match std::process::Command::new("docker")
         .args(["rm", "-f", name])
         .stdout(std::process::Stdio::null())
@@ -571,25 +571,27 @@ fn select_backend(kind: BackendKind, isolated: bool) -> &'static dyn ExecutionBa
 /// a container path (`/workspace`, passed as `--workdir`) that does not exist
 /// on the host, so the client starts in the daemon's own directory instead;
 /// spawning it there failed with ENOENT before the container ever started.
-fn docker_client_launch(launch: &LaunchSpec, args: Vec<String>) -> LaunchSpec {
-    let cwd = if launch.isolation.is_some() {
-        String::new()
+pub(crate) fn docker_client_launch(launch: &LaunchSpec, args: Vec<String>) -> LaunchSpec {
+    let (cwd, env) = if launch.isolation.is_some() {
+        (
+            String::new(),
+            crate::isolation::docker_client_env(&launch.env),
+        )
     } else {
-        launch.cwd.clone()
+        (launch.cwd.clone(), launch.env.clone())
     };
     LaunchSpec {
         command: "docker".to_string(),
         args,
         cwd,
+        env,
         ..launch.clone()
     }
 }
 
-pub fn execute_docker(
-    launch: &LaunchSpec,
-    cancel: &CancellationToken,
-    timed_out: &AtomicBool,
-) -> SubprocessResult {
+/// The full `docker run` argv for a launch: container flags, image,
+/// command, args.
+pub(crate) fn docker_run_args(launch: &LaunchSpec) -> Vec<String> {
     let mut args: Vec<String> = match &launch.isolation {
         Some(run) => crate::isolation::isolated_docker_args(
             run,
@@ -601,8 +603,15 @@ pub fn execute_docker(
     };
     args.push(launch.command.clone());
     args.extend(launch.args.iter().cloned());
+    args
+}
 
-    let docker_launch = docker_client_launch(launch, args);
+pub fn execute_docker(
+    launch: &LaunchSpec,
+    cancel: &CancellationToken,
+    timed_out: &AtomicBool,
+) -> SubprocessResult {
+    let docker_launch = docker_client_launch(launch, docker_run_args(launch));
 
     let mut result = execute_subprocess(&docker_launch, cancel, timed_out);
     if cancel.is_cancelled() && !launch.container_name.is_empty() {
@@ -1159,6 +1168,7 @@ impl Manager {
         stderr_capture: Arc<Mutex<CaptureBuffer>>,
         pid: u32,
         timeout: Duration,
+        container_name: String,
     ) {
         let secret_values = execution
             .consumer
@@ -1282,7 +1292,21 @@ impl Manager {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        let result = result.unwrap_or_default();
+        let mut result = result.unwrap_or_default();
+        if !container_name.is_empty() {
+            // Killing the attached `docker run` client does not stop its
+            // container; on a normal exit `--rm` already removed it and this
+            // is a no-op.
+            remove_container(&container_name);
+            result.backend_metadata.insert(
+                "backend".to_string(),
+                serde_json::json!(BackendKind::Docker.as_str()),
+            );
+            result.backend_metadata.insert(
+                "containerName".to_string(),
+                serde_json::json!(container_name),
+            );
+        }
 
         let completed_at = Utc::now();
         execution.status = result.status;

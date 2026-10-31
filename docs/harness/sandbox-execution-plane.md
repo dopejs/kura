@@ -706,6 +706,26 @@ The floor asks the backend seam (`backend_for_profile(..).tenant_isolated()`)
 rather than matching profile ids, so a future isolated backend (gVisor,
 3.4) passes without changes here.
 
+### 7. MCP Stdio In The Isolated Plane (Agent Runtime Program 3.3, 2026-10-31)
+
+Attached executions used to refuse docker entirely. An attached run on the
+**isolated** backend is now allowed: the `docker run -i` client holds the
+session's stdin and stdout, the container is the same tenant-built
+container as any isolated run, and the container is force-removed when the
+session ends or is cancelled. A request-shaped (`docker_default`) attached
+run is still refused.
+
+For a server whose profile is `tenant_isolated`, MCP sends no host working
+dir and derives no mount roots from it. Roots or network the server
+declares are still sent, so the sandbox refuses them with its reason
+instead of dropping them.
+
+Container environment values travel as `-e KEY`, with the value in the
+`docker` client's own environment, never on its argv, which any host user
+can read through `ps`. Names that steer the client (`PATH`, `HOME`,
+`XDG_RUNTIME_DIR`, `DOCKER_*`) go inline, to the container only. This
+applies to every isolated run.
+
 ## Explicit Prerequisites Before MCP
 
 The next roadmap should not be "MCP immediately" without these prerequisites being explicit:

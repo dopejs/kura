@@ -329,13 +329,29 @@ impl Manager {
             self.publish_execution_terminal(&execution)?;
             return Ok((execution, None));
         }
-        if execution.backend_kind == BackendKind::Docker {
-            return Err(SandboxError::AttachedDockerUnsupported);
-        }
         let Some(launch) = launch else {
             // Unreachable in practice (Go would nil-deref); keep the execution
             // ledger consistent by returning it as-is.
             return Ok((execution, None));
+        };
+        // An isolated container can serve a live stdio session (Stage 3.3):
+        // `docker run -i` keeps the pipes, and the container is built from
+        // the tenant as for any isolated run. A request-shaped docker run
+        // still cannot.
+        let container_name = launch.container_name.clone();
+        let (launch, isolation_error) = match (&execution.backend_kind, &launch.isolation) {
+            (BackendKind::Docker, None) => return Err(SandboxError::AttachedDockerUnsupported),
+            (BackendKind::Docker, Some(run)) => {
+                let error = crate::isolation::ensure_workspace(run).err();
+                (
+                    crate::execution::docker_client_launch(
+                        &launch,
+                        crate::execution::docker_run_args(&launch),
+                    ),
+                    error,
+                )
+            }
+            _ => (launch, None),
         };
 
         let cancel = CancellationToken::new();
@@ -361,7 +377,11 @@ impl Manager {
             command.process_group(0);
         }
 
-        let mut child = match command.spawn() {
+        let spawned = match isolation_error {
+            Some(err) => Err(std::io::Error::other(err.to_string())),
+            None => command.spawn(),
+        };
+        let mut child = match spawned {
             Ok(child) => child,
             Err(err) => {
                 let now = Utc::now();
@@ -438,6 +458,7 @@ impl Manager {
                 stderr_capture,
                 pid,
                 launch.timeout,
+                container_name,
             )
         });
 

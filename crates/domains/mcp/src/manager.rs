@@ -2823,11 +2823,18 @@ impl Manager {
             allowed_ports: server.declaration.allowed_ports.clone(),
             allow_loopback: server.declaration.allow_loopback,
         };
-        if access.read_roots.is_empty() && !server.working_dir.trim().is_empty() {
-            access.read_roots = vec![server.working_dir.trim().to_string()];
-        }
-        if access.write_roots.is_empty() && !server.working_dir.trim().is_empty() {
-            access.write_roots = vec![server.working_dir.trim().to_string()];
+        // A tenant-isolated server runs in its tenant's container, where the
+        // only filesystem is the workspace: a host working dir is neither
+        // mounted nor a valid cwd there. Roots the server *declares* still go
+        // through, so the sandbox refuses them with its reason (Stage 3.3).
+        let isolated = server.sandbox_profile_id.trim() == kura_sandbox::PROFILE_ID_TENANT_ISOLATED;
+        if !isolated {
+            if access.read_roots.is_empty() && !server.working_dir.trim().is_empty() {
+                access.read_roots = vec![server.working_dir.trim().to_string()];
+            }
+            if access.write_roots.is_empty() && !server.working_dir.trim().is_empty() {
+                access.write_roots = vec![server.working_dir.trim().to_string()];
+            }
         }
         let mut metadata = HashMap::new();
         metadata.insert("mcpServerId".to_string(), server.server_id.clone());
@@ -2839,7 +2846,11 @@ impl Manager {
             profile_id: server.sandbox_profile_id.clone(),
             command: server.command.clone(),
             args: clone_strings(&server.args),
-            cwd: server.working_dir.clone(),
+            cwd: if isolated {
+                String::new()
+            } else {
+                server.working_dir.clone()
+            },
             env,
             // The server's owner: MCP starts run outside any request, so
             // without this the sandbox could not tell a tenant's server

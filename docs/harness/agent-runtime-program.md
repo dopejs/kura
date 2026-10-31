@@ -260,6 +260,19 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       the host.
 - [ ] **3.3** MCP stdio servers and per-tenant browser contexts in the same
       plane.
+      *MCP stdio done 2026-10-31.* An attached execution on the isolated
+      backend runs `docker run -i` with live stdin/stdout, so an MCP stdio
+      server on `tenant_isolated` runs in its tenant's container. MCP passes
+      the owner and no host working dir or derived roots. Roots or network
+      the server declares are still refused with the sandbox's reason. The
+      container is removed when the session ends or is cancelled. The
+      operator chooses an image that has the server's runtime, via
+      `KURA_SANDBOX_DOCKER_IMAGE`; per-server images are not built yet.
+      Fixed along the way: container env values no longer travel on the
+      `docker` argv, which any host user can read with `ps`. `-e KEY` takes
+      them from the client's environment, and client-steering names
+      (`PATH`, `HOME`, `DOCKER_*`) go inline to the container only.
+      *Open:* per-tenant browser contexts.
 - [ ] **3.4** Measure gVisor on the cell hosts; adopt as a second backend only
       if overhead fits.
 - [ ] **3.5** G11 DNS rebinding (from 1.5): tenant workloads reach the network

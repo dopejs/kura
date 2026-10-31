@@ -297,12 +297,61 @@ pub fn isolated_docker_args(
         "-e".into(),
         format!("HOME={CONTAINER_WORKSPACE}"),
     ];
-    for item in env {
-        args.push("-e".into());
-        args.push(item.clone());
-    }
+    args.extend(container_env_args(env));
     args.push(image.into());
     args
+}
+
+/// Variables the `docker` client itself reads. A container variable with one
+/// of these names must not reach the client's environment (a tenant-supplied
+/// `DOCKER_HOST` would redirect the client), so it is passed inline instead.
+fn affects_docker_client(key: &str) -> bool {
+    matches!(key, "PATH" | "HOME" | "XDG_RUNTIME_DIR") || key.starts_with("DOCKER_")
+}
+
+/// `-e` flags for the container's environment (`KEY=VALUE` items).
+///
+/// Values are **not** on the command line: `-e KEY` makes docker copy the
+/// value from the client's own environment ([`docker_client_env`]). An argv
+/// is readable by every user on the host through `ps`, and these variables
+/// carry the tenant's resolved secrets. Only client-affecting names go
+/// inline, so they can never steer the client.
+#[must_use]
+pub fn container_env_args(env: &[String]) -> Vec<String> {
+    let mut args = Vec::with_capacity(env.len() * 2);
+    for item in env {
+        let Some((key, _)) = item.split_once('=') else {
+            continue;
+        };
+        args.push("-e".to_string());
+        if affects_docker_client(key) {
+            args.push(item.clone());
+        } else {
+            args.push(key.to_string());
+        }
+    }
+    args
+}
+
+/// The `docker` client's environment for an isolated run: the daemon's own
+/// client settings (`PATH`, `HOME`, `DOCKER_*`), then the container values
+/// that [`container_env_args`] names. Nothing else of the daemon's
+/// environment is passed.
+#[must_use]
+pub fn docker_client_env(env: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = std::env::vars()
+        .filter(|(key, _)| affects_docker_client(key))
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect();
+    out.extend(
+        env.iter()
+            .filter(|item| {
+                item.split_once('=')
+                    .is_some_and(|(key, _)| !affects_docker_client(key))
+            })
+            .cloned(),
+    );
+    out
 }
 
 #[cfg(test)]
@@ -350,7 +399,7 @@ mod tests {
         assert_eq!(flag_value(&args, "--workdir"), ["/workspace"]);
         assert_eq!(flag_value(&args, "--name"), ["kura-exec-1"]);
         assert_eq!(args.last().map(String::as_str), Some("alpine:3.20"));
-        assert!(flag_value(&args, "-e").contains(&"A=1"));
+        assert!(flag_value(&args, "-e").contains(&"A"), "{args:?}");
     }
 
     #[test]
@@ -409,5 +458,33 @@ mod tests {
             assert_eq!(mode(dir.join("tenants/ten_a/workspace")), 0o777);
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn secret_values_stay_off_the_command_line() {
+        let env = vec![
+            "API_TOKEN=sk-secret-value".to_string(),
+            "DOCKER_HOST=tcp://attacker:2375".to_string(),
+            "PATH=/opt/tool/bin:/usr/bin".to_string(),
+        ];
+        let args = isolated_docker_args(&run(), "n", "img", &env);
+        assert!(
+            !args.iter().any(|a| a.contains("sk-secret-value")),
+            "{args:?}"
+        );
+        let e = flag_value(&args, "-e");
+        assert!(e.contains(&"API_TOKEN"));
+        // Client-affecting names go inline, to the container only.
+        assert!(e.contains(&"DOCKER_HOST=tcp://attacker:2375"));
+        assert!(e.contains(&"PATH=/opt/tool/bin:/usr/bin"));
+
+        let client = docker_client_env(&env);
+        assert!(client.contains(&"API_TOKEN=sk-secret-value".to_string()));
+        assert!(
+            !client
+                .iter()
+                .any(|item| item.contains("attacker") || item.contains("/opt/tool")),
+            "the tenant cannot steer the docker client: {client:?}"
+        );
     }
 }
