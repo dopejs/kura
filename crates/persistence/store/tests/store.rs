@@ -619,6 +619,22 @@ fn manager_document_round_trips_through_sqlite() {
     assert_eq!(listed[0].environment_scope, "test");
     assert_eq!(listed[0].document_json, "{\"a\":1}");
 
+    let got = store.get_manager_document("triage", "t1").unwrap().unwrap();
+    assert_eq!(got.tenant_id, "tenant_1");
+    assert_eq!(got.document_json, "{\"a\":1}");
+    assert!(
+        store
+            .get_manager_document("triage", "t2")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .get_manager_document("routine", "t1")
+            .unwrap()
+            .is_none()
+    );
+
     store.delete_manager_document("triage", "t1").unwrap();
     assert_eq!(store.list_manager_documents("triage").unwrap().len(), 0);
     assert_eq!(

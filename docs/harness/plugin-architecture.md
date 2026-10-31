@@ -175,6 +175,28 @@ cites the captured asset (`…; elided span captured as Memory[l0_ref …]`)
 so the model can drill back. Threadless turns keep their spans reachable
 through dispatch records only.
 
+In-window summary (agent-runtime-program.md 2.5, opt-in): with
+`summaryBudgetTokens` set, the elided span is shown to the model as a
+model-written summary (a system message prefixed `[session summary]`,
+framed as a record rather than instructions) instead of only the marker.
+The summary is per thread and per session segment, stored as a
+`session_summary` manager document, and rolling: a dispatch uses whatever
+summary exists, and when at least `summaryRefreshMessages` (default 4)
+newly elided messages lie past it — or no summary exists yet — a
+background job folds them in on the tenant's default model and
+credential, off the reply path (pre-dispatch runs once per tool round).
+Messages not yet covered keep the marker, so a late or failing summary
+degrades to the behavior above. The window makes room for the summary
+(its cost comes out of the history budget), the summary is cut to its
+budget whatever the model returns, and each injection is recorded as a
+`context.assembled` inclusion (`source: session_summary`, `layer:
+summary`). One update runs per thread, at most 4 at once, with a 5-minute
+pause after a failure. Metrics:
+`kura_session_summary_windows_total{coverage=full|partial|none}` and
+`kura_session_summary_updates_total{outcome=written|failed|empty|busy|backoff}`.
+Rollback is removing `summaryBudgetTokens`; stored summaries are then
+ignored.
+
 Later slices: session frame objects (explicit goal/constraint records)
 and channel-native thread segmentation policies — planned as Stage 5 of
 [`agent-deepening-program.md`](agent-deepening-program.md).

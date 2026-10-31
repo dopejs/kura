@@ -158,6 +158,30 @@ impl SQLiteStore {
         Ok(items)
     }
 
+    /// One document by (kind, id). A point read for per-dispatch paths that
+    /// must not scan every document of the kind.
+    pub fn get_manager_document(
+        &self,
+        doc_kind: &str,
+        doc_id: &str,
+    ) -> Result<Option<ManagerDocument>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                r#"SELECT doc_kind, doc_id, environment_scope, tenant_id, document_json, updated_at
+                FROM manager_documents
+                WHERE doc_kind = ?1 AND doc_id = ?2"#,
+            )
+            .map_err(|e| format!("get manager document {doc_kind}/{doc_id}: {e}"))?;
+        let mut rows = stmt
+            .query(params![doc_kind, doc_id])
+            .map_err(|e| e.to_string())?;
+        match rows.next().map_err(|e| e.to_string())? {
+            Some(row) => scan_manager_document(row).map(Some),
+            None => Ok(None),
+        }
+    }
+
     pub fn list_manager_documents(&self, doc_kind: &str) -> Result<Vec<ManagerDocument>, String> {
         let mut stmt = self
             .conn

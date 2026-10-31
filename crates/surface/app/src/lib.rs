@@ -981,7 +981,7 @@ mod tests {
     /// A test config pointing at a fresh temp data dir.
     use kura_config::LlmConfig;
 
-    fn test_config() -> (tempfile::TempDir, Config) {
+    pub(crate) fn test_config() -> (tempfile::TempDir, Config) {
         let dir = tempfile::Builder::new()
             .prefix("kura-app-smoke-")
             .tempdir()

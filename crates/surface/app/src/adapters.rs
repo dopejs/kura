@@ -1091,35 +1091,75 @@ impl LlmConsolidator {
         system: &str,
         user: String,
     ) -> Result<serde_json::Value, String> {
-        let input = kura_llm::CreateDispatchInput {
-            provider: String::new(),
-            model: String::new(),
-            messages: vec![
-                kura_llm::Message {
-                    role: kura_llm::MessageRole::System,
-                    content: system.to_string(),
-                    ..Default::default()
-                },
-                kura_llm::Message {
-                    role: kura_llm::MessageRole::User,
-                    content: user,
-                    ..Default::default()
-                },
-            ],
-            ..kura_llm::CreateDispatchInput::default()
-        };
-        let mut dispatch = self
-            .dispatcher
-            .prepare(input, false)
-            .map_err(|err| format!("prepare consolidation dispatch: {err}"))?;
-        dispatch.tenant_id = tenant_id.trim().to_string();
-        let cancel = kura_llm::CancelToken::new();
-        let dispatcher = Arc::clone(&self.dispatcher);
-        let settled = consolidator_runtime()?
-            .block_on(async move { dispatcher.dispatch(dispatch, &cancel).await })
-            .map_err(|err| format!("consolidation dispatch failed: {err}"))?;
-        extract_json(&settled.output)
-            .ok_or_else(|| "consolidation reply carried no JSON".to_string())
+        let output = dispatch_system_prompt(&self.dispatcher, tenant_id, system, user)
+            .map_err(|err| format!("consolidation {err}"))?;
+        extract_json(&output).ok_or_else(|| "consolidation reply carried no JSON".to_string())
+    }
+}
+
+/// One internal system dispatch (empty provider/model resolve to the
+/// daemon defaults) on `tenant_id`'s credential, blocking the calling
+/// thread on [`consolidator_runtime`]. Callers are off the reply path.
+fn dispatch_system_prompt(
+    dispatcher: &Arc<kura_llm::Dispatcher>,
+    tenant_id: &str,
+    system: &str,
+    user: String,
+) -> Result<String, String> {
+    let input = kura_llm::CreateDispatchInput {
+        provider: String::new(),
+        model: String::new(),
+        messages: vec![
+            kura_llm::Message {
+                role: kura_llm::MessageRole::System,
+                content: system.to_string(),
+                ..Default::default()
+            },
+            kura_llm::Message {
+                role: kura_llm::MessageRole::User,
+                content: user,
+                ..Default::default()
+            },
+        ],
+        ..kura_llm::CreateDispatchInput::default()
+    };
+    let mut dispatch = dispatcher
+        .prepare(input, false)
+        .map_err(|err| format!("prepare dispatch: {err}"))?;
+    dispatch.tenant_id = tenant_id.trim().to_string();
+    let cancel = kura_llm::CancelToken::new();
+    let dispatcher = Arc::clone(dispatcher);
+    let settled = consolidator_runtime()?
+        .block_on(async move { dispatcher.dispatch(dispatch, &cancel).await })
+        .map_err(|err| format!("dispatch failed: {err}"))?;
+    Ok(settled.output)
+}
+
+/// The in-window session summarizer (agent-runtime-program.md 2.5) over the
+/// same internal dispatch path as the consolidator: the tenant's default
+/// model, on the tenant's credential, off the reply path.
+pub struct LlmSessionSummarizer {
+    dispatcher: Arc<kura_llm::Dispatcher>,
+}
+
+impl LlmSessionSummarizer {
+    #[must_use]
+    pub fn new(dispatcher: Arc<kura_llm::Dispatcher>) -> Self {
+        Self { dispatcher }
+    }
+}
+
+impl kura_session::summary::Summarizer for LlmSessionSummarizer {
+    fn summarize(
+        &self,
+        tenant_id: &str,
+        previous: &str,
+        batch: &[kura_session::WindowMessage],
+        budget_tokens: usize,
+    ) -> Result<String, String> {
+        let (system, user) = kura_session::summary::summary_prompt(previous, batch, budget_tokens);
+        dispatch_system_prompt(&self.dispatcher, tenant_id, &system, user)
+            .map_err(|err| format!("session summary {err}"))
     }
 }
 

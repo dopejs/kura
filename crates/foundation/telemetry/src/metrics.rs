@@ -25,6 +25,8 @@ pub const HOOK_DURATION_SECONDS: &str = "kura_hook_duration_seconds";
 pub const CHAT_TOOL_CALLS_TOTAL: &str = "kura_chat_tool_calls_total";
 pub const CHAT_TOOL_CALL_DURATION_SECONDS: &str = "kura_chat_tool_call_duration_seconds";
 pub const SESSION_WINDOW_SHADOW_TOTAL: &str = "kura_session_window_shadow_total";
+pub const SESSION_SUMMARY_WINDOWS_TOTAL: &str = "kura_session_summary_windows_total";
+pub const SESSION_SUMMARY_UPDATES_TOTAL: &str = "kura_session_summary_updates_total";
 pub const TOKEN_ESTIMATE_INPUT_TOKENS_TOTAL: &str = "kura_token_estimate_input_tokens_total";
 pub const RETRIEVAL_EMBEDDINGS_TOTAL: &str = "kura_retrieval_embeddings_total";
 pub const EMBEDDER_REQUESTS_TOTAL: &str = "kura_embedder_requests_total";
@@ -71,6 +73,14 @@ const HELP: &[(&str, &str)] = &[
     (
         SESSION_WINDOW_SHADOW_TOTAL,
         "Session windows shaped in shadow mode, by whether a token budget would have elided the same, more or fewer messages than the char budget did.",
+    ),
+    (
+        SESSION_SUMMARY_WINDOWS_TOTAL,
+        "Elided session windows with summaries enabled, by how much of the elided span the thread's summary covered (full|partial|none).",
+    ),
+    (
+        SESSION_SUMMARY_UPDATES_TOTAL,
+        "Session summary updates, by outcome (written|failed|empty|busy|backoff). busy and backoff were not attempted.",
     ),
     (
         TOKEN_ESTIMATE_INPUT_TOKENS_TOTAL,

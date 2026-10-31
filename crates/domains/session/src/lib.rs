@@ -28,6 +28,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod summary;
+
 /// The role/content shape of one message in the hook payload (a structural
 /// subset of `kura_llm::Message`; this crate stays decoupled from the LLM
 /// crate on purpose).
@@ -70,6 +72,16 @@ pub struct SessionStrategyConfig {
     /// Room left in the window for the reply and later tool rounds; 0 uses
     /// [`DEFAULT_RESERVE_OUTPUT_TOKENS`].
     pub reserve_output_tokens: usize,
+    /// Budget for the in-window summary of elided messages, in estimated
+    /// tokens (agent-runtime-program.md 2.5). 0 (the default) keeps the bare
+    /// elision marker: a summary is a model call on the tenant's credential,
+    /// so it is opted into, not switched on by an upgrade.
+    pub summary_budget_tokens: usize,
+    /// Newly elided messages that must accumulate before an existing summary
+    /// is rewritten; 0 uses [`summary::DEFAULT_SUMMARY_REFRESH_MESSAGES`].
+    /// Each rewrite changes the window prefix, so this bounds both model
+    /// calls and prompt-cache churn.
+    pub summary_refresh_messages: usize,
 }
 
 /// The unit a window budget is counted in.
@@ -218,6 +230,21 @@ impl SessionStrategyConfig {
         }
     }
 
+    /// Whether in-window summaries are on (2.5).
+    #[must_use]
+    pub fn summary_enabled(&self) -> bool {
+        self.summary_budget_tokens > 0
+    }
+
+    #[must_use]
+    pub fn summary_refresh_floor(&self) -> usize {
+        if self.summary_refresh_messages > 0 {
+            self.summary_refresh_messages
+        } else {
+            summary::DEFAULT_SUMMARY_REFRESH_MESSAGES
+        }
+    }
+
     #[must_use]
     pub fn keep_recent_floor(&self) -> usize {
         if self.keep_recent > 0 {
@@ -238,6 +265,10 @@ pub struct ShapedWindow {
     /// (the caller captures them into the memory plane so eviction never
     /// discards content).
     pub elided_messages: Vec<WindowMessage>,
+    /// Positions of the elided messages in the input, ascending. Elision is
+    /// not always a prefix: a small old message can still fit after a large
+    /// newer one was dropped.
+    pub elided_indices: Vec<usize>,
 }
 
 /// The marker inserted where messages were elided.
@@ -290,6 +321,7 @@ fn shape_window_by(
             messages: messages.to_vec(),
             elided: 0,
             elided_messages: Vec::new(),
+            elided_indices: Vec::new(),
         };
     }
 
@@ -325,6 +357,7 @@ fn shape_window_by(
             messages: messages.to_vec(),
             elided: 0,
             elided_messages: Vec::new(),
+            elided_indices: Vec::new(),
         };
     }
 
@@ -332,12 +365,14 @@ fn shape_window_by(
     // position so the model sees where history was cut.
     let mut out: Vec<WindowMessage> = Vec::with_capacity(messages.len() - elided + 1);
     let mut elided_messages: Vec<WindowMessage> = Vec::with_capacity(elided);
+    let mut elided_indices: Vec<usize> = Vec::with_capacity(elided);
     let mut marker_placed = false;
     for (idx, message) in messages.iter().enumerate() {
         if message.role == "system" || kept.contains(&idx) {
             out.push(message.clone());
         } else {
             elided_messages.push(message.clone());
+            elided_indices.push(idx);
             if !marker_placed {
                 out.push(WindowMessage {
                     role: "system".to_string(),
@@ -351,6 +386,7 @@ fn shape_window_by(
         messages: out,
         elided,
         elided_messages,
+        elided_indices,
     }
 }
 

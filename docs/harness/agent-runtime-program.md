@@ -314,9 +314,18 @@ resource exhaustion in one run does not degrade others beyond the limits.
 
 Sequenced after Stage 3 because resume semantics depend on where tools run.
 
-- [ ] **2.5 In-window summary (G3).** Elided messages are replaced by a
+- [x] **2.5 In-window summary (G3).** Elided messages are replaced by a
       model-written summary under its own budget; the summary is recorded in
       the `AssemblyRecord` like any other inclusion.
+      *Shipped opt-in* (`summaryBudgetTokens`; see plugin-architecture.md,
+      session strategy). Rolling and asynchronous: the summary is written
+      behind the reply and used from the next dispatch, so the first turn
+      that crosses the budget still sees only the marker. Coverage is found
+      by a content digest of the last folded-in messages, since message ids
+      do not reach the hook. *Not covered:* the summary is a system message
+      written from content that includes tool output (G9 framing lands in
+      2.8); every elided window still captures its whole span to L0 again
+      (pre-existing, unchanged here).
 - [ ] **2.6 Parallel tool calls (G4).** Calls declared read-only run
       concurrently (bounded); calls with side effects stay serial and in
       order. Approval and quota gates are evaluated per call before any call

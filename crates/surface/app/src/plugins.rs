@@ -1160,27 +1160,12 @@ impl kura_plugin::Hook for ContextHook {
         }
 
         // Inspectability: the assembly decision is an event (best effort).
-        let mut event_payload = serde_json::Map::new();
-        event_payload.insert(
-            "record".to_string(),
-            serde_json::to_value(&record).unwrap_or(Value::Null),
+        publish_context_assembly(
+            state,
+            &tenant_id,
+            payload.get("threadId").and_then(Value::as_str),
+            &record,
         );
-        event_payload.insert("tenantId".to_string(), Value::String(tenant_id));
-        if let Some(thread_id) = payload.get("threadId").and_then(Value::as_str) {
-            event_payload.insert("threadId".to_string(), Value::String(thread_id.to_string()));
-        }
-        let event = kura_events::Event {
-            category: "context".to_string(),
-            name: "context.assembled".to_string(),
-            resource: kura_events::Resource {
-                kind: "context_assembly".to_string(),
-                id: uuid::Uuid::now_v7().to_string(),
-            },
-            payload: event_payload,
-            ..kura_events::Event::default()
-        };
-        let event = state.store.lock().append_event(&event).unwrap_or(event);
-        state.event_bus.publish(event);
         kura_plugin::HookOutcome::Continue
     }
 }
@@ -1216,6 +1201,9 @@ fn build_context(asm: &mut Assembly) -> Result<(), AppError> {
 struct SessionStrategyHook {
     config: kura_session::SessionStrategyConfig,
     state: Arc<std::sync::OnceLock<AppState>>,
+    /// Set when `summaryBudgetTokens` is configured (2.5).
+    summarizer: Option<Arc<dyn kura_session::summary::Summarizer>>,
+    summary_jobs: Arc<SummaryJobs>,
 }
 
 impl kura_plugin::Hook for SessionStrategyHook {
@@ -1268,7 +1256,26 @@ impl kura_plugin::Hook for SessionStrategyHook {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        let mut shaped = shape_by_unit(&self.config, &messages, source_kind.as_deref(), &model);
+        let mut shaped = shape_by_unit(
+            &self.config,
+            &messages,
+            source_kind.as_deref(),
+            &model,
+            None,
+        );
+        if shaped.elided > 0 {
+            if let (Some(summarizer), Some(state)) = (&self.summarizer, self.state.get()) {
+                self.place_summary(
+                    state,
+                    summarizer,
+                    payload,
+                    &messages,
+                    source_kind.as_deref(),
+                    &model,
+                    &mut shaped,
+                );
+            }
+        }
         if shaped.elided == 0 {
             if frame_applied {
                 if let Ok(new_messages) = serde_json::to_value(&shaped.messages) {
@@ -1318,11 +1325,19 @@ impl kura_plugin::Hook for SessionStrategyHook {
                 if let Some((asset_id, due)) = captured {
                     // The marker cites the captured span: eviction leaves a
                     // drill-down path, not a hole.
-                    if let Some(marker) = shaped
+                    // With a summary covering the whole span there is no
+                    // marker; the summary carries the citation instead.
+                    let marker_at = shaped
                         .messages
-                        .iter_mut()
-                        .find(|m| m.content.contains("elided by the session-strategy"))
-                    {
+                        .iter()
+                        .position(|m| m.content.contains("elided by the session-strategy"))
+                        .or_else(|| {
+                            shaped.messages.iter().position(|m| {
+                                m.content
+                                    .starts_with(kura_session::summary::SUMMARY_MESSAGE_PREFIX)
+                            })
+                        });
+                    if let Some(marker) = marker_at.map(|at| &mut shaped.messages[at]) {
                         marker.content = format!(
                             "{}; elided span captured as Memory[l0_ref {asset_id}]",
                             marker.content.trim_end_matches(']'),
@@ -1351,28 +1366,354 @@ impl kura_plugin::Hook for SessionStrategyHook {
     }
 }
 
+impl SessionStrategyHook {
+    /// 2.5: puts the thread's summary in place of the elided span and, when
+    /// enough uncovered messages have piled up, folds them in off the reply
+    /// path. Every failure leaves `shaped` as the plain marker window.
+    #[allow(clippy::too_many_arguments)]
+    fn place_summary(
+        &self,
+        state: &AppState,
+        summarizer: &Arc<dyn kura_session::summary::Summarizer>,
+        payload: &serde_json::Value,
+        messages: &[kura_session::WindowMessage],
+        source_kind: Option<&str>,
+        model: &str,
+        shaped: &mut kura_session::ShapedWindow,
+    ) {
+        use serde_json::Value;
+        let field = |name: &str| {
+            payload
+                .get(name)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        };
+        let (tenant_id, thread_id) = (field("tenantId"), field("threadId"));
+        if thread_id.is_empty() {
+            return;
+        }
+        // A summary belongs to one session segment: after a reset (manual
+        // or idle-gap segmentation) the old conversation's summary must not
+        // leak into the new one.
+        let segment_id = state
+            .store_pool
+            .read()
+            .get_thread_for_tenant(&tenant_id, &thread_id)
+            .ok()
+            .flatten()
+            .map(|thread| thread.current_session_segment_id)
+            .unwrap_or_default();
+        let existing = load_session_summary(state, &tenant_id, &thread_id)
+            .filter(|summary| summary.segment_id == segment_id);
+
+        // The summary is part of the window, so the history makes room for
+        // it rather than the total overflowing the budget.
+        if let Some(summary) = &existing {
+            let reserve = kura_session::WindowMessage {
+                role: "system".to_string(),
+                content: kura_session::summary::render_summary_message(&summary.summary),
+            };
+            *shaped = shape_by_unit(&self.config, messages, source_kind, model, Some(&reserve));
+        }
+        let placement = kura_session::summary::place_summary(
+            messages,
+            shaped,
+            existing.as_ref().map(|s| s.summary.as_str()),
+            existing.as_ref().map_or("", |s| s.watermark.as_str()),
+            self.config.summary_refresh_floor(),
+        );
+        let coverage = if placement.uncovered == 0 {
+            "full"
+        } else if placement.covered > 0 {
+            "partial"
+        } else {
+            "none"
+        };
+        kura_telemetry::metrics::registry().inc(
+            kura_telemetry::metrics::SESSION_SUMMARY_WINDOWS_TOTAL,
+            &[("coverage", coverage)],
+        );
+        if placement.summary_injected {
+            if let Some(message) = placement.messages.iter().find(|m| {
+                m.content
+                    .starts_with(kura_session::summary::SUMMARY_MESSAGE_PREFIX)
+            }) {
+                let tokens = kura_session::estimate_message_tokens(message);
+                let record = kura_context::AssemblyRecord {
+                    included: vec![kura_context::IncludedItem {
+                        asset_id: format!(
+                            "{}/{thread_id}",
+                            kura_session::summary::DOC_KIND_SESSION_SUMMARY
+                        ),
+                        layer: "summary".to_string(),
+                        chars: message.content.len(),
+                        tokens,
+                        source: "session_summary".to_string(),
+                    }],
+                    budget_unit: kura_context::BudgetUnit::Tokens,
+                    budget_tokens: self.config.summary_budget_tokens,
+                    used_tokens: tokens,
+                    budget_chars: self.config.summary_budget_tokens * kura_session::CHARS_PER_TOKEN,
+                    used_chars: message.content.len(),
+                    ..kura_context::AssemblyRecord::default()
+                };
+                publish_context_assembly(state, &tenant_id, Some(&thread_id), &record);
+            }
+        }
+        shaped.messages = placement.messages;
+        if let Some(update) = placement.update {
+            self.spawn_summary_update(
+                state, summarizer, tenant_id, thread_id, segment_id, existing, update,
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_summary_update(
+        &self,
+        state: &AppState,
+        summarizer: &Arc<dyn kura_session::summary::Summarizer>,
+        tenant_id: String,
+        thread_id: String,
+        segment_id: String,
+        previous: Option<kura_session::summary::SessionSummary>,
+        update: kura_session::summary::SummaryUpdate,
+    ) {
+        let count = |outcome: &str| {
+            kura_telemetry::metrics::registry().inc(
+                kura_telemetry::metrics::SESSION_SUMMARY_UPDATES_TOTAL,
+                &[("outcome", outcome)],
+            );
+        };
+        let job = match self.summary_jobs.begin(&format!("{tenant_id}/{thread_id}")) {
+            Ok(job) => job,
+            Err(outcome) => {
+                count(outcome);
+                return;
+            }
+        };
+        let budget = self.config.summary_budget_tokens;
+        let state = state.clone();
+        let summarizer = Arc::clone(summarizer);
+        let spawned = std::thread::Builder::new()
+            .name("session-summary".to_string())
+            .spawn(move || {
+                let previous_text = previous.as_ref().map_or("", |p| p.summary.as_str());
+                let outcome =
+                    match summarizer.summarize(&tenant_id, previous_text, &update.batch, budget) {
+                        Ok(text) => {
+                            let text = kura_session::summary::fit_summary(&text, budget);
+                            if text.is_empty() {
+                                "empty"
+                            } else {
+                                let summary = kura_session::summary::SessionSummary {
+                                    thread_id: thread_id.clone(),
+                                    tenant_id: tenant_id.clone(),
+                                    segment_id,
+                                    summary: text,
+                                    watermark: update.watermark,
+                                    covered_messages: previous
+                                        .as_ref()
+                                        .map_or(0, |p| p.covered_messages)
+                                        + update.batch.len(),
+                                    updated_at: chrono::Utc::now(),
+                                };
+                                let stored = kura_store::put_document(
+                                    &state.store.lock(),
+                                    kura_session::summary::DOC_KIND_SESSION_SUMMARY,
+                                    &thread_id,
+                                    "",
+                                    &tenant_id,
+                                    &summary,
+                                );
+                                match stored {
+                                    Ok(()) => "written",
+                                    Err(err) => {
+                                        kura_telemetry::global_logger().warn(&format!(
+                                            "session.summary store failed thread={thread_id}: {err}"
+                                        ));
+                                        "failed"
+                                    }
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            kura_telemetry::global_logger().warn(&format!(
+                                "session.summary update failed thread={thread_id}: {err}"
+                            ));
+                            "failed"
+                        }
+                    };
+                job.finish(outcome == "written");
+                count(outcome);
+            });
+        if let Err(err) = spawned {
+            // The closure (and the job it owns) is dropped, which releases
+            // the slot; the next dispatch tries again.
+            kura_telemetry::global_logger().warn(&format!("session.summary spawn failed: {err}"));
+        }
+    }
+}
+
+/// A thread's summary, if one exists under this tenant.
+fn load_session_summary(
+    state: &AppState,
+    tenant_id: &str,
+    thread_id: &str,
+) -> Option<kura_session::summary::SessionSummary> {
+    let doc = state
+        .store_pool
+        .read()
+        .get_manager_document(kura_session::summary::DOC_KIND_SESSION_SUMMARY, thread_id)
+        .ok()
+        .flatten()?;
+    // Summaries are new with 2.5, so there are no pre-tenancy rows to admit:
+    // the owner must match exactly.
+    if doc.tenant_id != tenant_id {
+        return None;
+    }
+    serde_json::from_str(&doc.document_json).ok()
+}
+
+/// Background summary updates (2.5): one in flight per thread, a small cap
+/// overall, and a pause after a failure, so a provider outage costs one call
+/// per thread per pause rather than one per tool round.
+#[derive(Default)]
+struct SummaryJobs {
+    inner: Arc<parking_lot::Mutex<SummaryJobsInner>>,
+}
+
+#[derive(Default)]
+struct SummaryJobsInner {
+    inflight: std::collections::HashSet<String>,
+    failed_at: std::collections::HashMap<String, std::time::Instant>,
+}
+
+/// Summary updates running at once across all threads.
+const SUMMARY_MAX_INFLIGHT: usize = 4;
+/// Pause after a failed update before the thread is tried again.
+const SUMMARY_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
+
+impl SummaryJobs {
+    /// Claims the thread's slot, or says why not (`busy` | `backoff`).
+    fn begin(&self, key: &str) -> Result<SummaryJob, &'static str> {
+        let mut inner = self.inner.lock();
+        if inner.inflight.contains(key) || inner.inflight.len() >= SUMMARY_MAX_INFLIGHT {
+            return Err("busy");
+        }
+        if inner
+            .failed_at
+            .get(key)
+            .is_some_and(|at| at.elapsed() < SUMMARY_RETRY_AFTER)
+        {
+            return Err("backoff");
+        }
+        inner.inflight.insert(key.to_string());
+        Ok(SummaryJob {
+            key: key.to_string(),
+            jobs: Arc::clone(&self.inner),
+        })
+    }
+}
+
+/// A claimed slot; released on drop, so a panicking update cannot wedge
+/// the thread.
+struct SummaryJob {
+    key: String,
+    jobs: Arc<parking_lot::Mutex<SummaryJobsInner>>,
+}
+
+impl SummaryJob {
+    fn finish(&self, ok: bool) {
+        let mut inner = self.jobs.lock();
+        if ok {
+            inner.failed_at.remove(&self.key);
+        } else {
+            inner
+                .failed_at
+                .insert(self.key.clone(), std::time::Instant::now());
+        }
+    }
+}
+
+impl Drop for SummaryJob {
+    fn drop(&mut self) {
+        self.jobs.lock().inflight.remove(&self.key);
+    }
+}
+
+/// Records one assembly decision as a `context.assembled` event (best
+/// effort), read back through `/v1/context/assemblies`.
+fn publish_context_assembly(
+    state: &AppState,
+    tenant_id: &str,
+    thread_id: Option<&str>,
+    record: &kura_context::AssemblyRecord,
+) {
+    use serde_json::Value;
+    let mut event_payload = serde_json::Map::new();
+    event_payload.insert(
+        "record".to_string(),
+        serde_json::to_value(record).unwrap_or(Value::Null),
+    );
+    event_payload.insert("tenantId".to_string(), Value::String(tenant_id.to_string()));
+    if let Some(thread_id) = thread_id {
+        event_payload.insert("threadId".to_string(), Value::String(thread_id.to_string()));
+    }
+    let event = kura_events::Event {
+        category: "context".to_string(),
+        name: "context.assembled".to_string(),
+        resource: kura_events::Resource {
+            kind: "context_assembly".to_string(),
+            id: uuid::Uuid::now_v7().to_string(),
+        },
+        payload: event_payload,
+        ..kura_events::Event::default()
+    };
+    let event = state.store.lock().append_event(&event).unwrap_or(event);
+    state.event_bus.publish(event);
+}
+
 /// Shapes the window in the configured unit (agent-runtime-program.md 2.2).
 /// Shadow mode shapes by chars, as before, and counts how a token budget
 /// would have differed, so the switch is made on measured traffic.
+///
+/// `reserve` is a message the caller will add to the window (the 2.5
+/// summary); its cost comes out of the budget so the total still fits.
 fn shape_by_unit(
     config: &kura_session::SessionStrategyConfig,
     messages: &[kura_session::WindowMessage],
     source_kind: Option<&str>,
     model: &str,
+    reserve: Option<&kura_session::WindowMessage>,
 ) -> kura_session::ShapedWindow {
     let keep_recent = config.keep_recent_floor();
-    let by_chars =
-        || kura_session::shape_window(messages, config.budget_for(source_kind), keep_recent);
+    let reserve_chars = reserve.map_or(0, |m| m.content.len());
+    let reserve_tokens = reserve.map_or(0, kura_session::estimate_message_tokens);
+    let by_chars = || {
+        kura_session::shape_window(
+            messages,
+            config.budget_for(source_kind).saturating_sub(reserve_chars),
+            keep_recent,
+        )
+    };
     let by_tokens = || {
         kura_session::shape_window_tokens(
             messages,
-            config.token_budget_for(source_kind, model),
+            config
+                .token_budget_for(source_kind, model)
+                .saturating_sub(reserve_tokens),
             keep_recent,
         )
     };
     match config.budget_unit {
         kura_session::BudgetUnit::Chars => by_chars(),
         kura_session::BudgetUnit::Tokens => by_tokens(),
+        // The 2.5 re-shape (with a reserve) is the same dispatch again;
+        // counting it would weigh summarized windows twice.
+        kura_session::BudgetUnit::Shadow if reserve.is_some() => by_chars(),
         kura_session::BudgetUnit::Shadow => {
             let chars = by_chars();
             let tokens = by_tokens();
@@ -1530,12 +1871,21 @@ fn build_session_strategy(asm: &mut Assembly) -> Result<(), AppError> {
             state: asm.late_state.clone(),
         }),
     );
+    let summarizer: Option<Arc<dyn kura_session::summary::Summarizer>> = if config.summary_enabled()
+    {
+        let llm = asm.state.llm.clone().expect("llm plugin built");
+        Some(Arc::new(adapters::LlmSessionSummarizer::new(llm)))
+    } else {
+        None
+    };
     bus.register(
         kura_plugin::points::CHAT_PRE_DISPATCH,
         "session-strategy",
         Arc::new(SessionStrategyHook {
             config,
             state: asm.late_state.clone(),
+            summarizer,
+            summary_jobs: Arc::new(SummaryJobs::default()),
         }),
     );
     Ok(())
@@ -2110,6 +2460,8 @@ mod session_window_unit_tests {
         let hook = SessionStrategyHook {
             config: serde_json::from_value(config).expect("config"),
             state: Arc::new(std::sync::OnceLock::new()),
+            summarizer: None,
+            summary_jobs: Arc::new(SummaryJobs::default()),
         };
         let mut payload = chinese_window();
         kura_plugin::Hook::handle(&hook, &mut payload);
@@ -2183,5 +2535,276 @@ mod session_window_unit_tests {
                 &labels
             ) > before
         );
+    }
+}
+
+#[cfg(test)]
+mod session_summary_tests {
+    use super::*;
+    use kura_session::summary::{DOC_KIND_SESSION_SUMMARY, SUMMARY_MESSAGE_PREFIX, SessionSummary};
+
+    /// Records every call; replies with `reply`.
+    struct FakeSummarizer {
+        calls: parking_lot::Mutex<Vec<(String, String, usize)>>,
+        reply: Result<String, String>,
+    }
+
+    impl kura_session::summary::Summarizer for FakeSummarizer {
+        fn summarize(
+            &self,
+            tenant_id: &str,
+            previous: &str,
+            batch: &[kura_session::WindowMessage],
+            _budget_tokens: usize,
+        ) -> Result<String, String> {
+            self.calls
+                .lock()
+                .push((tenant_id.to_string(), previous.to_string(), batch.len()));
+            self.reply.clone()
+        }
+    }
+
+    fn fake(reply: Result<String, String>) -> Arc<FakeSummarizer> {
+        Arc::new(FakeSummarizer {
+            calls: parking_lot::Mutex::new(Vec::new()),
+            reply,
+        })
+    }
+
+    fn hook(app: &crate::App, summarizer: Arc<FakeSummarizer>) -> SessionStrategyHook {
+        let state = std::sync::OnceLock::new();
+        let _ = state.set(app.state.clone());
+        SessionStrategyHook {
+            config: serde_json::from_value(serde_json::json!({
+                "personalBudgetChars": 1200,
+                "keepRecent": 1,
+                "summaryBudgetTokens": 20,
+            }))
+            .expect("config"),
+            state: Arc::new(state),
+            summarizer: Some(summarizer),
+            summary_jobs: Arc::new(SummaryJobs::default()),
+        }
+    }
+
+    /// A frame, six 400-char history messages and the current query: the
+    /// 1200-char budget elides the oldest four, and still holds the two kept
+    /// ones once a summary takes its share.
+    fn payload(tenant_id: &str, thread_id: &str) -> serde_json::Value {
+        let mut messages = vec![serde_json::json!({"role": "system", "content": "frame"})];
+        for i in 0..6 {
+            messages.push(serde_json::json!({
+                "role": if i % 2 == 0 { "user" } else { "assistant" },
+                "content": format!("{i}{}", "h".repeat(399)),
+            }));
+        }
+        messages.push(serde_json::json!({"role": "user", "content": "what next"}));
+        serde_json::json!({
+            "tenantId": tenant_id, "threadId": thread_id, "sourceKind": "chat",
+            "model": "", "messages": messages,
+        })
+    }
+
+    fn run(hook: &SessionStrategyHook, tenant_id: &str, thread_id: &str) -> Vec<String> {
+        let mut payload = payload(tenant_id, thread_id);
+        kura_plugin::Hook::handle(hook, &mut payload);
+        payload["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    fn has_marker(messages: &[String]) -> bool {
+        messages
+            .iter()
+            .any(|m| m.contains("elided by the session-strategy"))
+    }
+
+    fn summary_of(messages: &[String]) -> Option<&String> {
+        messages
+            .iter()
+            .find(|m| m.starts_with(SUMMARY_MESSAGE_PREFIX))
+    }
+
+    fn wait_for(mut done: impl FnMut() -> bool) {
+        for _ in 0..200 {
+            if done() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        panic!("condition not reached within 5s");
+    }
+
+    fn put_summary(app: &crate::App, summary: &SessionSummary) {
+        kura_store::put_document(
+            &app.state.store.lock(),
+            DOC_KIND_SESSION_SUMMARY,
+            &summary.thread_id,
+            "",
+            &summary.tenant_id,
+            summary,
+        )
+        .expect("put summary");
+    }
+
+    #[tokio::test]
+    async fn an_elided_span_is_summarized_off_the_reply_path_then_replaces_the_marker() {
+        let (_dir, config) = crate::tests::test_config();
+        let app = crate::App::new(config).expect("app");
+        let summarizer = fake(Ok(format!("they chose plan B {}", "and more ".repeat(40))));
+        let hook = hook(&app, Arc::clone(&summarizer));
+
+        // First crossing: the marker as before; the summary is written
+        // behind the reply.
+        let first = run(&hook, "", "thr_sum");
+        assert!(
+            has_marker(&first) && summary_of(&first).is_none(),
+            "{first:?}"
+        );
+        wait_for(|| load_session_summary(&app.state, "", "thr_sum").is_some());
+        let calls = summarizer.calls.lock().clone();
+        assert_eq!(calls, [(String::new(), String::new(), 4)]);
+        let stored = load_session_summary(&app.state, "", "thr_sum").expect("stored");
+        assert!(
+            kura_session::estimate_tokens(&stored.summary) <= 20,
+            "the budget is enforced, not trusted to the model: {}",
+            stored.summary
+        );
+        assert_eq!(stored.covered_messages, 4);
+
+        // Next dispatch: the summary stands where the span was; nothing is
+        // left uncovered, so no marker and no further model call.
+        let second = run(&hook, "", "thr_sum");
+        let summary = summary_of(&second).expect("summary injected");
+        assert!(summary.contains("they chose plan B"), "{summary}");
+        assert!(!has_marker(&second), "{second:?}");
+        assert_eq!(second.last().map(String::as_str), Some("what next"));
+        // The L0 citation appended after shaping is outside the budget, as
+        // it always was for the marker; everything else fits.
+        let total: usize = second
+            .iter()
+            .map(|m| {
+                m.split("; elided span captured as")
+                    .next()
+                    .unwrap_or(m)
+                    .len()
+            })
+            .sum();
+        assert!(total <= 1200, "the summary fits the budget: {total}");
+        assert!(
+            summary.contains("elided span captured as Memory[l0_ref"),
+            "{summary}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(summarizer.calls.lock().len(), 1);
+
+        // Recorded like any other inclusion.
+        let events = app
+            .state
+            .store_pool
+            .read()
+            .list_events(&kura_events::Filter {
+                category: "context".to_string(),
+                ..kura_events::Filter::default()
+            })
+            .expect("events");
+        let included = events
+            .iter()
+            .filter(|e| e.name == "context.assembled")
+            .flat_map(|e| {
+                e.payload["record"]["included"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .find(|item| item["source"] == "session_summary")
+            .expect("summary recorded");
+        assert_eq!(included["assetId"], "session_summary/thr_sum");
+        assert_eq!(included["layer"], "summary");
+        app.close();
+    }
+
+    #[tokio::test]
+    async fn another_tenants_or_another_segments_summary_is_never_injected() {
+        let (_dir, config) = crate::tests::test_config();
+        let app = crate::App::new(config).expect("app");
+        let summarizer = fake(Ok("fresh".to_string()));
+        let hook = hook(&app, Arc::clone(&summarizer));
+        let input: Vec<kura_session::WindowMessage> =
+            serde_json::from_value(payload("ten_a", "thr_x")["messages"].clone()).expect("m");
+        let watermark = kura_session::summary::watermark_at(&input, 4);
+
+        put_summary(
+            &app,
+            &SessionSummary {
+                thread_id: "thr_x".into(),
+                tenant_id: "ten_b".into(),
+                summary: "ten_b's secret".into(),
+                watermark: watermark.clone(),
+                ..SessionSummary::default()
+            },
+        );
+        let messages = run(&hook, "ten_a", "thr_x");
+        assert!(summary_of(&messages).is_none(), "{messages:?}");
+
+        // Same tenant, but written in a segment the thread has left.
+        put_summary(
+            &app,
+            &SessionSummary {
+                thread_id: "thr_y".into(),
+                tenant_id: "ten_a".into(),
+                segment_id: "seg_old".into(),
+                summary: "the previous conversation".into(),
+                watermark,
+                ..SessionSummary::default()
+            },
+        );
+        let messages = run(&hook, "ten_a", "thr_y");
+        assert!(summary_of(&messages).is_none(), "{messages:?}");
+        app.close();
+    }
+
+    #[tokio::test]
+    async fn a_failed_update_backs_off_instead_of_retrying_every_round() {
+        let (_dir, config) = crate::tests::test_config();
+        let app = crate::App::new(config).expect("app");
+        let summarizer = fake(Err("provider down".to_string()));
+        let hook = hook(&app, Arc::clone(&summarizer));
+
+        let first = run(&hook, "", "thr_fail");
+        assert!(has_marker(&first), "the marker is the fallback: {first:?}");
+        wait_for(|| {
+            hook.summary_jobs
+                .inner
+                .lock()
+                .failed_at
+                .contains_key("/thr_fail")
+        });
+        wait_for(|| hook.summary_jobs.inner.lock().inflight.is_empty());
+
+        let registry = kura_telemetry::metrics::registry();
+        let labels = [("outcome", "backoff")];
+        let before = registry.counter_value(
+            kura_telemetry::metrics::SESSION_SUMMARY_UPDATES_TOTAL,
+            &labels,
+        );
+        let second = run(&hook, "", "thr_fail");
+        assert!(has_marker(&second));
+        assert_eq!(
+            summarizer.calls.lock().len(),
+            1,
+            "no retry inside the pause"
+        );
+        assert!(
+            registry.counter_value(
+                kura_telemetry::metrics::SESSION_SUMMARY_UPDATES_TOTAL,
+                &labels
+            ) > before
+        );
+        assert!(load_session_summary(&app.state, "", "thr_fail").is_none());
+        app.close();
     }
 }
