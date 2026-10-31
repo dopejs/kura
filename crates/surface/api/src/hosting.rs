@@ -391,6 +391,10 @@ mod tests {
         ("POST", "/v1/memory/consolidate"),
         ("GET", "/metrics"),
         ("POST", "/v1/provisioning/users"),
+        // The browser worker runs on the host as the operator; tenants get
+        // no browser until it runs in their isolated plane (3.3 after 3.5).
+        ("POST", "/v1/runs/probe/computer-use/sessions"),
+        ("POST", "/v1/runs/probe/computer-use/sessions/probe/actions"),
     ];
 
     #[tokio::test]

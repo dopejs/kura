@@ -272,7 +272,13 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       `docker` argv, which any host user can read with `ps`. `-e KEY` takes
       them from the client's environment, and client-steering names
       (`PATH`, `HOME`, `DOCKER_*`) go inline to the container only.
-      *Open:* per-tenant browser contexts.
+      *Open:* per-tenant browser contexts, sequenced after 3.5. A browser
+      needs network, and tenant containers get network only through 3.5's
+      egress proxy. Until then tenants have no browser path at all: the
+      computer-use session/action routes are operator-only in shared mode
+      (pinned in `hosting.rs` `OPERATOR_ROUTES`), there is no browser chat
+      tool, and workflow browser steps run through operator-only
+      `POST /v1/runs`. The operator's browser worker remains a host process.
 - [ ] **3.4** Measure gVisor on the cell hosts; adopt as a second backend only
       if overhead fits.
 - [ ] **3.5** G11 DNS rebinding (from 1.5): tenant workloads reach the network

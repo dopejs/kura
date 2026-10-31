@@ -3181,17 +3181,29 @@ mod tests {
             );
         }
 
-        let events = app
-            .state
-            .store
-            .lock()
-            .list_events(&kura_events::Filter::default())
-            .expect("events");
-        let names: Vec<&str> = events
-            .iter()
-            .filter(|e| e.category == "swarm")
-            .map(|e| e.name.as_str())
-            .collect();
+        // The run turns Completed when its last child does; `swarm.run_completed`
+        // is published after that (routes/swarm.rs), so wait for the event
+        // rather than reading the log the moment the status flips.
+        let swarm_events = || {
+            app.state
+                .store
+                .lock()
+                .list_events(&kura_events::Filter::default())
+                .expect("events")
+                .into_iter()
+                .filter(|e| e.category == "swarm")
+                .map(|e| e.name)
+                .collect::<Vec<String>>()
+        };
+        let mut events = swarm_events();
+        for _ in 0..100 {
+            if events.iter().any(|n| n == "swarm.run_completed") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            events = swarm_events();
+        }
+        let names: Vec<&str> = events.iter().map(String::as_str).collect();
         assert!(
             names.contains(&"swarm.run_queued") && names.contains(&"swarm.run_started"),
             "{names:?}"
