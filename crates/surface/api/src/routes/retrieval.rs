@@ -6,14 +6,14 @@
 //! recall memory on demand. Every hit carries its source links and
 //! drill-down member ids — recalled results are evidence, never bare text.
 
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::routing::post;
-use axum::{Extension, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
-use crate::middleware::TenantContext;
+use crate::middleware::ActingTenant;
 use crate::response::Json;
 use crate::state::AppState;
 
@@ -55,14 +55,14 @@ const DEFAULT_LIMIT: usize = 5;
 #[allow(clippy::unused_async)]
 pub async fn query(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<Json<RetrievalQueryResponse>, ApiError> {
     let request: RetrievalQueryRequest = super::decode_json_required(&body)?;
     if request.query.trim().is_empty() {
         return Err(ApiError::BadRequest("query is required".to_string()));
     }
-    let tenant_id = super::scoped_tenant(tenant.as_deref(), &request.tenant_id)?;
+    let tenant_id = tenant.scoped(&request.tenant_id)?;
     let hits =
         run_query(&state, &tenant_id, &request.query, request.limit).map_err(ApiError::internal)?;
     Ok(Json(RetrievalQueryResponse { hits }))

@@ -4,7 +4,7 @@
 
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Extension, Path, Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::http::header::HeaderMap;
 use axum::routing::{get, patch, post};
@@ -15,7 +15,7 @@ use kura_mcp as mcp;
 use kura_webhook as webhook;
 
 use crate::error::ApiError;
-use crate::middleware::TenantContext;
+use crate::middleware::ActingTenant;
 use crate::response::Json;
 use crate::state::AppState;
 use crate::types::{
@@ -151,10 +151,10 @@ pub fn ingress_router() -> Router<AppState> {
 /// resolved tenant context (Go handleMCPServers GET).
 async fn list_mcp_servers(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
 ) -> Result<Json<ListResponse<mcp::ServerResource>>, ApiError> {
     let manager = mcp_manager(&state)?;
-    let items = match tenant.as_ref().map(|e| &e.0.0) {
+    let items = match tenant.context().map(|tc| &tc.0) {
         Some(tc) if !tc.tenant_id.trim().is_empty() => {
             manager.list_servers_for_tenant(&tc.tenant_id)
         }
@@ -167,18 +167,15 @@ async fn list_mcp_servers(
 /// Tenant contexts need mcp.manage (Go requireMCPPermissionIfTenant).
 async fn create_mcp_server(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<(StatusCode, Json<mcp::ServerResource>), ApiError> {
     let manager = mcp_manager(&state)?;
-    require_mcp_manage(tenant.as_ref().map(|e| &e.0.0))?;
+    require_mcp_manage(tenant.context().map(|tc| &tc.0))?;
     let mut input: mcp::CreateServerInput = decode_json_body(&body)?;
     // From the request, never from the body: a caller must not be able to
     // create a server belonging to someone else by saying so.
-    input.tenant_id = tenant
-        .as_ref()
-        .map(|extension| extension.0.0.tenant_id.clone())
-        .unwrap_or_default();
+    input.tenant_id = tenant.id().to_string();
     let (resource, created) = manager.create_server(input).map_err(map_mcp_error)?;
     let status = if created {
         StatusCode::CREATED
@@ -191,12 +188,12 @@ async fn create_mcp_server(
 /// GET /v1/mcp/servers/{server_id} — server resource (Go handleMCPServerByID).
 async fn get_mcp_server(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(server_id): Path<String>,
 ) -> Result<Json<mcp::ServerResource>, ApiError> {
     let manager = mcp_manager(&state)?;
     let resource =
-        mcp_server_resource_for_request(manager, tenant.as_ref().map(|e| &e.0.0), &server_id)
+        mcp_server_resource_for_request(manager, tenant.context().map(|tc| &tc.0), &server_id)
             .ok_or_else(|| ApiError::NotFound("not found".to_string()))?;
     Ok(Json(resource))
 }
@@ -204,17 +201,17 @@ async fn get_mcp_server(
 /// PATCH /v1/mcp/servers/{server_id} — partial server update.
 async fn update_mcp_server(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(server_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<mcp::ServerResource>, ApiError> {
     let manager = mcp_manager(&state)?;
-    if mcp_server_resource_for_request(manager, tenant.as_ref().map(|e| &e.0.0), &server_id)
+    if mcp_server_resource_for_request(manager, tenant.context().map(|tc| &tc.0), &server_id)
         .is_none()
     {
         return Err(ApiError::NotFound("not found".to_string()));
     }
-    require_mcp_manage(tenant.as_ref().map(|e| &e.0.0))?;
+    require_mcp_manage(tenant.context().map(|tc| &tc.0))?;
     let input: mcp::UpdateServerInput = decode_json_body(&body)?;
     let resource = manager
         .update_server(&server_id, &input)
@@ -226,13 +223,13 @@ async fn update_mcp_server(
 /// handleMCPServerStart).
 async fn mcp_server_start(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(server_id): Path<String>,
 ) -> Result<Json<mcp::LifecycleResponse>, ApiError> {
     let manager = mcp_manager(&state)?;
-    ensure_mcp_server_route_access(manager, tenant.as_ref().map(|e| &e.0.0), &server_id, true)?;
+    ensure_mcp_server_route_access(manager, tenant.context().map(|tc| &tc.0), &server_id, true)?;
     let response = manager
-        .start(&server_id, &current_actor(tenant.as_ref().map(|e| &e.0.0)))
+        .start(&server_id, &current_actor(tenant.context().map(|tc| &tc.0)))
         .map_err(map_mcp_error)?;
     Ok(Json(response))
 }
@@ -241,11 +238,11 @@ async fn mcp_server_start(
 /// completed, 409 when blocked/conflicted — Go handleMCPServerRefresh).
 async fn mcp_server_refresh(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(server_id): Path<String>,
 ) -> Result<(StatusCode, Json<mcp::CatalogLifecycleResult>), ApiError> {
     let manager = mcp_manager(&state)?;
-    ensure_mcp_server_route_access(manager, tenant.as_ref().map(|e| &e.0.0), &server_id, true)?;
+    ensure_mcp_server_route_access(manager, tenant.context().map(|tc| &tc.0), &server_id, true)?;
     let response = manager
         .refresh_catalog_server(&server_id)
         .map_err(map_mcp_error)?;
@@ -256,11 +253,11 @@ async fn mcp_server_refresh(
 /// POST /v1/mcp/servers/{server_id}/reinstall — catalog reinstall.
 async fn mcp_server_reinstall(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(server_id): Path<String>,
 ) -> Result<(StatusCode, Json<mcp::CatalogLifecycleResult>), ApiError> {
     let manager = mcp_manager(&state)?;
-    ensure_mcp_server_route_access(manager, tenant.as_ref().map(|e| &e.0.0), &server_id, true)?;
+    ensure_mcp_server_route_access(manager, tenant.context().map(|tc| &tc.0), &server_id, true)?;
     let response = manager
         .reinstall_catalog_server(&server_id)
         .map_err(map_mcp_error)?;
@@ -271,11 +268,11 @@ async fn mcp_server_reinstall(
 /// POST /v1/mcp/servers/{server_id}/uninstall — catalog uninstall.
 async fn mcp_server_uninstall(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(server_id): Path<String>,
 ) -> Result<(StatusCode, Json<mcp::CatalogLifecycleResult>), ApiError> {
     let manager = mcp_manager(&state)?;
-    ensure_mcp_server_route_access(manager, tenant.as_ref().map(|e| &e.0.0), &server_id, true)?;
+    ensure_mcp_server_route_access(manager, tenant.context().map(|tc| &tc.0), &server_id, true)?;
     let response = manager
         .uninstall_catalog_server(&server_id)
         .map_err(map_mcp_error)?;
@@ -287,11 +284,11 @@ async fn mcp_server_uninstall(
 /// when the server is ready, 409 otherwise — Go handleMCPServerRevalidate).
 async fn mcp_server_revalidate(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(server_id): Path<String>,
 ) -> Result<(StatusCode, Json<mcp::CatalogRevalidationResult>), ApiError> {
     let manager = mcp_manager(&state)?;
-    ensure_mcp_server_route_access(manager, tenant.as_ref().map(|e| &e.0.0), &server_id, true)?;
+    ensure_mcp_server_route_access(manager, tenant.context().map(|tc| &tc.0), &server_id, true)?;
     let response = manager
         .revalidate_catalog_server(&server_id)
         .map_err(map_mcp_error)?;
@@ -306,11 +303,11 @@ async fn mcp_server_revalidate(
 /// POST /v1/mcp/servers/{server_id}/stop — lifecycle stop.
 async fn mcp_server_stop(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(server_id): Path<String>,
 ) -> Result<Json<mcp::LifecycleResponse>, ApiError> {
     let manager = mcp_manager(&state)?;
-    ensure_mcp_server_route_access(manager, tenant.as_ref().map(|e| &e.0.0), &server_id, true)?;
+    ensure_mcp_server_route_access(manager, tenant.context().map(|tc| &tc.0), &server_id, true)?;
     let response = manager.stop(&server_id).map_err(map_mcp_error)?;
     Ok(Json(response))
 }
@@ -318,13 +315,13 @@ async fn mcp_server_stop(
 /// POST /v1/mcp/servers/{server_id}/restart — lifecycle restart.
 async fn mcp_server_restart(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(server_id): Path<String>,
 ) -> Result<Json<mcp::LifecycleResponse>, ApiError> {
     let manager = mcp_manager(&state)?;
-    ensure_mcp_server_route_access(manager, tenant.as_ref().map(|e| &e.0.0), &server_id, true)?;
+    ensure_mcp_server_route_access(manager, tenant.context().map(|tc| &tc.0), &server_id, true)?;
     let response = manager
-        .restart(&server_id, &current_actor(tenant.as_ref().map(|e| &e.0.0)))
+        .restart(&server_id, &current_actor(tenant.context().map(|tc| &tc.0)))
         .map_err(map_mcp_error)?;
     Ok(Json(response))
 }
@@ -332,11 +329,11 @@ async fn mcp_server_restart(
 /// POST /v1/mcp/servers/{server_id}/cancel — lifecycle cancel.
 async fn mcp_server_cancel(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(server_id): Path<String>,
 ) -> Result<Json<mcp::LifecycleResponse>, ApiError> {
     let manager = mcp_manager(&state)?;
-    ensure_mcp_server_route_access(manager, tenant.as_ref().map(|e| &e.0.0), &server_id, true)?;
+    ensure_mcp_server_route_access(manager, tenant.context().map(|tc| &tc.0), &server_id, true)?;
     let response = manager.cancel(&server_id).map_err(map_mcp_error)?;
     Ok(Json(response))
 }
@@ -345,11 +342,11 @@ async fn mcp_server_cancel(
 /// tenant context is present (Go handleMCPServerTools).
 async fn mcp_server_tools(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(server_id): Path<String>,
 ) -> Result<Json<ListResponse<mcp::ToolResource>>, ApiError> {
     let manager = mcp_manager(&state)?;
-    let items = match tenant.as_ref().map(|e| &e.0.0) {
+    let items = match tenant.context().map(|tc| &tc.0) {
         Some(tc) if !tc.tenant_id.trim().is_empty() => {
             manager.list_tools_for_tenant(&server_id, &tc.tenant_id)
         }
@@ -363,12 +360,12 @@ async fn mcp_server_tools(
 /// exposure rule (Go handleMCPServerToolExposure).
 async fn mcp_server_tool_exposure(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path((server_id, tool_name)): Path<(String, String)>,
     body: Bytes,
 ) -> Result<Json<mcp::ToolResource>, ApiError> {
     let manager = mcp_manager(&state)?;
-    ensure_mcp_server_route_access(manager, tenant.as_ref().map(|e| &e.0.0), &server_id, true)?;
+    ensure_mcp_server_route_access(manager, tenant.context().map(|tc| &tc.0), &server_id, true)?;
     let input: mcp::UpdateExposureInput = decode_json_body(&body)?;
     let resource = manager
         .update_tool_exposure(&server_id, &tool_name, &input)
@@ -382,15 +379,15 @@ async fn mcp_server_tool_exposure(
 /// handleMCPServerToolAuthorize).
 async fn mcp_server_tool_authorize(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path((server_id, tool_name)): Path<(String, String)>,
     body: Bytes,
 ) -> Result<(StatusCode, Json<mcp::ToolAuthorizationResponse>), ApiError> {
     let manager = mcp_manager(&state)?;
-    ensure_mcp_server_route_access(manager, tenant.as_ref().map(|e| &e.0.0), &server_id, false)?;
+    ensure_mcp_server_route_access(manager, tenant.context().map(|tc| &tc.0), &server_id, false)?;
     let mut input: mcp::AuthorizeToolInput = decode_optional_json_body(&body)?;
     if input.requested_by.trim().is_empty() {
-        input.requested_by = current_actor(tenant.as_ref().map(|e| &e.0.0));
+        input.requested_by = current_actor(tenant.context().map(|tc| &tc.0));
     }
     let response = manager
         .authorize_tool(&server_id, &tool_name, &input)
@@ -505,16 +502,18 @@ async fn skill_detail(
 // ---------------------------------------------------------------------------
 
 /// GET /v1/webhooks — endpoints for the tenant from the tenantId query
-/// parameter (Go handleWebhooks GET).
+/// parameter (Go handleWebhooks GET). Across the webhook routes the body
+/// tenant wins over the query tenant (Go webhookTenant) and the
+/// authenticated tenant over both: naming another tenant's endpoints is 403.
 async fn list_webhooks(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(query): Query<WebhookListQuery>,
 ) -> Result<Json<WebhookListResponse>, ApiError> {
     let manager = webhook_manager(&state)?;
     let tenant_id = query.tenant_id.unwrap_or_default();
     Ok(Json(WebhookListResponse {
-        items: manager.list_for_tenant(&webhook_tenant(tenant.as_deref(), &tenant_id)?),
+        items: manager.list_for_tenant(&tenant.scoped(&tenant_id)?),
     }))
 }
 
@@ -522,12 +521,12 @@ async fn list_webhooks(
 /// secret is returned exactly once (Go handleWebhooks POST).
 async fn create_webhook(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<(StatusCode, Json<webhook::CreateSecret>), ApiError> {
     let manager = webhook_manager(&state)?;
     let request: CreateWebhookRequest = decode_json_body(&body)?;
-    let tenant_id = webhook_tenant(tenant.as_deref(), &request.tenant_id)?;
+    let tenant_id = tenant.scoped(&request.tenant_id)?;
     let created = manager
         .create(
             &tenant_id,
@@ -543,15 +542,12 @@ async fn create_webhook(
 /// handleWebhookRoutes get branch).
 async fn get_webhook(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(query): Query<WebhookListQuery>,
     Path(webhook_id): Path<String>,
 ) -> Result<Json<webhook::Endpoint>, ApiError> {
     let manager = webhook_manager(&state)?;
-    let tenant_id = webhook_tenant(
-        tenant.as_deref(),
-        query.tenant_id.as_deref().unwrap_or_default(),
-    )?;
+    let tenant_id = tenant.scoped(query.tenant_id.as_deref().unwrap_or_default())?;
     let endpoint = manager
         .get(&tenant_id, &webhook_id)
         .ok_or_else(|| write_webhook_error(&webhook::WebhookError::EndpointNotFound))?;
@@ -562,20 +558,17 @@ async fn get_webhook(
 /// handleWebhookRoutes "rotate").
 async fn rotate_webhook(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(query): Query<WebhookListQuery>,
     Path(webhook_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<webhook::CreateSecret>, ApiError> {
     let manager = webhook_manager(&state)?;
     let request: WebhookTenantRequest = decode_optional_json_body(&body)?;
-    let tenant_id = webhook_tenant(
-        tenant.as_deref(),
-        &first_non_empty(&[
-            request.tenant_id.as_str(),
-            query.tenant_id.as_deref().unwrap_or_default(),
-        ]),
-    )?;
+    let tenant_id = tenant.scoped(&first_non_empty(&[
+        request.tenant_id.as_str(),
+        query.tenant_id.as_deref().unwrap_or_default(),
+    ]))?;
     let rotated = manager
         .rotate(&tenant_id, &webhook_id)
         .map_err(|err| write_webhook_error(&err))?;
@@ -586,20 +579,17 @@ async fn rotate_webhook(
 /// handleWebhookRoutes "disable").
 async fn disable_webhook(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(query): Query<WebhookListQuery>,
     Path(webhook_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<webhook::Endpoint>, ApiError> {
     let manager = webhook_manager(&state)?;
     let request: WebhookTenantRequest = decode_optional_json_body(&body)?;
-    let tenant_id = webhook_tenant(
-        tenant.as_deref(),
-        &first_non_empty(&[
-            request.tenant_id.as_str(),
-            query.tenant_id.as_deref().unwrap_or_default(),
-        ]),
-    )?;
+    let tenant_id = tenant.scoped(&first_non_empty(&[
+        request.tenant_id.as_str(),
+        query.tenant_id.as_deref().unwrap_or_default(),
+    ]))?;
     let disabled = manager
         .disable(&tenant_id, &webhook_id)
         .map_err(|err| write_webhook_error(&err))?;
@@ -732,13 +722,6 @@ fn lifecycle_status(status: &mcp::CatalogActionStatus) -> StatusCode {
     }
 }
 
-/// Go webhookTenant (the body tenant wins over the query tenant at the call
-/// sites), but the authenticated tenant wins over both: a request naming
-/// another tenant's endpoints is refused.
-fn webhook_tenant(tenant: Option<&TenantContext>, requested: &str) -> Result<String, ApiError> {
-    super::scoped_tenant(tenant, requested)
-}
-
 /// Go firstNonEmpty (trimmed).
 fn first_non_empty(values: &[&str]) -> String {
     for value in values {
@@ -868,6 +851,8 @@ mod tests {
 
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
+
+    use crate::middleware::TenantContext;
     use axum::http::header::CONTENT_TYPE;
     use parking_lot::Mutex;
     use tower::ServiceExt;

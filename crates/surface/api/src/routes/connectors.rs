@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 
 use axum::body::Bytes;
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -37,7 +37,7 @@ use kura_router as router_domain;
 use kura_runtime as runtime;
 
 use crate::error::ApiError;
-use crate::middleware::{TenantContext, environment_scope_from_config};
+use crate::middleware::{ActingTenant, environment_scope_from_config};
 use crate::state::AppState;
 
 use super::decode_json_required;
@@ -296,23 +296,17 @@ fn new_ingress_id() -> String {
 // Supervision handlers
 // ---------------------------------------------------------------------------
 
-/// The authenticated tenant, if the request carries one. Connectors are
-/// visible to and changeable by their own tenant only; a request without a
-/// tenant context (identity not configured) keeps the daemon-wide view.
-fn acting_tenant(tenant: Option<&Extension<TenantContext>>) -> &str {
-    tenant.map_or("", |extension| extension.0.0.tenant_id.trim())
-}
-
 /// GET /v1/connectors (Go handleConnectors GET branch, local path), limited
-/// to the acting tenant's connectors.
+/// to the acting tenant's connectors; a request without a tenant context
+/// (identity not configured) keeps the daemon-wide view.
 async fn list_connectors(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
 ) -> Result<Json<ConnectorListResponse>, ApiError> {
     let supervisor = supervisor(&state)?;
     Ok(Json(ConnectorListResponse {
         items: supervisor
-            .list_for_tenant(acting_tenant(tenant.as_ref()))
+            .list_for_tenant(tenant.id())
             .into_iter()
             .map(project_connector_resource)
             .collect(),
@@ -326,13 +320,13 @@ async fn list_connectors(
 /// supervisor would otherwise move it to the caller).
 async fn register_connector(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<(StatusCode, Json<connectors::Connector>), ApiError> {
     let mut input: connectors::RegisterInput = decode_json_required(&body)?;
-    input.tenant_id = super::scoped_tenant(tenant.as_deref(), &input.tenant_id)?;
+    input.tenant_id = tenant.scoped(&input.tenant_id)?;
     let supervisor = supervisor(&state)?;
-    let acting = acting_tenant(tenant.as_ref());
+    let acting = tenant.id();
     if !acting.is_empty() {
         if let Some(existing) = supervisor.get(input.connector_id.trim()) {
             if !existing.tenant_id.is_empty() && existing.tenant_id != acting {
@@ -375,12 +369,12 @@ async fn register_connector(
 /// GET /v1/connectors/{connector_id} (Go handleConnectorByID, local path).
 async fn get_connector(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(connector_id): Path<String>,
 ) -> Result<Json<connectors::Connector>, ApiError> {
     let supervisor = supervisor(&state)?;
     supervisor
-        .get_for_tenant(connector_id.trim(), acting_tenant(tenant.as_ref()))
+        .get_for_tenant(connector_id.trim(), tenant.id())
         .map(|connector| Json(project_connector_resource(connector)))
         .ok_or_else(|| ApiError::NotFound("not found".to_string()))
 }
@@ -390,14 +384,14 @@ async fn get_connector(
 /// disabled connector answers 409.
 async fn connector_action(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path((connector_id, action)): Path<(String, String)>,
     body: Bytes,
 ) -> Result<Json<connectors::Connector>, ApiError> {
     let supervisor = supervisor(&state)?;
     let connector_id = connector_id.trim();
     if supervisor
-        .get_for_tenant(connector_id, acting_tenant(tenant.as_ref()))
+        .get_for_tenant(connector_id, tenant.id())
         .is_none()
     {
         return Err(ApiError::NotFound("not found".to_string()));
@@ -480,10 +474,10 @@ async fn connector_action(
 /// the tenant (Go handleConnectorDiagnostics / *Setup / *Smoke).
 fn hosted_read_tenant(
     state: &AppState,
-    tenant: &Option<Extension<TenantContext>>,
+    tenant: &ActingTenant,
     connector_id: &str,
 ) -> Result<String, Response> {
-    let Some(tc) = tenant.as_ref().map(|extension| &extension.0.0) else {
+    let Some(tc) = tenant.context().map(|tc| &tc.0) else {
         return Err(credential_denial("tenant_context_missing"));
     };
     if tc.tenant_id.trim().is_empty() {
@@ -517,7 +511,7 @@ fn json_or_not_found<T: Serialize>(value: Result<Option<T>, String>) -> Response
 /// GET /v1/connectors/{id}/diagnostics.
 async fn connector_diagnostics(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(connector_id): Path<String>,
 ) -> Response {
     let tenant_id = match hosted_read_tenant(&state, &tenant, connector_id.trim()) {
@@ -539,7 +533,7 @@ macro_rules! hosted_setup_read {
         #[doc = $doc]
         async fn $name(
             State(state): State<AppState>,
-            tenant: Option<Extension<TenantContext>>,
+            tenant: ActingTenant,
             Path(connector_id): Path<String>,
         ) -> Response {
             let tenant_id = match hosted_read_tenant(&state, &tenant, connector_id.trim()) {
@@ -556,7 +550,7 @@ macro_rules! hosted_smoke_read {
         #[doc = $doc]
         async fn $name(
             State(state): State<AppState>,
-            tenant: Option<Extension<TenantContext>>,
+            tenant: ActingTenant,
             Path(connector_id): Path<String>,
         ) -> Response {
             let tenant_id = match hosted_read_tenant(&state, &tenant, connector_id.trim()) {
@@ -825,14 +819,14 @@ fn blocked_response(
 #[allow(clippy::too_many_lines)]
 async fn ingress_messages(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(connector_id): Path<String>,
     body: Bytes,
 ) -> Result<Response, ApiError> {
     let mut request: ConnectorIngressMessageRequest = decode_json_required(&body)?;
     // The authenticated tenant wins; with it set, only that tenant's
     // connectors resolve below.
-    request.tenant_id = super::scoped_tenant(tenant.as_deref(), &request.tenant_id)?;
+    request.tenant_id = tenant.scoped(&request.tenant_id)?;
     if request.message.message_id.trim().is_empty() {
         return Err(ApiError::BadRequest("messageId is required".to_string()));
     }

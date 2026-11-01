@@ -31,7 +31,7 @@ use serde::Deserialize;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::error::ApiError;
-use crate::middleware::{RequestContext, TenantContext};
+use crate::middleware::{ActingTenant, RequestContext, TenantContext};
 use crate::response::Json;
 use crate::state::AppState;
 use crate::types::{
@@ -120,7 +120,7 @@ pub struct ChatTurnMessageRequest {
 /// - 429 `turn_inbox_full`: it already holds 8 messages it has not read.
 pub async fn handle_chat_turn_message(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(request_id): Path<String>,
     body: Bytes,
 ) -> Response {
@@ -131,7 +131,7 @@ pub async fn handle_chat_turn_message(
         Ok(request) => request,
         Err(err) => return err.into_response(),
     };
-    match chat_service.steer_turn(&tenant_id(tenant.as_ref()), &request_id, &request.message) {
+    match chat_service.steer_turn(tenant.id(), &request_id, &request.message) {
         Ok(pending) => (
             StatusCode::ACCEPTED,
             Json(ChatTurnMessageResponse {
@@ -149,13 +149,13 @@ pub async fn handle_chat_turn_message(
 /// 202 when the turn was told to stop; 404 and 409 as for messages.
 pub async fn handle_chat_turn_cancel(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(request_id): Path<String>,
 ) -> Response {
     let Some(chat_service) = state.chat.as_deref() else {
         return ApiError::Internal("chat service is not configured".to_string()).into_response();
     };
-    match chat_service.cancel_turn(&tenant_id(tenant.as_ref()), &request_id) {
+    match chat_service.cancel_turn(tenant.id(), &request_id) {
         Ok(()) => (
             StatusCode::ACCEPTED,
             Json(ChatTurnCancelResponse {
@@ -165,14 +165,6 @@ pub async fn handle_chat_turn_cancel(
             .into_response(),
         Err(err) => steer_error(&err),
     }
-}
-
-/// The resolved tenant, as `query_input_from_request` takes it, so a turn
-/// is reached by the same tenant that started it.
-fn tenant_id(tenant: Option<&Extension<TenantContext>>) -> String {
-    tenant
-        .map(|extension| extension.0.0.tenant_id.trim().to_string())
-        .unwrap_or_default()
 }
 
 /// The `ApiError` body shape, with the specific code: a client tells a
@@ -207,7 +199,7 @@ fn steer_error(err: &SteerError) -> Response {
 #[allow(clippy::unused_async)]
 pub async fn handle_chat_query(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     correlation: Option<Extension<RequestContext>>,
     body: Bytes,
 ) -> Response {
@@ -221,8 +213,7 @@ pub async fn handle_chat_query(
     if let Err(err) = check_response_format(&request, false) {
         return err.into_response();
     }
-    let mut input =
-        query_input_from_request(&request, tenant.as_ref().map(|extension| &extension.0));
+    let mut input = query_input_from_request(&request, tenant.context());
     input.request_id = request_id(correlation.as_ref());
     // The chat service bridges into the async dispatcher through a per-call
     // current-thread Tokio runtime, which cannot be created on an axum worker
@@ -259,7 +250,7 @@ pub async fn handle_chat_query(
 #[allow(clippy::unused_async)]
 pub async fn handle_chat_query_stream(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     correlation: Option<Extension<RequestContext>>,
     body: Bytes,
 ) -> Response {
@@ -273,8 +264,7 @@ pub async fn handle_chat_query_stream(
     if let Err(err) = check_response_format(&request, true) {
         return err.into_response();
     }
-    let mut input =
-        query_input_from_request(&request, tenant.as_ref().map(|extension| &extension.0));
+    let mut input = query_input_from_request(&request, tenant.context());
     input.request_id = request_id(correlation.as_ref());
 
     let query_text = input.query.trim().to_string();

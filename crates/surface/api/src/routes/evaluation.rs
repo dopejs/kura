@@ -75,7 +75,7 @@ use std::sync::Arc;
 use axum::Json as AxumJson;
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Extension, Path, Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -97,7 +97,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::error::ApiError;
-use crate::middleware::{TenantContext, environment_scope_from_config};
+use crate::middleware::{ActingTenant, TenantContext, environment_scope_from_config};
 use crate::response::Json;
 use crate::state::AppState;
 
@@ -549,16 +549,13 @@ fn require_live_validation_execute(
 /// Resolved tenant id for response/filter fields (Go tenantctx.FromContext).
 /// Prefers the request's TenantContext extension (installed by protected())
 /// and falls back to the kura_identity tenantctx task-local.
-fn resolved_tenant_id(tenant: Option<&TenantContext>) -> String {
-    if let Some(tc) = tenant {
-        let id = tc.0.tenant_id.trim().to_string();
-        if !id.is_empty() {
-            return id;
-        }
+fn resolved_tenant_id(tenant: &ActingTenant) -> String {
+    match tenant.id() {
+        "" => kura_identity::tenantctx::from_context()
+            .map(|tc| tc.tenant_id)
+            .unwrap_or_default(),
+        acting => acting.to_string(),
     }
-    kura_identity::tenantctx::from_context()
-        .map(|tc| tc.tenant_id)
-        .unwrap_or_default()
 }
 
 /// Runs the future with the resolved tenant installed in the tenantctx
@@ -851,7 +848,7 @@ async fn replay_candidate_attempts(
 async fn replay_candidate_live_validations(
     State(state): State<AppState>,
     Path(candidate_id): Path<String>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<(StatusCode, AxumJson<StartResult>), EvaluationApiError> {
     let evaluation = evaluation_manager(&state)?;
@@ -879,7 +876,7 @@ async fn replay_candidate_live_validations(
     }
     let input = input.into_start_input();
     let (status, result) = with_tenant_context(
-        tenant.as_ref().map(|t| &t.0),
+        tenant.context(),
         run_live_validation_start(&state, &live_validation, input),
     )
     .await?;
@@ -1020,10 +1017,10 @@ async fn list_fixtures(
 async fn list_live_validations(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
 ) -> Result<Json<LiveValidationAttemptListResponse>, ApiError> {
     let manager = live_validation_manager(&state)?;
-    let tenant_id = resolved_tenant_id(tenant.as_ref().map(|t| &t.0));
+    let tenant_id = resolved_tenant_id(&tenant);
     let filter = AttemptFilter {
         tenant_id: tenant_id.clone(),
         candidate_id: params.get("candidateId").cloned().unwrap_or_default(),
@@ -1045,7 +1042,7 @@ async fn list_live_validations(
 /// POST /v1/live-validations — start an attempt (202 / 409 / 503).
 async fn start_live_validation(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<(StatusCode, AxumJson<StartResult>), EvaluationApiError> {
     let manager = live_validation_manager(&state)?;
@@ -1056,7 +1053,7 @@ async fn start_live_validation(
             .map_err(|err| EvaluationApiError::Api(ApiError::BadRequest(err.to_string())))?
     };
     let (status, result) = with_tenant_context(
-        tenant.as_ref().map(|t| &t.0),
+        tenant.context(),
         run_live_validation_start(&state, &manager, input.into_start_input()),
     )
     .await?;
@@ -1067,15 +1064,12 @@ async fn start_live_validation(
 async fn get_live_validation(
     State(state): State<AppState>,
     Path(validation_id): Path<String>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
 ) -> Result<Json<Attempt>, ApiError> {
     let manager = live_validation_manager(&state)?;
-    let item = with_tenant_context(
-        tenant.as_ref().map(|t| &t.0),
-        manager.get_attempt(&validation_id),
-    )
-    .await
-    .map_err(ApiError::internal)?;
+    let item = with_tenant_context(tenant.context(), manager.get_attempt(&validation_id))
+        .await
+        .map_err(ApiError::internal)?;
     match item {
         Some(item) => Ok(Json(item)),
         None => Err(ApiError::NotFound("live validation not found".to_string())),
@@ -1087,10 +1081,10 @@ async fn live_validation_ledger(
     State(state): State<AppState>,
     Path(validation_id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
 ) -> Result<Json<LiveValidationLedgerResponse>, ApiError> {
     let manager = live_validation_manager(&state)?;
-    let tenant_id = resolved_tenant_id(tenant.as_ref().map(|t| &t.0));
+    let tenant_id = resolved_tenant_id(&tenant);
     let filter = kura_livevalidation::LedgerFilter {
         tenant_id: tenant_id.clone(),
         validation_id: validation_id.clone(),
@@ -1115,10 +1109,10 @@ async fn live_validation_ledger(
 async fn live_validation_abort(
     State(state): State<AppState>,
     Path(validation_id): Path<String>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
 ) -> Result<Json<Attempt>, ApiError> {
     let manager = live_validation_manager(&state)?;
-    let item = with_tenant_context(tenant.as_ref().map(|t| &t.0), manager.abort(&validation_id))
+    let item = with_tenant_context(tenant.context(), manager.abort(&validation_id))
         .await
         .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     let event = kura_events::live_validation_attempt_event(
@@ -1144,15 +1138,13 @@ async fn live_validation_retention(
 async fn live_validation_compare(
     State(state): State<AppState>,
     Path(validation_id): Path<String>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
 ) -> Result<(StatusCode, AxumJson<Comparison>), ApiError> {
     let manager = live_validation_manager(&state)?;
-    let comparison = with_tenant_context(
-        tenant.as_ref().map(|t| &t.0),
-        manager.create_comparison(&validation_id),
-    )
-    .await
-    .map_err(|err| ApiError::BadRequest(err.to_string()))?;
+    let comparison =
+        with_tenant_context(tenant.context(), manager.create_comparison(&validation_id))
+            .await
+            .map_err(|err| ApiError::BadRequest(err.to_string()))?;
     let event = kura_events::live_validation_comparison_event(comparison.clone());
     state.event_bus.publish(event);
     Ok((StatusCode::ACCEPTED, AxumJson(comparison)))
@@ -1163,7 +1155,7 @@ async fn live_validation_compare(
 async fn live_validation_reconcile(
     State(state): State<AppState>,
     Path((_validation_id, ambiguous_commit_id)): Path<(String, String)>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<Json<ReconciliationResolution>, ApiError> {
     let manager = live_validation_manager(&state)?;
@@ -1173,7 +1165,7 @@ async fn live_validation_reconcile(
         serde_json::from_slice(&body).map_err(|err| ApiError::BadRequest(err.to_string()))?
     };
     let resolution = with_tenant_context(
-        tenant.as_ref().map(|t| &t.0),
+        tenant.context(),
         manager.resolve_reconciliation(ReconciliationResolution {
             ambiguous_commit_id,
             resolution: ReconciliationResolutionValue::new(request.resolution),
@@ -1200,7 +1192,7 @@ async fn live_validation_reconcile(
 async fn list_kill_switches(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let manager = live_validation_manager(&state)?;
     let tenant_id = params
@@ -1208,7 +1200,7 @@ async fn list_kill_switches(
         .cloned()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
-            let resolved = resolved_tenant_id(tenant.as_ref().map(|t| &t.0));
+            let resolved = resolved_tenant_id(&tenant);
             (!resolved.is_empty()).then_some(resolved)
         })
         .unwrap_or_default();
@@ -1229,7 +1221,7 @@ async fn list_kill_switches(
 /// reconciliation authority).
 async fn set_kill_switch(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<Json<KillSwitch>, ApiError> {
     let manager = live_validation_manager(&state)?;
@@ -1239,7 +1231,7 @@ async fn set_kill_switch(
         serde_json::from_slice(&body).map_err(|err| ApiError::BadRequest(err.to_string()))?
     };
     let item = with_tenant_context(
-        tenant.as_ref().map(|t| &t.0),
+        tenant.context(),
         manager.set_kill_switch(KillSwitch {
             scope: KillSwitchScope::new(request.scope),
             tenant_id: request.tenant_id,
@@ -1291,18 +1283,15 @@ async fn live_validation_support_matrix(
 /// tenant's connector conformance results (404 when none).
 async fn live_validation_connector_conformance(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<LiveValidationDiscordConformanceResponse>, EvaluationApiError> {
     let _manager = live_validation_manager(&state)?;
     require_hosted_credential_read_any(
-        tenant.as_ref().map(|t| &t.0),
+        tenant.context(),
         &[kura_identity::Permission::ConnectorsManage],
     )?;
-    let tenant_id = tenant
-        .as_ref()
-        .map(|t| t.0.0.tenant_id.clone())
-        .unwrap_or_default();
+    let tenant_id = tenant.id().to_string();
     let connector_id = params
         .get("connectorId")
         .map(|value| value.trim().to_string())
@@ -1332,18 +1321,15 @@ async fn live_validation_connector_conformance(
 /// GET /v1/live-validations/discord-smoke — latest Discord smoke evidence.
 async fn live_validation_discord_smoke(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<kura_store::DiscordSmokeEvidenceRecord>, EvaluationApiError> {
     let _manager = live_validation_manager(&state)?;
     require_hosted_credential_read_any(
-        tenant.as_ref().map(|t| &t.0),
+        tenant.context(),
         &[kura_identity::Permission::ConnectorsManage],
     )?;
-    let tenant_id = tenant
-        .as_ref()
-        .map(|t| t.0.0.tenant_id.clone())
-        .unwrap_or_default();
+    let tenant_id = tenant.id().to_string();
     let connector_id = params
         .get("connectorId")
         .map(|value| value.trim().to_string())
@@ -1367,18 +1353,15 @@ async fn live_validation_discord_smoke(
 /// GET /v1/live-validations/telegram-smoke — latest Telegram smoke evidence.
 async fn live_validation_telegram_smoke(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<kura_store::TelegramSmokeEvidenceRecord>, EvaluationApiError> {
     let _manager = live_validation_manager(&state)?;
     require_hosted_credential_read_any(
-        tenant.as_ref().map(|t| &t.0),
+        tenant.context(),
         &[kura_identity::Permission::ConnectorsManage],
     )?;
-    let tenant_id = tenant
-        .as_ref()
-        .map(|t| t.0.0.tenant_id.clone())
-        .unwrap_or_default();
+    let tenant_id = tenant.id().to_string();
     let connector_id = params
         .get("connectorId")
         .map(|value| value.trim().to_string())
@@ -1403,18 +1386,15 @@ async fn live_validation_telegram_smoke(
 /// to the tenant-safe resource shape.
 async fn live_validation_slack_smoke(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<SlackSmokeEvidenceResource>, EvaluationApiError> {
     let _manager = live_validation_manager(&state)?;
     require_hosted_credential_read_any(
-        tenant.as_ref().map(|t| &t.0),
+        tenant.context(),
         &[kura_identity::Permission::ConnectorsManage],
     )?;
-    let tenant_id = tenant
-        .as_ref()
-        .map(|t| t.0.0.tenant_id.clone())
-        .unwrap_or_default();
+    let tenant_id = tenant.id().to_string();
     let connector_id = params
         .get("connectorId")
         .map(|value| value.trim().to_string())
@@ -1438,18 +1418,15 @@ async fn live_validation_slack_smoke(
 /// GET /v1/live-validations/matrix-smoke — latest Matrix smoke evidence.
 async fn live_validation_matrix_smoke(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<kura_store::MatrixSmokeEvidenceRecord>, EvaluationApiError> {
     let _manager = live_validation_manager(&state)?;
     require_hosted_credential_read_any(
-        tenant.as_ref().map(|t| &t.0),
+        tenant.context(),
         &[kura_identity::Permission::ConnectorsManage],
     )?;
-    let tenant_id = tenant
-        .as_ref()
-        .map(|t| t.0.0.tenant_id.clone())
-        .unwrap_or_default();
+    let tenant_id = tenant.id().to_string();
     let connector_id = params
         .get("connectorId")
         .map(|value| value.trim().to_string())
@@ -1475,16 +1452,13 @@ async fn live_validation_matrix_smoke(
 /// equivalent yet (Go: 400 "matrix safe-live smoke executor is not configured").
 async fn record_matrix_smoke(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<HashMap<String, String>>,
     body: Bytes,
 ) -> Result<(StatusCode, AxumJson<kura_store::MatrixSmokeEvidenceRecord>), EvaluationApiError> {
     let _manager = live_validation_manager(&state)?;
-    require_live_validation_execute(tenant.as_ref().map(|t| &t.0))?;
-    let tenant_id = tenant
-        .as_ref()
-        .map(|t| t.0.0.tenant_id.clone())
-        .unwrap_or_default();
+    require_live_validation_execute(tenant.context())?;
+    let tenant_id = tenant.id().to_string();
     let mut request: RecordMatrixSmokeRequest = if body.is_empty() {
         RecordMatrixSmokeRequest::default()
     } else {
@@ -1792,10 +1766,10 @@ fn product_page(params: &HashMap<String, String>) -> kura_evaluation::ProductPag
 /// GET /v1/evaluation/discovery-policies (Go handleEvaluationProductDiscoveryPolicies).
 async fn list_discovery_policies(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::DiscoveryPolicy>>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     let enabled = match params.get("enabled") {
         Some(raw) if !raw.trim().is_empty() => Some(
             raw.trim()
@@ -1827,10 +1801,10 @@ async fn list_discovery_policies(
 /// GET /v1/evaluation/discovery-policies/{policy_id} — one policy.
 async fn get_discovery_policy(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(policy_id): Path<String>,
 ) -> Result<Json<kura_evaluation::DiscoveryPolicy>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     let item = state
         .store_pool
         .read()
@@ -1844,11 +1818,11 @@ async fn get_discovery_policy(
 /// handleEvaluationProductDiscoveryPolicyRoutes PUT branch).
 async fn upsert_discovery_policy(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(policy_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<kura_evaluation::DiscoveryPolicy>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     let input: UpsertDiscoveryPolicyRequest = decode_optional_json_body(&body)?;
     let now = Utc::now();
     let item = kura_evaluation::DiscoveryPolicy {
@@ -1879,10 +1853,10 @@ async fn upsert_discovery_policy(
 /// handleEvaluationProductDiscoveryRuns GET branch).
 async fn list_discovery_runs(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::DiscoveryRun>>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     let filter = kura_evaluation::DiscoveryRunFilter {
         base: kura_evaluation::ProductListFilter {
             tenant_id: tc.tenant_id.clone(),
@@ -1916,10 +1890,10 @@ async fn list_discovery_runs(
 /// handleEvaluationProductDiscoveryRuns POST branch).
 async fn start_discovery_run(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<(StatusCode, AxumJson<kura_evaluation::DiscoveryRun>), ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     let input: StartDiscoveryRunRequest = decode_optional_json_body(&body)?;
     let now = Utc::now();
     let policy = if input.policy_id.trim().is_empty() {
@@ -1972,10 +1946,10 @@ async fn start_discovery_run(
 /// handleEvaluationProductDiscoveryRunRoutes).
 async fn get_discovery_run(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(discovery_run_id): Path<String>,
 ) -> Result<Json<kura_evaluation::DiscoveryRun>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     let item = state
         .store_pool
         .read()
@@ -1989,10 +1963,10 @@ async fn get_discovery_run(
 /// handleEvaluationProductDiscoveredCandidates).
 async fn list_discovered_candidates(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::DiscoveredCandidate>>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     let filter = kura_evaluation::DiscoveredCandidateFilter {
         base: kura_evaluation::ProductListFilter {
             tenant_id: tc.tenant_id.clone(),
@@ -2045,10 +2019,10 @@ async fn list_discovered_candidates(
 /// handleEvaluationProductDiscoveredCandidateRoutes GET branch).
 async fn get_discovered_candidate(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(discovered_candidate_id): Path<String>,
 ) -> Result<Json<kura_evaluation::DiscoveredCandidate>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     let item = state
         .store_pool
         .read()
@@ -2064,11 +2038,11 @@ async fn get_discovered_candidate(
 /// evaluation.fixture.manage.
 async fn materialize_product_fixture(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(discovered_candidate_id): Path<String>,
     body: Bytes,
 ) -> Result<(StatusCode, AxumJson<ProductFixtureMutationResponse>), ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationFixtureManage) {
         return Err(ApiError::Forbidden(
             "evaluation.fixture.manage is required".to_string(),
@@ -2126,10 +2100,10 @@ async fn materialize_product_fixture(
 /// Requires evaluation.fixture.read.
 async fn list_product_fixtures(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::ProductManagedFixture>>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationFixtureRead) {
         return Err(ApiError::Forbidden(
             "evaluation.fixture.read is required".to_string(),
@@ -2156,10 +2130,10 @@ async fn list_product_fixtures(
 /// handleEvaluationProductFixtureRoutes single-segment branch).
 async fn get_product_fixture(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(fixture_id): Path<String>,
 ) -> Result<Json<kura_evaluation::ProductManagedFixture>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationFixtureRead) {
         return Err(ApiError::Forbidden(
             "evaluation.fixture.read is required".to_string(),
@@ -2178,11 +2152,11 @@ async fn get_product_fixture(
 /// handleEvaluationProductFixtureRevisions GET branch).
 async fn list_fixture_revisions(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(fixture_id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::FixtureRevision>>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationFixtureRead) {
         return Err(ApiError::Forbidden(
             "evaluation.fixture.read is required".to_string(),
@@ -2205,11 +2179,11 @@ async fn list_fixture_revisions(
 /// branch). Requires evaluation.fixture.manage.
 async fn create_fixture_revision(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(fixture_id): Path<String>,
     body: Bytes,
 ) -> Result<(StatusCode, AxumJson<ProductFixtureMutationResponse>), ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationFixtureManage) {
         return Err(ApiError::Forbidden(
             "evaluation.fixture.manage is required".to_string(),
@@ -2269,11 +2243,11 @@ async fn create_fixture_revision(
 /// handleEvaluationProductFixtureReview). Requires evaluation.fixture.review.
 async fn review_product_fixture_route(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(fixture_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<ProductFixtureMutationResponse>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationFixtureReview) {
         return Err(ApiError::Forbidden(
             "evaluation.fixture.review is required".to_string(),
@@ -2314,10 +2288,10 @@ async fn review_product_fixture_route(
 /// handleEvaluationProductFixtureSuppress). Requires evaluation.fixture.suppress.
 async fn suppress_product_fixture_route(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(fixture_id): Path<String>,
 ) -> Result<Json<ProductFixtureMutationResponse>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationFixtureSuppress) {
         return Err(ApiError::Forbidden(
             "evaluation.fixture.suppress is required".to_string(),
@@ -2346,10 +2320,10 @@ async fn suppress_product_fixture_route(
 /// handleEvaluationProductSuppressions).
 async fn create_suppression(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<(StatusCode, AxumJson<kura_evaluation::SuppressionRecord>), ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     let input: CreateSuppressionRequest = decode_optional_json_body(&body)?;
     let now = Utc::now();
     let item = kura_evaluation::SuppressionRecord {
@@ -2388,10 +2362,10 @@ async fn create_suppression(
 /// branch). Requires evaluation.campaign.read.
 async fn list_replay_campaigns(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::ReplayCampaign>>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationCampaignRead) {
         return Err(ApiError::Forbidden(
             "evaluation.campaign.read is required".to_string(),
@@ -2419,10 +2393,10 @@ async fn list_replay_campaigns(
 /// evaluation.campaign.manage.
 async fn create_replay_campaign_route(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<(StatusCode, AxumJson<kura_evaluation::ReplayCampaign>), ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationCampaignManage) {
         return Err(ApiError::Forbidden(
             "evaluation.campaign.manage is required".to_string(),
@@ -2463,10 +2437,10 @@ async fn create_replay_campaign_route(
 /// handleEvaluationProductCampaignRoutes single-segment branch).
 async fn get_replay_campaign(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(campaign_id): Path<String>,
 ) -> Result<Json<kura_evaluation::ReplayCampaign>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationCampaignRead) {
         return Err(ApiError::Forbidden(
             "evaluation.campaign.read is required".to_string(),
@@ -2485,11 +2459,11 @@ async fn get_replay_campaign(
 /// handleEvaluationProductCampaignRoutes items branch).
 async fn list_campaign_items(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(campaign_id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::CampaignItem>>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationCampaignRead) {
         return Err(ApiError::Forbidden(
             "evaluation.campaign.read is required".to_string(),
@@ -2516,11 +2490,11 @@ async fn list_campaign_items(
 /// handleEvaluationProductCampaignRoutes attempt-groups branch).
 async fn list_campaign_attempt_groups(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(campaign_id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::CampaignAttemptGroup>>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationCampaignRead) {
         return Err(ApiError::Forbidden(
             "evaluation.campaign.read is required".to_string(),
@@ -2548,10 +2522,10 @@ async fn list_campaign_attempt_groups(
 /// evaluation.campaign.manage.
 async fn campaign_transition_route(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path((campaign_id, action)): Path<(String, String)>,
 ) -> Result<Json<kura_evaluation::ReplayCampaign>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationCampaignManage) {
         return Err(ApiError::Forbidden(
             "evaluation.campaign.manage is required".to_string(),
@@ -2584,11 +2558,11 @@ async fn campaign_transition_route(
 /// handleEvaluationProductCampaignRoutes tool-call-inspections branch).
 async fn list_campaign_tool_call_inspections(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(campaign_id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::ToolCallInspection>>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationInspectionRead) {
         return Err(ApiError::Forbidden(
             "evaluation.inspection.read is required".to_string(),
@@ -2615,10 +2589,10 @@ async fn list_campaign_tool_call_inspections(
 /// Requires evaluation.dashboard.read.
 async fn list_dashboard_projections(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<EvaluationProductListResponse<kura_evaluation::DashboardProjection>>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationDashboardRead) {
         return Err(ApiError::Forbidden(
             "evaluation.dashboard.read is required".to_string(),
@@ -2646,10 +2620,10 @@ async fn list_dashboard_projections(
 /// evaluation.inspection.read.
 async fn get_tool_call_inspection(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(inspection_id): Path<String>,
 ) -> Result<Json<kura_evaluation::ToolCallInspection>, ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     if !evaluation_product_permission(tc, Permission::EvaluationInspectionRead) {
         return Err(ApiError::Forbidden(
             "evaluation.inspection.read is required".to_string(),
@@ -2670,10 +2644,10 @@ async fn get_tool_call_inspection(
 /// implements the real handler with a dry_run flag).
 async fn apply_evaluation_retention(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<(StatusCode, AxumJson<serde_json::Value>), ApiError> {
-    let tc = evaluation_product_tenant(tenant.as_ref().map(|e| &e.0))?;
+    let tc = evaluation_product_tenant(tenant.context())?;
     let input: ApplyRetentionRequest = decode_optional_json_body(&body)?;
     let filter = kura_evaluation::RetentionApplicationFilter {
         base: kura_evaluation::ProductListFilter {

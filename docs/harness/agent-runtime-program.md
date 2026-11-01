@@ -408,7 +408,23 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
 - [ ] **4.3** Load test with parallel tools (2.6) and swarm enabled; the
       single writer connection is the expected bottleneck — measure via
       `kura_store_lock_wait_seconds` before changing it.
-- [ ] **4.4** Collapse the per-route tenant helpers (H4) into one extractor.
+- [x] **4.4** Collapse the per-route tenant helpers (H4) into one extractor.
+      *Done 2026-11-01:* `middleware::ActingTenant` (infallible
+      `FromRequestParts`) replaces the twelve per-family copies
+      (`acting_tenant` ×4, `context_tenant` ×2, `route_tenant`,
+      `resolve_tenant`, `tenant_id_from`, `tenant_id`, `webhook_tenant`,
+      `routes::scoped_tenant`) with three rules: `id()` (resolved or empty),
+      `or_requested()` (resolved wins, request value only without one) and
+      `scoped()` (a different requested tenant is 403). Each family keeps
+      the rule it had, so no response changes; 106 handlers take it, and the
+      audit gate counts it as a tenancy marker. *Not covered:* the 189
+      remaining `Option<Extension<TenantContext>>` parameters hand the
+      whole context to permission and ownership checks and were left as
+      they are. *Found, not changed:* `GET
+      /v1/live-validations/kill-switches` lets `?tenantId=` override the
+      resolved tenant (Go parity). It is operator-only in shared mode, but in
+      single mode a member of another tenant can list that tenant's
+      switches.
 
 ## Parallel Track — Hosted Launch Evidence (Roadmaps 76/77)
 

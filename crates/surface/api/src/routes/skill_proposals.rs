@@ -16,7 +16,7 @@
 
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Path, State};
 use axum::routing::{get, post};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use kura_memory as memory;
 
 use crate::error::ApiError;
-use crate::middleware::TenantContext;
+use crate::middleware::ActingTenant;
 use crate::response::Json;
 use crate::state::AppState;
 
@@ -74,7 +74,7 @@ fn skill_dir_id(name: &str) -> String {
 #[allow(clippy::unused_async)]
 pub async fn propose(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<Json<SkillProposalResponse>, ApiError> {
     let request: SkillProposalRequest = super::decode_json_required(&body)?;
@@ -92,7 +92,7 @@ pub async fn propose(
         .memory
         .as_deref()
         .ok_or_else(|| ApiError::internal("memory manager is not configured"))?;
-    let tenant_id = super::memory::route_tenant(&tenant, &request.tenant_id);
+    let tenant_id = tenant.or_requested(&request.tenant_id);
     let owner = request.proposed_by.clone().unwrap_or(memory::Actor {
         kind: memory::ActorKind::Agent,
         id: "agent".to_string(),
@@ -126,13 +126,13 @@ pub async fn propose(
 #[allow(clippy::unused_async)]
 pub async fn list(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let manager = state
         .memory
         .as_deref()
         .ok_or_else(|| ApiError::internal("memory manager is not configured"))?;
-    let tenant_id = super::memory::route_tenant(&tenant, "");
+    let tenant_id = tenant.or_requested("");
     let mut items = manager.list(&tenant_id, Some(memory::MemoryLayer::L1), None);
     items.retain(|asset| asset.kind == memory::AssetKind::Skill);
     Ok(Json(serde_json::json!({ "items": items })))
@@ -390,7 +390,7 @@ fn parse_skill_draft(text: &str) -> Result<(String, String, String), String> {
 /// Pending proposal, so review and publication are unchanged.
 pub async fn distill(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<Json<DistillResponse>, ApiError> {
     let request: DistillRequest = super::decode_json_required(&body)?;
@@ -398,7 +398,7 @@ pub async fn distill(
     if thread_id.is_empty() {
         return Err(ApiError::BadRequest("threadId is required".into()));
     }
-    let tenant_id = super::memory::route_tenant(&tenant, &request.tenant_id);
+    let tenant_id = tenant.or_requested(&request.tenant_id);
     let chat = state
         .chat
         .clone()

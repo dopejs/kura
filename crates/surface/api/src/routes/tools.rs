@@ -16,7 +16,7 @@
 //! provider is neither listed nor addressable by another.
 
 use axum::body::Bytes;
-use axum::extract::{Extension, Path, Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -25,7 +25,7 @@ use serde::Serialize;
 use kura_tools as tools;
 
 use crate::error::ApiError;
-use crate::middleware::TenantContext;
+use crate::middleware::ActingTenant;
 use crate::state::AppState;
 
 /// Screens a profile's egress target against the daemon's outbound policy.
@@ -88,16 +88,6 @@ fn map_error(err: tools::ToolsError) -> ApiError {
     }
 }
 
-fn acting_tenant(tenant: Option<&TenantContext>, fallback: &str) -> String {
-    if let Some(tc) = tenant {
-        let id = tc.0.tenant_id.trim();
-        if !id.is_empty() {
-            return id.to_string();
-        }
-    }
-    fallback.trim().to_string()
-}
-
 /// Verifies the profile belongs to the acting tenant before acting on it.
 /// Answers 404 rather than 403 for another tenant's profile: the existence of
 /// a profile is itself information.
@@ -129,14 +119,11 @@ fn persist(state: &AppState, profile: &tools::ToolProfile) -> Result<(), ApiErro
 /// deployment cannot search" is an answer the caller needs, not an omission.
 async fn list_capabilities(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<CapabilityListResponse>, ApiError> {
     let manager = manager(&state)?;
-    let tenant_id = acting_tenant(
-        tenant.as_ref().map(|e| &e.0),
-        params.get("tenantId").map_or("", String::as_str),
-    );
+    let tenant_id = tenant.or_requested(params.get("tenantId").map_or("", String::as_str));
     Ok(Json(CapabilityListResponse {
         items: manager.capabilities(&tenant_id),
     }))
@@ -146,14 +133,11 @@ async fn list_capabilities(
 /// `secretConfigured`; never a credential value.
 async fn list_profiles(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<ProfileListResponse>, ApiError> {
     let manager = manager(&state)?;
-    let tenant_id = acting_tenant(
-        tenant.as_ref().map(|e| &e.0),
-        params.get("tenantId").map_or("", String::as_str),
-    );
+    let tenant_id = tenant.or_requested(params.get("tenantId").map_or("", String::as_str));
     let capability = params
         .get("capability")
         .map(String::as_str)
@@ -166,13 +150,13 @@ async fn list_profiles(
 /// POST /v1/tools/profiles — 201 with the created profile.
 async fn create_profile(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<(StatusCode, Json<tools::ToolProfile>), ApiError> {
     let input: tools::CreateProfileInput = decode_json_required(&body)?;
     let manager = manager(&state)?;
     screen_base_url(&state, &input.base_url)?;
-    let tenant_id = acting_tenant(tenant.as_ref().map(|e| &e.0), "");
+    let tenant_id = tenant.id().to_string();
     let profile = manager.create(&tenant_id, input).map_err(map_error)?;
     // Promoting a default demotes the previous one in the manager; both rows
     // must be persisted or a restart would restore two defaults.
@@ -188,7 +172,7 @@ async fn create_profile(
 /// configuration. The secret's **value** is not reachable from this route.
 async fn update_profile(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(profile_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<tools::ToolProfile>, ApiError> {
@@ -197,7 +181,7 @@ async fn update_profile(
     if let Some(base_url) = input.base_url.as_deref() {
         screen_base_url(&state, base_url)?;
     }
-    let tenant_id = acting_tenant(tenant.as_ref().map(|e| &e.0), "");
+    let tenant_id = tenant.id().to_string();
     let existing = owned_profile(manager, &tenant_id, &profile_id)?;
     let updated = manager
         .update(&existing.profile_id, input)
@@ -211,11 +195,11 @@ async fn update_profile(
 /// DELETE /v1/tools/profiles/{profile_id}.
 async fn delete_profile(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(profile_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let manager = manager(&state)?;
-    let tenant_id = acting_tenant(tenant.as_ref().map(|e| &e.0), "");
+    let tenant_id = tenant.id().to_string();
     let existing = owned_profile(manager, &tenant_id, &profile_id)?;
     manager.delete(&existing.profile_id).map_err(map_error)?;
     state
@@ -234,11 +218,11 @@ async fn delete_profile(
 /// surfaces where the operator is already standing.
 async fn check_profile(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(profile_id): Path<String>,
 ) -> Result<Json<tools::CheckOutcome>, ApiError> {
     let manager = manager(&state)?;
-    let tenant_id = acting_tenant(tenant.as_ref().map(|e| &e.0), "");
+    let tenant_id = tenant.id().to_string();
     let profile = owned_profile(manager, &tenant_id, &profile_id)?;
 
     let credential = resolve_credential(&state, &tenant_id, &profile).await;

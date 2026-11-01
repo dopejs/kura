@@ -26,7 +26,7 @@ use axum::http::StatusCode;
 use axum::routing::get;
 
 use crate::error::ApiError;
-use crate::middleware::{AuthenticatedToken, TenantContext};
+use crate::middleware::{ActingTenant, AuthenticatedToken};
 use crate::response::Json;
 use crate::state::AppState;
 
@@ -52,12 +52,6 @@ fn manager(state: &AppState) -> Result<Arc<kura_swarm::Manager>, ApiError> {
         .swarm
         .clone()
         .ok_or_else(|| ApiError::internal("swarm manager is not configured"))
-}
-
-fn acting_tenant(tenant: Option<&TenantContext>) -> String {
-    tenant
-        .map(|tc| tc.0.tenant_id.trim().to_string())
-        .unwrap_or_default()
 }
 
 fn persist(state: &AppState, run: &kura_swarm::SwarmRun) {
@@ -265,7 +259,7 @@ pub fn execute_run(state: AppState, run_id: String) {
 /// background and is observable through `GET` and the `swarm.*` events.
 async fn launch_run(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     token: Option<Extension<AuthenticatedToken>>,
     body: Bytes,
 ) -> Result<(StatusCode, Json<kura_swarm::SwarmRun>), ApiError> {
@@ -278,8 +272,8 @@ async fn launch_run(
             .unwrap_or_else(|| "operator".into());
     }
     let manager = manager(&state)?;
-    let tenant_ref = tenant.as_ref().map(|e| &e.0);
-    let tenant_id = acting_tenant(tenant_ref);
+    let tenant_ref = tenant.context();
+    let tenant_id = tenant.id().to_string();
     let run = manager.launch(&tenant_id, input).map_err(|err| match err {
         kura_swarm::SwarmError::Disabled => ApiError::Forbidden(err.to_string()),
         kura_swarm::SwarmError::NotFound => ApiError::NotFound("not found".into()),
@@ -296,12 +290,12 @@ async fn launch_run(
 
 async fn list_runs(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(_params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<RunListResponse>, ApiError> {
     let manager = manager(&state)?;
-    let tenant_ref = tenant.as_ref().map(|e| &e.0);
-    let tenant_id = acting_tenant(tenant_ref);
+    let tenant_ref = tenant.context();
+    let tenant_id = tenant.id().to_string();
     let visible = tenant_visible_document_ids(&state, tenant_ref, DOC_KIND)?;
     let items = manager
         .list(&tenant_id)
@@ -316,16 +310,16 @@ async fn list_runs(
 
 async fn get_run(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(run_id): Path<String>,
 ) -> Result<Json<kura_swarm::SwarmRun>, ApiError> {
     let manager = manager(&state)?;
-    let tenant_ref = tenant.as_ref().map(|e| &e.0);
+    let tenant_ref = tenant.context();
     guard_document_tenant(&state, tenant_ref, DOC_KIND, run_id.trim())?;
     let run = manager
         .get(&run_id)
         .ok_or_else(|| ApiError::NotFound("not found".into()))?;
-    if !acting_tenant(tenant_ref).is_empty() && run.tenant_id != acting_tenant(tenant_ref) {
+    if !tenant.id().is_empty() && run.tenant_id != tenant.id() {
         return Err(ApiError::NotFound("not found".into()));
     }
     Ok(Json(run))

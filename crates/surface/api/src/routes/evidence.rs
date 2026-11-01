@@ -10,7 +10,7 @@
 //! failures fail closed as 422.
 
 use axum::body::Bytes;
-use axum::extract::{Extension, Path, Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use kura_evidence as evidence;
 
 use crate::error::ApiError;
-use crate::middleware::TenantContext;
+use crate::middleware::ActingTenant;
 use crate::state::AppState;
 
 use super::decode_json_required;
@@ -73,16 +73,6 @@ fn resolve(value: &str, fallback: &str) -> String {
     }
 }
 
-/// A resolved tenant context overrides any caller-supplied tenant.
-fn context_tenant(tenant: &Option<Extension<TenantContext>>, resolved: String) -> String {
-    if let Some(tc) = tenant.as_ref().map(|extension| &extension.0.0) {
-        if !tc.tenant_id.trim().is_empty() {
-            return tc.tenant_id.trim().to_string();
-        }
-    }
-    resolved
-}
-
 fn map_evidence_error(err: evidence::EvidenceError) -> ApiError {
     let message = err.to_string();
     match err {
@@ -100,11 +90,11 @@ fn map_evidence_error(err: evidence::EvidenceError) -> ApiError {
 /// GET /v1/support/evidence-bundles (Go handleEvidenceBundles GET branch).
 async fn list_bundles(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(query): Query<EvidenceQuery>,
 ) -> Result<Json<EvidenceBundleListResponse>, ApiError> {
     let manager = manager(&state)?;
-    let tenant_id = context_tenant(&tenant, query.tenant_id.trim().to_string());
+    let tenant_id = tenant.or_requested(&query.tenant_id);
     let bundles = manager
         .list_for_tenant(&tenant_id, query.actor.trim())
         .map_err(map_evidence_error)?;
@@ -115,7 +105,7 @@ async fn list_bundles(
 /// — 201 with the redacted bundle.
 async fn generate_bundle(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(query): Query<EvidenceQuery>,
     body: Bytes,
 ) -> Result<(StatusCode, Json<evidence::Bundle>), ApiError> {
@@ -123,7 +113,7 @@ async fn generate_bundle(
     let manager = manager(&state)?;
     let bundle = manager
         .generate(
-            &context_tenant(&tenant, resolve(&request.tenant_id, &query.tenant_id)),
+            &tenant.or_requested(&resolve(&request.tenant_id, &query.tenant_id)),
             &resolve(&request.actor, &query.actor),
             request.scope,
         )
@@ -135,12 +125,12 @@ async fn generate_bundle(
 /// handleEvidenceBundleRoutes).
 async fn get_bundle(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(bundle_id): Path<String>,
     Query(query): Query<EvidenceQuery>,
 ) -> Result<Json<evidence::Bundle>, ApiError> {
     let manager = manager(&state)?;
-    let tenant_id = context_tenant(&tenant, query.tenant_id.trim().to_string());
+    let tenant_id = tenant.or_requested(&query.tenant_id);
     let bundle = manager
         .get(&tenant_id, query.actor.trim(), bundle_id.trim())
         .map_err(map_evidence_error)?;

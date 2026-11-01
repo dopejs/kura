@@ -41,6 +41,68 @@ pub struct AuthenticatedToken(pub AccessToken);
 #[derive(Debug, Clone)]
 pub struct TenantContext(pub ResolvedTenantContext);
 
+/// The tenant a request acts as, taken by handlers instead of reading
+/// [`TenantContext`] and re-deriving the id per route family.
+///
+/// Empty when `protected` resolved no tenant: identity is not configured
+/// (the single-user assembly) or the route is unprotected. In shared mode
+/// `hosting::shared_route_policy` refuses tenant routes before that can
+/// happen, so the request-supplied fallbacks below are reachable only in
+/// the single-user assembly, where the caller owns every tenant id anyway.
+#[derive(Debug, Clone, Default)]
+pub struct ActingTenant(Option<TenantContext>);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for ActingTenant {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Self(parts.extensions.get::<TenantContext>().cloned()))
+    }
+}
+
+impl ActingTenant {
+    /// The resolved context, in the shape the shared guards take.
+    #[must_use]
+    pub fn context(&self) -> Option<&TenantContext> {
+        self.0.as_ref()
+    }
+
+    /// The acting tenant id, trimmed; empty without a resolved tenant.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        self.0.as_ref().map_or("", |tc| tc.0.tenant_id.trim())
+    }
+
+    /// The acting tenant when there is one, otherwise the tenant the request
+    /// names. A request naming another tenant is silently held to its own;
+    /// use [`Self::scoped`] where that should be refused instead.
+    #[must_use]
+    pub fn or_requested(&self, requested: &str) -> String {
+        match self.id() {
+            "" => requested.trim().to_string(),
+            acting => acting.to_string(),
+        }
+    }
+
+    /// Like [`Self::or_requested`], for families whose request shape carries
+    /// a `tenantId` (body or query): naming a tenant other than the acting
+    /// one is a 403, never a redirect into that tenant's data. See
+    /// docs/harness/shared-hosting.md §4.5.
+    pub fn scoped(&self, requested: &str) -> Result<String, ApiError> {
+        let requested = requested.trim();
+        match self.id() {
+            "" => Ok(requested.to_string()),
+            acting if requested.is_empty() || requested == acting => Ok(acting.to_string()),
+            _ => Err(ApiError::Forbidden(
+                "the request names a tenant other than the authenticated one".to_string(),
+            )),
+        }
+    }
+}
+
 /// Stage 10.3: per-request correlation shared between the outer
 /// `observe_request` layer and the inner `protected` layer. The outer layer
 /// creates it (with the request id) before `protected` runs and reads the
@@ -743,5 +805,54 @@ mod tenant_task_local_tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert!(body_text(response).await.starts_with("ERR:"));
+    }
+}
+
+#[cfg(test)]
+mod acting_tenant_tests {
+    use axum::extract::FromRequestParts;
+    use axum::http::Request;
+
+    use super::{ActingTenant, ResolvedTenantContext, TenantContext};
+    use crate::error::ApiError;
+
+    async fn acting(tenant_id: Option<&str>) -> ActingTenant {
+        let mut request = Request::new(());
+        if let Some(tenant_id) = tenant_id {
+            request
+                .extensions_mut()
+                .insert(TenantContext(ResolvedTenantContext {
+                    tenant_id: tenant_id.to_string(),
+                    ..ResolvedTenantContext::default()
+                }));
+        }
+        let (mut parts, ()) = request.into_parts();
+        let Ok(acting) = ActingTenant::from_request_parts(&mut parts, &()).await;
+        acting
+    }
+
+    #[tokio::test]
+    async fn the_resolved_tenant_wins_over_the_requested_one() {
+        let tenant = acting(Some(" tnt_a ")).await;
+        assert_eq!(tenant.id(), "tnt_a");
+        assert!(tenant.context().is_some());
+        assert_eq!(tenant.or_requested("tnt_b"), "tnt_a");
+        assert_eq!(tenant.or_requested(""), "tnt_a");
+        assert_eq!(tenant.scoped("").unwrap(), "tnt_a");
+        assert_eq!(tenant.scoped(" tnt_a ").unwrap(), "tnt_a");
+        assert!(matches!(
+            tenant.scoped("tnt_b"),
+            Err(ApiError::Forbidden(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn without_a_resolved_tenant_the_request_names_it() {
+        for tenant in [acting(None).await, acting(Some("  ")).await] {
+            assert_eq!(tenant.id(), "");
+            assert_eq!(tenant.or_requested(" tnt_b "), "tnt_b");
+            assert_eq!(tenant.scoped(" tnt_b ").unwrap(), "tnt_b");
+            assert_eq!(tenant.scoped("").unwrap(), "");
+        }
     }
 }

@@ -10,7 +10,7 @@
 //! permission denied -> 403, unmet requirements / invalid item -> 400.
 
 use axum::body::Bytes;
-use axum::extract::{Extension, Path, Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use kura_catalog as catalog;
 
 use crate::error::ApiError;
-use crate::middleware::TenantContext;
+use crate::middleware::ActingTenant;
 use crate::state::AppState;
 
 use super::{decode_json_or_default, decode_json_required};
@@ -72,22 +72,13 @@ fn manager(state: &AppState) -> Result<&catalog::Manager, ApiError> {
 
 /// Go catalogTenant + the tenant-context override: a resolved tenant context
 /// wins over the body tenant, which wins over ?tenantId=.
-fn resolve_tenant(
-    tenant: &Option<Extension<TenantContext>>,
-    body_tenant: &str,
-    query: &TenantQuery,
-) -> String {
-    if let Some(tc) = tenant.as_ref().map(|extension| &extension.0.0) {
-        if !tc.tenant_id.trim().is_empty() {
-            return tc.tenant_id.trim().to_string();
-        }
-    }
-    let trimmed = body_tenant.trim();
-    if trimmed.is_empty() {
-        query.tenant_id.trim().to_string()
+fn resolve_tenant(tenant: &ActingTenant, body_tenant: &str, query: &TenantQuery) -> String {
+    let body_tenant = body_tenant.trim();
+    tenant.or_requested(if body_tenant.is_empty() {
+        &query.tenant_id
     } else {
-        trimmed.to_string()
-    }
+        body_tenant
+    })
 }
 
 fn map_catalog_error(err: catalog::CatalogError) -> ApiError {
@@ -130,7 +121,7 @@ async fn register_item(
 /// branch) — the tenant-scoped inspection projection.
 async fn inspect_item(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(item_id): Path<String>,
     Query(query): Query<TenantQuery>,
 ) -> Result<Json<catalog::Inspection>, ApiError> {
@@ -146,7 +137,7 @@ async fn inspect_item(
 /// unknown actions are 404.
 async fn enablement_action(
     State(state): State<AppState>,
-    tenant_context: Option<Extension<TenantContext>>,
+    tenant_context: ActingTenant,
     Path((item_id, action)): Path<(String, String)>,
     Query(query): Query<TenantQuery>,
     body: Bytes,

@@ -51,7 +51,7 @@ const GLOBAL_BY_DESIGN: &[(&str, &str)] = &[
 /// the gap this gate missed (shared-hosting.md G6).
 const TENANCY_MARKERS: &[&str] = &[
     "TenantContext",
-    "scoped_tenant",
+    "ActingTenant",
     "for_tenant",
     "guard_document_tenant",
     "bind_document_tenant",

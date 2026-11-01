@@ -9,7 +9,7 @@
 //! permission denied -> 403, unavailable / invalid -> 400.
 
 use axum::body::Bytes;
-use axum::extract::{Extension, Path, Query, State};
+use axum::extract::{Path, Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use kura_execprofile as execprofile;
 
 use crate::error::ApiError;
-use crate::middleware::TenantContext;
+use crate::middleware::ActingTenant;
 use crate::state::AppState;
 
 use super::{decode_json_or_default, decode_json_required};
@@ -107,7 +107,7 @@ async fn get_profile(
 /// tenant (body first, then query) is 403.
 async fn select_profile(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(profile_id): Path<String>,
     Query(query): Query<TenantQuery>,
     body: Bytes,
@@ -119,7 +119,7 @@ async fn select_profile(
     } else {
         request.tenant_id.as_str()
     };
-    let tenant = super::scoped_tenant(tenant.as_deref(), requested)?;
+    let tenant = tenant.scoped(requested)?;
     let selection = manager
         .select_profile(&tenant, profile_id.trim(), request.actor.trim())
         .map_err(map_exec_error)?;

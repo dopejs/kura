@@ -141,10 +141,11 @@ address is refused (fail closed). `KURA_HOSTING` other than unset / `single` /
   caller's tenant (else 404) and none in another tenant (else 409: remove the
   membership instead — a principal-wide switch is not a tenant's to flip).
 - Audit gate: `tenant_id` alone no longer counts as a tenancy marker; a family
-  must use the resolved context (`TenantContext`, `scoped_tenant`,
+  must use the resolved context (`TenantContext`, `ActingTenant`,
   `for_tenant`, the guards).
 
-Implemented (2026-10-08) with `routes::scoped_tenant` as the one rule: with a
+Implemented (2026-10-08) with `routes::scoped_tenant` (since 4.4,
+`middleware::ActingTenant::scoped`) as the one rule: with a
 resolved tenant, an empty request tenant becomes the resolved one, a different
 one is 403; without a tenant context (identity not configured) the request
 value is used as before. Details per family:

@@ -11,12 +11,12 @@
 
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 
 use crate::error::ApiError;
-use crate::middleware::TenantContext;
+use crate::middleware::ActingTenant;
 use crate::response::Json;
 use crate::state::AppState;
 
@@ -36,12 +36,6 @@ pub fn router() -> Router<AppState> {
         "/v1/threads/{thread_id}/frame",
         get(get_frame).put(put_frame).delete(delete_frame),
     )
-}
-
-fn acting_tenant(tenant: Option<&TenantContext>) -> String {
-    tenant
-        .map(|tc| tc.0.tenant_id.trim().to_string())
-        .unwrap_or_default()
 }
 
 /// Loads a thread's frame; `None` when the thread has no frame.
@@ -70,16 +64,11 @@ pub fn load_frame(
 
 async fn get_frame(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(thread_id): Path<String>,
 ) -> Result<Json<kura_session::SessionFrame>, ApiError> {
-    let tenant_id = acting_tenant(tenant.as_ref().map(|e| &e.0));
-    guard_document_tenant(
-        &state,
-        tenant.as_ref().map(|e| &e.0),
-        DOC_KIND,
-        thread_id.trim(),
-    )?;
+    let tenant_id = tenant.id().to_string();
+    guard_document_tenant(&state, tenant.context(), DOC_KIND, thread_id.trim())?;
     load_frame(&state, &tenant_id, &thread_id)?
         .map(Json)
         .ok_or_else(|| ApiError::NotFound("not found".to_string()))
@@ -87,7 +76,7 @@ async fn get_frame(
 
 async fn put_frame(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(thread_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<kura_session::SessionFrame>, ApiError> {
@@ -95,8 +84,8 @@ async fn put_frame(
     if request.goal.trim().is_empty() {
         return Err(ApiError::BadRequest("goal is required".to_string()));
     }
-    let tenant_ref = tenant.as_ref().map(|e| &e.0);
-    let tenant_id = acting_tenant(tenant_ref);
+    let tenant_ref = tenant.context();
+    let tenant_id = tenant.id().to_string();
     guard_document_tenant(&state, tenant_ref, DOC_KIND, thread_id.trim())?;
     let frame = kura_session::SessionFrame {
         thread_id: thread_id.trim().to_string(),
@@ -121,12 +110,12 @@ async fn put_frame(
 
 async fn delete_frame(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(thread_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let tenant_ref = tenant.as_ref().map(|e| &e.0);
+    let tenant_ref = tenant.context();
     guard_document_tenant(&state, tenant_ref, DOC_KIND, thread_id.trim())?;
-    if load_frame(&state, &acting_tenant(tenant_ref), &thread_id)?.is_none() {
+    if load_frame(&state, tenant.id(), &thread_id)?.is_none() {
         return Err(ApiError::NotFound("not found".to_string()));
     }
     let store = state.store.lock();

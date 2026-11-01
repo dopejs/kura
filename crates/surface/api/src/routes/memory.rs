@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use axum::body::Bytes;
-use axum::extract::{Extension, Path, Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -24,7 +24,7 @@ use kura_events as events;
 use kura_memory as memory;
 
 use crate::error::ApiError;
-use crate::middleware::{TenantContext, environment_scope_from_config};
+use crate::middleware::{ActingTenant, environment_scope_from_config};
 use crate::state::AppState;
 
 use super::{decode_json_or_default, decode_json_required};
@@ -116,15 +116,6 @@ fn map_memory_error(err: memory::MemoryError) -> ApiError {
         | memory::MemoryError::InvalidVisibilityChange => ApiError::Conflict(message),
         _ => ApiError::BadRequest(message),
     }
-}
-
-fn context_tenant(tenant: &Option<Extension<TenantContext>>, fallback: &str) -> String {
-    if let Some(tc) = tenant.as_ref().map(|extension| &extension.0.0) {
-        if !tc.tenant_id.trim().is_empty() {
-            return tc.tenant_id.trim().to_string();
-        }
-    }
-    fallback.trim().to_string()
 }
 
 fn persist_asset(state: &AppState, asset: &memory::MemoryAsset) -> Result<(), ApiError> {
@@ -260,12 +251,6 @@ fn clear_derived_indexes_if_unrecallable(state: &AppState, asset: &memory::Memor
 // chat/connector/workflow families and the app scheduler tick call these.
 // ---------------------------------------------------------------------------
 
-/// Resolved-tenant helper shared with the skill-proposal family: a resolved
-/// tenant context overrides any caller-supplied tenant.
-pub fn route_tenant(tenant: &Option<Extension<TenantContext>>, fallback: &str) -> String {
-    context_tenant(tenant, fallback)
-}
-
 /// Persists + publishes + projects one manager-created asset (the
 /// full-content capture path for context refs, which must not go through
 /// capture_l0's excerpt truncation).
@@ -397,11 +382,11 @@ pub fn memory_tick(state: &AppState) {
 /// GET /v1/memory/assets.
 async fn list_assets(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<AssetListResponse>, ApiError> {
     let manager = manager(&state)?;
-    let tenant_id = context_tenant(&tenant, &query.tenant_id);
+    let tenant_id = tenant.or_requested(&query.tenant_id);
     let layer = if query.layer.trim().is_empty() {
         None
     } else {
@@ -421,11 +406,11 @@ async fn list_assets(
 /// and the policy decision.
 async fn create_asset(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<(StatusCode, Json<AssetDecisionResponse>), ApiError> {
     let mut input: memory::CreateAssetInput = decode_json_required(&body)?;
-    input.tenant_id = context_tenant(&tenant, &input.tenant_id);
+    input.tenant_id = tenant.or_requested(&input.tenant_id);
     let manager = manager(&state)?;
     let (asset, decision) = manager.create(input).map_err(map_memory_error)?;
     finish_mutation(&state, "memory.asset_written", &asset)?;
@@ -536,12 +521,12 @@ async fn set_visibility(
 /// bookkeeping; responds with whether an extraction pass is now due.
 async fn capture(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let request: CaptureRequest = decode_json_required(&body)?;
     let manager = manager(&state)?;
-    let tenant_id = context_tenant(&tenant, &request.tenant_id);
+    let tenant_id = tenant.or_requested(&request.tenant_id);
     let (asset, _) = manager
         .create(memory::CreateAssetInput {
             kind: memory::AssetKind::ChatMemory,
@@ -570,11 +555,11 @@ async fn capture(
 /// window defaults to the tenant's pending captures.
 async fn consolidate(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Result<Json<memory::ConsolidationRun>, ApiError> {
     let request: ConsolidateRequest = decode_json_or_default(&body)?;
-    let tenant_id = context_tenant(&tenant, &request.tenant_id);
+    let tenant_id = tenant.or_requested(&request.tenant_id);
     let trigger = if request.trigger.trim().is_empty() {
         "manual"
     } else {
@@ -650,11 +635,11 @@ fn change_entry(asset: &memory::MemoryAsset) -> MemoryChangeEntry {
 /// just revoked or expired.
 async fn overview(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<MemoryOverviewResponse>, ApiError> {
     let manager = manager(&state)?;
-    let tenant_id = context_tenant(&tenant, params.get("tenantId").map_or("", String::as_str));
+    let tenant_id = tenant.or_requested(params.get("tenantId").map_or("", String::as_str));
 
     let counts = state
         .store_pool
@@ -753,10 +738,10 @@ pub struct ReembedSummary {
 /// take a while on a large corpus; it runs off the async workers.
 async fn rebuild_indexes(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<RebuildIndexesResponse>, ApiError> {
-    let tenant_id = context_tenant(&tenant, params.get("tenantId").map_or("", String::as_str));
+    let tenant_id = tenant.or_requested(params.get("tenantId").map_or("", String::as_str));
     let reembed = match params.get("reembed").map(String::as_str) {
         None | Some("false" | "0" | "") => false,
         Some("true" | "1") => true,

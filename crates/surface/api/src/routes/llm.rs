@@ -21,7 +21,7 @@
 //! dependent-use decision plumbing.
 
 use axum::body::Bytes;
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event as SseEvent, Sse};
 use axum::response::{IntoResponse, Response};
@@ -36,7 +36,7 @@ use kura_llm as llm;
 use kura_providers as providers;
 
 use crate::error::ApiError;
-use crate::middleware::{TenantContext, environment_scope_from_config};
+use crate::middleware::{ActingTenant, environment_scope_from_config};
 use crate::state::AppState;
 
 use super::decode_json_required;
@@ -144,13 +144,6 @@ fn persist_dispatch(
     }
 }
 
-fn tenant_id_from(tenant: &Option<Extension<TenantContext>>) -> String {
-    tenant
-        .as_ref()
-        .map(|extension| extension.0.0.tenant_id.trim().to_string())
-        .unwrap_or_default()
-}
-
 /// Go publishLLMDispatchRequested / publishLLMDispatchTerminal.
 fn publish_dispatch_event(
     state: &AppState,
@@ -219,10 +212,10 @@ fn publish_dispatch_event(
 /// GET /v1/llm/dispatches (Go handleLLMDispatches GET branch).
 async fn list_dispatches(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
 ) -> Result<Json<DispatchListResponse>, ApiError> {
     dispatcher(&state)?;
-    let tenant_id = tenant_id_from(&tenant);
+    let tenant_id = tenant.id().to_string();
     let store = state.store.lock();
     let items = if tenant_id.is_empty() {
         store.list_llm_dispatches().map_err(ApiError::from_store)?
@@ -237,10 +230,10 @@ async fn list_dispatches(
 /// GET /v1/llm/dispatches/{dispatch_id} (Go handleLLMDispatchRoutes).
 async fn get_dispatch(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     Path(dispatch_id): Path<String>,
 ) -> Result<Json<llm::Dispatch>, ApiError> {
-    let tenant_id = tenant_id_from(&tenant);
+    let tenant_id = tenant.id().to_string();
     let store = state.store.lock();
     let dispatch = if tenant_id.is_empty() {
         store
@@ -261,10 +254,10 @@ async fn get_dispatch(
 /// terminal event, and answer 201 (success) or the Go dispatch status code.
 async fn create_dispatch(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Response {
-    let tenant_id = tenant_id_from(&tenant);
+    let tenant_id = tenant.id().to_string();
     let input: llm::CreateDispatchInput = match decode_json_required(&body) {
         Ok(input) => input,
         Err(err) => return err.into_response(),
@@ -315,10 +308,10 @@ async fn create_dispatch(
 /// after an error-cancelled stream, matching Go).
 async fn stream_dispatch(
     State(state): State<AppState>,
-    tenant: Option<Extension<TenantContext>>,
+    tenant: ActingTenant,
     body: Bytes,
 ) -> Response {
-    let tenant_id = tenant_id_from(&tenant);
+    let tenant_id = tenant.id().to_string();
     let input: llm::CreateDispatchInput = match decode_json_required(&body) {
         Ok(input) => input,
         Err(err) => return err.into_response(),
