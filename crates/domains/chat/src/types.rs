@@ -214,6 +214,9 @@ pub struct Service {
     /// Turns running in this process, so a retry that arrives while its
     /// first attempt still runs does not resume beside it (2.7).
     pub(crate) running_turns: Arc<crate::resume::RunningTurns>,
+    /// Turns that can be sent a message or cancelled while they run (2.8,
+    /// G8), by tenant and request id.
+    pub(crate) active_turns: Arc<crate::steer::ActiveTurns>,
     /// Whether tool-calling turns keep a checkpoint and a retry resumes
     /// from it. On by default; off is the rollback.
     pub(crate) turn_resume: bool,
@@ -269,6 +272,7 @@ impl Service {
             max_parallel_tool_calls: kura_core::DEFAULT_MAX_PARALLEL_TOOL_CALLS,
             traces: Arc::new(kura_telemetry::trace::TraceStore::default()),
             running_turns: Arc::default(),
+            active_turns: Arc::default(),
             turn_resume: true,
             frame_tool_output: true,
         }

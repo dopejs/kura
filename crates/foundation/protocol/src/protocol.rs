@@ -82,6 +82,11 @@ pub enum EventMsg {
     AgentMessage {
         message: String,
     },
+    /// A message the user sent to the turn while it ran, now part of the
+    /// conversation the model reads next (agent-runtime-program.md 2.8, G8).
+    SteerMessage {
+        message: String,
+    },
     TurnComplete,
     Error {
         message: String,

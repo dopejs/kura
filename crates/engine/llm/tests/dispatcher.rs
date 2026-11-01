@@ -376,6 +376,44 @@ async fn parent_cancellation_wins_over_provider_error() {
 }
 
 #[tokio::test]
+async fn an_already_cancelled_dispatch_never_reaches_the_provider() {
+    // Raced, an attempt can start before the cancel wins; a request started
+    // and dropped may already have been sent and billed.
+    let dispatcher = Dispatcher::new();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let provider = TestProvider::new(
+        "counted",
+        Box::new(move |_request| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { Ok(ProviderResponse::default()) })
+        }),
+        unused_stream(),
+    );
+    dispatcher.register_provider(Arc::new(provider));
+    let dispatch = dispatcher
+        .prepare(
+            CreateDispatchInput {
+                provider: "counted".into(),
+                model: "test-model".to_string(),
+                messages: vec![user_message("hi")],
+                timeout_ms: 60_000,
+                ..CreateDispatchInput::default()
+            },
+            false,
+        )
+        .unwrap();
+
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let failure = failed(dispatcher.dispatch(dispatch, &cancel).await);
+
+    assert_eq!(failure.dispatch.status, DispatchStatus::Cancelled);
+    assert_eq!(failure.dispatch.error_code, "cancelled");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn marks_partial_failed_after_visible_stream_output() {
     let dispatcher = Dispatcher::new();
     let provider = TestProvider::new(

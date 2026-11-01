@@ -362,7 +362,7 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
       are not retried, so they do not resume; a crash between recording the
       answer and deleting the checkpoint replays the settled calls and asks
       the model once more.
-- [ ] **2.8** Structured output (G7), steering a running turn (G8), and
+- [x] **2.8** Structured output (G7), steering a running turn (G8), and
       untrusted-content framing for tool output (G9).
       *G7 provider-agnostic path done* (see plugin-architecture.md, chat):
       `responseFormat` on the non-streamed query, schema checked on arrival
@@ -385,6 +385,20 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
       injected by the context hook is not framed, though L0 captures can
       hold tool and web content; text a provider-side tool returns never
       passes through this path.
+      *G8 done 2026-11-01* (see plugin-architecture.md, chat): a running
+      non-streamed query is reached by its tenant and `X-Request-Id` at
+      `POST /v1/chat/turns/{requestId}/messages` and `/cancel`. The loop
+      reads a `kura_core::TurnInbox` before every model call, and a message
+      that arrives as the model answers makes that answer interim; the last
+      check and closing the inbox are one step, so a message is read or
+      refused (`turn_finished`), never accepted and dropped. Bounded at 8
+      unread messages of 32 KiB. Found on the way: the dispatcher raced an
+      already-cancelled token against a fresh attempt, so a cancelled
+      round could still start a provider request; it now does not start
+      one. *Not covered:* streamed queries (one dispatch, no loop); a
+      message is not in the 2.7 checkpoint, so a turn resumed after a
+      crash has lost the messages it was sent; reaching a turn running in
+      another daemon process.
 
 ## Stage 4 — Shared Hosting M4: Fairness and Scale
 

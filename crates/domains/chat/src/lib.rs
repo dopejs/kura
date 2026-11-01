@@ -21,6 +21,7 @@ mod framing;
 mod resume;
 mod round;
 mod service;
+mod steer;
 mod store;
 mod types;
 
@@ -39,6 +40,7 @@ pub use service::{
     profile_context_messages, resolve_selected_skills, response_continuity_source_event_key,
     selected_skill_contracts, selected_skill_ids_from_skills, terminal_dispatch_event,
 };
+pub use steer::{MAX_PENDING_STEER_MESSAGES, MAX_STEER_MESSAGE_BYTES, SteerError};
 pub use store::{BindingResolutionParams, ChatStore, ContinuityLookupQuery};
 pub use types::{
     QueryExecution, QueryInput, QueryResult, Service, StreamChunk, ToolSource, ToolTurn,

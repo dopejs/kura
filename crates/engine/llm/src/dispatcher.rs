@@ -361,7 +361,12 @@ impl Dispatcher {
             // `output` and used as the fallback output on failure.
             let mut aggregate = String::new();
             let result: Result<ProviderResponse, ProviderError> =
-                if let Some(emit) = emit.as_deref_mut() {
+                // Checked before the attempt, not only raced against it: the
+                // race below is unbiased, and an attempt that is started and
+                // then dropped may already have reached the provider.
+                if cancel.is_cancelled() {
+                    Err(ProviderError::Cancelled)
+                } else if let Some(emit) = emit.as_deref_mut() {
                     let mut forwarding = |mut chunk: StreamChunk| {
                         aggregate.push_str(&chunk.delta);
                         chunk.output = aggregate.clone();

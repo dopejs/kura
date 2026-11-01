@@ -17,13 +17,13 @@ use std::convert::Infallible;
 
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{Extension, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event as SseEvent, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use kura_chat::{
-    CancellationToken, ChatError, QueryExecution, QueryInput, QueryResult, StreamChunk,
+    CancellationToken, ChatError, QueryExecution, QueryInput, QueryResult, SteerError, StreamChunk,
 };
 use kura_llm::{Dispatch, DispatchStatus};
 use kura_threads::ContinuityStatus;
@@ -34,7 +34,10 @@ use crate::error::ApiError;
 use crate::middleware::{RequestContext, TenantContext};
 use crate::response::Json;
 use crate::state::AppState;
-use crate::types::{ChatQueryResponse, ChatQueryStreamDelta, ChatQueryStreamStarted};
+use crate::types::{
+    ChatQueryResponse, ChatQueryStreamDelta, ChatQueryStreamStarted, ChatTurnCancelResponse,
+    ChatTurnMessageResponse,
+};
 
 /// Go `chatQueryRequest` (`daemon/internal/api/server.go`). Field names map
 /// through `rename_all = "camelCase"`: timeoutMs, maxRetries, threadId,
@@ -88,6 +91,109 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/chat/query", post(handle_chat_query))
         .route("/v1/chat/query/stream", post(handle_chat_query_stream))
+        .route(
+            "/v1/chat/turns/{request_id}/messages",
+            post(handle_chat_turn_message),
+        )
+        .route(
+            "/v1/chat/turns/{request_id}/cancel",
+            post(handle_chat_turn_cancel),
+        )
+}
+
+/// Body of `POST /v1/chat/turns/{requestId}/messages`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatTurnMessageRequest {
+    pub message: String,
+}
+
+/// POST /v1/chat/turns/{requestId}/messages — says more to a running
+/// non-streamed query (agent-runtime-program.md 2.8, G8). The turn is the
+/// one whose query was sent with `X-Request-Id: {requestId}`, by the
+/// caller's tenant; the model reads the message before its next call.
+///
+/// - 202 with how many messages the turn holds unread.
+/// - 400 `invalid_steer_message`: empty, or over 32 KiB.
+/// - 404 `turn_not_found`: no such turn is running for this tenant.
+/// - 409 `turn_finished`: the turn has answered or failed.
+/// - 429 `turn_inbox_full`: it already holds 8 messages it has not read.
+pub async fn handle_chat_turn_message(
+    State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
+    Path(request_id): Path<String>,
+    body: Bytes,
+) -> Response {
+    let Some(chat_service) = state.chat.as_deref() else {
+        return ApiError::Internal("chat service is not configured".to_string()).into_response();
+    };
+    let request: ChatTurnMessageRequest = match decode_json_body(&body) {
+        Ok(request) => request,
+        Err(err) => return err.into_response(),
+    };
+    match chat_service.steer_turn(&tenant_id(tenant.as_ref()), &request_id, &request.message) {
+        Ok(pending) => (
+            StatusCode::ACCEPTED,
+            Json(ChatTurnMessageResponse {
+                request_id: request_id.trim().to_string(),
+                pending,
+            }),
+        )
+            .into_response(),
+        Err(err) => steer_error(&err),
+    }
+}
+
+/// POST /v1/chat/turns/{requestId}/cancel — stops a running non-streamed
+/// query. The query itself then answers 408 with a cancelled dispatch.
+/// 202 when the turn was told to stop; 404 and 409 as for messages.
+pub async fn handle_chat_turn_cancel(
+    State(state): State<AppState>,
+    tenant: Option<Extension<TenantContext>>,
+    Path(request_id): Path<String>,
+) -> Response {
+    let Some(chat_service) = state.chat.as_deref() else {
+        return ApiError::Internal("chat service is not configured".to_string()).into_response();
+    };
+    match chat_service.cancel_turn(&tenant_id(tenant.as_ref()), &request_id) {
+        Ok(()) => (
+            StatusCode::ACCEPTED,
+            Json(ChatTurnCancelResponse {
+                request_id: request_id.trim().to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => steer_error(&err),
+    }
+}
+
+/// The resolved tenant, as `query_input_from_request` takes it, so a turn
+/// is reached by the same tenant that started it.
+fn tenant_id(tenant: Option<&Extension<TenantContext>>) -> String {
+    tenant
+        .map(|extension| extension.0.0.tenant_id.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// The `ApiError` body shape, with the specific code: a client tells a
+/// finished turn from a full one by it.
+fn steer_error(err: &SteerError) -> Response {
+    let status = match err {
+        SteerError::NotFound(_) => StatusCode::NOT_FOUND,
+        SteerError::Finished => StatusCode::CONFLICT,
+        SteerError::Full => StatusCode::TOO_MANY_REQUESTS,
+        SteerError::Invalid(_) => StatusCode::BAD_REQUEST,
+    };
+    let message = err.to_string();
+    (
+        status,
+        Json(serde_json::json!({
+            "code": err.code(),
+            "message": message,
+            "error": message,
+        })),
+    )
+        .into_response()
 }
 
 /// POST /v1/chat/query — one-shot chat query (Go handleChatQuery).
@@ -872,5 +978,172 @@ mod tests {
             .await
             .expect("oneshot");
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// Answers with the last user message, but holds its first answer until
+    /// `open` is set: the turn is running, and reachable, until then.
+    struct GateProvider {
+        open: Arc<std::sync::atomic::AtomicBool>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl kura_llm::Provider for GateProvider {
+        fn name(&self) -> &str {
+            "gate"
+        }
+
+        fn complete<'a>(
+            &'a self,
+            request: kura_llm::ProviderRequest,
+        ) -> futures::future::BoxFuture<
+            'a,
+            Result<kura_llm::ProviderResponse, kura_llm::ProviderError>,
+        > {
+            let first = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+            Box::pin(async move {
+                while first && !self.open.load(std::sync::atomic::Ordering::SeqCst) {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                let last = request
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.role == kura_llm::MessageRole::User)
+                    .map(|message| message.content.clone())
+                    .unwrap_or_default();
+                Ok(kura_llm::ProviderResponse {
+                    output: last,
+                    finish_reason: "stop".to_string(),
+                    ..kura_llm::ProviderResponse::default()
+                })
+            })
+        }
+
+        fn stream<'a>(
+            &'a self,
+            request: kura_llm::ProviderRequest,
+            _emit: kura_llm::StreamEmitter<'a>,
+        ) -> futures::future::BoxFuture<
+            'a,
+            Result<kura_llm::ProviderResponse, kura_llm::ProviderError>,
+        > {
+            self.complete(request)
+        }
+    }
+
+    async fn send(app: &axum::Router, uri: &str, body: &str) -> (StatusCode, serde_json::Value) {
+        let response = app
+            .clone()
+            .oneshot(request("POST", uri, Some(body)))
+            .await
+            .expect("oneshot");
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        (status, serde_json::from_slice(&bytes).unwrap_or_default())
+    }
+
+    #[tokio::test]
+    async fn a_running_query_reads_a_message_sent_to_its_request_id() {
+        let open = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let dispatcher = Arc::new(Dispatcher::new());
+        dispatcher.register_provider(Arc::new(GateProvider {
+            open: Arc::clone(&open),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        }));
+        let service = Arc::new(ChatService::new_service(
+            dispatcher,
+            None,
+            None,
+            Some(Bus::new()),
+            None,
+        ));
+        let app = crate::routes::router(state_with(Some(service)));
+
+        let query = tokio::spawn({
+            let app = app.clone();
+            async move {
+                let request = HttpRequest::builder()
+                    .method("POST")
+                    .uri("/v1/chat/query")
+                    .header(crate::middleware::REQUEST_ID_HEADER, "req_steer_e2e")
+                    .body(Body::from(
+                        r#"{"provider":"gate","model":"m","query":"2+2?"}"#,
+                    ))
+                    .expect("request");
+                let response = app.oneshot(request).await.expect("oneshot");
+                let status = response.status();
+                let bytes = to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("body");
+                let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+                (status, json)
+            }
+        });
+
+        // The query registers its turn once it starts running.
+        let uri = "/v1/chat/turns/req_steer_e2e/messages";
+        let mut accepted = None;
+        for _ in 0..400 {
+            let (status, json) = send(&app, uri, r#"{"message":"in French"}"#).await;
+            if status == StatusCode::ACCEPTED {
+                accepted = Some(json);
+                break;
+            }
+            assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let accepted = accepted.expect("the turn became reachable");
+        assert_eq!(accepted["requestId"], "req_steer_e2e");
+        assert_eq!(accepted["pending"], 1);
+        open.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let (status, json) = query.await.expect("query task");
+        assert_eq!(status, StatusCode::OK, "{json}");
+        // The first answer became interim; the reply is to the message.
+        assert_eq!(json["reply"], "in French");
+
+        let (status, json) = send(&app, uri, r#"{"message":"late"}"#).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json["code"], "turn_not_found");
+    }
+
+    #[tokio::test]
+    async fn reaching_a_turn_that_is_not_running() {
+        let app = crate::routes::router(state_with(Some(chat_service())));
+
+        let (status, json) =
+            send(&app, "/v1/chat/turns/req_x/messages", r#"{"message":"hi"}"#).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json["code"], "turn_not_found");
+
+        let (status, json) = send(&app, "/v1/chat/turns/req_x/cancel", "").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json["code"], "turn_not_found");
+
+        let (status, json) =
+            send(&app, "/v1/chat/turns/req_x/messages", r#"{"message":"  "}"#).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(json["code"], "invalid_steer_message");
+
+        let (status, _) = send(&app, "/v1/chat/turns/req_x/messages", "").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn steer_errors_keep_their_codes_and_statuses() {
+        for (error, status, code) in [
+            (SteerError::Finished, StatusCode::CONFLICT, "turn_finished"),
+            (
+                SteerError::Full,
+                StatusCode::TOO_MANY_REQUESTS,
+                "turn_inbox_full",
+            ),
+        ] {
+            let response = steer_error(&error);
+            assert_eq!(response.status(), status);
+            assert_eq!(error.code(), code);
+        }
     }
 }

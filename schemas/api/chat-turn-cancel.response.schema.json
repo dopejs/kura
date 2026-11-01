@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/chat-turn-cancel.response.schema.json",
+  "title": "ChatTurnCancelResponse",
+  "description": "A running chat turn told to stop (202, POST /v1/chat/turns/{requestId}/cancel). Its query answers 408 with a cancelled dispatch.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["requestId"],
+  "properties": {
+    "requestId": { "type": "string" }
+  }
+}

@@ -318,6 +318,56 @@ describe("KuraClient", () => {
     expect(response.structuredOutput).toEqual({ name: "Ada" });
   });
 
+  it("sends a query with a request id, then a message and a cancel to that turn", async () => {
+    const calls: Array<{ url: string; method?: string; requestId?: string | null; body?: unknown }> = [];
+    const client = createKuraClient({
+      baseURL: "http://127.0.0.1:19192",
+      fetchImpl: async (input: string | URL | Request, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        calls.push({
+          url: String(input),
+          method: init?.method,
+          requestId: headers.get("X-Request-Id"),
+          body: init?.body === undefined ? undefined : JSON.parse(String(init.body))
+        });
+        if (String(input).endsWith("/messages")) {
+          return mockJSONResponse(202, { requestId: "req 1", pending: 1 });
+        }
+        if (String(input).endsWith("/cancel")) {
+          return mockJSONResponse(202, { requestId: "req 1" });
+        }
+        return mockJSONResponse(200, {
+          dispatchId: "dispatch_1",
+          provider: "echo",
+          model: "m",
+          skills: [],
+          query: "q",
+          status: "completed",
+          partial: false,
+          reply: "r",
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }
+        });
+      }
+    });
+
+    await client.queryChat({ query: "q" }, { requestId: " req 1 " });
+    const accepted = await client.sendChatTurnMessage("req 1", " only PDFs ");
+    const cancelled = await client.cancelChatTurn("req 1");
+    await client.queryChat({ query: "q" });
+
+    expect(calls[0].requestId).toBe("req 1");
+    expect(calls[1]).toEqual({
+      url: "http://127.0.0.1:19192/v1/chat/turns/req%201/messages",
+      method: "POST",
+      requestId: null,
+      body: { message: "only PDFs" }
+    });
+    expect(accepted.pending).toBe(1);
+    expect(calls[2].url).toBe("http://127.0.0.1:19192/v1/chat/turns/req%201/cancel");
+    expect(cancelled.requestId).toBe("req 1");
+    expect(calls[3].requestId).toBeNull();
+  });
+
   it("loads operator surfaces, approvals, details, and run creation with normalized URLs", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()

@@ -63,6 +63,28 @@ export type ChatQueryInput = {
   responseFormat?: ChatResponseFormat;
 };
 
+/**
+ * Options for a non-streamed chat query. `requestId` is sent as
+ * `X-Request-Id`: the handle a running turn is reached by with
+ * `sendChatTurnMessage` and `cancelChatTurn`, and the id a retry of the same
+ * request resumes by.
+ */
+export type ChatQueryOptions = TenantRequestOptions & {
+  requestId?: string;
+};
+
+/** A message accepted by a running chat turn. */
+export type ChatTurnMessageResponse = {
+  requestId: string;
+  /** Messages the turn holds that the model has not read yet, this one included. */
+  pending: number;
+};
+
+/** A running chat turn told to stop; its query answers 408. */
+export type ChatTurnCancelResponse = {
+  requestId: string;
+};
+
 export type ChatQueryResponse = {
   /** The turn's trace id, readable at `GET /v1/turn-traces/{turnId}`. */
   turnId?: string;
@@ -3652,10 +3674,41 @@ export class KuraClient {
     this.defaultTenantId = options.defaultTenantId?.trim() || undefined;
   }
 
-  async queryChat(input: ChatQueryInput, tenantOptions?: TenantRequestOptions): Promise<ChatQueryResponse> {
+  async queryChat(input: ChatQueryInput, options?: ChatQueryOptions): Promise<ChatQueryResponse> {
+    const requestId = options?.requestId?.trim();
     return this.requestJSON<ChatQueryResponse>("/v1/chat/query", {
       method: "POST",
       body: normalizeChatInput(input),
+      tenant: options,
+      headers: requestId ? { "X-Request-Id": requestId } : undefined
+    });
+  }
+
+  /**
+   * Says more to a running `queryChat` sent with `requestId`; the model reads
+   * it before its next call. Fails with `turn_not_found` (404) when no such
+   * turn runs, `turn_finished` (409) once it has answered, and
+   * `turn_inbox_full` (429) while it holds 8 messages it has not read.
+   */
+  async sendChatTurnMessage(
+    requestId: string,
+    message: string,
+    tenantOptions?: TenantRequestOptions
+  ): Promise<ChatTurnMessageResponse> {
+    return this.requestJSON<ChatTurnMessageResponse>(
+      `/v1/chat/turns/${encodePathComponent(requestId)}/messages`,
+      {
+        method: "POST",
+        body: { message: message.trim() },
+        tenant: tenantOptions
+      }
+    );
+  }
+
+  /** Stops a running `queryChat` sent with `requestId`. */
+  async cancelChatTurn(requestId: string, tenantOptions?: TenantRequestOptions): Promise<ChatTurnCancelResponse> {
+    return this.requestJSON<ChatTurnCancelResponse>(`/v1/chat/turns/${encodePathComponent(requestId)}/cancel`, {
+      method: "POST",
       tenant: tenantOptions
     });
   }
@@ -4982,11 +5035,12 @@ export class KuraClient {
       query?: Record<string, QueryValue>;
       body?: unknown;
       tenant?: TenantRequestOptions;
+      headers?: Record<string, string>;
     } = {}
   ): Promise<T> {
     const response = await this.fetchImpl(this.buildURL(route, options.query), {
       method: options.method ?? "GET",
-      headers: this.buildHeaders(options.tenant),
+      headers: { ...(this.buildHeaders(options.tenant) as Record<string, string>), ...options.headers },
       body: options.body === undefined ? undefined : JSON.stringify(options.body)
     });
 

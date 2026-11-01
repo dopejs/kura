@@ -146,6 +146,11 @@ impl Service {
             &input.thread_id,
             input.query.trim(),
         );
+        // Reachable for the whole turn: a message sent to it is read before
+        // the next round, and a cancel stops it (2.8, G8).
+        let active = self
+            .active_turns
+            .register(&input.tenant_id, &input.request_id, cancel);
         // The turn runs as an agent loop, and a round of that loop is a
         // dispatch. `kura-core` owns the looping; what this supplies is what a
         // round means here -- hooked, prepared, persisted, evented.
@@ -157,6 +162,7 @@ impl Service {
             cancel,
             trace,
             resume.as_ref(),
+            active.as_ref().map(|turn| turn.inbox()),
             Box::new({
                 let service = self.clone();
                 let input = input.clone();
@@ -485,6 +491,7 @@ impl Service {
         cancel: &CancellationToken,
         trace: &TurnRecorder,
         resume: Option<&crate::resume::TurnResume>,
+        inbox: Option<Arc<crate::steer::SteerInbox>>,
         on_first_round: crate::round::OnFirstRound,
     ) -> Result<(Dispatch, Option<String>), ChatError> {
         // The assembled conversation, split the way the loop reads it: a
@@ -549,6 +556,9 @@ impl Service {
         if let Some(format) = &input.response_format {
             session = session.with_answer_check(Arc::new(StructuredAnswer(format.clone())));
         }
+        if let Some(inbox) = inbox {
+            session = session.with_inbox(inbox as Arc<dyn kura_core::TurnInbox>);
+        }
 
         let runtime = bridge_runtime()?;
         // The loop runs calls between rounds and announces each; that is
@@ -584,6 +594,9 @@ impl Service {
         let outcome = runtime.block_on(session.resume_turn(&question, checkpoint, &mut emit));
         trace.set_attribute(trace.root(), "rounds", log.lock().rounds);
         trace.set_attribute(trace.root(), "toolCalls", tool_calls);
+        if session.steered() > 0 {
+            trace.set_attribute(trace.root(), "steerMessages", session.steered());
+        }
         let resumed = session.resumed();
         if resumed.rounds > 0 {
             // `rounds` and `toolCalls` count this attempt; these say what it

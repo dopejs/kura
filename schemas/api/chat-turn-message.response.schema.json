@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/chat-turn-message.response.schema.json",
+  "title": "ChatTurnMessageResponse",
+  "description": "A message accepted by a running chat turn (202).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["requestId", "pending"],
+  "properties": {
+    "requestId": { "type": "string" },
+    "pending": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Messages the turn holds that the model has not read yet, this one included."
+    }
+  }
+}

@@ -7,6 +7,7 @@
 mod answer;
 mod checkpoint;
 mod session;
+mod steer;
 mod tools;
 
 pub use answer::{AnswerCheck, AnswerRejection};
@@ -15,4 +16,5 @@ pub use checkpoint::{
     TurnCheckpoint, TurnJournal,
 };
 pub use session::{CoreError, DEFAULT_MAX_PARALLEL_TOOL_CALLS, Session, TurnOutcome};
+pub use steer::TurnInbox;
 pub use tools::{Tool, ToolError, ToolInvocation, ToolOutput, ToolRegistry};

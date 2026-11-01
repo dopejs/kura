@@ -355,6 +355,23 @@ pub struct CreateIntegrationDiagnosticSmokeProbe {
 // Chat
 // ---------------------------------------------------------------------------
 
+/// `POST /v1/chat/turns/{requestId}/messages`, accepted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatTurnMessageResponse {
+    pub request_id: String,
+    /// Messages the turn holds that the model has not read yet, this one
+    /// included.
+    pub pending: usize,
+}
+
+/// `POST /v1/chat/turns/{requestId}/cancel`, accepted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatTurnCancelResponse {
+    pub request_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatQueryResponse {

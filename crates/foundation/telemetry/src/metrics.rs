@@ -26,6 +26,7 @@ pub const CHAT_TOOL_CALLS_TOTAL: &str = "kura_chat_tool_calls_total";
 pub const CHAT_TOOL_CALL_DURATION_SECONDS: &str = "kura_chat_tool_call_duration_seconds";
 pub const CHAT_TURN_CHECKPOINTS_TOTAL: &str = "kura_chat_turn_checkpoints_total";
 pub const CHAT_TURN_RESUMED_CALLS_TOTAL: &str = "kura_chat_turn_resumed_calls_total";
+pub const CHAT_TURN_CONTROLS_TOTAL: &str = "kura_chat_turn_controls_total";
 pub const SESSION_WINDOW_SHADOW_TOTAL: &str = "kura_session_window_shadow_total";
 pub const SESSION_SUMMARY_WINDOWS_TOTAL: &str = "kura_session_summary_windows_total";
 pub const SESSION_SUMMARY_UPDATES_TOTAL: &str = "kura_session_summary_updates_total";
@@ -79,6 +80,10 @@ const HELP: &[(&str, &str)] = &[
     (
         CHAT_TURN_RESUMED_CALLS_TOTAL,
         "Tool calls of resumed chat turns by kind (replayed|interrupted|rerun). interrupted: had side effects, started and never settled; not run again.",
+    ),
+    (
+        CHAT_TURN_CONTROLS_TOTAL,
+        "Messages and cancels sent to running chat turns, by action (steer|cancel) and outcome (accepted|not_found|finished|full|invalid|duplicate). duplicate: a turn started with a request id another running turn holds, and cannot be reached.",
     ),
     (
         SESSION_WINDOW_SHADOW_TOTAL,

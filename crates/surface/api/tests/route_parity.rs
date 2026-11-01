@@ -76,6 +76,8 @@ const GO_ROUTE_PROBES: &[(&str, &str)] = &[
     ("GET", "/v1/channel-management/connectors/probe"),
     ("POST", "/v1/chat/query"),
     ("POST", "/v1/chat/query/stream"),
+    ("POST", "/v1/chat/turns/probe/messages"),
+    ("POST", "/v1/chat/turns/probe/cancel"),
     ("GET", "/v1/computer-use/artifacts/probe"),
     ("GET", "/v1/config"),
     ("GET", "/v1/connectors"),

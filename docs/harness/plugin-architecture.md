@@ -203,6 +203,26 @@ only a subset of JSON Schema. A 400 that names the field (or `json_schema`)
 is answered by resending without it, and that client stops sending it.
 Anthropic gets the instruction only.
 
+Steering (agent-runtime-program.md 2.8, G8): a non-streamed query that is
+running can be reached by the tenant that sent it, by the `X-Request-Id` it
+was sent with (the SDK's `queryChat(input, {requestId})`).
+`POST /v1/chat/turns/{requestId}/messages` with `{message}` answers 202
+`{requestId, pending}`; the loop reads the message as the user's before its
+next model call, after the results of the calls it is waiting on. One that
+arrives while the model writes its answer makes that answer interim: the
+model reads both and continues, and the extra rounds count against
+`toolMaxRounds`. When the model answers with nothing waiting, the inbox is
+closed in the same step, so a later message gets 409 `turn_finished` rather
+than being accepted and never read. 404 `turn_not_found` is no such turn
+for this tenant (another tenant's request id names nothing), 429
+`turn_inbox_full` is 8 unread messages, 400 `invalid_steer_message` is empty
+or over 32 KiB. `POST /v1/chat/turns/{requestId}/cancel` stops the turn; its
+query answers 408 with a cancelled dispatch. A second turn started with a
+request id a running turn holds runs unreachable. Counted as
+`kura_chat_turn_controls_total{action, outcome}`; a turn's trace carries
+`steerMessages`, and the session emits a `steer_message` event per message.
+Streamed queries are a single dispatch and cannot be steered.
+
 A veto surfaces as `ChatError::HookVetoed` → HTTP 403 and is recorded as a
 `chat.hook.vetoed` event. `GET /v1/plugins` reports every hook registration
 (`hooks: [{point, pluginId}]`). Context already derives from persisted

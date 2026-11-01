@@ -16,6 +16,7 @@ use crate::checkpoint::{
     CallState, CheckpointCall, CheckpointRound, INTERRUPTED_CALL_OUTPUT, ResumeStats,
     TurnCheckpoint, TurnJournal,
 };
+use crate::steer::TurnInbox;
 use crate::tools::ToolInvocation;
 use crate::tools::ToolOutput;
 use crate::tools::ToolRegistry;
@@ -61,6 +62,9 @@ pub struct Session {
     journal: Option<Arc<dyn TurnJournal>>,
     resumed: ResumeStats,
     answer_check: Option<Arc<dyn AnswerCheck>>,
+    inbox: Option<Arc<dyn TurnInbox>>,
+    /// Messages taken from `inbox` this turn.
+    steered: usize,
 }
 
 impl Session {
@@ -78,6 +82,8 @@ impl Session {
             journal: None,
             resumed: ResumeStats::default(),
             answer_check: None,
+            inbox: None,
+            steered: 0,
         }
     }
 
@@ -125,6 +131,19 @@ impl Session {
         self
     }
 
+    /// Read messages sent to the turn while it runs (see [`TurnInbox`]).
+    #[must_use]
+    pub fn with_inbox(mut self, inbox: Arc<dyn TurnInbox>) -> Self {
+        self.inbox = Some(inbox);
+        self
+    }
+
+    /// Messages the last turn took from its inbox.
+    #[must_use]
+    pub fn steered(&self) -> usize {
+        self.steered
+    }
+
     pub fn thread_id(&self) -> ThreadId {
         self.thread_id
     }
@@ -158,7 +177,27 @@ impl Session {
     /// parallel-safe -- changes nothing -- and is otherwise reported to the
     /// model as interrupted. Replayed and interrupted calls emit no events:
     /// they did not run in this attempt.
+    ///
+    /// With an inbox, messages sent while the turn runs join the
+    /// conversation before the next model call, and one that arrives as the
+    /// model answers makes that answer interim: the turn continues, and the
+    /// extra rounds count against the cap. However the turn ends, the inbox
+    /// is closed.
     pub async fn resume_turn(
+        &mut self,
+        input: &str,
+        checkpoint: TurnCheckpoint,
+        emit: &mut dyn FnMut(Event),
+    ) -> Result<TurnOutcome, CoreError> {
+        self.steered = 0;
+        let outcome = self.turn(input, checkpoint, emit).await;
+        if let Some(inbox) = &self.inbox {
+            inbox.close();
+        }
+        outcome
+    }
+
+    async fn turn(
         &mut self,
         input: &str,
         checkpoint: TurnCheckpoint,
@@ -195,6 +234,9 @@ impl Session {
             }
             rounds += 1;
 
+            if let Some(inbox) = self.inbox.clone() {
+                self.steer(inbox.take(), emit);
+            }
             let prompt = Prompt {
                 instructions: self.instructions.clone(),
                 input: self.history.clone(),
@@ -267,6 +309,16 @@ impl Session {
                         },
                     );
                 }
+                // Something arrived while the answer was being written: it
+                // was an answer to a question that has since changed. The
+                // model reads both and goes on.
+                if let Some(inbox) = self.inbox.clone() {
+                    let waiting = inbox.take_or_close();
+                    if !waiting.is_empty() {
+                        self.steer(waiting, emit);
+                        continue;
+                    }
+                }
                 self.publish(emit, EventMsg::TurnComplete);
                 break Ok(TurnOutcome {
                     final_message: (!text.is_empty()).then_some(text),
@@ -285,6 +337,18 @@ impl Session {
                     .collect(),
             };
             self.run_calls(round, emit).await;
+        }
+    }
+
+    /// Appends messages sent to the running turn, as the user's.
+    fn steer(&mut self, messages: Vec<String>, emit: &mut dyn FnMut(Event)) {
+        for message in messages {
+            self.steered += 1;
+            self.history.push(ResponseItem::Message {
+                role: Role::User,
+                content: message.clone(),
+            });
+            self.publish(emit, EventMsg::SteerMessage { message });
         }
     }
 
@@ -1127,5 +1191,176 @@ mod tests {
                 .iter()
                 .any(|msg| matches!(msg, EventMsg::Error { .. }))
         );
+    }
+
+    /// Hands out one scripted batch per take, whichever kind; records how
+    /// it was asked and whether it ended up closed.
+    #[derive(Default)]
+    struct ScriptedInbox {
+        batches: Mutex<VecDeque<Vec<String>>>,
+        asked: Mutex<Vec<&'static str>>,
+        closed: std::sync::atomic::AtomicBool,
+    }
+
+    impl ScriptedInbox {
+        fn new(batches: Vec<Vec<&str>>) -> Arc<Self> {
+            Arc::new(Self {
+                batches: Mutex::new(
+                    batches
+                        .into_iter()
+                        .map(|batch| batch.into_iter().map(String::from).collect())
+                        .collect(),
+                ),
+                ..Self::default()
+            })
+        }
+
+        fn closed(&self) -> bool {
+            self.closed.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl TurnInbox for ScriptedInbox {
+        fn take(&self) -> Vec<String> {
+            self.asked.lock().push("take");
+            self.batches.lock().pop_front().unwrap_or_default()
+        }
+
+        fn take_or_close(&self) -> Vec<String> {
+            self.asked.lock().push("take_or_close");
+            let batch = self.batches.lock().pop_front().unwrap_or_default();
+            if batch.is_empty() {
+                self.close();
+            }
+            batch
+        }
+
+        fn close(&self) {
+            self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn user(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            role: Role::User,
+            content: text.into(),
+        }
+    }
+
+    fn echo_registry() -> Arc<ToolRegistry> {
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(EchoTool));
+        Arc::new(registry)
+    }
+
+    #[tokio::test]
+    async fn a_message_sent_while_a_tool_ran_is_read_on_the_next_round() {
+        let provider = Arc::new(FakeProvider::with_rounds(vec![
+            vec![ResponseEvent::FunctionCall {
+                call_id: "c1".into(),
+                name: "echo".into(),
+                arguments: "{}".into(),
+            }],
+            vec![ResponseEvent::OutputTextDelta("only the PDFs".into())],
+        ]));
+        // Round one: nothing yet. Round two: the message. Then the answer.
+        let inbox = ScriptedInbox::new(vec![vec![], vec!["only the PDFs, please"]]);
+        let mut session = Session::new(provider.clone(), echo_registry()).with_inbox(inbox.clone());
+        let (mut emit, events) = collect_events();
+        let outcome = session.run_turn("list the files", &mut emit).await.unwrap();
+
+        assert_eq!(outcome.final_message.as_deref(), Some("only the PDFs"));
+        assert_eq!(session.steered(), 1);
+        let prompts = provider.prompts.lock();
+        assert_eq!(prompts.len(), 2);
+        // After the call and its result, which the model must still see
+        // answered, not before them.
+        let second = &prompts[1].input;
+        assert!(matches!(
+            second[second.len() - 2],
+            ResponseItem::FunctionCallOutput { .. }
+        ));
+        assert_eq!(second.last(), Some(&user("only the PDFs, please")));
+        assert!(events.lock().contains(&EventMsg::SteerMessage {
+            message: "only the PDFs, please".into()
+        }));
+        assert_eq!(*inbox.asked.lock(), vec!["take", "take", "take_or_close"]);
+        assert!(inbox.closed());
+    }
+
+    #[tokio::test]
+    async fn a_message_that_arrives_with_the_answer_makes_it_interim() {
+        let provider = Arc::new(FakeProvider::with_rounds(vec![
+            vec![ResponseEvent::OutputTextDelta("four".into())],
+            vec![ResponseEvent::OutputTextDelta("quatre".into())],
+        ]));
+        let inbox = ScriptedInbox::new(vec![vec![], vec!["in French"]]);
+        let mut session =
+            Session::new(provider.clone(), Arc::new(ToolRegistry::new())).with_inbox(inbox.clone());
+        let (mut emit, events) = collect_events();
+        let outcome = session.run_turn("2+2?", &mut emit).await.unwrap();
+
+        assert_eq!(outcome.final_message.as_deref(), Some("quatre"));
+        let prompts = provider.prompts.lock();
+        let second = &prompts[1].input;
+        assert_eq!(
+            second[second.len() - 2..],
+            [
+                ResponseItem::Message {
+                    role: Role::Assistant,
+                    content: "four".into(),
+                },
+                user("in French"),
+            ]
+        );
+        // One turn, one completion.
+        let completions = events
+            .lock()
+            .iter()
+            .filter(|msg| matches!(msg, EventMsg::TurnComplete))
+            .count();
+        assert_eq!(completions, 1);
+        assert!(inbox.closed());
+    }
+
+    #[tokio::test]
+    async fn a_message_sent_before_the_first_round_follows_the_question() {
+        let provider = Arc::new(FakeProvider::with_rounds(vec![vec![
+            ResponseEvent::OutputTextDelta("ok".into()),
+        ]]));
+        let inbox = ScriptedInbox::new(vec![vec!["and keep it short"]]);
+        let mut session =
+            Session::new(provider.clone(), Arc::new(ToolRegistry::new())).with_inbox(inbox);
+        let (mut emit, _) = collect_events();
+        session.run_turn("explain", &mut emit).await.unwrap();
+
+        let prompts = provider.prompts.lock();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(
+            prompts[0].input[prompts[0].input.len() - 2..],
+            [user("explain"), user("and keep it short")]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_fails_closes_its_inbox() {
+        let provider = Arc::new(FakeProvider::with_rounds(vec![vec![
+            ResponseEvent::FunctionCall {
+                call_id: "c1".into(),
+                name: "echo".into(),
+                arguments: "{}".into(),
+            },
+        ]]));
+        let inbox = ScriptedInbox::new(vec![]);
+        let mut session = Session::new(provider, echo_registry())
+            .with_max_tool_rounds(1)
+            .with_inbox(inbox.clone());
+        let (mut emit, _) = collect_events();
+        let err = session.run_turn("go", &mut emit).await.unwrap_err();
+
+        assert!(matches!(err, CoreError::MaxToolRounds(1)));
+        // Never asked to take-or-close: the model never answered.
+        assert!(!inbox.asked.lock().contains(&"take_or_close"));
+        assert!(inbox.closed());
     }
 }

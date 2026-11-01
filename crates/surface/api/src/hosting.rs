@@ -110,6 +110,10 @@ pub const TENANT_ROUTES: &[(&str, &str)] = &[
     // Conversation. Chat tools are the tenant's own (G15).
     ("POST", "/v1/chat/query"),
     ("POST", "/v1/chat/query/stream"),
+    // A tenant reaches only its own running turns; the turn is keyed by
+    // the caller's tenant.
+    ("POST", "/v1/chat/turns/{request_id}/messages"),
+    ("POST", "/v1/chat/turns/{request_id}/cancel"),
     // A tenant reads only its own turns' traces; the handler filters.
     ("GET", "/v1/turn-traces"),
     ("GET", "/v1/turn-traces/{turn_id}"),

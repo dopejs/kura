@@ -306,6 +306,46 @@ fn test_chat_query_request_rejects_an_unknown_response_format_type() {
 }
 
 #[test]
+fn test_chat_turn_schemas_accept_canonical_fixtures() {
+    let validator = Validator::new(schema_root_dir());
+    let fixtures: &[Fixture] = &[
+        (
+            r##"schemas/api/chat-turn-message.request.schema.json"##,
+            r##"{"message":"only the PDFs, please"}"##,
+        ),
+        (
+            r##"schemas/api/chat-turn-message.response.schema.json"##,
+            r##"{"requestId":"req_1","pending":1}"##,
+        ),
+        (
+            r##"schemas/api/chat-turn-cancel.response.schema.json"##,
+            r##"{"requestId":"req_1"}"##,
+        ),
+    ];
+    for (schema, fixture) in fixtures {
+        validator
+            .validate_relative(schema, fixture.as_bytes())
+            .unwrap_or_else(|err| panic!("{schema}: {err}"));
+    }
+}
+
+#[test]
+fn test_chat_turn_message_request_rejects_an_empty_or_missing_message() {
+    let validator = Validator::new(schema_root_dir());
+    for fixture in [
+        r##"{}"##,
+        r##"{"message":""}"##,
+        r##"{"message":"a","extra":1}"##,
+    ] {
+        let err = validator.validate_relative(
+            r##"schemas/api/chat-turn-message.request.schema.json"##,
+            fixture.as_bytes(),
+        );
+        assert!(err.is_err(), "expected {fixture} to fail schema validation");
+    }
+}
+
+#[test]
 fn test_chat_stream_schemas_accept_canonical_fixtures() {
     let validator = Validator::new(schema_root_dir());
     let fixtures: &[Fixture] = &[

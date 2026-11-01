@@ -3271,3 +3271,152 @@ fn a_stream_refuses_a_response_format() {
     assert_eq!(error.code(), "invalid_response_format");
     assert!(seen.read().is_empty());
 }
+
+// ------------------------------------------------------------------------
+// Steering a running turn (agent-runtime-program.md 2.8, G8).
+// ------------------------------------------------------------------------
+
+/// What a person does while a turn's tool runs, done from inside the tool:
+/// the turn is running then, and the call is where the next round waits.
+enum Meanwhile {
+    Steer(&'static str),
+    Cancel,
+}
+
+struct InterruptingTool {
+    service: Arc<std::sync::OnceLock<Service>>,
+    meanwhile: Meanwhile,
+    outcome: Arc<parking_lot::RwLock<Vec<String>>>,
+}
+
+impl kura_core::Tool for InterruptingTool {
+    fn spec(&self) -> kura_llm::ToolSpec {
+        kura_llm::ToolSpec {
+            name: "list_files".to_string(),
+            description: "a test tool".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    fn call<'a>(
+        &'a self,
+        _invocation: &'a kura_core::ToolInvocation,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<kura_core::ToolOutput, kura_core::ToolError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        let service = self.service.get().expect("service");
+        let outcome = match self.meanwhile {
+            Meanwhile::Steer(message) => service
+                .steer_turn("tenant_a", "req_steer", message)
+                .map(|pending| format!("pending {pending}")),
+            Meanwhile::Cancel => service
+                .cancel_turn("tenant_a", "req_steer")
+                .map(|()| "cancelled".to_string()),
+        };
+        self.outcome
+            .write()
+            .push(outcome.unwrap_or_else(|error| error.code().to_string()));
+        Box::pin(async move { Ok(kura_core::ToolOutput::ok("a.pdf b.txt")) })
+    }
+}
+
+/// The service, what the provider was asked, and what the tool's
+/// interruption came back with.
+type SteeringFixture = (
+    Service,
+    Arc<parking_lot::RwLock<Vec<ProviderRequest>>>,
+    Arc<parking_lot::RwLock<Vec<String>>>,
+);
+
+fn steering_service(rounds: Vec<ProviderResponse>, meanwhile: Meanwhile) -> SteeringFixture {
+    let (provider, seen) = ScriptedProvider::new(rounds);
+    let slot = Arc::new(std::sync::OnceLock::new());
+    let outcome = Arc::new(parking_lot::RwLock::new(Vec::new()));
+    let mut registry = kura_core::ToolRegistry::new();
+    registry.register(Arc::new(InterruptingTool {
+        service: Arc::clone(&slot),
+        meanwhile,
+        outcome: Arc::clone(&outcome),
+    }));
+    let mut svc = service(new_dispatcher(provider), None, None);
+    svc.set_tools(Arc::new(FixedTools(Arc::new(registry))));
+    let _ = slot.set(svc.clone());
+    (svc, seen, outcome)
+}
+
+fn steerable_query() -> QueryInput {
+    let mut input = base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "list my files");
+    input.tenant_id = "tenant_a".to_string();
+    input.request_id = "req_steer".to_string();
+    input
+}
+
+#[test]
+fn a_message_sent_to_a_running_turn_is_read_on_its_next_round() {
+    let (svc, seen, outcome) = steering_service(
+        vec![asked_for("call_1", "list_files", "{}"), answered("a.pdf")],
+        Meanwhile::Steer("only the PDFs"),
+    );
+
+    let execution = svc
+        .query(steerable_query(), &CancellationToken::new())
+        .expect("query");
+
+    assert!(execution.exec_error.is_none());
+    assert_eq!(execution.result.dispatch.output, "a.pdf");
+    assert_eq!(*outcome.read(), vec!["pending 1"]);
+    let seen = seen.read();
+    assert_eq!(seen.len(), 2);
+    let last = seen[1].messages.last().expect("message");
+    assert_eq!(last.role, MessageRole::User);
+    assert_eq!(last.content, "only the PDFs");
+    // The call's result still comes before it.
+    assert!(shows_call_output(&seen[1], "call_1"));
+    // Finished: nothing can reach it now.
+    assert_eq!(
+        svc.steer_turn("tenant_a", "req_steer", "late")
+            .map_err(|e| e.code()),
+        Err("turn_not_found")
+    );
+}
+
+#[test]
+fn another_tenant_cannot_reach_the_turn() {
+    let (svc, _, outcome) = steering_service(
+        vec![asked_for("call_1", "list_files", "{}"), answered("done")],
+        Meanwhile::Steer("hijack"),
+    );
+    let mut input = steerable_query();
+    input.tenant_id = "tenant_b".to_string();
+
+    svc.query(input, &CancellationToken::new()).expect("query");
+
+    assert_eq!(*outcome.read(), vec!["turn_not_found"]);
+}
+
+#[test]
+fn a_cancelled_turn_stops_before_its_next_round() {
+    let (svc, seen, outcome) = steering_service(
+        vec![
+            asked_for("call_1", "list_files", "{}"),
+            answered("never sent"),
+        ],
+        Meanwhile::Cancel,
+    );
+
+    let execution = svc
+        .query(steerable_query(), &CancellationToken::new())
+        .expect("query");
+
+    assert_eq!(*outcome.read(), vec!["cancelled"]);
+    assert!(execution.exec_error.is_some());
+    assert_eq!(
+        execution.result.dispatch.status,
+        kura_llm::DispatchStatus::Cancelled
+    );
+    assert_eq!(seen.read().len(), 1);
+}
