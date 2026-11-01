@@ -207,6 +207,8 @@ struct FakeInner {
     capability_visibility: HashMap<String, CapabilityDecision>,
     profile_projections: Vec<RuntimeProjection>,
     binding_evidence: Vec<RuntimeBindingEvidence>,
+    turn_checkpoints: HashMap<String, kura_store::TurnCheckpointRecord>,
+    turn_checkpoint_writes: usize,
 }
 
 struct FakeStore {
@@ -282,6 +284,27 @@ impl FakeStore {
 const DEFAULT_TURN_LIMIT: usize = 76;
 
 impl ChatStore for FakeStore {
+    fn get_turn_checkpoint(
+        &self,
+        turn_key: &str,
+    ) -> Result<Option<kura_store::TurnCheckpointRecord>, String> {
+        Ok(self.inner.read().turn_checkpoints.get(turn_key).cloned())
+    }
+
+    fn put_turn_checkpoint(&self, record: &kura_store::TurnCheckpointRecord) -> Result<(), String> {
+        let mut inner = self.inner.write();
+        inner.turn_checkpoint_writes += 1;
+        inner
+            .turn_checkpoints
+            .insert(record.turn_key.clone(), record.clone());
+        Ok(())
+    }
+
+    fn delete_turn_checkpoint(&self, turn_key: &str) -> Result<(), String> {
+        self.inner.write().turn_checkpoints.remove(turn_key);
+        Ok(())
+    }
+
     fn upsert_llm_dispatch(&self, dispatch: &Dispatch) -> Result<(), String> {
         let mut inner = self.inner.write();
         if let Some(existing) = inner
@@ -2901,4 +2924,196 @@ fn a_stream_is_traced_as_one_round_of_one_dispatch() {
     assert_eq!(dispatches.len(), 1);
     assert_eq!(dispatches[0].status, kura_telemetry::trace::SpanStatus::Ok);
     assert_eq!(trace.usage.total_tokens, 5);
+}
+
+// ------------------------------------------------------------------------
+// Turn resume (agent-runtime-program.md 2.7): a retried request picks up
+// from its last settled call.
+// ------------------------------------------------------------------------
+
+/// Replays one scripted result per round, failures included.
+struct FallibleProvider {
+    rounds: parking_lot::Mutex<std::collections::VecDeque<Result<ProviderResponse, ProviderError>>>,
+    seen: Arc<parking_lot::RwLock<Vec<ProviderRequest>>>,
+}
+
+impl Provider for FallibleProvider {
+    fn name(&self) -> &str {
+        OPENAI_COMPATIBLE_PROVIDER_NAME
+    }
+
+    fn complete<'a>(
+        &'a self,
+        request: ProviderRequest,
+    ) -> BoxFuture<'a, Result<ProviderResponse, ProviderError>> {
+        self.seen.write().push(request);
+        let next = self
+            .rounds
+            .lock()
+            .pop_front()
+            .unwrap_or_else(|| Ok(answered("unscripted")));
+        Box::pin(async move { next })
+    }
+
+    fn stream<'a>(
+        &'a self,
+        request: ProviderRequest,
+        _emit: kura_llm::StreamEmitter<'a>,
+    ) -> BoxFuture<'a, Result<ProviderResponse, ProviderError>> {
+        self.complete(request)
+    }
+}
+
+fn provider_down() -> ProviderError {
+    ProviderError::Provider {
+        code: "unavailable".to_string(),
+        message: "down".to_string(),
+        retryable: false,
+    }
+}
+
+struct ResumeFixture {
+    svc: Service,
+    store: Arc<FakeStore>,
+    calls: Arc<parking_lot::RwLock<Vec<String>>>,
+    seen: Arc<parking_lot::RwLock<Vec<ProviderRequest>>>,
+}
+
+fn resume_fixture(rounds: Vec<Result<ProviderResponse, ProviderError>>) -> ResumeFixture {
+    let seen = Arc::new(parking_lot::RwLock::new(Vec::new()));
+    let provider = Arc::new(FallibleProvider {
+        rounds: parking_lot::Mutex::new(rounds.into()),
+        seen: Arc::clone(&seen),
+    });
+    let calls = Arc::new(parking_lot::RwLock::new(Vec::new()));
+    let mut registry = kura_core::ToolRegistry::new();
+    registry.register(Arc::new(RecordingTool {
+        name: "send_mail".to_string(),
+        answer: "sent".to_string(),
+        calls: Arc::clone(&calls),
+    }));
+    let store = FakeStore::new();
+    let mut svc = service(
+        new_dispatcher(provider),
+        None,
+        Some(store.clone() as Arc<dyn ChatStore>),
+    );
+    svc.set_tools(Arc::new(FixedTools(Arc::new(registry))));
+    ResumeFixture {
+        svc,
+        store,
+        calls,
+        seen,
+    }
+}
+
+fn resumable_query(request_id: &str) -> QueryInput {
+    let mut input = base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "mail the report");
+    input.tenant_id = "tenant_a".to_string();
+    input.request_id = request_id.to_string();
+    input
+}
+
+fn shows_call_output(request: &ProviderRequest, call_id: &str) -> bool {
+    request
+        .messages
+        .iter()
+        .any(|message| message.tool_call_id == call_id)
+}
+
+#[test]
+fn a_retry_after_a_failed_round_resumes_and_does_not_send_twice() {
+    let fixture = resume_fixture(vec![
+        Ok(asked_for("call_1", "send_mail", "{\"to\":\"a@b\"}")),
+        Err(provider_down()),
+        Ok(answered("Sent it.")),
+    ]);
+
+    let first = fixture
+        .svc
+        .query(resumable_query("req_retry"), &CancellationToken::new())
+        .expect("first attempt");
+    assert!(first.exec_error.is_some(), "the second round failed");
+    assert_eq!(fixture.calls.read().len(), 1);
+    assert_eq!(fixture.store.inner.read().turn_checkpoints.len(), 1);
+
+    let second = fixture
+        .svc
+        .query(resumable_query("req_retry"), &CancellationToken::new())
+        .expect("retry");
+    assert!(second.exec_error.is_none());
+    assert_eq!(second.result.dispatch.output, "Sent it.");
+    // The mail went once: the retry read its result back from the checkpoint.
+    assert_eq!(fixture.calls.read().len(), 1);
+    let seen = fixture.seen.read();
+    assert_eq!(seen.len(), 3);
+    assert!(shows_call_output(&seen[2], "call_1"));
+    // Answered: nothing left to resume.
+    assert!(fixture.store.inner.read().turn_checkpoints.is_empty());
+
+    let trace = fixture
+        .svc
+        .traces()
+        .get(&second.result.turn_id)
+        .expect("trace");
+    let attributes = &trace.spans[0].attributes;
+    assert_eq!(attributes["resumedRounds"], serde_json::json!(1));
+    assert_eq!(attributes["replayedCalls"], serde_json::json!(1));
+    assert_eq!(attributes["interruptedCalls"], serde_json::json!(0));
+}
+
+#[test]
+fn another_request_id_is_another_turn() {
+    let fixture = resume_fixture(vec![
+        Ok(asked_for("call_1", "send_mail", "{}")),
+        Err(provider_down()),
+        Ok(asked_for("call_2", "send_mail", "{}")),
+        Ok(answered("Sent it.")),
+    ]);
+    fixture
+        .svc
+        .query(resumable_query("req_a"), &CancellationToken::new())
+        .expect("first attempt");
+    let other = fixture
+        .svc
+        .query(resumable_query("req_b"), &CancellationToken::new())
+        .expect("a different request");
+    assert!(other.exec_error.is_none());
+    // Nothing carried over: the new request ran its own call.
+    assert_eq!(fixture.calls.read().len(), 2);
+    // The first request's checkpoint is still there for its own retry.
+    assert_eq!(fixture.store.inner.read().turn_checkpoints.len(), 1);
+}
+
+#[test]
+fn a_turn_without_a_request_id_keeps_no_checkpoint() {
+    let fixture = resume_fixture(vec![
+        Ok(asked_for("call_1", "send_mail", "{}")),
+        Err(provider_down()),
+    ]);
+    fixture
+        .svc
+        .query(resumable_query(""), &CancellationToken::new())
+        .expect("query");
+    assert_eq!(fixture.calls.read().len(), 1);
+    assert_eq!(fixture.store.inner.read().turn_checkpoint_writes, 0);
+}
+
+#[test]
+fn with_resume_off_a_retry_runs_from_the_start() {
+    let mut fixture = resume_fixture(vec![
+        Ok(asked_for("call_1", "send_mail", "{}")),
+        Err(provider_down()),
+        Ok(asked_for("call_2", "send_mail", "{}")),
+        Ok(answered("Sent it.")),
+    ]);
+    fixture.svc.set_turn_resume(false);
+    for _ in 0..2 {
+        fixture
+            .svc
+            .query(resumable_query("req_retry"), &CancellationToken::new())
+            .expect("query");
+    }
+    assert_eq!(fixture.calls.read().len(), 2);
+    assert_eq!(fixture.store.inner.read().turn_checkpoint_writes, 0);
 }

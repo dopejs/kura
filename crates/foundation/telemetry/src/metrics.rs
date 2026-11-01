@@ -24,6 +24,8 @@ pub const STORE_LOCK_WAIT_SECONDS: &str = "kura_store_lock_wait_seconds";
 pub const HOOK_DURATION_SECONDS: &str = "kura_hook_duration_seconds";
 pub const CHAT_TOOL_CALLS_TOTAL: &str = "kura_chat_tool_calls_total";
 pub const CHAT_TOOL_CALL_DURATION_SECONDS: &str = "kura_chat_tool_call_duration_seconds";
+pub const CHAT_TURN_CHECKPOINTS_TOTAL: &str = "kura_chat_turn_checkpoints_total";
+pub const CHAT_TURN_RESUMED_CALLS_TOTAL: &str = "kura_chat_turn_resumed_calls_total";
 pub const SESSION_WINDOW_SHADOW_TOTAL: &str = "kura_session_window_shadow_total";
 pub const SESSION_SUMMARY_WINDOWS_TOTAL: &str = "kura_session_summary_windows_total";
 pub const SESSION_SUMMARY_UPDATES_TOTAL: &str = "kura_session_summary_updates_total";
@@ -69,6 +71,14 @@ const HELP: &[(&str, &str)] = &[
     (
         CHAT_TOOL_CALL_DURATION_SECONDS,
         "Chat tool call duration by tool name.",
+    ),
+    (
+        CHAT_TURN_CHECKPOINTS_TOTAL,
+        "Chat turn checkpoint events (resumed|busy|unreadable|write_failed|pruned). busy: a retry arrived while the same turn was running and ran without one.",
+    ),
+    (
+        CHAT_TURN_RESUMED_CALLS_TOTAL,
+        "Tool calls of resumed chat turns by kind (replayed|interrupted|rerun). interrupted: had side effects, started and never settled; not run again.",
     ),
     (
         SESSION_WINDOW_SHADOW_TOTAL,

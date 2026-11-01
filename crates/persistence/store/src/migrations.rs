@@ -3155,5 +3155,31 @@ pub fn schema_migrations() -> Vec<SchemaMigration> {
                 WHERE is_default = 1;"#
                 .to_string(),
         ],
-    },]
+    },
+    SchemaMigration {
+        version: 7,
+        name: "agent_turn_checkpoints".to_string(),
+        statements: vec![
+            // Where an unfinished agent turn stands, so a retry of the same
+            // request resumes from its last settled tool call
+            // (agent-runtime-program.md 2.7). `turn_key` is derived by the
+            // chat service from tenant, request, thread and question; the
+            // other columns say whose row it is. Rows live for one turn and
+            // are pruned by `updated_at` when nobody came back for them.
+            r#"CREATE TABLE IF NOT EXISTS agent_turn_checkpoints (
+                turn_key TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                checkpoint_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );"#
+                .to_string(),
+            r#"CREATE INDEX IF NOT EXISTS idx_agent_turn_checkpoints_updated
+                ON agent_turn_checkpoints(updated_at);"#
+                .to_string(),
+        ],
+    },
+]
 }

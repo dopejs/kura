@@ -130,6 +130,17 @@ impl Service {
         } else {
             String::new()
         };
+        // Held for the whole turn: a retry of this request while it runs
+        // starts its own attempt, and one after it died resumes this one's
+        // checkpoint (agent-runtime-program.md 2.7).
+        let resume = crate::resume::TurnResume::claim(
+            &self.running_turns,
+            self.store.as_ref().filter(|_| self.turn_resume),
+            &input.tenant_id,
+            &input.request_id,
+            &input.thread_id,
+            input.query.trim(),
+        );
         // The turn runs as an agent loop, and a round of that loop is a
         // dispatch. `kura-core` owns the looping; what this supplies is what a
         // round means here -- hooked, prepared, persisted, evented.
@@ -140,6 +151,7 @@ impl Service {
             &dispatch_input,
             cancel,
             trace,
+            resume.as_ref(),
             Box::new({
                 let service = self.clone();
                 let input = input.clone();
@@ -183,6 +195,16 @@ impl Service {
             input.query.trim(),
         )?;
         self.persist_continuity_response(&mut continuity, &input, &final_dispatch)?;
+        // Answered and recorded: nothing is left to resume. A turn whose
+        // last round failed keeps its checkpoint, so retrying it replays
+        // the calls that ran instead of running them again. A crash between
+        // the line above and this one replays the settled calls and asks
+        // the model once more.
+        if let Some(resume) = &resume {
+            if exec_error_message.is_none() {
+                resume.finish();
+            }
+        }
 
         let mut result = QueryResult {
             query: input.query.trim().to_string(),
@@ -443,6 +465,7 @@ impl Service {
         dispatch_input: &CreateDispatchInput,
         cancel: &CancellationToken,
         trace: &TurnRecorder,
+        resume: Option<&crate::resume::TurnResume>,
         on_first_round: crate::round::OnFirstRound,
     ) -> Result<(Dispatch, Option<String>), ChatError> {
         // The assembled conversation, split the way the loop reads it: a
@@ -496,6 +519,14 @@ impl Service {
         if let Some(instructions) = instructions {
             session = session.with_instructions(instructions);
         }
+        let checkpoint = match resume {
+            Some(resume) => {
+                session = session
+                    .with_journal(Arc::clone(&resume.journal) as Arc<dyn kura_core::TurnJournal>);
+                resume.checkpoint.clone()
+            }
+            None => kura_core::TurnCheckpoint::default(),
+        };
 
         let runtime = bridge_runtime()?;
         // The loop runs calls between rounds and announces each; that is
@@ -528,12 +559,26 @@ impl Service {
             }
             _ => {}
         };
-        let outcome = runtime.block_on(session.run_turn(&question, &mut emit));
+        let outcome = runtime.block_on(session.resume_turn(&question, checkpoint, &mut emit));
         trace.set_attribute(trace.root(), "rounds", log.lock().rounds);
         trace.set_attribute(trace.root(), "toolCalls", tool_calls);
+        let resumed = session.resumed();
+        if resumed.rounds > 0 {
+            // `rounds` and `toolCalls` count this attempt; these say what it
+            // carried over from the one before.
+            trace.set_attribute(trace.root(), "resumedRounds", resumed.rounds);
+            trace.set_attribute(trace.root(), "replayedCalls", resumed.replayed_calls);
+            trace.set_attribute(trace.root(), "interruptedCalls", resumed.interrupted_calls);
+            trace.set_attribute(trace.root(), "rerunCalls", resumed.rerun_calls);
+            crate::resume::record_resumed(resumed);
+        }
         if let Err(kura_core::CoreError::MaxToolRounds(_)) = &outcome {
             // More specific than the provider error the turn reports it as.
             trace.finish(SpanStatus::Error, "max_tool_rounds");
+            // A retry would replay every round and stop at the same cap.
+            if let Some(resume) = resume {
+                resume.finish();
+            }
         }
 
         let mut log = log.lock();

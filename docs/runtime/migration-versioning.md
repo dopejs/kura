@@ -96,11 +96,14 @@ That is the minimum P0 migration confidence bar.
 |---|---|---|
 | 1 | `baseline_v1_first_release` | the collapsed Go-era chain, including the tenant identity tables below |
 | 2 | `memory_assets` | Roadmap 78 memory plane |
-| 3 | `memory_asset_embeddings` | Stage 1.1 retrieval index; FK `ON DELETE CASCADE` onto `memory_assets` |
-| 4 | `tool_profiles` | Stage 9.1b tool providers; partial unique index enforces one default per capability |
+| 3 | `model_role_bindings` | model role bindings |
+| 4 | `llm_dispatch_tools` | `tools_json`/`tool_calls_json` on `llm_dispatches` |
+| 5 | `memory_asset_embeddings` | Stage 1.1 retrieval index; FK `ON DELETE CASCADE` onto `memory_assets` |
+| 6 | `tool_profiles` | Stage 9.1b tool providers; partial unique index enforces one default per capability |
+| 7 | `agent_turn_checkpoints` | agent-runtime-program.md 2.7 turn resume; short-lived rows, pruned by `updated_at` |
 
-Each of v2–v4 has a store test that opens a database at the previous version
-and asserts the upgrade lands the new table in place.
+v7 has a store test (`turn_checkpoints::tests::a_v6_database_gains_the_table_on_upgrade`)
+that opens a database at v6 and asserts the upgrade lands the table in place.
 
 ## Tenant Identity Tables (in the v1 baseline)
 

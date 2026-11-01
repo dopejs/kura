@@ -11,6 +11,10 @@ use kura_protocol::ResponseItem;
 use kura_protocol::Role;
 use kura_protocol::ThreadId;
 
+use crate::checkpoint::{
+    CallState, CheckpointCall, CheckpointRound, INTERRUPTED_CALL_OUTPUT, ResumeStats,
+    TurnCheckpoint, TurnJournal,
+};
 use crate::tools::ToolInvocation;
 use crate::tools::ToolOutput;
 use crate::tools::ToolRegistry;
@@ -47,6 +51,10 @@ pub struct Session {
     max_tool_rounds: usize,
     max_parallel_tool_calls: usize,
     event_seq: u64,
+    /// Where this turn stands; reported to `journal` on every change.
+    checkpoint: TurnCheckpoint,
+    journal: Option<Arc<dyn TurnJournal>>,
+    resumed: ResumeStats,
 }
 
 impl Session {
@@ -60,6 +68,9 @@ impl Session {
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
             max_parallel_tool_calls: DEFAULT_MAX_PARALLEL_TOOL_CALLS,
             event_seq: 0,
+            checkpoint: TurnCheckpoint::default(),
+            journal: None,
+            resumed: ResumeStats::default(),
         }
     }
 
@@ -91,12 +102,26 @@ impl Session {
         self
     }
 
+    /// Report where the turn stands as it goes, so it can be resumed
+    /// ([`Session::resume_turn`]) if the process running it dies.
+    #[must_use]
+    pub fn with_journal(mut self, journal: Arc<dyn TurnJournal>) -> Self {
+        self.journal = Some(journal);
+        self
+    }
+
     pub fn thread_id(&self) -> ThreadId {
         self.thread_id
     }
 
     pub fn history(&self) -> &[ResponseItem] {
         &self.history
+    }
+
+    /// What the last [`Session::resume_turn`] carried over; zero for a turn
+    /// that started fresh.
+    pub fn resumed(&self) -> ResumeStats {
+        self.resumed
     }
 
     /// Run one user turn to completion: append the input, then loop
@@ -107,13 +132,37 @@ impl Session {
         input: &str,
         emit: &mut dyn FnMut(Event),
     ) -> Result<TurnOutcome, CoreError> {
+        self.resume_turn(input, TurnCheckpoint::default(), emit)
+            .await
+    }
+
+    /// [`Session::run_turn`], continuing from where an earlier attempt at
+    /// the same turn stood. Rounds in `checkpoint` count against the round
+    /// cap. Settled calls are replayed, not run; calls that never started
+    /// run; a call that started and never settled runs again only if it is
+    /// parallel-safe -- changes nothing -- and is otherwise reported to the
+    /// model as interrupted. Replayed and interrupted calls emit no events:
+    /// they did not run in this attempt.
+    pub async fn resume_turn(
+        &mut self,
+        input: &str,
+        checkpoint: TurnCheckpoint,
+        emit: &mut dyn FnMut(Event),
+    ) -> Result<TurnOutcome, CoreError> {
         self.history.push(ResponseItem::Message {
             role: Role::User,
             content: input.to_string(),
         });
         self.publish(emit, EventMsg::TurnStarted);
 
+        self.checkpoint = TurnCheckpoint::default();
+        self.resumed = ResumeStats::default();
         let mut rounds = 0;
+        for round in checkpoint.rounds {
+            rounds += 1;
+            self.resumed.rounds += 1;
+            self.run_calls(round, emit).await;
+        }
         loop {
             // `>=`, checked before the round it would allow. With `>` the cap
             // permitted one round more than it named -- a cap of three ran
@@ -177,7 +226,18 @@ impl Session {
                 });
             }
 
-            self.run_calls(pending_calls, emit).await;
+            let round = CheckpointRound {
+                calls: pending_calls
+                    .into_iter()
+                    .map(|(call_id, name, arguments)| CheckpointCall {
+                        call_id,
+                        name,
+                        arguments,
+                        state: CallState::Planned,
+                    })
+                    .collect(),
+            };
+            self.run_calls(round, emit).await;
         }
     }
 
@@ -187,36 +247,75 @@ impl Session {
     /// it, so calls with side effects keep the order the model asked for.
     /// Whatever ran concurrently, results enter the history in call order:
     /// the model reads them back against the calls it made.
-    async fn run_calls(
-        &mut self,
-        calls: Vec<(String, String, String)>,
-        emit: &mut dyn FnMut(Event),
-    ) {
-        let invocations: Vec<ToolInvocation> = calls
-            .into_iter()
-            .map(|(call_id, name, arguments)| ToolInvocation {
-                call_id,
-                name,
-                arguments,
+    ///
+    /// A round from a checkpoint arrives partly settled; only what has not
+    /// settled runs (see [`Session::resume_turn`]). Every state change is
+    /// journaled before the work it describes: a call is recorded as
+    /// started before it starts, so a call that is not recorded as started
+    /// certainly did not run.
+    async fn run_calls(&mut self, mut round: CheckpointRound, emit: &mut dyn FnMut(Event)) {
+        let invocations: Vec<ToolInvocation> = round
+            .calls
+            .iter()
+            .map(|call| ToolInvocation {
+                call_id: call.call_id.clone(),
+                name: call.name.clone(),
+                arguments: call.arguments.clone(),
             })
             .collect();
         // Decided for every call before any of them starts.
-        let parallel: Vec<bool> = invocations
+        let safe: Vec<bool> = invocations
             .iter()
-            .map(|invocation| {
-                self.max_parallel_tool_calls > 1 && self.tools.parallel_safe(invocation)
-            })
+            .map(|invocation| self.tools.parallel_safe(invocation))
             .collect();
+        for (call, safe) in round.calls.iter_mut().zip(&safe) {
+            match call.state {
+                CallState::Settled { .. } => self.resumed.replayed_calls += 1,
+                CallState::Started if *safe => {
+                    self.resumed.rerun_calls += 1;
+                    call.state = CallState::Planned;
+                }
+                CallState::Started => {
+                    self.resumed.interrupted_calls += 1;
+                    call.state = CallState::Settled {
+                        output: INTERRUPTED_CALL_OUTPUT.to_string(),
+                        success: false,
+                    };
+                }
+                CallState::Planned => {}
+            }
+        }
+        let parallel: Vec<bool> = safe
+            .iter()
+            .map(|safe| self.max_parallel_tool_calls > 1 && *safe)
+            .collect();
+        let pending = |round: &CheckpointRound, index: usize| {
+            matches!(round.calls[index].state, CallState::Planned)
+        };
+        self.checkpoint.rounds.push(round);
+        let at = self.checkpoint.rounds.len() - 1;
+        self.journal();
 
-        let mut outputs: Vec<Option<ToolOutput>> = Vec::new();
-        outputs.resize_with(invocations.len(), || None);
         let mut start = 0;
         while start < invocations.len() {
+            if !pending(&self.checkpoint.rounds[at], start) {
+                start += 1;
+                continue;
+            }
             let end = if parallel[start] {
-                start + parallel[start..].iter().take_while(|safe| **safe).count()
+                start
+                    + (start..invocations.len())
+                        .take_while(|index| {
+                            parallel[*index] && pending(&self.checkpoint.rounds[at], *index)
+                        })
+                        .count()
             } else {
                 start + 1
             };
+            for index in start..end {
+                self.checkpoint.rounds[at].calls[index].state = CallState::Started;
+            }
+            self.journal();
             for invocation in &invocations[start..end] {
                 self.publish(
                     emit,
@@ -249,23 +348,37 @@ impl Session {
                         success: output.success,
                     },
                 );
-                outputs[index] = Some(output);
+                self.checkpoint.rounds[at].calls[index].state = CallState::Settled {
+                    output: output.content,
+                    success: output.success,
+                };
+                self.journal();
             }
             drop(running);
             start = end;
         }
 
-        for (invocation, output) in invocations.into_iter().zip(outputs) {
-            let output = output.unwrap_or_else(|| ToolOutput::failed("tool call did not run"));
+        for call in &self.checkpoint.rounds[at].calls {
+            let output = match &call.state {
+                CallState::Settled { output, .. } => output.clone(),
+                // Unreachable: every pending call ran above.
+                CallState::Planned | CallState::Started => "tool call did not run".to_string(),
+            };
             self.history.push(ResponseItem::FunctionCall {
-                call_id: invocation.call_id.clone(),
-                name: invocation.name,
-                arguments: invocation.arguments,
+                call_id: call.call_id.clone(),
+                name: call.name.clone(),
+                arguments: call.arguments.clone(),
             });
             self.history.push(ResponseItem::FunctionCallOutput {
-                call_id: invocation.call_id,
-                output: output.content,
+                call_id: call.call_id.clone(),
+                output,
             });
+        }
+    }
+
+    fn journal(&self) {
+        if let Some(journal) = &self.journal {
+            journal.record(&self.checkpoint);
         }
     }
 
@@ -689,5 +802,214 @@ mod tests {
             );
             assert_eq!(outputs_in_history(&session).len(), 5);
         }
+    }
+
+    /// Keeps every checkpoint the loop reported.
+    #[derive(Default)]
+    struct Recorded(Mutex<Vec<TurnCheckpoint>>);
+
+    impl TurnJournal for Recorded {
+        fn record(&self, checkpoint: &TurnCheckpoint) {
+            self.0.lock().push(checkpoint.clone());
+        }
+    }
+
+    fn checkpoint_call(call_id: &str, name: &str, state: CallState) -> CheckpointCall {
+        CheckpointCall {
+            call_id: call_id.into(),
+            name: name.into(),
+            arguments: "5".into(),
+            state,
+        }
+    }
+
+    fn settled(output: &str) -> CallState {
+        CallState::Settled {
+            output: output.into(),
+            success: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_call_is_journaled_as_started_before_it_runs_and_settled_after() {
+        let timed = timed_registry();
+        let provider = Arc::new(FakeProvider::with_rounds(vec![
+            vec![call("r", "read", 5), call("w", "write", 5)],
+            vec![ResponseEvent::OutputTextDelta("done".into())],
+        ]));
+        let journal = Arc::new(Recorded::default());
+        let mut session =
+            Session::new(provider, timed.registry.clone()).with_journal(journal.clone());
+        let (mut emit, _) = collect_events();
+        session.run_turn("go", &mut emit).await.unwrap();
+
+        let states: Vec<Vec<CallState>> = journal
+            .0
+            .lock()
+            .iter()
+            .map(|checkpoint| {
+                checkpoint.rounds[0]
+                    .calls
+                    .iter()
+                    .map(|call| call.state.clone())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            states,
+            vec![
+                vec![CallState::Planned, CallState::Planned],
+                vec![CallState::Started, CallState::Planned],
+                vec![settled("out r"), CallState::Planned],
+                vec![settled("out r"), CallState::Started],
+                vec![settled("out r"), settled("out w")],
+            ]
+        );
+        assert_eq!(session.resumed(), ResumeStats::default());
+    }
+
+    #[tokio::test]
+    async fn a_resumed_turn_replays_settled_calls_and_does_not_repeat_an_interrupted_write() {
+        let timed = timed_registry();
+        let provider = Arc::new(FakeProvider::with_rounds(vec![vec![
+            ResponseEvent::OutputTextDelta("done".into()),
+        ]]));
+        let checkpoint = TurnCheckpoint {
+            rounds: vec![CheckpointRound {
+                calls: vec![
+                    checkpoint_call("r1", "read", settled("earlier r1")),
+                    checkpoint_call("w1", "write", settled("earlier w1")),
+                    checkpoint_call("w2", "write", CallState::Started),
+                ],
+            }],
+        };
+        let journal = Arc::new(Recorded::default());
+        let mut session =
+            Session::new(provider.clone(), timed.registry.clone()).with_journal(journal.clone());
+        let (mut emit, seen) = collect_events();
+        let outcome = session
+            .resume_turn("go", checkpoint, &mut emit)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.final_message.as_deref(), Some("done"));
+        assert!(timed.log.lock().is_empty(), "nothing ran again");
+        assert_eq!(
+            outputs_in_history(&session),
+            ["earlier r1", "earlier w1", INTERRUPTED_CALL_OUTPUT]
+        );
+        assert_eq!(
+            session.resumed(),
+            ResumeStats {
+                rounds: 1,
+                replayed_calls: 2,
+                interrupted_calls: 1,
+                rerun_calls: 0,
+            }
+        );
+        // The model's first round of this attempt reads all three.
+        let prompts = provider.prompts.lock();
+        assert_eq!(prompts.len(), 1);
+        let replayed = prompts[0]
+            .input
+            .iter()
+            .filter(|item| matches!(item, ResponseItem::FunctionCallOutput { .. }))
+            .count();
+        assert_eq!(replayed, 3);
+        // Nothing that did not run in this attempt is announced as running.
+        assert!(
+            !seen
+                .lock()
+                .iter()
+                .any(|msg| matches!(msg, EventMsg::ToolCallBegin { .. }))
+        );
+        // The interrupted call is settled in the journal, so a second
+        // restart would not count it again.
+        let last = journal.0.lock().last().cloned().unwrap();
+        assert_eq!(
+            last.rounds[0].calls[2].state,
+            CallState::Settled {
+                output: INTERRUPTED_CALL_OUTPUT.into(),
+                success: false,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_resumed_round_runs_what_never_started_and_reruns_an_interrupted_read() {
+        let timed = timed_registry();
+        let provider = Arc::new(FakeProvider::with_rounds(vec![vec![
+            ResponseEvent::OutputTextDelta("done".into()),
+        ]]));
+        let checkpoint = TurnCheckpoint {
+            rounds: vec![CheckpointRound {
+                calls: vec![
+                    checkpoint_call("w1", "write", settled("earlier w1")),
+                    checkpoint_call("r1", "read", CallState::Started),
+                    checkpoint_call("w2", "write", CallState::Planned),
+                ],
+            }],
+        };
+        let mut session = Session::new(provider, timed.registry.clone());
+        let (mut emit, _) = collect_events();
+        session
+            .resume_turn("go", checkpoint, &mut emit)
+            .await
+            .unwrap();
+
+        let log = timed.log.lock().clone();
+        assert_eq!(log, ["start r1", "end r1", "start w2", "end w2"]);
+        assert_eq!(
+            outputs_in_history(&session),
+            ["earlier w1", "out r1", "out w2"]
+        );
+        assert_eq!(session.resumed().rerun_calls, 1);
+        assert_eq!(session.resumed().interrupted_calls, 0);
+    }
+
+    #[tokio::test]
+    async fn resumed_rounds_count_against_the_round_cap() {
+        let timed = timed_registry();
+        let provider = Arc::new(FakeProvider::with_rounds(vec![vec![call("r", "read", 1)]]));
+        let checkpoint = TurnCheckpoint {
+            rounds: (0..2)
+                .map(|i| CheckpointRound {
+                    calls: vec![checkpoint_call(&format!("c{i}"), "read", settled("x"))],
+                })
+                .collect(),
+        };
+        let mut session =
+            Session::new(provider.clone(), timed.registry.clone()).with_max_tool_rounds(3);
+        let (mut emit, _) = collect_events();
+        let err = session
+            .resume_turn("go", checkpoint, &mut emit)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::MaxToolRounds(3)));
+        // Two rounds carried over, one asked for: the cap of three is met.
+        assert_eq!(provider.prompts.lock().len(), 1);
+    }
+
+    #[test]
+    fn a_checkpoint_round_trips_through_json() {
+        let checkpoint = TurnCheckpoint {
+            rounds: vec![CheckpointRound {
+                calls: vec![
+                    checkpoint_call("a", "read", CallState::Planned),
+                    checkpoint_call("b", "write", CallState::Started),
+                    checkpoint_call("c", "write", settled("ok")),
+                ],
+            }],
+        };
+        let json = serde_json::to_value(&checkpoint).unwrap();
+        assert_eq!(
+            json["rounds"][0]["calls"][2],
+            serde_json::json!({
+                "callId": "c", "name": "write", "arguments": "5",
+                "state": {"state": "settled", "output": "ok", "success": true}
+            })
+        );
+        let back: TurnCheckpoint = serde_json::from_value(json).unwrap();
+        assert_eq!(back, checkpoint);
     }
 }

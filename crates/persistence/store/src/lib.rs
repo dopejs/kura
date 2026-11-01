@@ -49,6 +49,7 @@ pub mod thread_continuity;
 pub mod thread_handoff;
 pub mod thread_persistence;
 mod tools;
+mod turn_checkpoints;
 pub mod workflow;
 pub mod workspaces;
 
@@ -83,6 +84,7 @@ pub use telegram_setup::{
     TelegramSmokeEvidenceRecord, TelegramUpdateEvidenceRecord,
 };
 pub use thread_persistence::ThreadListQuery;
+pub use turn_checkpoints::TurnCheckpointRecord;
 
 /// The production schema head: the first-release baseline. The 55
 /// development-era migrations were collapsed into it (see migrations.rs);
@@ -90,7 +92,7 @@ pub use thread_persistence::ThreadListQuery;
 ///
 /// Must equal the highest `version` in `schema_migrations()`, or a database
 /// written by this build is rejected on reopen as "newer than supported".
-pub const CURRENT_SCHEMA_VERSION: i64 = 6;
+pub const CURRENT_SCHEMA_VERSION: i64 = 7;
 
 /// The last development-era schema version before the baseline collapse.
 /// Databases stamped exactly at this legacy head hold a schema identical to

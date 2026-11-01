@@ -204,6 +204,12 @@ pub struct Service {
     /// Recent turns' span trees (agent-runtime-program.md 2.1). Always on;
     /// bounded by turn count.
     pub(crate) traces: Arc<kura_telemetry::trace::TraceStore>,
+    /// Turns running in this process, so a retry that arrives while its
+    /// first attempt still runs does not resume beside it (2.7).
+    pub(crate) running_turns: Arc<crate::resume::RunningTurns>,
+    /// Whether tool-calling turns keep a checkpoint and a retry resumes
+    /// from it. On by default; off is the rollback.
+    pub(crate) turn_resume: bool,
 }
 
 /// Rounds allowed in a single turn before the turn is failed.
@@ -252,6 +258,8 @@ impl Service {
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
             max_parallel_tool_calls: kura_core::DEFAULT_MAX_PARALLEL_TOOL_CALLS,
             traces: Arc::new(kura_telemetry::trace::TraceStore::default()),
+            running_turns: Arc::default(),
+            turn_resume: true,
         }
     }
 
@@ -281,6 +289,13 @@ impl Service {
         if max > 0 {
             self.max_parallel_tool_calls = max;
         }
+    }
+
+    /// Turns checkpointing and resume on or off (2.7). Off, no checkpoint
+    /// is written or read and a retried request runs from the start, as
+    /// before; checkpoints already written are left to expire.
+    pub fn set_turn_resume(&mut self, on: bool) {
+        self.turn_resume = on;
     }
 
     /// Attaches the plugin hook bus; the `chat/turn-start`,

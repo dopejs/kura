@@ -840,6 +840,9 @@ fn build_chat(asm: &mut Assembly) -> Result<(), AppError> {
     if config.tool_max_parallel > 0 {
         chat.set_max_parallel_tool_calls(config.tool_max_parallel);
     }
+    if config.turn_resume == Some(false) {
+        chat.set_turn_resume(false);
+    }
     asm.state.chat = Some(Arc::new(chat));
     Ok(())
 }
@@ -853,6 +856,9 @@ struct ChatPluginConfig {
     /// Parallel-safe calls of one round run at once (2.6); 0 = the default
     /// (4), 1 = strictly serial.
     tool_max_parallel: usize,
+    /// Checkpoint tool-calling turns so a retried request resumes from its
+    /// last settled call (2.7); absent = on, `false` turns it off.
+    turn_resume: Option<bool>,
 }
 
 /// The default context-assembly hook: injects the tenant's Ready L3/L2

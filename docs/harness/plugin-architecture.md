@@ -139,6 +139,28 @@ quota inside the call. Blocking work (MCP `call_tool`, recall) runs on
 the blocking pool so calls actually overlap; the tenant context is
 carried into it.
 
+Turn resume (agent-runtime-program.md 2.7): a turn that calls tools keeps a
+checkpoint (`agent_turn_checkpoints`, schema v7) of every round's calls and
+each call's state — planned, started, settled with its output — written
+before the work it describes, so a call not recorded as started certainly
+did not run. The turn is identified by tenant, `X-Request-Id`, thread and
+question; a client that retries the same request after a restart or a failed
+round resumes it: settled calls are replayed, never-started calls run, a
+started read-only (parallel-safe) call runs again, and a started call with
+side effects is **not** run again — the model reads that it was interrupted
+and its effect is unknown. The checkpoint is deleted when the turn is
+answered (kept when its last round failed, so that retry resumes too) and
+pruned after 24 h otherwise. A retry that arrives while the same turn is
+still running in this process runs on its own without a checkpoint. A store
+write that fails stops checkpointing for that turn and deletes the row, so a
+stale record is never resumed. Server-generated request ids never repeat, so
+only a client that sends its own id ever resumes. `turnResume: false`
+(`entries.chat.config`) turns it off. Observed as
+`kura_chat_turn_checkpoints_total{event}`,
+`kura_chat_turn_resumed_calls_total{kind}` and the trace attributes
+`resumedRounds`/`replayedCalls`/`interruptedCalls`/`rerunCalls`. Streaming
+turns run no tools and keep none.
+
 A veto surfaces as `ChatError::HookVetoed` → HTTP 403 and is recorded as a
 `chat.hook.vetoed` event. `GET /v1/plugins` reports every hook registration
 (`hooks: [{point, pluginId}]`). Context already derives from persisted

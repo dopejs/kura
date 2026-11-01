@@ -341,10 +341,27 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
       check and the call makes that one call wait for approval while its
       read-only siblings run; tool-profile tools stay serial until their
       quota reservation moves ahead of the batch.
-- [ ] **2.7 Turn resume (G5).** Persist round state after each settled tool
+- [x] **2.7 Turn resume (G5).** Persist round state after each settled tool
       call; on restart, resume from the last settled call. Side-effecting
       tools carry an idempotency key so a replayed call is detected, not
       repeated.
+      *Shipped* (`turnResume`, default on; see plugin-architecture.md, chat).
+      The idempotency key is the turn key (tenant, `X-Request-Id`, thread,
+      question) plus the call id, and detection happens in the loop: every
+      call is journaled as started before it runs, so on resume a call with
+      side effects that started and never settled is reported to the model
+      as interrupted instead of repeated, and a granted approval is never
+      asked again because that call is never re-entered. Resume is driven
+      by the client retrying, not by the daemon at boot: a resumed turn's
+      answer must reach whoever asked, and an unattended restart would
+      spend tokens for nobody. *Not covered:* the key is not passed to tools,
+      so a remote service cannot deduplicate on its side (no tool has an
+      idempotent API to pass it to yet); a call interrupted while waiting
+      for approval is reported as interrupted, and the model must call it
+      again (a new approval); scheduled and IM turns use request ids that
+      are not retried, so they do not resume; a crash between recording the
+      answer and deleting the checkpoint replays the settled calls and asks
+      the model once more.
 - [ ] **2.8** Structured output (G7), steering a running turn (G8), and
       untrusted-content framing for tool output (G9).
 

@@ -56,6 +56,27 @@ pub trait ChatStore: Send + Sync {
     fn bind_llm_dispatch_tenant(&self, _dispatch_id: &str, _tenant_id: &str) -> Result<(), String> {
         Ok(())
     }
+    // -- turn checkpoints (agent-runtime-program.md 2.7) -----------------
+    // Default no-ops: a store that keeps none resumes nothing, which is how
+    // every turn ran before checkpoints.
+    fn get_turn_checkpoint(
+        &self,
+        _turn_key: &str,
+    ) -> Result<Option<kura_store::TurnCheckpointRecord>, String> {
+        Ok(None)
+    }
+    fn put_turn_checkpoint(
+        &self,
+        _record: &kura_store::TurnCheckpointRecord,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn delete_turn_checkpoint(&self, _turn_key: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn prune_turn_checkpoints(&self, _cutoff: &DateTime<Utc>) -> Result<usize, String> {
+        Ok(0)
+    }
     // -- event ledger (ported in kura-store) ------------------------------
     fn append_event(&self, event: &Event) -> Result<Event, String>;
     // -- setup wizard (not yet ported to kura-store) ----------------------
@@ -149,6 +170,29 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
         self.lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .upsert_llm_dispatch(dispatch)
+    }
+    fn get_turn_checkpoint(
+        &self,
+        turn_key: &str,
+    ) -> Result<Option<kura_store::TurnCheckpointRecord>, String> {
+        self.lock()
+            .map_err(|_| "lock sqlite store".to_string())?
+            .get_turn_checkpoint(turn_key)
+    }
+    fn put_turn_checkpoint(&self, record: &kura_store::TurnCheckpointRecord) -> Result<(), String> {
+        self.lock()
+            .map_err(|_| "lock sqlite store".to_string())?
+            .put_turn_checkpoint(record)
+    }
+    fn delete_turn_checkpoint(&self, turn_key: &str) -> Result<(), String> {
+        self.lock()
+            .map_err(|_| "lock sqlite store".to_string())?
+            .delete_turn_checkpoint(turn_key)
+    }
+    fn prune_turn_checkpoints(&self, cutoff: &DateTime<Utc>) -> Result<usize, String> {
+        self.lock()
+            .map_err(|_| "lock sqlite store".to_string())?
+            .prune_turn_checkpoints(cutoff)
     }
     fn append_event(&self, event: &Event) -> Result<Event, String> {
         self.lock()

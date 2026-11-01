@@ -24,6 +24,7 @@ kura-setupwizard.workspace = true
 kura-session.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 parking_lot.workspace = true

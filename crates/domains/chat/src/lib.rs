@@ -17,6 +17,7 @@
 mod cancel;
 mod error;
 mod events;
+mod resume;
 mod round;
 mod service;
 mod store;
