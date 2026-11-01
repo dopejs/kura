@@ -403,8 +403,22 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
 ## Stage 4 — Shared Hosting M4: Fairness and Scale
 
 - [ ] **4.1** Per-tenant rate, concurrency and token limits; fair run queue.
-- [ ] **4.2** Indexed token lookup; no store write per request (the
+- [x] **4.2** Indexed token lookup; no store write per request (the
       `upsert_access_token` in `protected`); reader pool on by default.
+      *Done 2026-11-01:* the auth manager keeps a `token_hash -> token_id`
+      index (one place, `State::put_token`, maintains it) and answers a
+      token used within `LAST_USED_RESOLUTION` (60 s) under the read lock;
+      it used to scan every token under the write lock. `protected` writes
+      only when `last_used_at` moved, through `touch_access_token`, which
+      sets `last_used_at`/`updated_at` and never status. *Found on the
+      way:* the old whole-row upsert, from a snapshot taken at
+      authentication, could put a token revoked in between back to active
+      in the store (in memory it stayed revoked, so the token came back on
+      restart); `/v1/auth/me` had the same upsert and now relies on
+      `protected`. `store.readers` defaults to 2 (`0`, in config or
+      `KURA_STORE_READERS`, is the rollback). *Changed for clients:*
+      `lastUsedAt` is accurate to a minute. *Not covered:* an expiry
+      noticed during authentication is still not persisted (as before).
 - [ ] **4.3** Load test with parallel tools (2.6) and swarm enabled; the
       single writer connection is the expected bottleneck — measure via
       `kura_store_lock_wait_seconds` before changing it.

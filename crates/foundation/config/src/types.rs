@@ -57,7 +57,7 @@ pub struct Config {
 }
 
 /// Persistence settings.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct StoreConfig {
     /// Query-only reader connections opened beside the single writer
@@ -65,6 +65,19 @@ pub struct StoreConfig {
     /// through the writer. Reads on a reader connection run concurrently
     /// with writes under WAL.
     pub readers: usize,
+}
+
+/// Reader connections opened when the config does not say. Every route and
+/// assembly test runs with this many; `0` (config or `KURA_STORE_READERS`)
+/// is the rollback.
+pub const DEFAULT_STORE_READERS: usize = 2;
+
+impl Default for StoreConfig {
+    fn default() -> Self {
+        Self {
+            readers: DEFAULT_STORE_READERS,
+        }
+    }
 }
 
 impl Config {

@@ -90,6 +90,7 @@ const KURA_ENV_KEYS: &[&str] = &[
     "KURA_LLM_ROLE_IMAGE",
     "KURA_LLM_ROLE_VIDEO",
     "KURA_LLM_ROLE_EMBED",
+    "KURA_STORE_READERS",
     "OPENAI_TEST_KEY",
     "DISCORD_TEST_TOKEN",
     "TELEGRAM_TEST_TOKEN",
@@ -270,6 +271,25 @@ fn embedded_defaults_avoid_the_prod_and_test_daemons() {
     assert_ne!(cfg.bind_addr, "127.0.0.1:19192");
     assert!(!cfg.data_dir.ends_with(".dope"));
     assert!(!cfg.data_dir.ends_with(".dope-test"));
+}
+
+#[test]
+fn store_readers_default_on_and_zero_rolls_back() {
+    let _guard = ENV_LOCK.lock();
+    let home = TempHome::new();
+    set_base_env(home.path());
+    assert_eq!(load().expect("load").store.readers, 2);
+
+    write_config(
+        &home.path().join(".kura-test"),
+        r#"{ "store": { "readers": 0 } }"#,
+    );
+    assert_eq!(load().expect("load").store.readers, 0, "config file");
+
+    write_config(&home.path().join(".kura-test"), "{}");
+    set_env("KURA_STORE_READERS", "0");
+    assert_eq!(load().expect("load").store.readers, 0, "env override");
+    set_env("KURA_STORE_READERS", "");
 }
 
 #[test]

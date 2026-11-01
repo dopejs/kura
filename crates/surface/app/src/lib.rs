@@ -347,8 +347,9 @@ impl App {
 
         // --- kernel state population ---
         let mut state = AppState::new(cfg.clone(), event_bus.clone(), store.clone());
-        // Stage 10.2: reader connections beside the writer. `readers = 0`
-        // (the default) is exactly the pre-pool single-connection behaviour.
+        // Stage 10.2: reader connections beside the writer (two by default,
+        // plan item 4.2). `readers = 0` is exactly the pre-pool
+        // single-connection behaviour.
         state.store_pool = Arc::new(
             kura_store::StorePool::new(store.clone(), cfg.store.readers)
                 .map_err(AppError::Store)?,

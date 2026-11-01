@@ -123,7 +123,7 @@
         "readers": {
           "type": "integer",
           "minimum": 0,
-          "default": 0,
+          "default": 2,
           "description": "Query-only reader connections beside the single writer. 0 = every read goes through the writer (pre-pool behaviour)."
         }
       }
