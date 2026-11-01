@@ -116,7 +116,7 @@ fn to_llm_error(error: ProviderError) -> LlmError {
         },
         ProviderError::Http(inner) => LlmError::Provider {
             code: "transport".to_string(),
-            message: inner.to_string(),
+            message: with_causes(&inner),
             retryable: true,
         },
         ProviderError::Malformed(message) => LlmError::Provider {
@@ -125,6 +125,20 @@ fn to_llm_error(error: ProviderError) -> LlmError {
             retryable: false,
         },
     }
+}
+
+/// The error and every cause under it. reqwest's own message stops at
+/// "error sending request for url (...)"; whether that was a refused
+/// connection, a reset or a TLS failure is in the sources.
+fn with_causes(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
 }
 
 impl<M: ModelProvider> Provider for ModelProviderBridge<M> {

@@ -2048,14 +2048,6 @@ pub fn handoff_reference_continuity_reason(reference: &HandoffSourceReference) -
     }
 }
 
-/// Builds the per-call current-thread Tokio runtime that bridges the sync
-/// service into the async `kura-llm` dispatcher.
-///
-/// Time is enabled for the dispatcher's per-attempt timeout, and IO because a
-/// provider may reach the network. Only time was enabled until an HTTP
-/// provider was first dispatched here: the built-in `echo` and the managed CLI
-/// providers do no socket work, so every test passed while any real endpoint
-/// would panic on its first connection.
 /// A reply must parse and conform to the query's response format (2.8, G7).
 struct StructuredAnswer(kura_llm::ResponseFormat);
 
@@ -2071,12 +2063,38 @@ impl kura_core::AnswerCheck for StructuredAnswer {
     }
 }
 
-fn bridge_runtime() -> Result<tokio::runtime::Runtime, ChatError> {
-    tokio::runtime::Builder::new_current_thread()
+/// The runtime that bridges the sync service into the async `kura-llm`
+/// dispatcher: one per process, never dropped. Callers `block_on` it from
+/// their own blocking threads, as they did the per-call runtime it replaces;
+/// what the futures spawn (an HTTP client's connection tasks, mostly) runs
+/// on its workers.
+///
+/// It was built per call until the 4.3 load test. A provider's HTTP client
+/// pools connections, and a pooled connection's task lives on the runtime
+/// that opened it: once that call's runtime dropped, a later call could be
+/// handed the connection and fail as `transport` ("runtime dropped the
+/// dispatch task") — against any real keep-alive endpoint, intermittently.
+///
+/// Time is enabled for the dispatcher's per-attempt timeout, and IO because a
+/// provider may reach the network. Only time was enabled until an HTTP
+/// provider was first dispatched here: the built-in `echo` and the managed CLI
+/// providers do no socket work, so every test passed while any real endpoint
+/// would panic on its first connection.
+fn bridge_runtime() -> Result<&'static tokio::runtime::Runtime, ChatError> {
+    static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    if let Some(runtime) = RUNTIME.get() {
+        return Ok(runtime);
+    }
+    let built = tokio::runtime::Builder::new_multi_thread()
         .enable_io()
         .enable_time()
+        .thread_name("chat-dispatch")
+        .worker_threads(2)
         .build()
-        .map_err(|err| ChatError::Runtime(format!("build dispatch runtime: {err}")))
+        .map_err(|err| ChatError::Runtime(format!("build dispatch runtime: {err}")))?;
+    // A caller that loses the race drops its own copy, on its own (blocking)
+    // thread, before any work was spawned on it.
+    Ok(RUNTIME.get_or_init(|| built))
 }
 
 /// Ends a turn's trace from how the turn came out, and stamps the turn id on
@@ -2113,6 +2131,16 @@ mod bridge_runtime_tests {
     /// which no test caught because the built-in `echo` provider and the
     /// managed CLI providers never open one. This binds a listener because
     /// that is the cheapest operation that needs the driver at all.
+    /// One runtime for the life of the process: a provider's pooled
+    /// connections live on the runtime that opened them, so a runtime per
+    /// call strands them (see `bridge_runtime`).
+    #[test]
+    fn every_call_gets_the_same_runtime() {
+        let first = bridge_runtime().expect("bridge runtime");
+        let second = bridge_runtime().expect("bridge runtime");
+        assert!(std::ptr::eq(first, second));
+    }
+
     #[test]
     fn the_bridge_runtime_can_reach_the_network() {
         let runtime = bridge_runtime().expect("build the bridge runtime");
