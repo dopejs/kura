@@ -326,10 +326,21 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
       written from content that includes tool output (G9 framing lands in
       2.8); every elided window still captures its whole span to L0 again
       (pre-existing, unchanged here).
-- [ ] **2.6 Parallel tool calls (G4).** Calls declared read-only run
+- [x] **2.6 Parallel tool calls (G4).** Calls declared read-only run
       concurrently (bounded); calls with side effects stay serial and in
       order. Approval and quota gates are evaluated per call before any call
       in the batch starts.
+      *Shipped* (`toolMaxParallel`, default 4; see plugin-architecture.md,
+      chat). The gate is met by construction rather than a two-phase call:
+      only calls that need no approval and reserve no quota may join a
+      batch (`memory.lookup`; MCP tools declared `readOnlyHint` and allowed
+      outright on the surface), and that is decided for every call of the
+      round before any starts. *Not covered:* `readOnlyHint` is the
+      server's claim, trusted for ordering only (it never relaxes
+      authorization); a rule changed to `approval_required` between that
+      check and the call makes that one call wait for approval while its
+      read-only siblings run; tool-profile tools stay serial until their
+      quota reservation moves ahead of the batch.
 - [ ] **2.7 Turn resume (G5).** Persist round state after each settled tool
       call; on restart, resume from the last settled call. Side-effecting
       tools carry an idempotency key so a replayed call is detected, not

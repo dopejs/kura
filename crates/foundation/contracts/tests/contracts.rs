@@ -420,7 +420,7 @@ fn test_m_c_p_schemas_accept_canonical_fixtures() {
         ),
         (
             r##"schemas/api/mcp-tool-resource.schema.json"##,
-            r##"{"serverId":"mcp-test","toolName":"lookup","title":"Lookup","description":"Lookup tool","schemaFingerprint":"abc123","discoveryStatus":"discovered","lastDiscoveredAt":"2026-04-18T12:00:02Z","updatedAt":"2026-04-18T12:00:02Z","exposure":[{"serverId":"mcp-test","toolName":"lookup","runtimeSurface":"chat","exposureMode":"approval_required","active":true,"reason":"needs approval","updatedAt":"2026-04-18T12:00:03Z"}],"effectiveAvailability":"available","approvalRequired":true}"##,
+            r##"{"serverId":"mcp-test","toolName":"lookup","title":"Lookup","description":"Lookup tool","schemaFingerprint":"abc123","readOnlyHint":true,"discoveryStatus":"discovered","lastDiscoveredAt":"2026-04-18T12:00:02Z","updatedAt":"2026-04-18T12:00:02Z","exposure":[{"serverId":"mcp-test","toolName":"lookup","runtimeSurface":"chat","exposureMode":"approval_required","active":true,"reason":"needs approval","updatedAt":"2026-04-18T12:00:03Z"}],"effectiveAvailability":"available","approvalRequired":true}"##,
         ),
         (
             r##"schemas/api/mcp-tool-list.response.schema.json"##,

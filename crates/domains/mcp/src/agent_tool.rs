@@ -55,6 +55,8 @@ pub struct McpTool {
     runtime_surface: String,
     /// How long to wait for a person to answer an approval.
     approval_wait: Duration,
+    /// The server declared the tool read-only (`readOnlyHint`).
+    read_only: bool,
 }
 
 impl McpTool {
@@ -75,7 +77,17 @@ impl McpTool {
             parameters,
             runtime_surface: runtime_surface.into(),
             approval_wait: APPROVAL_WAIT,
+            read_only: false,
         }
+    }
+
+    /// Marks the tool as declared read-only by its server, which lets the
+    /// agent loop run it beside other such calls when it also needs no
+    /// approval.
+    #[must_use]
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
     }
 
     /// How long this tool waits for an approval. A surface nobody is watching
@@ -100,6 +112,18 @@ impl Tool for McpTool {
                 self.parameters.clone()
             },
         }
+    }
+
+    /// Declared read-only by its server **and** allowed on this surface
+    /// without approval. The second half is what keeps a parallel batch from
+    /// starting beside a call that stops to ask a person.
+    fn parallel_safe(&self, _invocation: &ToolInvocation) -> bool {
+        self.read_only
+            && self.manager.runs_without_approval(
+                &self.server_id,
+                &self.tool_name,
+                &self.runtime_surface,
+            )
     }
 
     fn call<'a>(
@@ -169,10 +193,32 @@ impl Tool for McpTool {
                 }
             };
 
-            let result = self
-                .manager
-                .call_tool(&self.server_id, &self.tool_name, arguments, &authorization)
-                .map_err(|error| ToolError::Failed(error.to_string()))?;
+            // `call_tool` blocks on the server's reply. Off the async
+            // worker, or it would stall every other future on it — including
+            // the calls running beside this one (2.6).
+            let result = {
+                let manager = Arc::clone(&self.manager);
+                let server_id = self.server_id.clone();
+                let tool_name = self.tool_name.clone();
+                // A blocking-pool thread does not inherit the task-local
+                // tenant context the sandbox's tenancy checks read.
+                let tenant = kura_identity::tenantctx::from_context();
+                let run = move || {
+                    let call =
+                        || manager.call_tool(&server_id, &tool_name, arguments, &authorization);
+                    match tenant {
+                        Some(tenant) => kura_identity::tenantctx::with_context(tenant, call),
+                        None => call(),
+                    }
+                };
+                match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => handle.spawn_blocking(run).await.map_err(|error| {
+                        ToolError::Failed(format!("tool call aborted: {error}"))
+                    })?,
+                    Err(_) => run(),
+                }
+            }
+            .map_err(|error| ToolError::Failed(error.to_string()))?;
 
             if !result.error.is_empty() {
                 // The server answered with a failure. That is an answer, and
@@ -305,14 +351,17 @@ fn collect_tools(
             continue;
         };
         for resource in published {
-            tools.push(Arc::new(McpTool::new(
-                Arc::clone(manager),
-                server_id.clone(),
-                resource.tool.tool_name.clone(),
-                resource.tool.description.clone(),
-                resource.tool.input_schema.clone(),
-                runtime_surface,
-            )));
+            tools.push(Arc::new(
+                McpTool::new(
+                    Arc::clone(manager),
+                    server_id.clone(),
+                    resource.tool.tool_name.clone(),
+                    resource.tool.description.clone(),
+                    resource.tool.input_schema.clone(),
+                    runtime_surface,
+                )
+                .with_read_only(resource.tool.read_only_hint),
+            ));
         }
     }
     tools

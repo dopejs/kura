@@ -1227,6 +1227,52 @@ fn a_tool_that_declared_no_schema_is_offered_as_taking_an_object() {
     assert_eq!(spec.parameters["type"], "object");
 }
 
+/// 2.6: a call may run beside others only when the server declared the tool
+/// read-only *and* this surface runs it without asking anyone. A read-only
+/// tool behind an approval stays serial, so a batch never starts beside a
+/// call that is waiting for a person.
+#[test]
+fn only_a_read_only_tool_that_needs_no_approval_is_parallel_safe() {
+    let parallel_safe = |read_only: bool, mode: Option<ExposureMode>| {
+        let mut tool = fake_tool("lookup");
+        tool.read_only_hint = read_only;
+        let manager = started_server_with(tool);
+        if let Some(mode) = mode {
+            allow(&manager, "lookup", mode);
+        }
+        let tools = kura_mcp::tools_for_surface(&manager, "chat");
+        let invocation = invocation("srv-1__lookup", "{}");
+        tools.first().is_some_and(|t| t.parallel_safe(&invocation))
+    };
+    assert!(parallel_safe(true, Some(ExposureMode::Allow)));
+    assert!(
+        !parallel_safe(false, Some(ExposureMode::Allow)),
+        "not declared read-only"
+    );
+    assert!(
+        !parallel_safe(true, Some(ExposureMode::ApprovalRequired)),
+        "read-only but asks a person"
+    );
+    assert!(!parallel_safe(true, Some(ExposureMode::Blocked)));
+    assert!(!parallel_safe(true, None), "no rule for this surface");
+}
+
+#[test]
+fn runs_without_approval_reads_the_rule_for_the_surface_and_raises_nothing() {
+    let (manager, policy) = started_server_with_policy(fake_tool("advance"));
+    allow(&manager, "advance", ExposureMode::ApprovalRequired);
+    assert!(!manager.runs_without_approval("srv-1", "advance", "chat"));
+    assert!(
+        policy.list_approvals(None).is_empty(),
+        "a pre-flight question must not ask a person anything"
+    );
+    allow(&manager, "advance", ExposureMode::Allow);
+    assert!(manager.runs_without_approval("srv-1", "advance", "chat"));
+    assert!(!manager.runs_without_approval("srv-1", "advance", "scheduled"));
+    assert!(!manager.runs_without_approval("srv-1", "missing", "chat"));
+    assert!(!manager.runs_without_approval("srv-x", "advance", "chat"));
+}
+
 #[tokio::test]
 async fn an_allowed_tool_runs() {
     let manager = started_server_with(fake_tool("lookup"));

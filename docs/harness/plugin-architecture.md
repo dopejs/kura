@@ -122,6 +122,23 @@ is recorded as a `chat.tool.called` event and counted. The loop is capped
 at `toolMaxRounds` (`plugins.json` → `entries.chat.config`, default 16);
 a turn that hits the cap is failed rather than answered with half a result.
 
+Parallel tool calls (agent-runtime-program.md 2.6): within one round,
+consecutive calls that are *parallel-safe* run concurrently, at most
+`toolMaxParallel` at once (`entries.chat.config`, default 4; `1` is
+strictly serial and is the rollback). Any other call is a barrier that
+runs alone, in the order the model asked, after everything before it.
+Results enter the history in call order whatever finished first; each
+call keeps its own `tool_call` span, closed when that call ends.
+Parallel-safe today: `memory.lookup`, and MCP tools whose server declares
+`annotations.readOnlyHint: true` **and** whose exposure rule on the
+surface is a plain allow (`Manager::runs_without_approval`, a state read
+that raises nothing). A read-only tool behind `approval_required` stays
+serial, so a batch never starts beside a call waiting for a person.
+Tool-profile tools (`web.search`, …) stay serial because they reserve
+quota inside the call. Blocking work (MCP `call_tool`, recall) runs on
+the blocking pool so calls actually overlap; the tenant context is
+carried into it.
+
 A veto surfaces as `ChatError::HookVetoed` → HTTP 403 and is recorded as a
 `chat.hook.vetoed` event. `GET /v1/plugins` reports every hook registration
 (`hooks: [{point, pluginId}]`). Context already derives from persisted

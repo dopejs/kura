@@ -50,6 +50,15 @@ pub trait Tool: Send + Sync {
         &'a self,
         invocation: &'a ToolInvocation,
     ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + 'a>>;
+
+    /// Whether this call may run concurrently with other such calls of the
+    /// same round. Only a call that changes nothing *and* will not stop to
+    /// ask a person qualifies: a batch must never start beside a call that
+    /// is waiting for approval. Asked before the batch starts, so it must
+    /// not have side effects. The default is serial, which is always safe.
+    fn parallel_safe(&self, _invocation: &ToolInvocation) -> bool {
+        false
+    }
 }
 
 #[derive(Default)]
@@ -74,6 +83,12 @@ impl ToolRegistry {
         let mut specs: Vec<ToolSpec> = self.tools.values().map(|tool| tool.spec()).collect();
         specs.sort_by(|a, b| a.name.cmp(&b.name));
         specs
+    }
+
+    /// [`Tool::parallel_safe`] by name; an unknown tool is serial.
+    pub fn parallel_safe(&self, invocation: &ToolInvocation) -> bool {
+        self.get(&invocation.name)
+            .is_some_and(|tool| tool.parallel_safe(invocation))
     }
 
     pub async fn invoke(&self, invocation: &ToolInvocation) -> Result<ToolOutput, ToolError> {

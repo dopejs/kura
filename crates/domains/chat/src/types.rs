@@ -198,6 +198,9 @@ pub struct Service {
     /// model or a tool that always provokes another call would otherwise burn
     /// provider quota without bound.
     pub(crate) max_tool_rounds: usize,
+    /// Parallel-safe calls of one round that may run at once (2.6); 1 is
+    /// strictly serial.
+    pub(crate) max_parallel_tool_calls: usize,
     /// Recent turns' span trees (agent-runtime-program.md 2.1). Always on;
     /// bounded by turn count.
     pub(crate) traces: Arc<kura_telemetry::trace::TraceStore>,
@@ -247,6 +250,7 @@ impl Service {
             hooks: None,
             tools: None,
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
+            max_parallel_tool_calls: kura_core::DEFAULT_MAX_PARALLEL_TOOL_CALLS,
             traces: Arc::new(kura_telemetry::trace::TraceStore::default()),
         }
     }
@@ -268,6 +272,14 @@ impl Service {
     pub fn set_max_tool_rounds(&mut self, rounds: usize) {
         if rounds > 0 {
             self.max_tool_rounds = rounds;
+        }
+    }
+
+    /// Overrides how many parallel-safe calls of a round run at once. Zero
+    /// is ignored like a zero round cap; 1 turns parallelism off.
+    pub fn set_max_parallel_tool_calls(&mut self, max: usize) {
+        if max > 0 {
+            self.max_parallel_tool_calls = max;
         }
     }
 

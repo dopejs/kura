@@ -12,6 +12,7 @@ kura-config.workspace = true
 kura-store.workspace = true
 kura-events.workspace = true
 kura-sandbox.workspace = true
+kura-identity.workspace = true
 kura-policy.workspace = true
 kura-livevalidation.workspace = true
 serde.workspace = true

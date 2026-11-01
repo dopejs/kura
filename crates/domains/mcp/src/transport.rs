@@ -179,6 +179,13 @@ pub fn decode_tools_list(
         description: String,
         #[serde(default, rename = "inputSchema")]
         input_schema: Value,
+        #[serde(default)]
+        annotations: ToolsListAnnotations,
+    }
+    #[derive(Default, Deserialize)]
+    struct ToolsListAnnotations {
+        #[serde(default, rename = "readOnlyHint")]
+        read_only_hint: Option<bool>,
     }
     #[derive(Deserialize)]
     struct ToolsListPayload {
@@ -196,6 +203,7 @@ pub fn decode_tools_list(
             description: item.description.trim().to_string(),
             schema_fingerprint: schema_fingerprint(&item.input_schema),
             input_schema: item.input_schema,
+            read_only_hint: item.annotations.read_only_hint == Some(true),
             discovery_status: DiscoveryStatus::Discovered,
             last_discovered_at: Some(now),
             updated_at: now,

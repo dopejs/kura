@@ -256,3 +256,20 @@ fn a_server_that_publishes_no_schema_leaves_it_null() {
 
     assert!(tools[0].input_schema.is_null());
 }
+
+#[test]
+fn the_read_only_annotation_is_kept_and_anything_else_reads_as_not_read_only() {
+    let raw = serde_json::json!({
+        "tools": [
+            {"name": "get", "annotations": {"readOnlyHint": true}},
+            {"name": "put", "annotations": {"readOnlyHint": false, "destructiveHint": true}},
+            {"name": "plain"},
+            {"name": "odd", "annotations": {"title": "no hint"}},
+        ],
+    });
+
+    let tools = kura_mcp::transport::decode_tools_list(&raw, "srv-1", chrono::Utc::now()).unwrap();
+
+    let read_only: Vec<bool> = tools.iter().map(|t| t.read_only_hint).collect();
+    assert_eq!(read_only, [true, false, false, false]);
+}

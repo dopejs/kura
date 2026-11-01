@@ -35,6 +35,10 @@
       "type": "object",
       "description": "The argument schema the server published. A fingerprint says whether it changed; this says what the tool takes."
     },
+    "readOnlyHint": {
+      "type": "boolean",
+      "description": "The server's annotations.readOnlyHint. Present only when true. Lets the agent loop run the tool beside other read-only calls when it also needs no approval; it never relaxes authorization."
+    },
     "discoveryStatus": {
       "type": "string",
       "enum": [

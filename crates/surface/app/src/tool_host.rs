@@ -236,6 +236,11 @@ struct MemoryLookupTool {
 }
 
 impl Tool for MemoryLookupTool {
+    /// Reads only, asks no one, reserves no quota.
+    fn parallel_safe(&self, _invocation: &ToolInvocation) -> bool {
+        true
+    }
+
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: MEMORY_LOOKUP_TOOL.to_string(),
@@ -299,12 +304,30 @@ impl Tool for MemoryLookupTool {
             if query.is_empty() {
                 return Ok(ToolOutput::failed("query or assetId is required"));
             }
-            match kura_api::routes::retrieval::run_query(
-                &self.state,
-                &self.tenant_id,
-                query,
-                MEMORY_LOOKUP_MAX_HITS,
-            ) {
+            // Recall reads the store and may call an external embedder; both
+            // block. Off the async worker, so lookups in one round overlap
+            // (2.6) instead of queueing behind each other.
+            let recall = {
+                let state = self.state.clone();
+                let tenant_id = self.tenant_id.clone();
+                let query = query.to_string();
+                let run = move || {
+                    kura_api::routes::retrieval::run_query(
+                        &state,
+                        &tenant_id,
+                        &query,
+                        MEMORY_LOOKUP_MAX_HITS,
+                    )
+                };
+                match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => handle
+                        .spawn_blocking(run)
+                        .await
+                        .unwrap_or_else(|error| Err(format!("memory lookup aborted: {error}"))),
+                    Err(_) => run(),
+                }
+            };
+            match recall {
                 Ok(hits) if hits.is_empty() => Ok(ToolOutput::ok("no matching memory")),
                 Ok(hits) => Ok(ToolOutput::ok(
                     hits.iter()
@@ -333,6 +356,13 @@ struct Observed {
 impl Tool for Observed {
     fn spec(&self) -> ToolSpec {
         self.inner.spec()
+    }
+
+    /// The wrapped tool decides. Profile tools stay serial: they reserve
+    /// quota inside the call, and 2.6 requires quota to be settled per call
+    /// before any call of a batch starts.
+    fn parallel_safe(&self, invocation: &ToolInvocation) -> bool {
+        self.inner.parallel_safe(invocation)
     }
 
     fn call<'a>(&'a self, invocation: &'a ToolInvocation) -> ToolFuture<'a> {

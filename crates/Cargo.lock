@@ -1963,6 +1963,7 @@ dependencies = [
  "kura-config",
  "kura-core",
  "kura-events",
+ "kura-identity",
  "kura-livevalidation",
  "kura-llm",
  "kura-policy",

@@ -7,5 +7,5 @@
 mod session;
 mod tools;
 
-pub use session::{CoreError, Session, TurnOutcome};
+pub use session::{CoreError, DEFAULT_MAX_PARALLEL_TOOL_CALLS, Session, TurnOutcome};
 pub use tools::{Tool, ToolError, ToolInvocation, ToolOutput, ToolRegistry};

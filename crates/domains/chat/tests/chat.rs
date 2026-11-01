@@ -2706,6 +2706,107 @@ fn a_tool_turn_is_traced_round_by_round_with_its_calls_and_usage() {
     }
 }
 
+/// A read-only tool that takes `arguments` milliseconds.
+struct SlowReadTool;
+
+impl kura_core::Tool for SlowReadTool {
+    fn spec(&self) -> kura_llm::ToolSpec {
+        kura_llm::ToolSpec {
+            name: "slow_read".to_string(),
+            description: "a read-only test tool".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    fn parallel_safe(&self, _invocation: &kura_core::ToolInvocation) -> bool {
+        true
+    }
+
+    fn call<'a>(
+        &'a self,
+        invocation: &'a kura_core::ToolInvocation,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<kura_core::ToolOutput, kura_core::ToolError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        let ms: u64 = invocation.arguments.parse().unwrap_or(0);
+        let call_id = invocation.call_id.clone();
+        Box::pin(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+            Ok(kura_core::ToolOutput::ok(format!("read {call_id}")))
+        })
+    }
+}
+
+/// 2.6 end to end: read-only calls of one round overlap inside a real turn,
+/// each keeps its own span (closed when *it* ends, under the round that
+/// asked), and the next round sees the results in the order it asked.
+#[test]
+fn read_only_calls_of_one_round_overlap_with_a_span_each() {
+    let ask = |call_id: &str, ms: u64| kura_llm::ToolCall {
+        call_id: call_id.to_string(),
+        name: "slow_read".to_string(),
+        arguments: ms.to_string(),
+    };
+    let (provider, seen) = ScriptedProvider::new(vec![
+        ProviderResponse {
+            tool_calls: vec![ask("a", 400), ask("b", 10), ask("c", 300)],
+            finish_reason: "tool_calls".to_string(),
+            ..ProviderResponse::default()
+        },
+        answered("done"),
+    ]);
+    let mut registry = kura_core::ToolRegistry::new();
+    registry.register(Arc::new(SlowReadTool));
+    let mut svc = service(new_dispatcher(provider), None, None);
+    svc.set_tools(Arc::new(FixedTools(Arc::new(registry))));
+
+    let started = std::time::Instant::now();
+    let execution = svc
+        .query(
+            base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "read three things"),
+            &CancellationToken::new(),
+        )
+        .expect("query");
+    let elapsed = started.elapsed();
+    assert!(execution.exec_error.is_none());
+    // Serial would be 710ms of tool time alone.
+    assert!(
+        elapsed < std::time::Duration::from_millis(650),
+        "calls did not overlap: {elapsed:?}"
+    );
+
+    let trace = svc.traces().get(&execution.result.turn_id).expect("trace");
+    let calls = spans_of(&trace, "tool_call");
+    assert_eq!(calls.len(), 3);
+    let round = spans_of(&trace, "round")[0].span_id;
+    let duration = |name: &str| {
+        let span = calls
+            .iter()
+            .find(|s| s.attributes.get("callId").and_then(|v| v.as_str()) == Some(name))
+            .expect("span per call");
+        assert_eq!(span.status, kura_telemetry::trace::SpanStatus::Ok);
+        assert_eq!(span.parent_span_id, Some(round));
+        span.duration_ms.expect("closed")
+    };
+    assert!(
+        duration("b") < 200 && duration("a") >= 400,
+        "each span measures its own call"
+    );
+
+    let requests = seen.read();
+    let replayed: Vec<&str> = requests[1]
+        .messages
+        .iter()
+        .filter(|m| m.role == MessageRole::Tool)
+        .map(|m| m.tool_call_id.as_str())
+        .collect();
+    assert_eq!(replayed, ["a", "b", "c"]);
+}
+
 #[test]
 fn a_failed_tool_call_is_an_error_span_in_a_turn_that_still_answers() {
     let tool = Arc::new(RecordingTool {

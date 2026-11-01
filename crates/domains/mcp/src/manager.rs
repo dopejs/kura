@@ -686,6 +686,41 @@ impl Manager {
         self.inner.policy.as_ref()?.get_approval(approval_id.trim())
     }
 
+    /// Whether `authorize_tool` would allow this tool on this surface
+    /// outright — no approval to wait for, nothing blocked. Reads state only
+    /// (no approval raised, nothing persisted), so the agent loop can ask it
+    /// before deciding to run a call beside others. The answer can go stale
+    /// before the call: the call itself still goes through `authorize_tool`.
+    #[must_use]
+    pub fn runs_without_approval(
+        &self,
+        server_id: &str,
+        tool_name: &str,
+        runtime_surface: &str,
+    ) -> bool {
+        let guard = self.inner.state.read();
+        let (Some(server), Some(tool)) = (
+            guard.servers.get(server_id.trim()),
+            guard
+                .tools
+                .get(server_id.trim())
+                .and_then(|map| map.get(tool_name.trim())),
+        ) else {
+            return false;
+        };
+        let allowed = guard
+            .exposure
+            .get(server_id.trim())
+            .and_then(|map| map.get(tool_name.trim()))
+            .and_then(|map| map.get(runtime_surface.trim()))
+            .is_some_and(|rule| rule.active && rule.exposure_mode == ExposureMode::Allow);
+        allowed
+            && self
+                .build_tool_resource_locked(&guard, server, tool)
+                .effective_availability
+                == "available"
+    }
+
     pub fn authorize_tool(
         &self,
         server_id: &str,

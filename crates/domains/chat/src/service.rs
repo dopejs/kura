@@ -491,15 +491,17 @@ impl Service {
         };
         let mut session = kura_core::Session::new(provider, tools)
             .with_history(history)
-            .with_max_tool_rounds(self.max_tool_rounds);
+            .with_max_tool_rounds(self.max_tool_rounds)
+            .with_max_parallel_tool_calls(self.max_parallel_tool_calls);
         if let Some(instructions) = instructions {
             session = session.with_instructions(instructions);
         }
 
         let runtime = bridge_runtime()?;
-        // The loop runs calls one at a time, between rounds, and announces
-        // each; that is where a call's span opens and closes. A call belongs
-        // to the round that asked for it.
+        // The loop runs calls between rounds and announces each; that is
+        // where a call's span opens and closes. Parallel-safe calls overlap
+        // (2.6), so spans are keyed by call id and each closes when its own
+        // call ends. A call belongs to the round that asked for it.
         let mut tool_spans = std::collections::HashMap::new();
         let mut tool_calls = 0_u64;
         let mut emit = |event: kura_protocol::Event| match event.msg {

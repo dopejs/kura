@@ -332,6 +332,12 @@ pub struct Tool {
     /// publishes no schema.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub input_schema: serde_json::Value,
+    /// The server's `annotations.readOnlyHint`: the tool claims not to
+    /// change its environment. A hint from the user's own server, used only
+    /// to let the agent loop run such calls side by side (2.6); it never
+    /// relaxes authorization. Absent and false read the same.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only_hint: bool,
     pub discovery_status: DiscoveryStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_discovered_at: Option<DateTime<Utc>>,

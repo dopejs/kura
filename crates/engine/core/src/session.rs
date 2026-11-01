@@ -19,6 +19,11 @@ use crate::tools::ToolRegistry;
 /// a misbehaving model or tool loop from burning unbounded provider quota.
 const DEFAULT_MAX_TOOL_ROUNDS: usize = 16;
 
+/// Calls of one round that may run at once (agent-runtime-program.md 2.6).
+/// Bounded because each is a server process, a sandbox run or a provider
+/// request somewhere; 1 restores strictly serial execution.
+pub const DEFAULT_MAX_PARALLEL_TOOL_CALLS: usize = 4;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
     #[error("provider error: {0}")]
@@ -40,6 +45,7 @@ pub struct Session {
     provider: Arc<dyn ModelProvider>,
     tools: Arc<ToolRegistry>,
     max_tool_rounds: usize,
+    max_parallel_tool_calls: usize,
     event_seq: u64,
 }
 
@@ -52,6 +58,7 @@ impl Session {
             provider,
             tools,
             max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
+            max_parallel_tool_calls: DEFAULT_MAX_PARALLEL_TOOL_CALLS,
             event_seq: 0,
         }
     }
@@ -63,6 +70,13 @@ impl Session {
 
     pub fn with_max_tool_rounds(mut self, max_tool_rounds: usize) -> Self {
         self.max_tool_rounds = max_tool_rounds;
+        self
+    }
+
+    /// How many parallel-safe calls of one round may run at once; 0 and 1
+    /// both mean serial.
+    pub fn with_max_parallel_tool_calls(mut self, max: usize) -> Self {
+        self.max_parallel_tool_calls = max.max(1);
         self
     }
 
@@ -163,44 +177,95 @@ impl Session {
                 });
             }
 
-            for (call_id, name, arguments) in pending_calls {
+            self.run_calls(pending_calls, emit).await;
+        }
+    }
+
+    /// Runs one round's calls. Consecutive parallel-safe calls form a batch
+    /// that runs concurrently (bounded); any other call is a barrier that
+    /// runs alone, after everything before it and before everything after
+    /// it, so calls with side effects keep the order the model asked for.
+    /// Whatever ran concurrently, results enter the history in call order:
+    /// the model reads them back against the calls it made.
+    async fn run_calls(
+        &mut self,
+        calls: Vec<(String, String, String)>,
+        emit: &mut dyn FnMut(Event),
+    ) {
+        let invocations: Vec<ToolInvocation> = calls
+            .into_iter()
+            .map(|(call_id, name, arguments)| ToolInvocation {
+                call_id,
+                name,
+                arguments,
+            })
+            .collect();
+        // Decided for every call before any of them starts.
+        let parallel: Vec<bool> = invocations
+            .iter()
+            .map(|invocation| {
+                self.max_parallel_tool_calls > 1 && self.tools.parallel_safe(invocation)
+            })
+            .collect();
+
+        let mut outputs: Vec<Option<ToolOutput>> = Vec::new();
+        outputs.resize_with(invocations.len(), || None);
+        let mut start = 0;
+        while start < invocations.len() {
+            let end = if parallel[start] {
+                start + parallel[start..].iter().take_while(|safe| **safe).count()
+            } else {
+                start + 1
+            };
+            for invocation in &invocations[start..end] {
                 self.publish(
                     emit,
                     EventMsg::ToolCallBegin {
-                        call_id: call_id.clone(),
-                        name: name.clone(),
-                        arguments: arguments.clone(),
+                        call_id: invocation.call_id.clone(),
+                        name: invocation.name.clone(),
+                        arguments: invocation.arguments.clone(),
                     },
                 );
-                let invocation = ToolInvocation {
-                    call_id: call_id.clone(),
-                    name: name.clone(),
-                    arguments: arguments.clone(),
-                };
-                // Tool failures are reported to the model as output so it can
-                // recover; they do not abort the turn.
-                let output = match self.tools.invoke(&invocation).await {
-                    Ok(output) => output,
-                    Err(err) => ToolOutput::failed(err.to_string()),
-                };
+            }
+            let tools = self.tools.clone();
+            let mut running = futures::stream::iter(start..end)
+                .map(|index| {
+                    let tools = tools.clone();
+                    let invocation = &invocations[index];
+                    async move { (index, tools.invoke(invocation).await) }
+                })
+                .buffer_unordered(self.max_parallel_tool_calls);
+            // Each call's end is announced when it finishes, not when its
+            // batch does, so its span measures the call.
+            while let Some((index, result)) = running.next().await {
+                // Tool failures are reported to the model as output so it
+                // can recover; they do not abort the turn.
+                let output = result.unwrap_or_else(|err| ToolOutput::failed(err.to_string()));
                 self.publish(
                     emit,
                     EventMsg::ToolCallEnd {
-                        call_id: call_id.clone(),
+                        call_id: invocations[index].call_id.clone(),
                         output: output.content.clone(),
                         success: output.success,
                     },
                 );
-                self.history.push(ResponseItem::FunctionCall {
-                    call_id: call_id.clone(),
-                    name,
-                    arguments,
-                });
-                self.history.push(ResponseItem::FunctionCallOutput {
-                    call_id,
-                    output: output.content,
-                });
+                outputs[index] = Some(output);
             }
+            drop(running);
+            start = end;
+        }
+
+        for (invocation, output) in invocations.into_iter().zip(outputs) {
+            let output = output.unwrap_or_else(|| ToolOutput::failed("tool call did not run"));
+            self.history.push(ResponseItem::FunctionCall {
+                call_id: invocation.call_id.clone(),
+                name: invocation.name,
+                arguments: invocation.arguments,
+            });
+            self.history.push(ResponseItem::FunctionCallOutput {
+                call_id: invocation.call_id,
+                output: output.content,
+            });
         }
     }
 
@@ -446,5 +511,183 @@ mod tests {
             err,
             CoreError::Provider(ProviderError::Malformed(_))
         ));
+    }
+
+    /// A tool that sleeps `arguments` milliseconds and logs when it starts
+    /// and finishes, tracking how many of its calls overlap.
+    struct TimedTool {
+        name: &'static str,
+        parallel: bool,
+        log: Arc<Mutex<Vec<String>>>,
+        running: Arc<std::sync::atomic::AtomicUsize>,
+        peak: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl crate::tools::Tool for TimedTool {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: self.name.into(),
+                description: String::new(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        }
+
+        fn call<'a>(
+            &'a self,
+            invocation: &'a ToolInvocation,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, crate::tools::ToolError>> + Send + 'a>>
+        {
+            use std::sync::atomic::Ordering;
+            Box::pin(async move {
+                self.log
+                    .lock()
+                    .push(format!("start {}", invocation.call_id));
+                let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
+                self.peak.fetch_max(now, Ordering::SeqCst);
+                let ms: u64 = invocation.arguments.parse().unwrap_or(0);
+                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                self.running.fetch_sub(1, Ordering::SeqCst);
+                self.log.lock().push(format!("end {}", invocation.call_id));
+                Ok(ToolOutput::ok(format!("out {}", invocation.call_id)))
+            })
+        }
+
+        fn parallel_safe(&self, _invocation: &ToolInvocation) -> bool {
+            self.parallel
+        }
+    }
+
+    struct Timed {
+        log: Arc<Mutex<Vec<String>>>,
+        peak: Arc<std::sync::atomic::AtomicUsize>,
+        registry: Arc<ToolRegistry>,
+    }
+
+    fn timed_registry() -> Timed {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let running = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut registry = ToolRegistry::new();
+        for (name, parallel) in [("read", true), ("write", false)] {
+            registry.register(Arc::new(TimedTool {
+                name,
+                parallel,
+                log: log.clone(),
+                running: running.clone(),
+                peak: peak.clone(),
+            }));
+        }
+        Timed {
+            log,
+            peak,
+            registry: Arc::new(registry),
+        }
+    }
+
+    fn call(call_id: &str, name: &str, ms: u64) -> ResponseEvent {
+        ResponseEvent::FunctionCall {
+            call_id: call_id.into(),
+            name: name.into(),
+            arguments: ms.to_string(),
+        }
+    }
+
+    fn outputs_in_history(session: &Session) -> Vec<String> {
+        session
+            .history()
+            .iter()
+            .filter_map(|item| match item {
+                ResponseItem::FunctionCallOutput { output, .. } => Some(output.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn parallel_safe_calls_overlap_and_results_keep_call_order() {
+        let timed = timed_registry();
+        let provider = Arc::new(FakeProvider::with_rounds(vec![
+            vec![
+                call("a", "read", 150),
+                call("b", "read", 10),
+                call("c", "read", 80),
+            ],
+            vec![ResponseEvent::OutputTextDelta("done".into())],
+        ]));
+        let mut session = Session::new(provider, timed.registry.clone());
+        let (mut emit, seen) = collect_events();
+        session.run_turn("go", &mut emit).await.unwrap();
+
+        assert_eq!(timed.peak.load(std::sync::atomic::Ordering::SeqCst), 3);
+        // b finished first, but the model reads results in the order it asked.
+        assert_eq!(outputs_in_history(&session), ["out a", "out b", "out c"]);
+        // Each end is announced when that call finishes.
+        let ends: Vec<String> = seen
+            .lock()
+            .iter()
+            .filter_map(|msg| match msg {
+                EventMsg::ToolCallEnd { call_id, .. } => Some(call_id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ends, ["b", "c", "a"]);
+    }
+
+    #[tokio::test]
+    async fn a_call_with_side_effects_is_a_barrier_that_runs_alone_and_in_order() {
+        let timed = timed_registry();
+        let provider = Arc::new(FakeProvider::with_rounds(vec![
+            vec![
+                call("r1", "read", 30),
+                call("r2", "read", 5),
+                call("w", "write", 5),
+                call("r3", "read", 5),
+                call("r4", "read", 5),
+            ],
+            vec![ResponseEvent::OutputTextDelta("done".into())],
+        ]));
+        let mut session = Session::new(provider, timed.registry.clone());
+        let (mut emit, _) = collect_events();
+        session.run_turn("go", &mut emit).await.unwrap();
+
+        let log = timed.log.lock().clone();
+        let at = |entry: &str| log.iter().position(|e| e == entry).expect(entry);
+        assert!(
+            at("start w") > at("end r1") && at("start w") > at("end r2"),
+            "{log:?}"
+        );
+        assert!(
+            at("start r3") > at("end w") && at("start r4") > at("end w"),
+            "{log:?}"
+        );
+        assert!(
+            at("start r2") < at("end r1"),
+            "reads before the write overlap: {log:?}"
+        );
+        assert_eq!(
+            outputs_in_history(&session),
+            ["out r1", "out r2", "out w", "out r3", "out r4"]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_batch_is_bounded_and_one_means_serial() {
+        for (max, peak) in [(2, 2), (1, 1)] {
+            let timed = timed_registry();
+            let provider = Arc::new(FakeProvider::with_rounds(vec![
+                (0..5).map(|i| call(&format!("c{i}"), "read", 10)).collect(),
+                vec![ResponseEvent::OutputTextDelta("done".into())],
+            ]));
+            let mut session =
+                Session::new(provider, timed.registry.clone()).with_max_parallel_tool_calls(max);
+            let (mut emit, _) = collect_events();
+            session.run_turn("go", &mut emit).await.unwrap();
+            assert_eq!(
+                timed.peak.load(std::sync::atomic::Ordering::SeqCst),
+                peak,
+                "max {max}"
+            );
+            assert_eq!(outputs_in_history(&session).len(), 5);
+        }
     }
 }
