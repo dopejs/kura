@@ -210,6 +210,9 @@ pub struct Service {
     /// Whether tool-calling turns keep a checkpoint and a retry resumes
     /// from it. On by default; off is the rollback.
     pub(crate) turn_resume: bool,
+    /// Whether tool results reach the model framed as untrusted data
+    /// (2.8, G9). On by default; off is the rollback.
+    pub(crate) frame_tool_output: bool,
 }
 
 /// Rounds allowed in a single turn before the turn is failed.
@@ -260,6 +263,7 @@ impl Service {
             traces: Arc::new(kura_telemetry::trace::TraceStore::default()),
             running_turns: Arc::default(),
             turn_resume: true,
+            frame_tool_output: true,
         }
     }
 
@@ -296,6 +300,12 @@ impl Service {
     /// before; checkpoints already written are left to expire.
     pub fn set_turn_resume(&mut self, on: bool) {
         self.turn_resume = on;
+    }
+
+    /// Turns the untrusted framing of tool results on or off (2.8, G9).
+    /// Off, results reach the model exactly as the tool returned them.
+    pub fn set_frame_tool_output(&mut self, on: bool) {
+        self.frame_tool_output = on;
     }
 
     /// Attaches the plugin hook bus; the `chat/turn-start`,

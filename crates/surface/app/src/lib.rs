@@ -3859,7 +3859,11 @@ mod tool_host_tests {
             .expect("query");
         assert!(execution.exec_error.is_none(), "{:?}", execution.exec_error);
         let output = &execution.result.dispatch.output;
-        assert!(output.starts_with("final: [1] Memory[l1"), "{output}");
+        // The model reads the recall framed as tool data (2.8, G9).
+        assert!(
+            output.starts_with("final: <tool_output>\n[1] Memory[l1"),
+            "{output}"
+        );
         assert!(
             output.contains(&atom.asset_id) && output.contains("pnpm"),
             "{output}"

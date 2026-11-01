@@ -161,6 +161,19 @@ only a client that sends its own id ever resumes. `turnResume: false`
 `resumedRounds`/`replayedCalls`/`interruptedCalls`/`rerunCalls`. Streaming
 turns run no tools and keep none.
 
+Untrusted tool output (agent-runtime-program.md 2.8, G9): every tool result
+reaches the model enclosed in `<tool_output>…</tool_output>`
+(`chat/src/framing.rs`), and any dispatch that offers tools or carries a
+result has a fixed notice appended to its system message saying what is
+inside is data from wherever the tool reached, never instructions, and that
+a request found there is reported to the user rather than acted on. A result
+cannot close its own frame: `<tool_output` and `</tool_output` inside it, in
+any case, are escaped to `&lt;…`. Framing happens where the loop's history
+becomes dispatch messages, so the persisted dispatch is still exactly what
+the provider received. `toolOutputFraming: false` (`entries.chat.config`)
+sends results verbatim. This is posture, not a boundary: what stops a tool
+from doing harm is authorization and approval.
+
 A veto surfaces as `ChatError::HookVetoed` → HTTP 403 and is recorded as a
 `chat.hook.vetoed` event. `GET /v1/plugins` reports every hook registration
 (`hooks: [{point, pluginId}]`). Context already derives from persisted

@@ -2409,7 +2409,17 @@ fn the_second_round_shows_the_model_its_own_call_and_the_result() {
         .find(|m| m.role == MessageRole::Tool)
         .expect("the result must be replayed");
     assert_eq!(result.tool_call_id, "call_1");
-    assert_eq!(result.content, "{\"stage\":\"DISCOVERY\"}");
+    // Framed as data the tool returned (2.8, G9).
+    assert_eq!(
+        result.content,
+        "<tool_output>\n{\"stage\":\"DISCOVERY\"}\n</tool_output>"
+    );
+    let system = second
+        .messages
+        .iter()
+        .find(|m| m.role == MessageRole::System)
+        .expect("the notice rides on a system message");
+    assert!(system.content.contains("<tool_output>"));
 }
 
 #[test]

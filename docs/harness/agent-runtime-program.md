@@ -364,6 +364,14 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
       the model once more.
 - [ ] **2.8** Structured output (G7), steering a running turn (G8), and
       untrusted-content framing for tool output (G9).
+      *G9 done* (`toolOutputFraming`, default on; see plugin-architecture.md,
+      chat): results are enclosed in `<tool_output>` with their own tags
+      escaped, and the system message says the content is data. The 2.5
+      summary reads framed results and its prompt already reports
+      instructions in tool output as content. *Not covered:* memory
+      injected by the context hook is not framed, though L0 captures can
+      hold tool and web content; text a provider-side tool returns never
+      passes through this path.
 
 ## Stage 4 — Shared Hosting M4: Fairness and Scale
 

@@ -843,6 +843,9 @@ fn build_chat(asm: &mut Assembly) -> Result<(), AppError> {
     if config.turn_resume == Some(false) {
         chat.set_turn_resume(false);
     }
+    if config.tool_output_framing == Some(false) {
+        chat.set_frame_tool_output(false);
+    }
     asm.state.chat = Some(Arc::new(chat));
     Ok(())
 }
@@ -859,6 +862,9 @@ struct ChatPluginConfig {
     /// Checkpoint tool-calling turns so a retried request resumes from its
     /// last settled call (2.7); absent = on, `false` turns it off.
     turn_resume: Option<bool>,
+    /// Frame tool results as untrusted data for the model (2.8, G9);
+    /// absent = on, `false` turns it off.
+    tool_output_framing: Option<bool>,
 }
 
 /// The default context-assembly hook: injects the tenant's Ready L3/L2

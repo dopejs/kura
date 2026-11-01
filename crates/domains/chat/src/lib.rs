@@ -17,6 +17,7 @@
 mod cancel;
 mod error;
 mod events;
+mod framing;
 mod resume;
 mod round;
 mod service;
