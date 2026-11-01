@@ -982,11 +982,8 @@ async fn auth_me(
             auth::AuthError::AuthRequired.to_string(),
         ))
     })?;
-    state
-        .store
-        .lock()
-        .upsert_access_token(&token.0.0)
-        .map_err(ApiError::from_store)?;
+    // `protected` has already recorded the use (`touch_access_token`); a
+    // whole-row write here could restore a status revoked meanwhile.
     let Some(tenant_context) = tenant else {
         return Ok(Json(token.0.0).into_response());
     };

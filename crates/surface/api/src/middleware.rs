@@ -269,12 +269,17 @@ pub async fn protected(
         return Ok(next.run(req).await);
     };
 
-    let token = authenticate_request(auth, &req)?;
+    let authenticated = authenticate_request(auth, &req)?;
+    let token = authenticated.token;
 
-    // Go: persistAccessToken(r.Context(), store, token). The store owns the
-    // access-token table; failures surface as 500.
-    if let Err(e) = state.store.lock().upsert_access_token(&token) {
-        return Err(ApiError::from_store(e));
+    // Go: persistAccessToken(r.Context(), store, token), narrowed to the use
+    // record and to when it moved (`auth::LAST_USED_RESOLUTION`): a busy
+    // token is not a write per request on the single writer. Failures
+    // surface as 500.
+    if authenticated.touched {
+        if let Err(e) = state.store.lock().touch_access_token(&token) {
+            return Err(ApiError::from_store(e));
+        }
     }
 
     req.extensions_mut()
@@ -314,7 +319,7 @@ pub async fn protected(
 fn authenticate_request(
     auth: &kura_identity::auth::Manager,
     req: &Request,
-) -> Result<AccessToken, ApiError> {
+) -> Result<kura_identity::auth::Authenticated, ApiError> {
     let header = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -329,7 +334,7 @@ fn authenticate_request(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ApiError::Unauthorized(AuthError::TokenInvalid.to_string()))?;
-    let token = auth.authenticate(secret).map_err(|err| {
+    let token = auth.authenticate_touch(secret).map_err(|err| {
         // Go: token-expired requests additionally record a
         // tenant.access_denied audit event (reason_code=token_expired)
         // when the token identity is known. The Rust auth manager returns

@@ -163,6 +163,49 @@ fn access_token_and_authority_round_trip() {
 }
 
 #[test]
+fn touching_a_token_records_its_use_and_never_its_status() {
+    let dir = temp_dir("identity_token_touch");
+    let store = SQLiteStore::new(&dir).unwrap();
+
+    // A request authenticated with this snapshot while the token was active;
+    // the revocation then lands before the request records the use.
+    let snapshot = make_token();
+    let mut revoked = snapshot.clone();
+    revoked.status = TokenStatus::Revoked;
+    revoked.revoked_at = Some(Utc::now());
+    store.upsert_access_token(&revoked).unwrap();
+
+    let mut used = snapshot.clone();
+    let used_at = Utc::now();
+    used.last_used_at = Some(used_at);
+    used.updated_at = used_at;
+    store.touch_access_token(&used).unwrap();
+
+    let listed = store.list_access_tokens().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].status,
+        TokenStatus::Revoked,
+        "the revocation sticks"
+    );
+    assert!(listed[0].revoked_at.is_some());
+    assert_eq!(
+        listed[0].last_used_at.map(|at| at.timestamp_millis()),
+        Some(used_at.timestamp_millis())
+    );
+
+    // A token with no row yet is inserted whole.
+    let mut fresh = make_token();
+    fresh.token_id = "tok_2".to_string();
+    fresh.last_used_at = Some(used_at);
+    store.touch_access_token(&fresh).unwrap();
+    let listed = store.list_access_tokens().unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[1].token_id, "tok_2");
+    assert_eq!(listed[1].status, TokenStatus::Active);
+}
+
+#[test]
 fn tenant_round_trips_and_filters() {
     let dir = temp_dir("identity_tenant");
     let store = SQLiteStore::new(&dir).unwrap();

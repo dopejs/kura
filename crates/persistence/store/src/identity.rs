@@ -343,6 +343,46 @@ impl SQLiteStore {
         Ok(())
     }
 
+    /// Records a token's use: `last_used_at` and `updated_at` only. Unlike
+    /// [`Self::upsert_access_token`] it never writes status, so a request
+    /// that authenticated just before a revocation cannot put the revoked
+    /// row back to active. A token with no row yet is inserted whole.
+    pub fn touch_access_token(
+        &self,
+        token: &kura_identity::auth::AccessToken,
+    ) -> Result<(), String> {
+        self.conn
+            .execute(
+                r#"INSERT INTO auth_tokens (
+                    token_id, principal_id, label, mode, token_hash, token_preview, status,
+                    default_tenant_id, created_at, updated_at, last_used_at, expires_at,
+                    revoked_at, rotated_from_token_id, rotated_to_token_id
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                ON CONFLICT(token_id) DO UPDATE SET
+                    updated_at = excluded.updated_at,
+                    last_used_at = excluded.last_used_at"#,
+                params![
+                    token.token_id,
+                    null_string(&token.principal_id),
+                    token.label,
+                    enum_str(&token.mode),
+                    token.token_hash,
+                    token.token_preview,
+                    enum_str(&token.status),
+                    null_string(&token.default_tenant_id),
+                    now_rfc3339(&token.created_at),
+                    now_rfc3339(&token.updated_at),
+                    opt_time_string(&token.last_used_at),
+                    opt_time_string(&token.expires_at),
+                    opt_time_string(&token.revoked_at),
+                    null_string(&token.rotated_from_token_id),
+                    null_string(&token.rotated_to_token_id),
+                ],
+            )
+            .map_err(|e| format!("touch access token {}: {e}", token.token_id))?;
+        Ok(())
+    }
+
     pub fn list_access_tokens(&self) -> Result<Vec<kura_identity::auth::AccessToken>, String> {
         let mut stmt = self
             .conn

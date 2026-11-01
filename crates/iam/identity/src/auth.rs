@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use chrono::DateTime;
+use chrono::TimeDelta;
 use chrono::Utc;
 use parking_lot::RwLock;
 use serde::Deserialize;
@@ -170,12 +171,56 @@ pub struct RotateTokenInput {
     pub reason: String,
 }
 
+/// How stale `last_used_at` may get before an authentication refreshes it.
+/// The field answers "is this token still in use", so it is kept to this
+/// resolution: a busy token costs one write per interval, not one per
+/// request.
+pub const LAST_USED_RESOLUTION: TimeDelta = TimeDelta::seconds(60);
+
+/// A successful authentication. `touched` says `last_used_at` was advanced
+/// (see [`LAST_USED_RESOLUTION`]), which is when a caller persisting tokens
+/// has something to write.
+#[derive(Debug, Clone)]
+pub struct Authenticated {
+    pub token: AccessToken,
+    pub touched: bool,
+}
+
 #[derive(Debug, Default)]
 struct State {
     pairings: HashMap<String, Pairing>,
     pairing_ids: Vec<String>,
     tokens: HashMap<String, AccessToken>,
     token_ids: Vec<String>,
+    /// `token_hash` -> `token_id`, so authentication is one lookup rather
+    /// than a scan of every token. Maintained by [`State::put_token`], the
+    /// only way a token enters or changes in `tokens`.
+    by_hash: HashMap<String, String>,
+}
+
+impl State {
+    fn put_token(&mut self, token: AccessToken) {
+        match self.tokens.get(&token.token_id) {
+            Some(previous) if previous.token_hash != token.token_hash => {
+                if self.by_hash.get(&previous.token_hash) == Some(&token.token_id) {
+                    self.by_hash.remove(&previous.token_hash);
+                }
+            }
+            Some(_) => {}
+            None => self.token_ids.push(token.token_id.clone()),
+        }
+        if !token.token_hash.is_empty() {
+            self.by_hash
+                .insert(token.token_hash.clone(), token.token_id.clone());
+        }
+        self.tokens.insert(token.token_id.clone(), token);
+    }
+
+    fn token_by_hash(&self, token_hash: &str) -> Option<&AccessToken> {
+        self.by_hash
+            .get(token_hash)
+            .and_then(|token_id| self.tokens.get(token_id))
+    }
 }
 
 /// Identity stamped onto tokens issued by the pairing exchange.
@@ -295,8 +340,7 @@ impl Manager {
         state
             .pairings
             .insert(pairing_id.to_string(), pairing.clone());
-        state.tokens.insert(token.token_id.clone(), token.clone());
-        state.token_ids.push(token.token_id.clone());
+        state.put_token(token.clone());
 
         Ok((pairing, token, token_secret))
     }
@@ -327,9 +371,7 @@ impl Manager {
             rotated_to_token_id: String::new(),
         };
 
-        let mut state = self.state.write();
-        state.tokens.insert(token.token_id.clone(), token.clone());
-        state.token_ids.push(token.token_id.clone());
+        self.state.write().put_token(token.clone());
         Ok((token, token_secret))
     }
 
@@ -347,7 +389,7 @@ impl Manager {
         token.status = TokenStatus::Revoked;
         token.updated_at = now;
         token.revoked_at = Some(now);
-        state.tokens.insert(token_id.to_string(), token.clone());
+        state.put_token(token.clone());
         Ok(token)
     }
 
@@ -376,7 +418,7 @@ impl Manager {
         {
             old_token.status = TokenStatus::Expired;
             old_token.updated_at = now;
-            state.tokens.insert(token_id.to_string(), old_token);
+            state.put_token(old_token);
             return Err(AuthError::TokenExpired);
         }
 
@@ -401,53 +443,70 @@ impl Manager {
         old_token.status = TokenStatus::Rotated;
         old_token.updated_at = now;
         old_token.rotated_to_token_id = replacement.token_id.clone();
-        state
-            .tokens
-            .insert(old_token.token_id.clone(), old_token.clone());
-        state
-            .tokens
-            .insert(replacement.token_id.clone(), replacement.clone());
-        state.token_ids.push(replacement.token_id.clone());
+        state.put_token(old_token.clone());
+        state.put_token(replacement.clone());
         Ok((old_token, replacement, replacement_secret))
     }
 
-    /// Authenticates a plaintext token secret. Updates `last_used_at` on
-    /// success and lazily transitions overdue tokens to expired.
+    /// Authenticates a plaintext token secret. Advances `last_used_at` (to
+    /// [`LAST_USED_RESOLUTION`]) on success and lazily transitions overdue
+    /// tokens to expired.
     pub fn authenticate(&self, token_secret: &str) -> Result<AccessToken, AuthError> {
+        self.authenticate_touch(token_secret)
+            .map(|authenticated| authenticated.token)
+    }
+
+    /// [`Self::authenticate`], also saying whether `last_used_at` moved.
+    ///
+    /// A token in use within the resolution is answered under the read lock,
+    /// so concurrent requests do not queue on each other; only a refresh or
+    /// an expiry takes the write lock.
+    pub fn authenticate_touch(&self, token_secret: &str) -> Result<Authenticated, AuthError> {
         if token_secret.is_empty() {
             return Err(AuthError::AuthRequired);
         }
-
-        let mut state = self.state.write();
         let token_hash = hash_secret(token_secret);
-        let token_ids: Vec<String> = state.tokens.keys().cloned().collect();
-        for token_id in token_ids {
-            let Some(mut token) = state.tokens.get(&token_id).cloned() else {
-                continue;
-            };
-            if token.token_hash != token_hash {
-                continue;
+        let now = Utc::now();
+        {
+            let state = self.state.read();
+            let token = state
+                .token_by_hash(&token_hash)
+                .ok_or(AuthError::TokenInvalid)?;
+            usable(token)?;
+            if !overdue(token, now) && recently_used(token, now) {
+                return Ok(Authenticated {
+                    token: token.clone(),
+                    touched: false,
+                });
             }
-            match token.status {
-                TokenStatus::Active => {}
-                TokenStatus::Revoked => return Err(AuthError::TokenRevoked),
-                TokenStatus::Expired => return Err(AuthError::TokenExpired),
-                TokenStatus::Rotated => return Err(AuthError::TokenRotated),
-            }
-            let now = Utc::now();
-            if token.expires_at.is_some_and(|expires_at| expires_at <= now) {
-                token.status = TokenStatus::Expired;
-                token.updated_at = now;
-                state.tokens.insert(token_id.clone(), token);
-                return Err(AuthError::TokenExpired);
-            }
-            token.last_used_at = Some(now);
-            token.updated_at = now;
-            state.tokens.insert(token_id.clone(), token.clone());
-            return Ok(token);
         }
 
-        Err(AuthError::TokenInvalid)
+        let mut state = self.state.write();
+        // Read again: the token may have changed between the two locks.
+        let mut token = state
+            .token_by_hash(&token_hash)
+            .cloned()
+            .ok_or(AuthError::TokenInvalid)?;
+        usable(&token)?;
+        if overdue(&token, now) {
+            token.status = TokenStatus::Expired;
+            token.updated_at = now;
+            state.put_token(token);
+            return Err(AuthError::TokenExpired);
+        }
+        if recently_used(&token, now) {
+            return Ok(Authenticated {
+                token,
+                touched: false,
+            });
+        }
+        token.last_used_at = Some(now);
+        token.updated_at = now;
+        state.put_token(token.clone());
+        Ok(Authenticated {
+            token,
+            touched: true,
+        })
     }
 
     pub fn get_token(&self, token_id: &str) -> Option<AccessToken> {
@@ -455,11 +514,7 @@ impl Manager {
     }
 
     pub fn update_token(&self, token: AccessToken) {
-        let mut state = self.state.write();
-        if !state.tokens.contains_key(&token.token_id) {
-            state.token_ids.push(token.token_id.clone());
-        }
-        state.tokens.insert(token.token_id.clone(), token);
+        self.state.write().put_token(token);
     }
 
     pub fn list_tokens(&self) -> Vec<AccessToken> {
@@ -486,12 +541,33 @@ impl Manager {
             .into_iter()
             .map(|pairing| pairing.pairing_id)
             .collect();
-        state.tokens = tokens
-            .iter()
-            .map(|token| (token.token_id.clone(), token.clone()))
-            .collect();
-        state.token_ids = tokens.into_iter().map(|token| token.token_id).collect();
+        state.tokens.clear();
+        state.token_ids.clear();
+        state.by_hash.clear();
+        for token in tokens {
+            state.put_token(token);
+        }
     }
+}
+
+/// The status refusals, before any expiry check.
+fn usable(token: &AccessToken) -> Result<(), AuthError> {
+    match token.status {
+        TokenStatus::Active => Ok(()),
+        TokenStatus::Revoked => Err(AuthError::TokenRevoked),
+        TokenStatus::Expired => Err(AuthError::TokenExpired),
+        TokenStatus::Rotated => Err(AuthError::TokenRotated),
+    }
+}
+
+fn overdue(token: &AccessToken, now: DateTime<Utc>) -> bool {
+    token.expires_at.is_some_and(|expires_at| expires_at <= now)
+}
+
+fn recently_used(token: &AccessToken, now: DateTime<Utc>) -> bool {
+    token
+        .last_used_at
+        .is_some_and(|last_used_at| now - last_used_at < LAST_USED_RESOLUTION)
 }
 
 fn hash_secret(secret: &str) -> String {
@@ -534,6 +610,103 @@ mod tests {
         let authenticated = manager.authenticate(&token_secret).expect("authenticate");
         assert_eq!(authenticated.token_id, token.token_id);
         assert!(authenticated.last_used_at.is_some());
+    }
+
+    fn issued(manager: &Manager) -> (AccessToken, String) {
+        manager
+            .issue_token(IssueTokenInput {
+                principal_id: "prn_1".to_string(),
+                label: "cli".to_string(),
+                default_tenant_id: "tnt_1".to_string(),
+                expires_at: None,
+            })
+            .expect("issue token")
+    }
+
+    #[test]
+    fn last_used_moves_once_per_resolution() {
+        let manager = Manager::new();
+        let (token, secret) = issued(&manager);
+
+        let first = manager.authenticate_touch(&secret).expect("first use");
+        assert!(first.touched, "a token never used is recorded");
+        let second = manager.authenticate_touch(&secret).expect("second use");
+        assert!(!second.touched, "a use within the resolution is not");
+        assert_eq!(second.token.last_used_at, first.token.last_used_at);
+
+        let mut stale = manager.get_token(&token.token_id).expect("token");
+        stale.last_used_at = Some(Utc::now() - LAST_USED_RESOLUTION);
+        manager.update_token(stale);
+        let third = manager.authenticate_touch(&secret).expect("third use");
+        assert!(third.touched, "a use after the resolution is recorded");
+        assert!(third.token.last_used_at > first.token.last_used_at);
+    }
+
+    #[test]
+    fn a_recently_used_token_is_still_refused_once_revoked_or_overdue() {
+        let manager = Manager::new();
+        let (token, secret) = issued(&manager);
+        manager.authenticate(&secret).expect("use");
+
+        let mut overdue = manager.get_token(&token.token_id).expect("token");
+        overdue.expires_at = Some(Utc::now() - TimeDelta::seconds(1));
+        manager.update_token(overdue);
+        assert!(matches!(
+            manager.authenticate(&secret),
+            Err(AuthError::TokenExpired)
+        ));
+        assert_eq!(
+            manager.get_token(&token.token_id).expect("token").status,
+            TokenStatus::Expired
+        );
+
+        let (token, secret) = issued(&manager);
+        manager.authenticate(&secret).expect("use");
+        manager.revoke_token(&token.token_id).expect("revoke");
+        assert!(matches!(
+            manager.authenticate(&secret),
+            Err(AuthError::TokenRevoked)
+        ));
+    }
+
+    #[test]
+    fn the_hash_index_follows_rotation_replacement_and_restore() {
+        let manager = Manager::new();
+        let (token, secret) = issued(&manager);
+        let (_, replacement, replacement_secret) = manager
+            .rotate_token(&token.token_id, RotateTokenInput::default())
+            .expect("rotate");
+        assert!(matches!(
+            manager.authenticate(&secret),
+            Err(AuthError::TokenRotated)
+        ));
+        assert_eq!(
+            manager
+                .authenticate(&replacement_secret)
+                .expect("replacement")
+                .token_id,
+            replacement.token_id
+        );
+
+        // A token whose hash is replaced answers to the new secret only.
+        let mut rehashed = manager.get_token(&replacement.token_id).expect("token");
+        rehashed.token_hash = hash_secret("kura_other");
+        manager.update_token(rehashed);
+        assert!(matches!(
+            manager.authenticate(&replacement_secret),
+            Err(AuthError::TokenInvalid)
+        ));
+        assert!(manager.authenticate("kura_other").is_ok());
+
+        // Restore rebuilds the index from the persisted records alone.
+        let restored = Manager::new();
+        restored.restore(Vec::new(), manager.list_tokens());
+        assert!(restored.authenticate("kura_other").is_ok());
+        assert!(matches!(
+            restored.authenticate(&secret),
+            Err(AuthError::TokenRotated)
+        ));
+        assert_eq!(restored.list_tokens().len(), 2);
     }
 
     #[test]
