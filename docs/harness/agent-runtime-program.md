@@ -419,9 +419,42 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
       `KURA_STORE_READERS`, is the rollback). *Changed for clients:*
       `lastUsedAt` is accurate to a minute. *Not covered:* an expiry
       noticed during authentication is still not persisted (as before).
-- [ ] **4.3** Load test with parallel tools (2.6) and swarm enabled; the
+- [x] **4.3** Load test with parallel tools (2.6) and swarm enabled; the
       single writer connection is the expected bottleneck — measure via
       `kura_store_lock_wait_seconds` before changing it.
+      *Done 2026-11-01:* `crates/surface/app/tests/agent_load.rs` runs the
+      real assembly with bearer-token tenants, a local OpenAI-compatible
+      model (25 ms per answer) whose first round asks for three parallel
+      `memory.lookup` calls, and a three-goal swarm per tenant. It asserts
+      structure (every turn answers after its lookups, every child
+      completes, no write fails) and prints timings; CI runs 4×2×3.
+      `kura_store_lock_wait_seconds` turned out to see readers and
+      `pool.write()` only — ~95 handler writes lock `state.store`
+      directly and the manager-owned connections wait inside SQLite — so
+      two probes measure those instead: one acquiring the API writer mutex,
+      one writing on its own connection.
+      *Measured* (release build, this machine; model floor 50 ms a turn):
+
+      | Concurrent sessions | Turn p50 / p95 | Writer mutex p95 / max | Own-connection write p95 / max | Reader wait, total |
+      |---|---|---|---|---|
+      | 32 (160 turns, 552 tool calls) | 131 / 205 ms | 12 / 24 ms | 12 / 69 ms | 0.15 ms over 1288 reads |
+      | 128 (384 turns, 1296 tool calls) | 497 / 702 ms | 37 / 143 ms | 59 / 252 ms | 0.27 ms over 3024 reads |
+
+      The writer is the bottleneck, as expected: reads are free with the
+      pool, while write waits grow faster than the load (4× sessions, 3–4×
+      the tail), and a turn makes many writes. Not changed here; 4.1 sizes
+      admission from these numbers.
+      *Found on the way:* the chat service built a tokio runtime per call,
+      and a provider's pooled HTTP connections live on the runtime that
+      opened them, so a later turn could be handed a dead connection and
+      fail as `transport` ("runtime dropped the dispatch task"). It happened
+      on 5 of 24 turns at 8 sessions; against a real keep-alive provider it
+      would be intermittent. The bridge runtime is now one per process, like
+      the mcp and consolidator runtimes. Transport errors now carry their
+      causes; reqwest's own message stopped at "error sending request".
+      *Limit:* above ~128 simultaneous connects the fake model's listen
+      backlog (macOS `somaxconn` 128) resets connections; that is the
+      harness, not the daemon.
 - [x] **4.4** Collapse the per-route tenant helpers (H4) into one extractor.
       *Done 2026-11-01:* `middleware::ActingTenant` (infallible
       `FromRequestParts`) replaces the twelve per-family copies
