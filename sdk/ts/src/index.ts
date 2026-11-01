@@ -36,6 +36,19 @@ export type ModelRoleListResponse = {
   items: ModelRoleResource[];
 };
 
+/**
+ * The final reply must be a JSON value conforming to `schema`. The daemon
+ * accepts a subset of JSON Schema and answers 400 for anything else; a reply
+ * that still does not conform after one correction fails with 502. Not
+ * available on `streamChatQuery`.
+ */
+export type ChatResponseFormat = {
+  type: "json_schema";
+  /** 1-64 characters of A-Z, a-z, 0-9, _ or -. */
+  name: string;
+  schema: Record<string, unknown>;
+};
+
 export type ChatQueryInput = {
   provider?: string;
   model?: string;
@@ -47,6 +60,7 @@ export type ChatQueryInput = {
   continuity?: {
     mode?: "auto" | "disabled";
   };
+  responseFormat?: ChatResponseFormat;
 };
 
 export type ChatQueryResponse = {
@@ -81,6 +95,8 @@ export type ChatQueryResponse = {
   continuityStatus?: "applied" | "empty" | "disabled" | "blocked" | "partial" | "failed";
   continuityIncludedCount?: number;
   continuityExcludedCount?: number;
+  /** The reply parsed and validated against `responseFormat`; absent when none was asked for. */
+  structuredOutput?: unknown;
 };
 
 
@@ -5060,7 +5076,10 @@ function normalizeChatInput(input: ChatQueryInput): ChatQueryInput {
     timeoutMs: input.timeoutMs,
     maxRetries: input.maxRetries,
     threadId: input.threadId?.trim() || undefined,
-    continuity: input.continuity?.mode ? { mode: input.continuity.mode } : undefined
+    continuity: input.continuity?.mode ? { mode: input.continuity.mode } : undefined,
+    responseFormat: input.responseFormat
+      ? { type: input.responseFormat.type, name: input.responseFormat.name.trim(), schema: input.responseFormat.schema }
+      : undefined
   };
 }
 

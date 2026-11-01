@@ -398,6 +398,9 @@ pub struct ChatQueryResponse {
     pub continuity_included_count: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuity_excluded_count: Option<i64>,
+    /// The reply parsed and validated against the query's `responseFormat`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_output: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1642,6 +1645,7 @@ mod tests {
             continuity_status: "applied".to_string(),
             continuity_included_count: Some(2),
             continuity_excluded_count: None,
+            structured_output: None,
         };
         round_trip(&value);
         let json = serde_json::to_value(&value).expect("serialize");

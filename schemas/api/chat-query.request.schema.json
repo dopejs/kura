@@ -41,6 +41,25 @@
           "enum": ["auto", "disabled"]
         }
       }
+    },
+    "responseFormat": {
+      "type": "object",
+      "description": "The final reply must be a JSON value conforming to `schema`. Only a subset of JSON Schema is accepted (see agent-runtime-program.md 2.8); a schema using anything else is refused with 400. A reply that still does not conform after one correction fails with 502. Not available on the streamed query.",
+      "required": ["type", "name", "schema"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["json_schema"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "type": "object"
+        }
+      }
     }
   }
 }

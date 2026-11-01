@@ -1700,6 +1700,10 @@ fn query_input_round_trips_camel_case_wire() {
         run_id: "run_9".to_string(),
         // Not on the wire, so empty for the round trip to compare equal.
         request_id: String::new(),
+        response_format: Some(kura_llm::ResponseFormat {
+            name: "answer".to_string(),
+            schema: serde_json::json!({"type": "object"}),
+        }),
     };
     let json = serde_json::to_value(&input).expect("serialize");
     assert_eq!(json["query"], "hello");
@@ -1767,8 +1771,10 @@ fn query_result_round_trips_with_dispatch() {
         continuity_status: Some(ContinuityStatus::Applied),
         continuity_included_count: 1,
         continuity_excluded_count: 0,
+        structured_output: Some(serde_json::json!({"ok": true})),
     };
     let json = serde_json::to_value(&result).expect("serialize");
+    assert_eq!(json["structuredOutput"]["ok"], true);
     assert_eq!(json["continuityStatus"], "applied");
     assert_eq!(json["dispatch"]["status"], "completed");
     let back: QueryResult = serde_json::from_value(json).expect("deserialize");
@@ -3126,4 +3132,135 @@ fn with_resume_off_a_retry_runs_from_the_start() {
     }
     assert_eq!(fixture.calls.read().len(), 2);
     assert_eq!(fixture.store.inner.read().turn_checkpoint_writes, 0);
+}
+
+// ------------------------------------------------------------------------
+// Structured output (agent-runtime-program.md 2.8, G7).
+// ------------------------------------------------------------------------
+
+fn person_format() -> kura_llm::ResponseFormat {
+    kura_llm::ResponseFormat {
+        name: "person".to_string(),
+        schema: serde_json::json!({
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+            "required": ["name", "age"],
+            "additionalProperties": false
+        }),
+    }
+}
+
+fn structured_query(format: kura_llm::ResponseFormat) -> QueryInput {
+    let mut input = base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "who wrote it?");
+    input.response_format = Some(format);
+    input
+}
+
+#[test]
+fn a_conforming_reply_comes_back_parsed() {
+    let (provider, seen) = ScriptedProvider::new(vec![answered(
+        "```json\n{\"name\":\"Ada\",\"age\":36}\n```",
+    )]);
+    let svc = service(new_dispatcher(provider), None, None);
+
+    let execution = svc
+        .query(structured_query(person_format()), &CancellationToken::new())
+        .expect("query");
+
+    assert!(execution.exec_error.is_none());
+    assert_eq!(
+        execution.result.structured_output,
+        Some(serde_json::json!({"name": "Ada", "age": 36}))
+    );
+    // The model's own text is what the dispatch records.
+    assert!(execution.result.dispatch.output.starts_with("```json"));
+    let seen = seen.read();
+    assert_eq!(seen.len(), 1);
+    let system = &seen[0].messages[0];
+    assert_eq!(system.role, MessageRole::System);
+    assert!(
+        system.content.contains("named `person`"),
+        "{}",
+        system.content
+    );
+}
+
+#[test]
+fn a_reply_that_does_not_conform_is_corrected_once() {
+    let (provider, seen) = ScriptedProvider::new(vec![
+        answered("{\"name\":\"Ada\"}"),
+        answered("{\"name\":\"Ada\",\"age\":36}"),
+    ]);
+    let svc = service(new_dispatcher(provider), None, None);
+
+    let execution = svc
+        .query(structured_query(person_format()), &CancellationToken::new())
+        .expect("query");
+
+    assert_eq!(
+        execution.result.structured_output,
+        Some(serde_json::json!({"name": "Ada", "age": 36}))
+    );
+    let seen = seen.read();
+    assert_eq!(seen.len(), 2);
+    let feedback = seen[1].messages.last().expect("feedback");
+    assert_eq!(feedback.role, MessageRole::User);
+    assert!(
+        feedback.content.contains("missing required property `age`"),
+        "{}",
+        feedback.content
+    );
+}
+
+#[test]
+fn a_reply_that_still_does_not_conform_fails_the_query() {
+    let (provider, seen) = ScriptedProvider::new(vec![
+        answered("Ada, 36"),
+        answered("{\"name\":\"Ada\",\"age\":\"36\"}"),
+        answered("{\"name\":\"Ada\",\"age\":36}"),
+    ]);
+    let svc = service(new_dispatcher(provider), None, None);
+
+    let error = svc
+        .query(structured_query(person_format()), &CancellationToken::new())
+        .expect_err("rejected twice");
+
+    assert_eq!(error.code(), "structured_output_invalid");
+    assert!(
+        error.to_string().contains("$.age: expected integer"),
+        "{error}"
+    );
+    assert_eq!(seen.read().len(), 2, "corrected once, not again");
+}
+
+#[test]
+fn a_format_that_cannot_be_enforced_is_refused_before_anything_runs() {
+    let (provider, seen) = ScriptedProvider::new(vec![answered("{}")]);
+    let svc = service(new_dispatcher(provider), None, None);
+    let mut format = person_format();
+    format.schema = serde_json::json!({"type": "object", "if": {"required": ["a"]}});
+
+    let error = svc
+        .query(structured_query(format), &CancellationToken::new())
+        .expect_err("unsupported keyword");
+
+    assert_eq!(error.code(), "invalid_response_format");
+    assert!(seen.read().is_empty());
+}
+
+#[test]
+fn a_stream_refuses_a_response_format() {
+    let (provider, seen) = ScriptedProvider::new(vec![answered("{}")]);
+    let svc = service(new_dispatcher(provider), None, None);
+
+    let error = svc
+        .stream(
+            structured_query(person_format()),
+            &CancellationToken::new(),
+            Some(|_chunk: StreamChunk| Ok(())),
+        )
+        .expect_err("not on a stream");
+
+    assert_eq!(error.code(), "invalid_response_format");
+    assert!(seen.read().is_empty());
 }

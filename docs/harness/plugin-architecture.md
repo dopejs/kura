@@ -174,6 +174,25 @@ the provider received. `toolOutputFraming: false` (`entries.chat.config`)
 sends results verbatim. This is posture, not a boundary: what stops a tool
 from doing harm is authorization and approval.
 
+Structured output (agent-runtime-program.md 2.8, G7): `POST /v1/chat/query`
+takes `responseFormat: {type: "json_schema", name, schema}`. The schema is
+checked on arrival against the subset `kura_llm::ResponseFormat` can enforce
+(`crates/engine/llm/src/structured.rs`: `type`, `properties`, `required`,
+`additionalProperties`, `items`, `enum`, `const`, `anyOf`/`oneOf`/`allOf`,
+internal `$ref`/`$defs`, numeric and length bounds, `pattern`; annotations
+including `format` are allowed and not enforced); anything else is a 400
+(`invalid_response_format`), never a keyword silently skipped. Every round
+carries the schema in its system message, and the loop's final answer goes
+through `kura_core::AnswerCheck`: a reply that does not parse or conform is
+sent back once with the violations, as one more round of the same turn
+(it counts against `toolMaxRounds`); a second failure ends the turn with
+502 (`structured_output_invalid`). An accepted reply is returned parsed as
+`structuredOutput`; `reply` keeps the model's own text (a reply wrapped in a
+single code fence is accepted as its contents). Validation is bounded by
+nesting depth and a step budget, so a self-referential `anyOf` cannot make
+it run away. The streamed query refuses `responseFormat` with 400: it
+forwards text before it could be checked.
+
 A veto surfaces as `ChatError::HookVetoed` → HTTP 403 and is recorded as a
 `chat.hook.vetoed` event. `GET /v1/plugins` reports every hook registration
 (`hooks: [{point, pluginId}]`). Context already derives from persisted

@@ -57,6 +57,20 @@ pub struct ChatQueryRequest {
     pub thread_id: String,
     #[serde(default)]
     pub continuity: Option<ContinuityRequest>,
+    /// The reply must be JSON conforming to a schema (2.8, G7).
+    #[serde(default)]
+    pub response_format: Option<ResponseFormatRequest>,
+}
+
+/// `responseFormat` on the wire. `type` names the kind of constraint;
+/// `json_schema` is the only one.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResponseFormatRequest {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub name: String,
+    pub schema: serde_json::Value,
 }
 
 /// Go `chatQueryRequest.Continuity` (mode string).
@@ -98,6 +112,9 @@ pub async fn handle_chat_query(
         Ok(request) => request,
         Err(err) => return err.into_response(),
     };
+    if let Err(err) = check_response_format(&request, false) {
+        return err.into_response();
+    }
     let mut input =
         query_input_from_request(&request, tenant.as_ref().map(|extension| &extension.0));
     input.request_id = request_id(correlation.as_ref());
@@ -147,6 +164,9 @@ pub async fn handle_chat_query_stream(
         Ok(request) => request,
         Err(err) => return err.into_response(),
     };
+    if let Err(err) = check_response_format(&request, true) {
+        return err.into_response();
+    }
     let mut input =
         query_input_from_request(&request, tenant.as_ref().map(|extension| &extension.0));
     input.request_id = request_id(correlation.as_ref());
@@ -315,6 +335,28 @@ fn request_id(correlation: Option<&Extension<RequestContext>>) -> String {
 /// Maps the wire request onto `kura_chat::QueryInput`, trimming strings and
 /// taking the tenant id from the resolved `TenantContext` extension when
 /// present (Go `tenantContextFromContext`).
+/// What the wire shape alone can refuse about `responseFormat`; the
+/// schema itself is checked by the chat service.
+fn check_response_format(request: &ChatQueryRequest, streamed: bool) -> Result<(), ApiError> {
+    let Some(format) = &request.response_format else {
+        return Ok(());
+    };
+    if streamed {
+        // Refused before the stream opens, so it is a status, not a
+        // failure event on a stream that already said 200.
+        return Err(ApiError::BadRequest(
+            "responseFormat is not available on a streamed query; use /v1/chat/query".to_string(),
+        ));
+    }
+    if format.kind != "json_schema" {
+        return Err(ApiError::BadRequest(format!(
+            "responseFormat.type must be json_schema, not {:?}",
+            format.kind
+        )));
+    }
+    Ok(())
+}
+
 fn query_input_from_request(
     request: &ChatQueryRequest,
     tenant: Option<&TenantContext>,
@@ -338,6 +380,13 @@ fn query_input_from_request(
                 kura_threads::ContinuityMode::Auto
             }
         }),
+        response_format: request
+            .response_format
+            .as_ref()
+            .map(|format| kura_llm::ResponseFormat {
+                name: format.name.trim().to_string(),
+                schema: format.schema.clone(),
+            }),
         ..QueryInput::default()
     }
 }
@@ -371,6 +420,7 @@ fn build_chat_query_response(result: &QueryResult) -> ChatQueryResponse {
         continuity_status: String::new(),
         continuity_included_count: None,
         continuity_excluded_count: None,
+        structured_output: result.structured_output.clone(),
     };
     if !result.thread_id.is_empty() {
         response.thread_id = result.thread_id.clone();
@@ -423,6 +473,7 @@ fn continuity_status_str(status: Option<ContinuityStatus>) -> &'static str {
 fn llm_prepare_status_code(err: &ChatError) -> StatusCode {
     match err {
         ChatError::QueryRequired => StatusCode::BAD_REQUEST,
+        ChatError::InvalidResponseFormat(_) => StatusCode::BAD_REQUEST,
         ChatError::Prepare(_) => StatusCode::BAD_REQUEST,
         ChatError::Skills(message) if message.starts_with("skill not found") => {
             StatusCode::BAD_REQUEST
@@ -437,6 +488,10 @@ fn llm_prepare_status_code(err: &ChatError) -> StatusCode {
 fn llm_prepare_error(err: &ChatError) -> ApiError {
     if matches!(err, ChatError::HookVetoed { .. }) {
         return ApiError::Forbidden(err.to_string());
+    }
+    // The request was sound; the model's reply was not.
+    if matches!(err, ChatError::StructuredOutputInvalid(_)) {
+        return ApiError::BadGateway(err.to_string());
     }
     if llm_prepare_status_code(err) == StatusCode::BAD_REQUEST {
         ApiError::BadRequest(err.to_string())
@@ -606,6 +661,135 @@ mod tests {
             .expect("body");
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
         assert_eq!(json["error"], "chat service is not configured");
+    }
+
+    async fn post_query(body: &str, path: &str) -> (StatusCode, serde_json::Value) {
+        let app = crate::routes::router(state_with(Some(chat_service())));
+        let response = app
+            .oneshot(request("POST", path, Some(body)))
+            .await
+            .expect("oneshot");
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        (status, serde_json::from_slice(&bytes).unwrap_or_default())
+    }
+
+    fn structured_body(query: &str, kind: &str, schema: serde_json::Value) -> String {
+        serde_json::json!({
+            "provider": "echo",
+            "model": "echo-model",
+            "query": query,
+            "responseFormat": {"type": kind, "name": "point", "schema": schema},
+        })
+        .to_string()
+    }
+
+    fn point_schema() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {"x": {"type": "integer"}},
+            "required": ["x"]
+        })
+    }
+
+    /// Answers every request with the same text.
+    struct Fixed(&'static str);
+
+    impl kura_llm::Provider for Fixed {
+        fn name(&self) -> &str {
+            "fixed"
+        }
+
+        fn complete<'a>(
+            &'a self,
+            _request: kura_llm::ProviderRequest,
+        ) -> futures::future::BoxFuture<
+            'a,
+            Result<kura_llm::ProviderResponse, kura_llm::ProviderError>,
+        > {
+            let output = self.0.to_string();
+            Box::pin(async move {
+                Ok(kura_llm::ProviderResponse {
+                    output,
+                    finish_reason: "stop".to_string(),
+                    ..Default::default()
+                })
+            })
+        }
+
+        fn stream<'a>(
+            &'a self,
+            request: kura_llm::ProviderRequest,
+            _emit: kura_llm::StreamEmitter<'a>,
+        ) -> futures::future::BoxFuture<
+            'a,
+            Result<kura_llm::ProviderResponse, kura_llm::ProviderError>,
+        > {
+            self.complete(request)
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_query_returns_structured_output_for_a_conforming_reply() {
+        let dispatcher = Dispatcher::new();
+        dispatcher.register_provider(Arc::new(Fixed(r#"{"x": 3}"#)));
+        let chat = Arc::new(ChatService::new_service(
+            Arc::new(dispatcher),
+            None,
+            None,
+            Some(Bus::new()),
+            None,
+        ));
+        let app = crate::routes::router(state_with(Some(chat)));
+        let body = structured_body("where?", "json_schema", point_schema())
+            .replace("\"echo\"", "\"fixed\"");
+        let response = app
+            .oneshot(request("POST", "/v1/chat/query", Some(&body)))
+            .await
+            .expect("oneshot");
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["structuredOutput"], serde_json::json!({"x": 3}));
+        assert_eq!(json["reply"], r#"{"x": 3}"#);
+    }
+
+    #[tokio::test]
+    async fn chat_query_answers_502_when_the_reply_never_conforms() {
+        let (status, json) = post_query(
+            &structured_body("not json", "json_schema", point_schema()),
+            "/v1/chat/query",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{json}");
+        assert_eq!(json["code"], "bad_gateway");
+        assert!(json.get("structuredOutput").is_none());
+    }
+
+    #[tokio::test]
+    async fn chat_query_refuses_a_response_format_it_cannot_enforce() {
+        for (body, path) in [
+            (
+                structured_body("{}", "json_schema", serde_json::json!({"not": {}})),
+                "/v1/chat/query",
+            ),
+            (
+                structured_body("{}", "json_object", point_schema()),
+                "/v1/chat/query",
+            ),
+            (
+                structured_body("{}", "json_schema", point_schema()),
+                "/v1/chat/query/stream",
+            ),
+        ] {
+            let (status, json) = post_query(&body, path).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{path} {body}: {json}");
+        }
     }
 
     #[tokio::test]

@@ -25,6 +25,9 @@ pub enum ApiError {
     Unprocessable(String),
     #[error("{0}")]
     Internal(String),
+    /// An upstream (a model) answered with something unusable.
+    #[error("{0}")]
+    BadGateway(String),
     #[error("tenant migration in progress")]
     TenantMigrationInProgress,
 }
@@ -40,6 +43,7 @@ impl ApiError {
             Self::Conflict(_) => "conflict",
             Self::Unprocessable(_) => "unprocessable_entity",
             Self::Internal(_) => "internal",
+            Self::BadGateway(_) => "bad_gateway",
             Self::TenantMigrationInProgress => CODE_TENANT_MIGRATION_IN_PROGRESS,
         }
     }
@@ -54,6 +58,7 @@ impl ApiError {
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::BadGateway(_) => StatusCode::BAD_GATEWAY,
             Self::TenantMigrationInProgress => StatusCode::SERVICE_UNAVAILABLE,
         }
     }

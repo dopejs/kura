@@ -86,6 +86,11 @@ impl Service {
         trace: &TurnRecorder,
     ) -> Result<QueryExecution, ChatError> {
         self.ensure_configured()?;
+        // Refused before anything runs: a format that cannot be enforced
+        // would be a reply that is silently unchecked.
+        if let Some(format) = &input.response_format {
+            format.check().map_err(ChatError::InvalidResponseFormat)?;
+        }
         let mut input = input;
         self.run_turn_start_hooks(&mut input)?;
 
@@ -206,11 +211,18 @@ impl Service {
             }
         }
 
+        // The loop accepted this reply against the format; parsed again
+        // here because the loop hands back text.
+        let structured_output = match (&input.response_format, &exec_error_message) {
+            (Some(format), None) => format.accept(&final_dispatch.output).ok(),
+            _ => None,
+        };
         let mut result = QueryResult {
             query: input.query.trim().to_string(),
             skills: selected_skill_ids_from_skills(&selected_skills),
             skill_contracts: selected_skill_contracts(&selected_skills),
             dispatch: final_dispatch,
+            structured_output,
             ..QueryResult::default()
         };
         apply_continuity_result(&mut result, &continuity);
@@ -246,6 +258,13 @@ impl Service {
         E: FnMut(StreamChunk) -> Result<(), ChatError> + Send,
     {
         self.ensure_configured()?;
+        if input.response_format.is_some() {
+            // Deltas are forwarded as they arrive, before the reply could be
+            // checked; a stream cannot take back what it sent.
+            return Err(ChatError::InvalidResponseFormat(
+                "structured output is not available on a streamed query".to_string(),
+            ));
+        }
         let mut input = input;
         self.run_turn_start_hooks(&mut input)?;
 
@@ -527,6 +546,9 @@ impl Service {
             }
             None => kura_core::TurnCheckpoint::default(),
         };
+        if let Some(format) = &input.response_format {
+            session = session.with_answer_check(Arc::new(StructuredAnswer(format.clone())));
+        }
 
         let runtime = bridge_runtime()?;
         // The loop runs calls between rounds and announces each; that is
@@ -591,6 +613,9 @@ impl Service {
                 Ok(_) => ChatError::Provider("the turn produced no dispatch".to_string()),
             });
         };
+        if let Err(kura_core::CoreError::AnswerRejected(reason)) = outcome {
+            return Err(ChatError::StructuredOutputInvalid(reason));
+        }
         // A round cap reached is a turn that never finished. Answering with
         // the last text would present it as one that did.
         if let Err(error) = outcome {
@@ -2017,6 +2042,21 @@ pub fn handoff_reference_continuity_reason(reference: &HandoffSourceReference) -
 /// provider was first dispatched here: the built-in `echo` and the managed CLI
 /// providers do no socket work, so every test passed while any real endpoint
 /// would panic on its first connection.
+/// A reply must parse and conform to the query's response format (2.8, G7).
+struct StructuredAnswer(kura_llm::ResponseFormat);
+
+impl kura_core::AnswerCheck for StructuredAnswer {
+    fn check(&self, answer: &str) -> Result<(), kura_core::AnswerRejection> {
+        self.0
+            .accept(answer)
+            .map(|_| ())
+            .map_err(|errors| kura_core::AnswerRejection {
+                reason: errors.join("; "),
+                feedback: kura_llm::repair_prompt(&errors),
+            })
+    }
+}
+
 fn bridge_runtime() -> Result<tokio::runtime::Runtime, ChatError> {
     tokio::runtime::Builder::new_current_thread()
         .enable_io()

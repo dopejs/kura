@@ -364,6 +364,16 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
       the model once more.
 - [ ] **2.8** Structured output (G7), steering a running turn (G8), and
       untrusted-content framing for tool output (G9).
+      *G7 provider-agnostic path done* (see plugin-architecture.md, chat):
+      `responseFormat` on the non-streamed query, schema checked on arrival
+      against an enforceable subset, schema in the system message, the
+      final answer validated in the daemon with one correction round, and
+      `structuredOutput` returned parsed. *Next:* pass the schema natively
+      to providers that take one (OpenAI-compatible `response_format`,
+      Responses `text.format`), falling back when an endpoint refuses it;
+      validation stays in the daemon either way. *Not covered:* streamed
+      queries; the format is not recorded on the persisted dispatch, only
+      in its system message.
       *G9 done* (`toolOutputFraming`, default on; see plugin-architecture.md,
       chat): results are enclosed in `<tool_output>` with their own tags
       escaped, and the system message says the content is data. The 2.5

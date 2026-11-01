@@ -4,10 +4,12 @@
 //! tool calls, emits `kura_protocol::Event`s, and owns conversation history.
 //! It has no HTTP, filesystem, or sandbox knowledge of its own.
 
+mod answer;
 mod checkpoint;
 mod session;
 mod tools;
 
+pub use answer::{AnswerCheck, AnswerRejection};
 pub use checkpoint::{
     CallState, CheckpointCall, CheckpointRound, INTERRUPTED_CALL_OUTPUT, ResumeStats,
     TurnCheckpoint, TurnJournal,

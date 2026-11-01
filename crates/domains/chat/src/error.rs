@@ -73,6 +73,13 @@ pub enum ChatError {
     /// back (e.g. non-message objects in `messages`).
     #[error("hook payload invalid at {point}: {reason}")]
     HookPayload { point: String, reason: String },
+    /// The query's response format cannot be enforced (2.8, G7).
+    #[error("invalid response format: {0}")]
+    InvalidResponseFormat(String),
+    /// The model's reply did not conform to the response format, again
+    /// after being asked to correct it.
+    #[error("the reply does not conform to the response format: {0}")]
+    StructuredOutputInvalid(String),
 }
 
 impl ChatError {
@@ -96,6 +103,8 @@ impl ChatError {
             ChatError::Runtime(_) => "runtime",
             ChatError::HookVetoed { .. } => "hook_vetoed",
             ChatError::HookPayload { .. } => "hook_payload",
+            ChatError::InvalidResponseFormat(_) => "invalid_response_format",
+            ChatError::StructuredOutputInvalid(_) => "structured_output_invalid",
         }
     }
 

@@ -87,6 +87,10 @@ fn test_request_schemas_accept_canonical_fixtures() {
             r##"{"provider":"echo","model":"echo-v1","skills":["shared"],"query":"hello","timeoutMs":1000,"maxRetries":1}"##,
         ),
         (
+            r##"schemas/api/chat-query.request.schema.json"##,
+            r##"{"query":"who wrote it?","responseFormat":{"type":"json_schema","name":"person","schema":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}}"##,
+        ),
+        (
             r##"schemas/api/run-provider-check.request.schema.json"##,
             r##"{"model":"echo-v1","prompt":"hello"}"##,
         ),
@@ -284,6 +288,21 @@ fn test_validator_rejects_invalid_request_fixture() {
         r##"{"goal":"missing entrypoint"}"##.as_bytes(),
     );
     assert!(err.is_err(), "expected fixture to fail schema validation");
+}
+
+#[test]
+fn test_chat_query_request_rejects_an_unknown_response_format_type() {
+    let validator = Validator::new(schema_root_dir());
+    for fixture in [
+        r##"{"query":"q","responseFormat":{"type":"json_object","name":"a","schema":{}}}"##,
+        r##"{"query":"q","responseFormat":{"type":"json_schema","schema":{}}}"##,
+    ] {
+        let err = validator.validate_relative(
+            r##"schemas/api/chat-query.request.schema.json"##,
+            fixture.as_bytes(),
+        );
+        assert!(err.is_err(), "expected {fixture} to fail schema validation");
+    }
 }
 
 #[test]
@@ -699,6 +718,10 @@ fn test_turn_trace_schemas_accept_a_traced_tool_turn() {
         (
             r##"schemas/api/chat-query.response.schema.json"##,
             r##"{"turnId":"turn_1","dispatchId":"dispatch_2","provider":"openai_compatible","model":"gpt-test","skills":[],"query":"hello","status":"completed","partial":false,"reply":"hi","usage":{"inputTokens":10,"outputTokens":4,"totalTokens":14}}"##,
+        ),
+        (
+            r##"schemas/api/chat-query.response.schema.json"##,
+            r##"{"dispatchId":"dispatch_3","provider":"openai_compatible","model":"gpt-test","skills":[],"query":"who wrote it?","status":"completed","partial":false,"reply":"{\"name\":\"Ada\"}","usage":{"inputTokens":10,"outputTokens":4,"totalTokens":14},"structuredOutput":{"name":"Ada"}}"##,
         ),
         (
             r##"schemas/api/turn-trace-resource.schema.json"##,

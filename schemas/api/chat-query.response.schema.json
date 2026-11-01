@@ -52,6 +52,9 @@
     "reply": {
       "type": "string"
     },
+    "structuredOutput": {
+      "description": "The reply parsed and validated against the request's responseFormat; absent when the request had none."
+    },
     "finishReason": {
       "type": "string"
     },

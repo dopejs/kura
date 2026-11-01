@@ -9,6 +9,7 @@ mod credential;
 mod dispatcher;
 mod echo;
 mod provider;
+mod structured;
 mod types;
 
 pub use credential::{ApiKey, CredentialDecision, CredentialPolicy};
@@ -22,6 +23,7 @@ pub use provider::{
 // (`CreateDispatchInput::tools`): a consumer should not have to take a second
 // dependency to name a type this one hands it.
 pub use kura_protocol::ToolSpec;
+pub use structured::{MAX_SCHEMA_BYTES, ResponseFormat, repair_prompt, validate};
 pub use types::{
     CreateDispatchInput, Dispatch, DispatchStatus, Message, MessageRole, StreamChunk, Usage,
 };

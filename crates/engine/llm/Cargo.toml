@@ -10,6 +10,7 @@ kura-protocol.workspace = true
 kura-telemetry.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+regex.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
 uuid = { workspace = true, features = ["v4"] }

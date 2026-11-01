@@ -11,6 +11,7 @@ use kura_protocol::ResponseItem;
 use kura_protocol::Role;
 use kura_protocol::ThreadId;
 
+use crate::answer::AnswerCheck;
 use crate::checkpoint::{
     CallState, CheckpointCall, CheckpointRound, INTERRUPTED_CALL_OUTPUT, ResumeStats,
     TurnCheckpoint, TurnJournal,
@@ -34,6 +35,10 @@ pub enum CoreError {
     Provider(#[from] ProviderError),
     #[error("exceeded {0} tool rounds in one turn")]
     MaxToolRounds(usize),
+    /// The final answer failed the turn's [`AnswerCheck`], again after
+    /// being asked to correct it.
+    #[error("the answer was rejected: {0}")]
+    AnswerRejected(String),
 }
 
 #[derive(Debug)]
@@ -55,6 +60,7 @@ pub struct Session {
     checkpoint: TurnCheckpoint,
     journal: Option<Arc<dyn TurnJournal>>,
     resumed: ResumeStats,
+    answer_check: Option<Arc<dyn AnswerCheck>>,
 }
 
 impl Session {
@@ -71,6 +77,7 @@ impl Session {
             checkpoint: TurnCheckpoint::default(),
             journal: None,
             resumed: ResumeStats::default(),
+            answer_check: None,
         }
     }
 
@@ -107,6 +114,14 @@ impl Session {
     #[must_use]
     pub fn with_journal(mut self, journal: Arc<dyn TurnJournal>) -> Self {
         self.journal = Some(journal);
+        self
+    }
+
+    /// Judge the final answer; one rejected answer is sent back with the
+    /// check's feedback and answered again, as a round of the same turn.
+    #[must_use]
+    pub fn with_answer_check(mut self, check: Arc<dyn AnswerCheck>) -> Self {
+        self.answer_check = Some(check);
         self
     }
 
@@ -158,6 +173,7 @@ impl Session {
         self.checkpoint = TurnCheckpoint::default();
         self.resumed = ResumeStats::default();
         let mut rounds = 0;
+        let mut repaired = false;
         for round in checkpoint.rounds {
             rounds += 1;
             self.resumed.rounds += 1;
@@ -208,6 +224,34 @@ impl Session {
             }
 
             if pending_calls.is_empty() {
+                if let Some(check) = self.answer_check.clone() {
+                    if let Err(rejection) = check.check(&text) {
+                        if repaired {
+                            self.publish(
+                                emit,
+                                EventMsg::Error {
+                                    message: rejection.reason.clone(),
+                                },
+                            );
+                            break Err(CoreError::AnswerRejected(rejection.reason));
+                        }
+                        // Once. The model sees what it said and why it was
+                        // not accepted; the retry is a round like any other
+                        // and counts against the cap.
+                        repaired = true;
+                        if !text.is_empty() {
+                            self.history.push(ResponseItem::Message {
+                                role: Role::Assistant,
+                                content: text,
+                            });
+                        }
+                        self.history.push(ResponseItem::Message {
+                            role: Role::User,
+                            content: rejection.feedback,
+                        });
+                        continue;
+                    }
+                }
                 if !text.is_empty() {
                     self.history.push(ResponseItem::Message {
                         role: Role::Assistant,
@@ -1011,5 +1055,74 @@ mod tests {
         );
         let back: TurnCheckpoint = serde_json::from_value(json).unwrap();
         assert_eq!(back, checkpoint);
+    }
+
+    /// Accepts only answers that are a number.
+    struct Numeric;
+
+    impl AnswerCheck for Numeric {
+        fn check(&self, answer: &str) -> Result<(), crate::answer::AnswerRejection> {
+            answer
+                .trim()
+                .parse::<f64>()
+                .map(|_| ())
+                .map_err(|_| crate::answer::AnswerRejection {
+                    reason: format!("not a number: {answer}"),
+                    feedback: "answer with a number".into(),
+                })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rejected_answer_is_sent_back_once_and_the_retry_is_the_answer() {
+        let provider = Arc::new(FakeProvider::with_rounds(vec![
+            vec![ResponseEvent::OutputTextDelta("about four".into())],
+            vec![ResponseEvent::OutputTextDelta("4".into())],
+        ]));
+        let mut session = Session::new(provider.clone(), Arc::new(ToolRegistry::new()))
+            .with_answer_check(Arc::new(Numeric));
+        let (mut emit, _) = collect_events();
+        let outcome = session.run_turn("2+2?", &mut emit).await.unwrap();
+
+        assert_eq!(outcome.final_message.as_deref(), Some("4"));
+        let prompts = provider.prompts.lock();
+        assert_eq!(prompts.len(), 2);
+        let retry = &prompts[1].input;
+        assert_eq!(
+            retry[retry.len() - 2..],
+            [
+                ResponseItem::Message {
+                    role: Role::Assistant,
+                    content: "about four".into(),
+                },
+                ResponseItem::Message {
+                    role: Role::User,
+                    content: "answer with a number".into(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_rejection_fails_the_turn() {
+        let provider = Arc::new(FakeProvider::with_rounds(vec![
+            vec![ResponseEvent::OutputTextDelta("four".into())],
+            vec![ResponseEvent::OutputTextDelta("still four".into())],
+            vec![ResponseEvent::OutputTextDelta("4".into())],
+        ]));
+        let mut session = Session::new(provider.clone(), Arc::new(ToolRegistry::new()))
+            .with_answer_check(Arc::new(Numeric));
+        let (mut emit, seen) = collect_events();
+        let err = session.run_turn("2+2?", &mut emit).await.unwrap_err();
+
+        assert!(
+            matches!(err, CoreError::AnswerRejected(reason) if reason == "not a number: still four")
+        );
+        assert_eq!(provider.prompts.lock().len(), 2);
+        assert!(
+            seen.lock()
+                .iter()
+                .any(|msg| matches!(msg, EventMsg::Error { .. }))
+        );
     }
 }

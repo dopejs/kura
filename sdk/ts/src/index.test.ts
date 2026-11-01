@@ -288,6 +288,36 @@ describe("KuraClient", () => {
     expect(response.skills).toEqual(["shared"]);
   });
 
+  it("sends a response format and returns the structured output", async () => {
+    let body: Record<string, unknown> = {};
+    const client = createKuraClient({
+      baseURL: "http://127.0.0.1:19192",
+      fetchImpl: async (_input: string | URL | Request, init?: RequestInit) => {
+        body = JSON.parse(String(init?.body));
+        return mockJSONResponse(200, {
+          dispatchId: "dispatch_1",
+          provider: "openai_compatible",
+          model: "gpt-test",
+          skills: [],
+          query: "who?",
+          status: "completed",
+          partial: false,
+          reply: "{\"name\":\"Ada\"}",
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          structuredOutput: { name: "Ada" }
+        });
+      }
+    });
+
+    const schema = { type: "object", properties: { name: { type: "string" } }, required: ["name"] };
+    const response = await client.queryChat({
+      query: "who?",
+      responseFormat: { type: "json_schema", name: " person ", schema }
+    });
+    expect(body.responseFormat).toEqual({ type: "json_schema", name: "person", schema });
+    expect(response.structuredOutput).toEqual({ name: "Ada" });
+  });
+
   it("loads operator surfaces, approvals, details, and run creation with normalized URLs", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()

@@ -64,6 +64,9 @@ pub struct QueryInput {
     /// turn's trace; empty for work with no request. Not part of the wire.
     #[serde(skip)]
     pub request_id: String,
+    /// The final reply must be JSON conforming to this schema (2.8, G7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<kura_llm::ResponseFormat>,
 }
 
 /// Go `chat.QueryResult`. `continuity_status` is `None` when continuity was
@@ -98,6 +101,10 @@ pub struct QueryResult {
     pub continuity_included_count: i64,
     #[serde(default)]
     pub continuity_excluded_count: i64,
+    /// The reply parsed and validated against the query's response format;
+    /// absent when the query asked for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_output: Option<serde_json::Value>,
 }
 
 /// Go `chat.StreamChunk` forwarded to the stream emitter.
