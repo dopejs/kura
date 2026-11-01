@@ -589,8 +589,10 @@ impl Manager {
             model: resolved.model.clone(),
             messages: input.messages.clone(),
             // Resolution picks a provider and model; it does not decide what
-            // the caller is offering the model, so the tools pass through.
+            // the caller is offering the model or the shape its reply must
+            // take, so the tools and the format pass through.
             tools: input.tools.clone(),
+            response_format: input.response_format.clone(),
             timeout_ms: resolved.timeout_ms,
             max_retries: resolved.max_retries,
         };
@@ -654,6 +656,7 @@ impl Manager {
         };
 
         let dispatch_input = CreateDispatchInput {
+            response_format: None,
             provider: resolved.provider_id.clone(),
             model: resolved.model.clone(),
             messages: vec![Message {

@@ -368,12 +368,15 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
       `responseFormat` on the non-streamed query, schema checked on arrival
       against an enforceable subset, schema in the system message, the
       final answer validated in the daemon with one correction round, and
-      `structuredOutput` returned parsed. *Next:* pass the schema natively
-      to providers that take one (OpenAI-compatible `response_format`,
-      Responses `text.format`), falling back when an endpoint refuses it;
-      validation stays in the daemon either way. *Not covered:* streamed
-      queries; the format is not recorded on the persisted dispatch, only
-      in its system message.
+      `structuredOutput` returned parsed. *Native path done:* the schema
+      also goes to the OpenAI-compatible wire as `response_format`
+      (`json_schema`, not strict; only on rounds offering no tools) and to
+      the Responses wire as `text.format` (with tools); a 400 naming the
+      field drops it for the life of the client. Validation stays in the
+      daemon either way. *Not covered:* streamed queries; Anthropic's
+      native structured output; the format is not recorded on the
+      persisted dispatch, only in its system message; the native-format
+      fallback is not logged or counted.
       *G9 done* (`toolOutputFraming`, default on; see plugin-architecture.md,
       chat): results are enclosed in `<tool_output>` with their own tags
       escaped, and the system message says the content is data. The 2.5

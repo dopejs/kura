@@ -2,6 +2,7 @@
 //! of `daemon/internal/llm/dispatcher.go`.
 
 use crate::provider::ToolCall;
+use crate::structured::ResponseFormat;
 use chrono::{DateTime, Utc};
 use kura_protocol::ToolSpec;
 use serde::{Deserialize, Serialize};
@@ -99,6 +100,12 @@ pub struct Dispatch {
     /// or a turn that called a tool cannot be explained afterwards.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolSpec>,
+    /// The shape the reply must take, for a provider that can be told so
+    /// natively. Not serialized and not persisted: the same schema is in the
+    /// system message, which is, so the record already shows what the model
+    /// was asked for. A provider that cannot take it ignores it.
+    #[serde(skip)]
+    pub response_format: Option<ResponseFormat>,
     pub stream: bool,
     pub status: DispatchStatus,
     pub output: String,
@@ -148,6 +155,10 @@ pub struct CreateDispatchInput {
     /// round is prepared, persisted and hooked like any other dispatch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolSpec>,
+    /// The shape the reply must take (see [`Dispatch::response_format`]).
+    /// Set by the daemon's own callers; never read from a request body.
+    #[serde(skip)]
+    pub response_format: Option<ResponseFormat>,
     pub timeout_ms: i64,
     pub max_retries: i64,
 }
@@ -251,6 +262,7 @@ mod tests {
         let dispatch = Dispatch {
             tenant_id: String::new(),
             tools: Vec::new(),
+            response_format: None,
             tool_calls: Vec::new(),
             dispatch_id: "d-1".into(),
             provider: "echo".into(),

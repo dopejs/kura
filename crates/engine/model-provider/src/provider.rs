@@ -8,12 +8,16 @@ use serde::Deserialize;
 use serde::Serialize;
 
 /// Everything needed for one model invocation: instructions, conversation
-/// history, and the tools the model may call.
+/// history, the tools the model may call, and the shape its reply must take.
 #[derive(Debug, Clone, Default)]
 pub struct Prompt {
     pub instructions: Option<String>,
     pub input: Vec<ResponseItem>,
     pub tools: Vec<ToolSpec>,
+    /// Sent natively by a wire that can carry a schema, ignored by one that
+    /// cannot. The instructions already ask for the same shape, and the
+    /// caller validates the reply whichever happened.
+    pub response_format: Option<kura_llm::ResponseFormat>,
 }
 
 /// Incremental model output. Function calls are emitted once complete;

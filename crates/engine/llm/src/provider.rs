@@ -155,6 +155,11 @@ pub struct ProviderRequest {
     /// Tools the model may call. Empty is the ordinary case: a plain chat
     /// request offers none, and a provider that cannot use them ignores them.
     pub tools: Vec<ToolSpec>,
+    /// The shape the reply must take. A provider whose wire can carry a
+    /// schema sends it; any other ignores it. Either way the caller
+    /// validates the reply: this narrows what the model produces, it is
+    /// not a guarantee.
+    pub response_format: Option<crate::structured::ResponseFormat>,
     pub attempt: i64,
     pub timeout_ms: i64,
     pub stream_first_chunk_timeout_ms: i64,

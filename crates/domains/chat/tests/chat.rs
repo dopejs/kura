@@ -1559,6 +1559,7 @@ fn sqlite_store_adapter_ports_dispatch_and_defers_continuity() {
     let store = kura_store::SQLiteStore::new(dir.path().to_str().expect("path")).expect("store");
     let now = Utc::now();
     let dispatch = Dispatch {
+        response_format: None,
         tenant_id: String::new(),
         tools: Vec::new(),
         tool_calls: Vec::new(),
@@ -1719,6 +1720,7 @@ fn query_input_round_trips_camel_case_wire() {
 fn query_result_round_trips_with_dispatch() {
     let now = Utc::now();
     let dispatch = Dispatch {
+        response_format: None,
         tenant_id: String::new(),
         tools: Vec::new(),
         tool_calls: Vec::new(),
@@ -1886,6 +1888,7 @@ fn inject_continuity_messages_inserts_before_first_user_message() {
 fn terminal_dispatch_event_names_match_go() {
     let now = Utc::now();
     let base = Dispatch {
+        response_format: None,
         tenant_id: String::new(),
         tools: Vec::new(),
         tool_calls: Vec::new(),
@@ -3176,6 +3179,8 @@ fn a_conforming_reply_comes_back_parsed() {
     assert!(execution.result.dispatch.output.starts_with("```json"));
     let seen = seen.read();
     assert_eq!(seen.len(), 1);
+    // Handed to the provider too, for a wire that can take it natively.
+    assert_eq!(seen[0].response_format, Some(person_format()));
     let system = &seen[0].messages[0];
     assert_eq!(system.role, MessageRole::System);
     assert!(
@@ -3203,6 +3208,8 @@ fn a_reply_that_does_not_conform_is_corrected_once() {
     );
     let seen = seen.read();
     assert_eq!(seen.len(), 2);
+    // The correction round asks for the same shape.
+    assert_eq!(seen[1].response_format, Some(person_format()));
     let feedback = seen[1].messages.last().expect("feedback");
     assert_eq!(feedback.role, MessageRole::User);
     assert!(

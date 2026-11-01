@@ -98,6 +98,7 @@ fn to_prompt(messages: &[Message], tools: &[ToolSpec]) -> Prompt {
         instructions,
         input,
         tools: tools.to_vec(),
+        response_format: None,
     }
 }
 
@@ -159,7 +160,8 @@ impl<M: ModelProvider> ModelProviderBridge<M> {
         request: ProviderRequest,
         emit: StreamEmitter<'_>,
     ) -> Result<ProviderResponse, LlmError> {
-        let prompt = to_prompt(&request.messages, &request.tools);
+        let mut prompt = to_prompt(&request.messages, &request.tools);
+        prompt.response_format = request.response_format.clone();
         let mut events = match &request.credential {
             None => self.client.stream(&prompt),
             // Refused rather than sent with the configured credential: that one
@@ -242,6 +244,7 @@ mod tests {
 
     fn request(messages: Vec<Message>) -> ProviderRequest {
         ProviderRequest {
+            response_format: None,
             dispatch_id: "d1".into(),
             tools: Vec::new(),
             provider: "openai_compatible".into(),
@@ -614,6 +617,45 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    /// Records the format of each prompt it is asked to stream.
+    struct FormatRecorder(std::sync::Mutex<Vec<Option<kura_llm::ResponseFormat>>>);
+
+    impl ModelProvider for FormatRecorder {
+        fn stream<'a>(
+            &'a self,
+            prompt: &'a Prompt,
+        ) -> futures::stream::BoxStream<'a, Result<ResponseEvent, ProviderError>> {
+            self.0
+                .lock()
+                .expect("lock")
+                .push(prompt.response_format.clone());
+            futures::stream::iter(vec![Ok(ResponseEvent::Completed)]).boxed()
+        }
+    }
+
+    #[tokio::test]
+    async fn the_response_format_reaches_the_client() {
+        let provider = ModelProviderBridge::new("p", FormatRecorder(Default::default()));
+        let format = kura_llm::ResponseFormat {
+            name: "person".into(),
+            schema: serde_json::json!({"type": "object"}),
+        };
+        let mut structured = request(vec![Message {
+            role: MessageRole::User,
+            content: "hi".into(),
+            ..Default::default()
+        }]);
+        structured.response_format = Some(format.clone());
+        let plain = request(structured.messages.clone());
+        let mut sink = |_: StreamChunk| Ok(());
+
+        provider.run(structured, &mut sink).await.expect("run");
+        provider.run(plain, &mut sink).await.expect("run");
+
+        let seen = provider.client.0.lock().expect("lock").clone();
+        assert_eq!(seen, vec![Some(format), None]);
     }
 
     /// A client that cannot take a caller's key, like every client but the

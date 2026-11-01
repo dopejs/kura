@@ -15,6 +15,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_stream::try_stream;
 use futures::StreamExt;
@@ -22,7 +23,7 @@ use futures::stream::BoxStream;
 use kura_protocol::{ResponseItem, Role};
 use serde_json::{Value, json};
 
-use crate::openai::{Credential, checked_bytes_stream};
+use crate::openai::{Credential, checked_bytes_stream, refuses_native_format};
 use crate::provider::{ModelProvider, Prompt, ProviderError, ResponseEvent, TokenUsage, tokens};
 
 /// Streaming client for `/responses`.
@@ -31,6 +32,10 @@ pub struct ResponsesClient {
     model: String,
     credential: Credential,
     headers: BTreeMap<String, String>,
+    /// Whether to send a prompt's response format as `text.format`. Starts
+    /// on; cleared for the life of this client the first time the endpoint
+    /// rejects the field. The caller validates the reply either way.
+    native_format: AtomicBool,
     http: reqwest::Client,
 }
 
@@ -48,6 +53,7 @@ impl ResponsesClient {
             model: model.into(),
             credential: Credential::new(token),
             headers: BTreeMap::new(),
+            native_format: AtomicBool::new(true),
             http: reqwest::Client::new(),
         }
     }
@@ -80,23 +86,39 @@ impl ModelProvider for ResponsesClient {
         &'a self,
         prompt: &'a Prompt,
     ) -> BoxStream<'a, Result<ResponseEvent, ProviderError>> {
-        let body = build_request(&self.model, prompt);
-        let mut request = self
-            .http
-            .post(format!("{}/responses", self.base_url))
-            .json(&body);
-        for (name, value) in &self.headers {
-            request = request.header(name, value);
-        }
-        // Read per request: a token refreshed since the last dispatch has to
-        // be the one that goes out.
-        let request = match self.credential.get() {
-            Some(token) => request.bearer_auth(token),
-            None => request,
+        let build = move |native_format: bool| {
+            let mut request = self
+                .http
+                .post(format!("{}/responses", self.base_url))
+                .json(&build_request(&self.model, prompt, native_format));
+            for (name, value) in &self.headers {
+                request = request.header(name, value);
+            }
+            // Read per request: a token refreshed since the last dispatch has
+            // to be the one that goes out.
+            match self.credential.get() {
+                Some(token) => request.bearer_auth(token),
+                None => request,
+            }
         };
+        // Unlike chat completions, sent alongside tools: this wire is
+        // OpenAI's own, where a format shapes the final answer and the model
+        // can still call tools on the way to it.
+        let with_format =
+            prompt.response_format.is_some() && self.native_format.load(Ordering::Relaxed);
 
         Box::pin(try_stream! {
-            let response = request.send().await?;
+            let mut response = build(with_format).send().await?;
+            // A 400 that names the field is an endpoint that does not take
+            // it: sent again without, and not sent again by this client.
+            if with_format && response.status() == reqwest::StatusCode::BAD_REQUEST {
+                let body = response.text().await.unwrap_or_default();
+                if !refuses_native_format(&body, "text.format") {
+                    Err(ProviderError::Status { status: 400, body })?;
+                }
+                self.native_format.store(false, Ordering::Relaxed);
+                response = build(false).send().await?;
+            }
             let mut bytes = checked_bytes_stream(response).await?;
 
             let mut buffer = String::new();
@@ -237,7 +259,7 @@ fn accumulate_event(
 }
 
 /// Build the `/responses` body from a prompt.
-fn build_request(model: &str, prompt: &Prompt) -> Value {
+fn build_request(model: &str, prompt: &Prompt, native_format: bool) -> Value {
     let mut input: Vec<Value> = Vec::new();
 
     for item in &prompt.input {
@@ -311,6 +333,18 @@ fn build_request(model: &str, prompt: &Prompt) -> Value {
                 })
                 .collect(),
         );
+    }
+    if native_format && let Some(format) = &prompt.response_format {
+        // Not strict, for the reason given in `openai.rs`: strict mode takes
+        // a subset of JSON Schema, and the daemon validates the reply anyway.
+        body["text"] = json!({
+            "format": {
+                "type": "json_schema",
+                "name": format.name,
+                "schema": format.schema,
+                "strict": false,
+            },
+        });
     }
     body
 }
@@ -517,6 +551,7 @@ mod tests {
         let (base, seen) = spawn("data: {\"type\":\"response.completed\"}\n\n");
         let client = ResponsesClient::new(base, "gpt-5-codex", Some("oauth-token".into()));
         let prompt = Prompt {
+            response_format: None,
             instructions: Some("be brief".into()),
             input: vec![ResponseItem::Message {
                 role: Role::User,
@@ -543,6 +578,91 @@ mod tests {
         // is not part of the contract, so the shape is what is asserted.
         assert!(request.contains("\"name\":\"read_file\""), "{request}");
         assert!(!request.contains("\"function\":{"), "{request}");
+    }
+
+    fn structured() -> Prompt {
+        Prompt {
+            response_format: Some(kura_llm::ResponseFormat {
+                name: "person".into(),
+                schema: serde_json::json!({"type": "object"}),
+            }),
+            tools: vec![ToolSpec {
+                name: "lookup".into(),
+                description: "look it up".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            }],
+            ..user("who?")
+        }
+    }
+
+    #[test]
+    fn a_response_format_is_sent_as_text_format_alongside_tools() {
+        let body = build_request("m", &structured(), true);
+        assert_eq!(
+            body["text"],
+            serde_json::json!({
+                "format": {
+                    "type": "json_schema",
+                    "name": "person",
+                    "schema": {"type": "object"},
+                    "strict": false,
+                },
+            })
+        );
+        assert_eq!(body["tools"][0]["name"], "lookup");
+        assert!(
+            build_request("m", &structured(), false)
+                .get("text")
+                .is_none()
+        );
+        assert!(build_request("m", &user("hi"), true).get("text").is_none());
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_that_rejects_the_format_still_answers_and_is_not_asked_again() {
+        let completed = "data: {\"type\":\"response.completed\"}\n\n";
+        let (base, seen) = crate::test_support::spawn_scripted_endpoint(vec![
+            (400, r#"{"detail":"Unsupported parameter: text.format"}"#),
+            (200, completed),
+            (200, completed),
+        ]);
+        let client = ResponsesClient::new(base, "m", None);
+
+        assert_eq!(
+            collect(&client, &structured()).await,
+            vec![ResponseEvent::Completed]
+        );
+        collect(&client, &structured()).await;
+
+        let requests = seen.lock().expect("lock").clone();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[0].contains("\"text\":{"), "{}", requests[0]);
+        assert!(!requests[1].contains("\"text\":{"), "{}", requests[1]);
+        assert!(!requests[2].contains("\"text\":{"), "{}", requests[2]);
+    }
+
+    #[tokio::test]
+    async fn a_bad_request_about_something_else_is_reported() {
+        let (base, seen) = crate::test_support::spawn_scripted_endpoint(vec![(
+            400,
+            r#"{"detail":"unknown model"}"#,
+        )]);
+        let client = ResponsesClient::new(base, "m", None);
+        let prompt = structured();
+        let mut stream = client.stream(&prompt);
+        let mut failed = None;
+        while let Some(event) = stream.next().await {
+            if let Err(error) = event {
+                failed = Some(error);
+            }
+        }
+        drop(stream);
+        assert!(
+            matches!(failed, Some(ProviderError::Status { status: 400, .. })),
+            "{failed:?}"
+        );
+        assert_eq!(seen.lock().expect("lock").len(), 1);
+        assert!(client.native_format.load(Ordering::Relaxed));
     }
 
     #[tokio::test]

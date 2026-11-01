@@ -191,7 +191,17 @@ sent back once with the violations, as one more round of the same turn
 single code fence is accepted as its contents). Validation is bounded by
 nesting depth and a step budget, so a self-referential `anyOf` cannot make
 it run away. The streamed query refuses `responseFormat` with 400: it
-forwards text before it could be checked.
+forwards text before it could be checked. The schema is also handed to the
+provider (`ProviderRequest.response_format`, not persisted: the system
+message already records it). The OpenAI-compatible client sends it as
+`response_format: {type: "json_schema", json_schema: {name, schema,
+strict: false}}`, only on a round that offers no tools, because a server that
+constrains every token to the schema (vLLM, llama.cpp behind the same wire)
+would leave the model no way to call one. The Responses client sends it as
+`text.format`, tools or not. Not strict on either, since strict mode takes
+only a subset of JSON Schema. A 400 that names the field (or `json_schema`)
+is answered by resending without it, and that client stops sending it.
+Anthropic gets the instruction only.
 
 A veto surfaces as `ChatError::HookVetoed` → HTTP 403 and is recorded as a
 `chat.hook.vetoed` event. `GET /v1/plugins` reports every hook registration

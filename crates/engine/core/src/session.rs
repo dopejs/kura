@@ -199,6 +199,9 @@ impl Session {
                 instructions: self.instructions.clone(),
                 input: self.history.clone(),
                 tools: self.tools.specs(),
+                // A turn's format is enforced by its answer check; a provider
+                // that sends it natively is given it by its caller.
+                response_format: None,
             };
             // Clone the Arc so the stream borrows a local, not `self`.
             let provider = self.provider.clone();

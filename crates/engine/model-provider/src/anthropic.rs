@@ -774,6 +774,7 @@ mod tests {
         let (base, seen) = spawn("data: {\"type\":\"message_stop\"}\n\n");
         let client = AnthropicClient::new(base, "claude-sonnet-4-5", Some("oauth-token".into()));
         let prompt = Prompt {
+            response_format: None,
             instructions: Some("be brief".to_string()),
             input: vec![ResponseItem::Message {
                 role: Role::User,
@@ -834,6 +835,7 @@ mod tests {
             Some("sk-ant-api03-example".into()),
         );
         let prompt = Prompt {
+            response_format: None,
             instructions: Some("be brief".to_string()),
             input: vec![ResponseItem::Message {
                 role: Role::User,

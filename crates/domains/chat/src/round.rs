@@ -226,6 +226,9 @@ impl DispatcherProvider {
                 context.input.response_format.as_ref(),
             ),
             tools: prompt.tools.clone(),
+            // Also in the system message above; this is for a provider that
+            // can be told natively.
+            response_format: context.input.response_format.clone(),
             timeout_ms: context.timeout_ms,
             max_retries: context.max_retries,
         };
@@ -453,6 +456,7 @@ mod estimate_tests {
 
     fn prompt_with_result(tools: bool) -> Prompt {
         Prompt {
+            response_format: None,
             instructions: Some("Be brief.".into()),
             input: vec![
                 ResponseItem::Message {
@@ -509,6 +513,7 @@ mod estimate_tests {
     #[test]
     fn a_turn_without_tools_is_unchanged_and_framing_off_is_verbatim() {
         let plain = Prompt {
+            response_format: None,
             instructions: Some("Be brief.".into()),
             input: vec![ResponseItem::Message {
                 role: Role::User,

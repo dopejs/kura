@@ -74,6 +74,12 @@ pub struct OpenAiCompatibleClient {
     /// on; cleared for the life of this client the first time the endpoint
     /// rejects the field, so a gateway that predates it keeps working.
     stream_usage: AtomicBool,
+    /// Whether to send a prompt's response format as `response_format`.
+    /// Starts on; cleared for the life of this client the first time the
+    /// endpoint rejects the field, as `stream_usage` is. The reply is
+    /// validated by the caller either way, so dropping it costs reliability,
+    /// never correctness.
+    native_format: AtomicBool,
     http: reqwest::Client,
 }
 
@@ -103,6 +109,7 @@ impl OpenAiCompatibleClient {
             headers: BTreeMap::new(),
             sampling: Sampling::default(),
             stream_usage: AtomicBool::new(true),
+            native_format: AtomicBool::new(true),
             http: reqwest::Client::new(),
         }
     }
@@ -145,16 +152,11 @@ impl ModelProvider for OpenAiCompatibleClient {
         &'a self,
         prompt: &'a Prompt,
     ) -> BoxStream<'a, Result<ResponseEvent, ProviderError>> {
-        let build = move |stream_usage: bool| {
+        let build = move |fields: Optional| {
             let mut request = self
                 .http
                 .post(format!("{}/chat/completions", self.base_url))
-                .json(&build_request(
-                    &self.model,
-                    prompt,
-                    self.sampling,
-                    stream_usage,
-                ));
+                .json(&build_request(&self.model, prompt, self.sampling, fields));
             for (name, value) in &self.headers {
                 request = request.header(name, value);
             }
@@ -166,7 +168,12 @@ impl ModelProvider for OpenAiCompatibleClient {
                 None => request,
             }
         };
-        stream_chat_completions(build, &self.stream_usage)
+        stream_chat_completions(
+            build,
+            self.optional(prompt),
+            &self.stream_usage,
+            &self.native_format,
+        )
     }
 
     /// The configured gateway headers are left off as well as the configured
@@ -177,41 +184,81 @@ impl ModelProvider for OpenAiCompatibleClient {
         prompt: &'a Prompt,
         api_key: &'a str,
     ) -> Option<BoxStream<'a, Result<ResponseEvent, ProviderError>>> {
-        let build = move |stream_usage: bool| {
+        let build = move |fields: Optional| {
             self.http
                 .post(format!("{}/chat/completions", self.base_url))
-                .json(&build_request(
-                    &self.model,
-                    prompt,
-                    self.sampling,
-                    stream_usage,
-                ))
+                .json(&build_request(&self.model, prompt, self.sampling, fields))
                 .bearer_auth(api_key)
         };
-        Some(stream_chat_completions(build, &self.stream_usage))
+        Some(stream_chat_completions(
+            build,
+            self.optional(prompt),
+            &self.stream_usage,
+            &self.native_format,
+        ))
+    }
+}
+
+/// The request fields an endpoint may not know, and whether this request
+/// carries each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Optional {
+    /// `stream_options.include_usage`.
+    stream_usage: bool,
+    /// `response_format`, from the prompt's response format.
+    native_format: bool,
+}
+
+impl OpenAiCompatibleClient {
+    /// What the next request for `prompt` carries.
+    ///
+    /// The format goes only on a round that offers no tools. OpenAI applies
+    /// a schema to the final answer and still lets the model call tools, but
+    /// a server that enforces it by constraining every token (vLLM, llama.cpp
+    /// and the like, behind the same wire) leaves the model no way to ask
+    /// for a call: the turn would answer in the right shape without the data
+    /// it needed, and validation cannot see that. On a round with tools the
+    /// instruction in the system message asks for the shape instead.
+    fn optional(&self, prompt: &Prompt) -> Optional {
+        Optional {
+            stream_usage: self.stream_usage.load(Ordering::Relaxed),
+            native_format: prompt.response_format.is_some()
+                && prompt.tools.is_empty()
+                && self.native_format.load(Ordering::Relaxed),
+        }
     }
 }
 
 /// Sends a `/chat/completions` request and reads its SSE stream.
 ///
-/// `build` makes the request with or without `stream_options`. A 400 that
-/// names `stream_options` is a gateway that does not know the field: the
-/// request is sent once more without it and `stream_usage` is cleared, so
-/// asking for usage never costs a working endpoint a reply.
+/// `build` makes the request with the optional fields in `fields`. A 400 that
+/// names one of them is an endpoint that does not know it: the request is
+/// sent again without it, and the client stops sending it, so an optional
+/// field never costs a working endpoint a reply. Each field is dropped at
+/// most once, so this sends at most three requests.
 fn stream_chat_completions<'a>(
-    build: impl Fn(bool) -> reqwest::RequestBuilder + Send + 'a,
+    build: impl Fn(Optional) -> reqwest::RequestBuilder + Send + 'a,
+    fields: Optional,
     stream_usage: &'a AtomicBool,
+    native_format: &'a AtomicBool,
 ) -> BoxStream<'a, Result<ResponseEvent, ProviderError>> {
     Box::pin(try_stream! {
-            let with_usage = stream_usage.load(Ordering::Relaxed);
-            let mut response = build(with_usage).send().await?;
-            if with_usage && response.status() == reqwest::StatusCode::BAD_REQUEST {
+            let mut fields = fields;
+            let mut response = build(fields).send().await?;
+            while response.status() == reqwest::StatusCode::BAD_REQUEST
+                && (fields.stream_usage || fields.native_format)
+            {
                 let body = response.text().await.unwrap_or_default();
-                if !body.contains("stream_options") {
+                if fields.stream_usage && body.contains("stream_options") {
+                    stream_usage.store(false, Ordering::Relaxed);
+                    fields.stream_usage = false;
+                } else if fields.native_format && refuses_native_format(&body, "response_format") {
+                    native_format.store(false, Ordering::Relaxed);
+                    fields.native_format = false;
+                } else {
                     Err(ProviderError::Status { status: 400, body })?;
                 }
-                stream_usage.store(false, Ordering::Relaxed);
-                response = build(false).send().await?;
+                response = build(fields).send().await?;
             }
             let mut bytes = checked_bytes_stream(response).await?;
 
@@ -253,6 +300,13 @@ fn stream_chat_completions<'a>(
             }
             yield ResponseEvent::Completed;
     })
+}
+
+/// Whether a 400's body is an endpoint refusing a structured-output field,
+/// named by its path (`field`) or by its type, which some gateways report
+/// instead ("json_schema is not supported").
+pub(crate) fn refuses_native_format(body: &str, field: &str) -> bool {
+    body.contains(field) || body.contains("json_schema")
 }
 
 fn non_empty_or(value: String, fallback: String) -> String {
@@ -327,7 +381,7 @@ fn accumulate_chunk(
 
 /// Build the `/chat/completions` request body, mapping conversation history
 /// into OpenAI message shapes.
-fn build_request(model: &str, prompt: &Prompt, sampling: Sampling, stream_usage: bool) -> Value {
+fn build_request(model: &str, prompt: &Prompt, sampling: Sampling, fields: Optional) -> Value {
     let mut messages = Vec::new();
     if let Some(instructions) = &prompt.instructions {
         messages.push(json!({"role": "system", "content": instructions}));
@@ -372,8 +426,24 @@ fn build_request(model: &str, prompt: &Prompt, sampling: Sampling, stream_usage:
         "messages": messages,
         "stream": true,
     });
-    if stream_usage {
+    if fields.stream_usage {
         body["stream_options"] = json!({"include_usage": true});
+    }
+    if fields.native_format
+        && let Some(format) = &prompt.response_format
+    {
+        // Not strict: strict mode accepts only a subset of JSON Schema (every
+        // property required, no open objects), and a caller's schema that
+        // falls outside it would be refused outright. The daemon validates
+        // the reply against the whole schema regardless.
+        body["response_format"] = json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": format.name,
+                "schema": format.schema,
+                "strict": false,
+            },
+        });
     }
     if !prompt.tools.is_empty() {
         let tools: Vec<Value> = prompt
@@ -529,12 +599,13 @@ mod tests {
     #[test]
     fn sampling_is_omitted_when_unset_and_sent_when_set() {
         let prompt = Prompt {
+            response_format: None,
             instructions: None,
             input: vec![],
             tools: vec![],
         };
 
-        let bare = build_request("m", &prompt, Sampling::default(), false);
+        let bare = build_request("m", &prompt, Sampling::default(), NONE);
         assert!(bare.get("temperature").is_none());
         assert!(bare.get("top_p").is_none());
 
@@ -546,7 +617,7 @@ mod tests {
                 temperature: Some(0.0),
                 top_p: Some(0.95),
             },
-            false,
+            NONE,
         );
         assert_eq!(tuned["temperature"], json!(0.0));
         assert_eq!(tuned["top_p"], json!(0.95));
@@ -629,9 +700,15 @@ mod tests {
     use super::*;
     use crate::provider::ToolSpec;
 
+    const NONE: Optional = Optional {
+        stream_usage: false,
+        native_format: false,
+    };
+
     #[test]
     fn request_maps_history_to_openai_messages() {
         let prompt = Prompt {
+            response_format: None,
             instructions: Some("be brief".into()),
             input: vec![
                 ResponseItem::Message {
@@ -654,7 +731,15 @@ mod tests {
                 parameters: json!({"type": "object"}),
             }],
         };
-        let body = build_request("test-model", &prompt, Sampling::default(), true);
+        let body = build_request(
+            "test-model",
+            &prompt,
+            Sampling::default(),
+            Optional {
+                stream_usage: true,
+                native_format: false,
+            },
+        );
         assert_eq!(body["model"], "test-model");
         assert_eq!(body["stream"], true);
         assert_eq!(body["stream_options"]["include_usage"], true);
@@ -812,6 +897,171 @@ mod tests {
         assert!(requests[0].contains("stream_options"), "{}", requests[0]);
         assert!(!requests[1].contains("stream_options"), "{}", requests[1]);
         assert!(!requests[2].contains("stream_options"), "{}", requests[2]);
+    }
+
+    fn person() -> kura_llm::ResponseFormat {
+        kura_llm::ResponseFormat {
+            name: "person".into(),
+            schema: json!({"type": "object", "required": ["name"]}),
+        }
+    }
+
+    fn structured(tools: bool) -> Prompt {
+        Prompt {
+            response_format: Some(person()),
+            tools: if tools {
+                vec![ToolSpec {
+                    name: "lookup".into(),
+                    description: "look it up".into(),
+                    parameters: json!({"type": "object"}),
+                }]
+            } else {
+                Vec::new()
+            },
+            ..Prompt::default()
+        }
+    }
+
+    #[test]
+    fn a_response_format_is_sent_as_a_non_strict_json_schema() {
+        let fields = Optional {
+            stream_usage: false,
+            native_format: true,
+        };
+        let body = build_request("m", &structured(false), Sampling::default(), fields);
+        assert_eq!(
+            body["response_format"],
+            json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "person",
+                    "schema": {"type": "object", "required": ["name"]},
+                    "strict": false,
+                },
+            })
+        );
+        let without = build_request("m", &structured(false), Sampling::default(), NONE);
+        assert!(without.get("response_format").is_none());
+    }
+
+    #[test]
+    fn the_format_goes_only_on_a_round_without_tools() {
+        let client = OpenAiCompatibleClient::new("http://unused", "m", None);
+        assert!(client.optional(&structured(false)).native_format);
+        // A server that constrains every token to the schema would leave
+        // the model no way to call a tool.
+        assert!(!client.optional(&structured(true)).native_format);
+        assert!(!client.optional(&Prompt::default()).native_format);
+        client.native_format.store(false, Ordering::Relaxed);
+        assert!(!client.optional(&structured(false)).native_format);
+    }
+
+    async fn collect_prompt(
+        client: &OpenAiCompatibleClient,
+        prompt: &Prompt,
+    ) -> Result<Vec<ResponseEvent>, ProviderError> {
+        use futures::StreamExt;
+        let mut stream = client.stream(prompt);
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event?);
+        }
+        Ok(events)
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_that_rejects_the_format_still_answers_and_is_not_asked_again() {
+        let (base_url, seen) = crate::test_support::spawn_scripted_endpoint(vec![
+            (
+                400,
+                r#"{"error":{"message":"response_format.type 'json_schema' is not supported"}}"#,
+            ),
+            (200, "data: [DONE]\n\n"),
+            (200, "data: [DONE]\n\n"),
+        ]);
+        let client = OpenAiCompatibleClient::new(base_url, "m", None);
+
+        let first = collect_prompt(&client, &structured(false))
+            .await
+            .expect("answered after the retry");
+        assert_eq!(first, vec![ResponseEvent::Completed]);
+        collect_prompt(&client, &structured(false))
+            .await
+            .expect("answered");
+
+        let requests = seen.lock().expect("lock").clone();
+        assert_eq!(requests.len(), 3);
+        assert!(
+            requests[0].contains("\"response_format\""),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            !requests[1].contains("\"response_format\""),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            !requests[2].contains("\"response_format\""),
+            "{}",
+            requests[2]
+        );
+        // Only the refused field was dropped.
+        assert!(requests[1].contains("stream_options"), "{}", requests[1]);
+        assert!(client.stream_usage.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn each_refused_field_is_dropped_in_turn() {
+        let (base_url, seen) = crate::test_support::spawn_scripted_endpoint(vec![
+            (
+                400,
+                r#"{"error":{"message":"unknown field: stream_options"}}"#,
+            ),
+            (
+                400,
+                r#"{"error":{"message":"unknown field: response_format"}}"#,
+            ),
+            (200, "data: [DONE]\n\n"),
+        ]);
+        let client = OpenAiCompatibleClient::new(base_url, "m", None);
+
+        collect_prompt(&client, &structured(false))
+            .await
+            .expect("answered on the third request");
+
+        let requests = seen.lock().expect("lock").clone();
+        assert_eq!(requests.len(), 3);
+        assert!(
+            requests[1].contains("\"response_format\""),
+            "{}",
+            requests[1]
+        );
+        assert!(!requests[1].contains("stream_options"), "{}", requests[1]);
+        assert!(
+            !requests[2].contains("\"response_format\""),
+            "{}",
+            requests[2]
+        );
+        assert!(!client.stream_usage.load(Ordering::Relaxed));
+        assert!(!client.native_format.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn a_bad_request_about_something_else_keeps_the_format() {
+        let (base_url, seen) = crate::test_support::spawn_scripted_endpoint(vec![(
+            400,
+            r#"{"error":{"message":"unknown model"}}"#,
+        )]);
+        let client = OpenAiCompatibleClient::new(base_url, "m", None);
+
+        let result = collect_prompt(&client, &structured(false)).await;
+        assert!(
+            matches!(result, Err(ProviderError::Status { status: 400, .. })),
+            "{result:?}"
+        );
+        assert_eq!(seen.lock().expect("lock").len(), 1);
+        assert!(client.native_format.load(Ordering::Relaxed));
     }
 
     #[tokio::test]

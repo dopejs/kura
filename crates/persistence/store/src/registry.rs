@@ -117,6 +117,8 @@ fn scan_llm_dispatch(row: &Row) -> Result<kura_llm::Dispatch, String> {
     let partial = status == kura_llm::DispatchStatus::PartialFailed;
 
     Ok(kura_llm::Dispatch {
+        // Not persisted; the schema is in the stored system message.
+        response_format: None,
         tenant_id: String::new(),
         dispatch_id,
         provider,
