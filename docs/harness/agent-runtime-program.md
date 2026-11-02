@@ -119,7 +119,52 @@ schedules it.
       `each_tenant_chats_on_its_own_key_and_never_on_the_operators`.
       `kura_llm_tokens_total{tenant}` already labels the requesting tenant,
       which is now also the key owner.
-- [ ] **1.4** Gateway OAuth sign-up wired to 1.1.
+- [x] **1.4** Gateway OAuth sign-up wired to 1.1.
+      *Done 2026-11-02* in `kura-gateway` (`-mode shared`; design in that
+      repo's docs/design.md §16). The cell pilot is unchanged and stays
+      the default.
+      - *Sign-in and sign-up:*
+        - GitHub and Google sign in through the authorization code flow
+          with PKCE;
+        - the subject is the IdP's stable id (`github:<id>`,
+          `google:<sub>`) and is the provisioning idempotency key;
+        - sign-up calls `POST /v1/provisioning/users` with the operator
+          token, and the minted user token is sealed in the gateway DB;
+        - sessions are server-side, and the cookie holds only a random id.
+      - *Proxying:* every `/v1/*` request goes to the shared daemon with
+        the user's own token. Client identity headers are stripped, and the
+        cell-mode deny list still applies.
+      - *Model key:* the settings page sets the user's model key as the
+        tenant secret `llm.openai_compatible.api_key`, so the key never
+        reaches the gateway DB.
+      - *Operator controls:*
+        - sign-up can be closed (`-signup closed`) and is rate-limited per
+          hour;
+        - a concurrent duplicate sign-up revokes its surplus token;
+        - `admin accounts` lists accounts, and `admin disable` disables
+          one and ends its sessions.
+      - *Verified* by gateway unit tests and a local two-stranger end to
+        end. The run used the real daemon in shared mode, the real
+        gateway, a fake GitHub (`tools/oauth-smoke`) and a fake model:
+        - both sign up and chat, plain and streamed, each on their own
+          key, never the operator's;
+        - reminders, memory and retrieval stay per tenant, and selecting
+          another tenant is 403;
+        - `kura_llm_tokens_total{tenant}` equals the usage on each user's
+          key;
+        - no key or token appears in any log.
+      - *Found on the way and fixed:*
+        - reminders were never bound to a tenant, so every tenant could
+          list, read and act on every reminder (now bound, backfilled by
+          schema v8, and filtered; shared-hosting.md §4.5);
+        - the session summarizer's and consolidator's dispatches ran on the
+          tenant's key but were not counted in `kura_llm_tokens_total`. The
+          dispatcher now records spend for every dispatch.
+      - *Not covered:*
+        - real OAuth apps and deployment to the SG hosts (needs client ids
+          and the operator's go-ahead);
+        - the turn token budget (4.1) still charges chat turns only, not
+          the background summarizer calls.
 - ~~**1.5** G11 DNS rebinding~~ — **moved to Stage 3 (3.5) on 2026-10-28.**
       The premise was wrong: in M2 no tenant controls an outbound
       destination. The resolving egress check fires only for networked tool
