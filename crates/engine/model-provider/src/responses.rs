@@ -20,6 +20,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use async_stream::try_stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
+
+use crate::tool_names::{WireNames, restore_names};
 use kura_protocol::{ResponseItem, Role};
 use serde_json::{Value, json};
 
@@ -107,55 +109,58 @@ impl ModelProvider for ResponsesClient {
         let with_format =
             prompt.response_format.is_some() && self.native_format.load(Ordering::Relaxed);
 
-        Box::pin(try_stream! {
-            let mut response = build(with_format).send().await?;
-            // A 400 that names the field is an endpoint that does not take
-            // it: sent again without, and not sent again by this client.
-            if with_format && response.status() == reqwest::StatusCode::BAD_REQUEST {
-                let body = response.text().await.unwrap_or_default();
-                if !refuses_native_format(&body, "text.format") {
-                    Err(ProviderError::Status { status: 400, body })?;
+        restore_names(
+            WireNames::new(&prompt.tools),
+            try_stream! {
+                let mut response = build(with_format).send().await?;
+                // A 400 that names the field is an endpoint that does not take
+                // it: sent again without, and not sent again by this client.
+                if with_format && response.status() == reqwest::StatusCode::BAD_REQUEST {
+                    let body = response.text().await.unwrap_or_default();
+                    if !refuses_native_format(&body, "text.format") {
+                        Err(ProviderError::Status { status: 400, body })?;
+                    }
+                    self.native_format.store(false, Ordering::Relaxed);
+                    response = build(false).send().await?;
                 }
-                self.native_format.store(false, Ordering::Relaxed);
-                response = build(false).send().await?;
-            }
-            let mut bytes = checked_bytes_stream(response).await?;
+                let mut bytes = checked_bytes_stream(response).await?;
 
-            let mut buffer = String::new();
-            let mut pending: BTreeMap<i64, CallAcc> = BTreeMap::new();
-            let mut done = false;
+                let mut buffer = String::new();
+                let mut pending: BTreeMap<i64, CallAcc> = BTreeMap::new();
+                let mut done = false;
 
-            while let Some(chunk) = bytes.next().await {
-                let chunk = chunk?;
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
-                while let Some(pos) = buffer.find('\n') {
-                    let line = buffer[..pos].trim_end_matches('\r').to_string();
-                    buffer.drain(..=pos);
-                    let Some(data) = line.strip_prefix("data:") else {
-                        continue;
+                while let Some(chunk) = bytes.next().await {
+                    let chunk = chunk?;
+                    buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    while let Some(pos) = buffer.find('\n') {
+                        let line = buffer[..pos].trim_end_matches('\r').to_string();
+                        buffer.drain(..=pos);
+                        let Some(data) = line.strip_prefix("data:") else {
+                            continue;
+                        };
+                        let data = data.trim();
+                        if data.is_empty() || data == "[DONE]" {
+                            continue;
+                        }
+                        for event in accumulate_event(data, &mut pending, &mut done)? {
+                            yield event;
+                        }
+                    }
+                    if done {
+                        break;
+                    }
+                }
+
+                for (index, call) in std::mem::take(&mut pending) {
+                    yield ResponseEvent::FunctionCall {
+                        call_id: non_empty_or(call.call_id, format!("call_{index}")),
+                        name: call.name,
+                        arguments: non_empty_or(call.arguments, "{}".to_string()),
                     };
-                    let data = data.trim();
-                    if data.is_empty() || data == "[DONE]" {
-                        continue;
-                    }
-                    for event in accumulate_event(data, &mut pending, &mut done)? {
-                        yield event;
-                    }
                 }
-                if done {
-                    break;
-                }
-            }
-
-            for (index, call) in std::mem::take(&mut pending) {
-                yield ResponseEvent::FunctionCall {
-                    call_id: non_empty_or(call.call_id, format!("call_{index}")),
-                    name: call.name,
-                    arguments: non_empty_or(call.arguments, "{}".to_string()),
-                };
-            }
-            yield ResponseEvent::Completed;
-        })
+                yield ResponseEvent::Completed;
+            },
+        )
     }
 }
 
@@ -260,6 +265,7 @@ fn accumulate_event(
 
 /// Build the `/responses` body from a prompt.
 fn build_request(model: &str, prompt: &Prompt, native_format: bool) -> Value {
+    let names = WireNames::new(&prompt.tools);
     let mut input: Vec<Value> = Vec::new();
 
     for item in &prompt.input {
@@ -291,7 +297,7 @@ fn build_request(model: &str, prompt: &Prompt, native_format: bool) -> Value {
                 input.push(json!({
                     "type": "function_call",
                     "call_id": call_id,
-                    "name": name,
+                    "name": names.wire(name),
                     // Arguments stay a string here, unlike Anthropic's object.
                     "arguments": arguments,
                 }));
@@ -326,7 +332,7 @@ fn build_request(model: &str, prompt: &Prompt, native_format: bool) -> Value {
                         "type": "function",
                         // Flat, not nested under `function` as chat
                         // completions requires.
-                        "name": tool.name,
+                        "name": names.wire(&tool.name),
                         "description": tool.description,
                         "parameters": tool.parameters,
                     })

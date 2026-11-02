@@ -19,6 +19,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use async_stream::try_stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
+
+use crate::tool_names::{WireNames, restore_names};
 use kura_protocol::{ResponseItem, Role};
 use serde_json::{Value, json};
 
@@ -167,64 +169,68 @@ impl ModelProvider for AnthropicClient {
             }
         };
 
-        Box::pin(try_stream! {
-            // A 400 naming `cache_control` is a compatible endpoint without
-            // prompt caching: send once more without the breakpoints and stop
-            // adding them, so caching never costs a working endpoint a reply.
-            let with_cache = self.prompt_cache.load(Ordering::Relaxed);
-            let mut response = build(with_cache).send().await?;
-            if with_cache && response.status() == reqwest::StatusCode::BAD_REQUEST {
-                let body = response.text().await.unwrap_or_default();
-                if !body.contains("cache_control") {
-                    Err(ProviderError::Status { status: 400, body })?;
+        let names = WireNames::new(&prompt.tools);
+        restore_names(
+            names,
+            try_stream! {
+                // A 400 naming `cache_control` is a compatible endpoint without
+                // prompt caching: send once more without the breakpoints and stop
+                // adding them, so caching never costs a working endpoint a reply.
+                let with_cache = self.prompt_cache.load(Ordering::Relaxed);
+                let mut response = build(with_cache).send().await?;
+                if with_cache && response.status() == reqwest::StatusCode::BAD_REQUEST {
+                    let body = response.text().await.unwrap_or_default();
+                    if !body.contains("cache_control") {
+                        Err(ProviderError::Status { status: 400, body })?;
+                    }
+                    self.prompt_cache.store(false, Ordering::Relaxed);
+                    response = build(false).send().await?;
                 }
-                self.prompt_cache.store(false, Ordering::Relaxed);
-                response = build(false).send().await?;
-            }
-            let mut bytes = checked_bytes_stream(response).await?;
+                let mut bytes = checked_bytes_stream(response).await?;
 
-            let mut buffer = String::new();
-            // Keyed by content-block index: a message interleaves text and
-            // tool-use blocks, and their fragments arrive mixed together.
-            let mut pending: BTreeMap<i64, ToolUseAcc> = BTreeMap::new();
-            let mut done = false;
+                let mut buffer = String::new();
+                // Keyed by content-block index: a message interleaves text and
+                // tool-use blocks, and their fragments arrive mixed together.
+                let mut pending: BTreeMap<i64, ToolUseAcc> = BTreeMap::new();
+                let mut done = false;
 
-            while let Some(chunk) = bytes.next().await {
-                let chunk = chunk?;
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
-                while let Some(pos) = buffer.find('\n') {
-                    let line = buffer[..pos].trim_end_matches('\r').to_string();
-                    buffer.drain(..=pos);
-                    // `event:` lines name what follows; the payload carries its
-                    // own `type`, so only the data lines are read.
-                    let Some(data) = line.strip_prefix("data:") else {
-                        continue;
+                while let Some(chunk) = bytes.next().await {
+                    let chunk = chunk?;
+                    buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    while let Some(pos) = buffer.find('\n') {
+                        let line = buffer[..pos].trim_end_matches('\r').to_string();
+                        buffer.drain(..=pos);
+                        // `event:` lines name what follows; the payload carries its
+                        // own `type`, so only the data lines are read.
+                        let Some(data) = line.strip_prefix("data:") else {
+                            continue;
+                        };
+                        let data = data.trim();
+                        if data.is_empty() {
+                            continue;
+                        }
+                        for event in accumulate_event(data, &mut pending, &mut done)? {
+                            yield event;
+                        }
+                    }
+                    if done {
+                        break;
+                    }
+                }
+
+                // Whatever a `message_stop` did not close. Emitting them is better
+                // than dropping a call the model asked for because the stream
+                // ended untidily.
+                for (index, call) in std::mem::take(&mut pending) {
+                    yield ResponseEvent::FunctionCall {
+                        call_id: non_empty_or(call.id, format!("call_{index}")),
+                        name: call.name,
+                        arguments: non_empty_or(call.arguments, "{}".to_string()),
                     };
-                    let data = data.trim();
-                    if data.is_empty() {
-                        continue;
-                    }
-                    for event in accumulate_event(data, &mut pending, &mut done)? {
-                        yield event;
-                    }
                 }
-                if done {
-                    break;
-                }
-            }
-
-            // Whatever a `message_stop` did not close. Emitting them is better
-            // than dropping a call the model asked for because the stream
-            // ended untidily.
-            for (index, call) in std::mem::take(&mut pending) {
-                yield ResponseEvent::FunctionCall {
-                    call_id: non_empty_or(call.id, format!("call_{index}")),
-                    name: call.name,
-                    arguments: non_empty_or(call.arguments, "{}".to_string()),
-                };
-            }
-            yield ResponseEvent::Completed;
-        })
+                yield ResponseEvent::Completed;
+            },
+        )
     }
 }
 
@@ -348,6 +354,7 @@ fn build_request(
     subscription: bool,
     cache: bool,
 ) -> Value {
+    let names = WireNames::new(&prompt.tools);
     let mut messages: Vec<Value> = Vec::new();
 
     for item in &prompt.input {
@@ -379,7 +386,7 @@ fn build_request(
                     "content": [{
                         "type": "tool_use",
                         "id": call_id,
-                        "name": name,
+                        "name": names.wire(name),
                         "input": input,
                     }],
                 }));
@@ -431,7 +438,7 @@ fn build_request(
                 .iter()
                 .map(|tool| {
                     json!({
-                        "name": tool.name,
+                        "name": names.wire(&tool.name),
                         "description": tool.description,
                         // Named `input_schema` here, not `parameters`.
                         "input_schema": tool.parameters,

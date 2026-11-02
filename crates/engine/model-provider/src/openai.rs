@@ -6,6 +6,8 @@ use async_stream::try_stream;
 use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
+
+use crate::tool_names::{WireNames, restore_names};
 use kura_protocol::ResponseItem;
 use kura_protocol::Role;
 use serde_json::Value;
@@ -168,11 +170,14 @@ impl ModelProvider for OpenAiCompatibleClient {
                 None => request,
             }
         };
-        stream_chat_completions(
-            build,
-            self.optional(prompt),
-            &self.stream_usage,
-            &self.native_format,
+        restore_names(
+            WireNames::new(&prompt.tools),
+            stream_chat_completions(
+                build,
+                self.optional(prompt),
+                &self.stream_usage,
+                &self.native_format,
+            ),
         )
     }
 
@@ -190,11 +195,14 @@ impl ModelProvider for OpenAiCompatibleClient {
                 .json(&build_request(&self.model, prompt, self.sampling, fields))
                 .bearer_auth(api_key)
         };
-        Some(stream_chat_completions(
-            build,
-            self.optional(prompt),
-            &self.stream_usage,
-            &self.native_format,
+        Some(restore_names(
+            WireNames::new(&prompt.tools),
+            stream_chat_completions(
+                build,
+                self.optional(prompt),
+                &self.stream_usage,
+                &self.native_format,
+            ),
         ))
     }
 }
@@ -382,6 +390,7 @@ fn accumulate_chunk(
 /// Build the `/chat/completions` request body, mapping conversation history
 /// into OpenAI message shapes.
 fn build_request(model: &str, prompt: &Prompt, sampling: Sampling, fields: Optional) -> Value {
+    let names = WireNames::new(&prompt.tools);
     let mut messages = Vec::new();
     if let Some(instructions) = &prompt.instructions {
         messages.push(json!({"role": "system", "content": instructions}));
@@ -407,7 +416,7 @@ fn build_request(model: &str, prompt: &Prompt, sampling: Sampling, fields: Optio
                     "tool_calls": [{
                         "id": call_id,
                         "type": "function",
-                        "function": {"name": name, "arguments": arguments},
+                        "function": {"name": names.wire(name), "arguments": arguments},
                     }],
                 }));
             }
@@ -453,7 +462,7 @@ fn build_request(model: &str, prompt: &Prompt, sampling: Sampling, fields: Optio
                 json!({
                     "type": "function",
                     "function": {
-                        "name": tool.name,
+                        "name": names.wire(&tool.name),
                         "description": tool.description,
                         "parameters": tool.parameters,
                     },

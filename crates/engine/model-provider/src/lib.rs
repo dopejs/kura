@@ -9,6 +9,7 @@ mod openai;
 mod provider;
 #[cfg(test)]
 mod test_support;
+mod tool_names;
 
 pub mod anthropic;
 pub mod responses;
