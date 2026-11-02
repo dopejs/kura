@@ -58,7 +58,10 @@ fn test_config() -> (tempfile::TempDir, Config) {
         },
         connectors: Default::default(),
         egress: Default::default(),
-        store: kura_config::StoreConfig { readers: 2 },
+        store: kura_config::StoreConfig {
+            readers: 2,
+            ..kura_config::StoreConfig::default()
+        },
     };
     (dir, config)
 }

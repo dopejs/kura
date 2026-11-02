@@ -28,6 +28,7 @@ pub(crate) struct FileConfig {
 #[serde(rename_all = "camelCase", default)]
 struct FileStoreConfig {
     readers: Option<usize>,
+    synchronous: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -186,6 +187,9 @@ pub(crate) fn apply_file_config(cfg: &mut Config, file: FileConfig) {
     if let Some(store) = file.store {
         if let Some(readers) = store.readers {
             cfg.store.readers = readers;
+        }
+        if let Some(synchronous) = store.synchronous {
+            cfg.store.synchronous = synchronous;
         }
     }
 }

@@ -21,6 +21,7 @@ pub const LLM_DISPATCH_DURATION_SECONDS: &str = "kura_llm_dispatch_duration_seco
 pub const LLM_DISPATCHES_TOTAL: &str = "kura_llm_dispatches_total";
 pub const LLM_TOKENS_TOTAL: &str = "kura_llm_tokens_total";
 pub const STORE_LOCK_WAIT_SECONDS: &str = "kura_store_lock_wait_seconds";
+pub const STORE_COMMITS_TOTAL: &str = "kura_store_commits_total";
 pub const HOOK_DURATION_SECONDS: &str = "kura_hook_duration_seconds";
 pub const CHAT_TOOL_CALLS_TOTAL: &str = "kura_chat_tool_calls_total";
 pub const CHAT_TOOL_CALL_DURATION_SECONDS: &str = "kura_chat_tool_call_duration_seconds";
@@ -63,6 +64,10 @@ const HELP: &[(&str, &str)] = &[
     (
         STORE_LOCK_WAIT_SECONDS,
         "Time spent waiting for a store connection, by role (writer|reader).",
+    ),
+    (
+        STORE_COMMITS_TOTAL,
+        "SQLite commits on every connection this process opened (each statement outside a transaction is one).",
     ),
     (
         HOOK_DURATION_SECONDS,

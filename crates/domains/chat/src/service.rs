@@ -1738,13 +1738,10 @@ fn persist_dispatch(
     let Some(store) = store else {
         return Ok(());
     };
+    // D11: the row is bound to its tenant so the tenant-scoped list/get
+    // paths see it; written with the row, in one commit.
     store
-        .upsert_llm_dispatch(dispatch)
-        .map_err(ChatError::Store)?;
-    // D11: bind the row to its tenant so the tenant-scoped list/get paths
-    // see it. Without this every chat dispatch stayed a NULL-tenant row.
-    store
-        .bind_llm_dispatch_tenant(&dispatch.dispatch_id, tenant_id)
+        .upsert_llm_dispatch_for_tenant(dispatch, tenant_id)
         .map_err(ChatError::Store)
 }
 

@@ -56,6 +56,17 @@ pub trait ChatStore: Send + Sync {
     fn bind_llm_dispatch_tenant(&self, _dispatch_id: &str, _tenant_id: &str) -> Result<(), String> {
         Ok(())
     }
+    /// The dispatch and its tenant binding together. The default does the
+    /// two calls above; a store that can write them in one transaction
+    /// should (one commit per persisted round instead of two).
+    fn upsert_llm_dispatch_for_tenant(
+        &self,
+        dispatch: &Dispatch,
+        tenant_id: &str,
+    ) -> Result<(), String> {
+        self.upsert_llm_dispatch(dispatch)?;
+        self.bind_llm_dispatch_tenant(&dispatch.dispatch_id, tenant_id)
+    }
     // -- turn checkpoints (agent-runtime-program.md 2.7) -----------------
     // Default no-ops: a store that keeps none resumes nothing, which is how
     // every turn ran before checkpoints.
@@ -146,17 +157,77 @@ pub trait ChatStore: Send + Sync {
     ) -> Result<ContinuityPreview, String>;
 }
 
+/// How a [`ChatStore`] reaches SQLite: a connection to read on and one to
+/// write on. The plain mutex uses one connection for both, as before;
+/// [`PooledChatStore`] reads on the store pool's query-only readers, so a
+/// turn's reads do not queue behind every other turn's writes on one
+/// connection (agent-runtime-program.md 4.5).
+pub trait StoreAccess: Send + Sync {
+    type Read<'a>: std::ops::Deref<Target = kura_store::SQLiteStore>
+    where
+        Self: 'a;
+    type Write<'a>: std::ops::Deref<Target = kura_store::SQLiteStore>
+    where
+        Self: 'a;
+    fn read_lock(&self) -> Result<Self::Read<'_>, String>;
+    fn write_lock(&self) -> Result<Self::Write<'_>, String>;
+}
+
+impl StoreAccess for std::sync::Mutex<kura_store::SQLiteStore> {
+    type Read<'a> = std::sync::MutexGuard<'a, kura_store::SQLiteStore>;
+    type Write<'a> = std::sync::MutexGuard<'a, kura_store::SQLiteStore>;
+    fn read_lock(&self) -> Result<Self::Read<'_>, String> {
+        self.lock()
+            .map_err(|_| "chat store mutex poisoned".to_string())
+    }
+    fn write_lock(&self) -> Result<Self::Write<'_>, String> {
+        self.lock()
+            .map_err(|_| "chat store mutex poisoned".to_string())
+    }
+}
+
+/// Writes on the chat's own connection, reads on the pool's readers. A
+/// reader is query-only: a write sent to one fails rather than slipping
+/// through, so a method filed under the wrong kind shows up at once.
+pub struct PooledChatStore {
+    writer: std::sync::Arc<std::sync::Mutex<kura_store::SQLiteStore>>,
+    pool: std::sync::Arc<kura_store::StorePool>,
+}
+
+impl PooledChatStore {
+    #[must_use]
+    pub fn new(
+        writer: std::sync::Arc<std::sync::Mutex<kura_store::SQLiteStore>>,
+        pool: std::sync::Arc<kura_store::StorePool>,
+    ) -> Self {
+        Self { writer, pool }
+    }
+}
+
+impl StoreAccess for PooledChatStore {
+    type Read<'a> = kura_store::ReadGuard<'a>;
+    type Write<'a> = std::sync::MutexGuard<'a, kura_store::SQLiteStore>;
+    fn read_lock(&self) -> Result<Self::Read<'_>, String> {
+        Ok(self.pool.read())
+    }
+    fn write_lock(&self) -> Result<Self::Write<'_>, String> {
+        self.writer
+            .lock()
+            .map_err(|_| "chat store mutex poisoned".to_string())
+    }
+}
+
 /// Adapter for the `kura-store` SQLite store: every ChatStore method
 /// delegates to the native kura-store implementation. `resolve_binding_selection`
 /// composes the store's channel/account rule lookups and selectability
 /// checks through `kura_bindings::resolve_selection` (the Go precedence
 /// port), preserving the fail-closed semantics.
-impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
+impl<T: StoreAccess> ChatStore for T {
     fn bind_llm_dispatch_tenant(&self, dispatch_id: &str, tenant_id: &str) -> Result<(), String> {
         if tenant_id.trim().is_empty() {
             return Ok(());
         }
-        self.lock()
+        self.write_lock()
             .map_err(|_| "chat store mutex poisoned".to_string())?
             .bind_row_tenant(
                 "llm_dispatches",
@@ -167,40 +238,50 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
     }
 
     fn upsert_llm_dispatch(&self, dispatch: &Dispatch) -> Result<(), String> {
-        self.lock()
+        self.write_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .upsert_llm_dispatch(dispatch)
+    }
+
+    fn upsert_llm_dispatch_for_tenant(
+        &self,
+        dispatch: &Dispatch,
+        tenant_id: &str,
+    ) -> Result<(), String> {
+        self.write_lock()
+            .map_err(|_| "lock sqlite store".to_string())?
+            .upsert_llm_dispatch_for_tenant(dispatch, tenant_id)
     }
     fn get_turn_checkpoint(
         &self,
         turn_key: &str,
     ) -> Result<Option<kura_store::TurnCheckpointRecord>, String> {
-        self.lock()
+        self.read_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .get_turn_checkpoint(turn_key)
     }
     fn put_turn_checkpoint(&self, record: &kura_store::TurnCheckpointRecord) -> Result<(), String> {
-        self.lock()
+        self.write_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .put_turn_checkpoint(record)
     }
     fn delete_turn_checkpoint(&self, turn_key: &str) -> Result<(), String> {
-        self.lock()
+        self.write_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .delete_turn_checkpoint(turn_key)
     }
     fn prune_turn_checkpoints(&self, cutoff: &DateTime<Utc>) -> Result<usize, String> {
-        self.lock()
+        self.write_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .prune_turn_checkpoints(cutoff)
     }
     fn append_event(&self, event: &Event) -> Result<Event, String> {
-        self.lock()
+        self.write_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .append_event(event)
     }
     fn list_setup_sessions(&self, tenant_id: &str) -> Result<Vec<SetupSession>, String> {
-        self.lock()
+        self.read_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .list_setup_sessions(tenant_id)
     }
@@ -208,7 +289,8 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
         &self,
         tenant_id: &str,
     ) -> Result<Option<(AgentProfile, ActiveSelection)>, String> {
-        self.lock()
+        // Writes: the tenant's default profile is created on first use.
+        self.write_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .active_agent_profile_selection(tenant_id)
     }
@@ -216,7 +298,7 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
         &self,
         projection: &RuntimeProjection,
     ) -> Result<RuntimeProjection, String> {
-        self.lock()
+        self.write_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .record_runtime_profile_projection(projection.clone())
     }
@@ -224,7 +306,9 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
         &self,
         params: &BindingResolutionParams,
     ) -> Result<EffectiveBindingSelection, String> {
-        let guard = self.lock().map_err(|_| "lock sqlite store".to_string())?;
+        let guard = self
+            .write_lock()
+            .map_err(|_| "lock sqlite store".to_string())?;
         let tenant_id = params.tenant_id.trim();
         let channel_binding =
             guard.resolve_channel_binding(tenant_id, &params.channel_scope_ref)?;
@@ -286,7 +370,7 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
         workspace_id: &str,
         capability_id: &str,
     ) -> Result<CapabilityDecision, String> {
-        self.lock()
+        self.read_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             // The chat pipeline carries no scope-visibility limits (Go parity:
             // the service call passes none; limits ride the bindings routes).
@@ -302,7 +386,7 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
         &self,
         evidence: &RuntimeBindingEvidence,
     ) -> Result<RuntimeBindingEvidence, String> {
-        self.lock()
+        self.write_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .record_runtime_binding_evidence(evidence.clone())
     }
@@ -311,7 +395,7 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
         tenant_id: &str,
         thread_id: &str,
     ) -> Result<Option<Thread>, String> {
-        self.lock()
+        self.read_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .get_thread_for_tenant(tenant_id, thread_id)
     }
@@ -319,7 +403,7 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
         &self,
         query: &ContinuityLookupQuery,
     ) -> Result<Vec<ContinuityTurn>, String> {
-        self.lock()
+        self.read_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .list_continuity_turns(&store_continuity_query(query))
     }
@@ -327,7 +411,7 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
         &self,
         query: &ContinuityLookupQuery,
     ) -> Result<Vec<ContinuityTurn>, String> {
-        self.lock()
+        self.read_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .list_continuity_turns_outside_session_segment(&store_continuity_query(query))
     }
@@ -337,7 +421,7 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
         thread_id: &str,
         limit: i64,
     ) -> Result<Vec<HandoffLink>, String> {
-        self.lock()
+        self.read_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .list_handoff_links(tenant_id, thread_id, limit)
     }
@@ -346,12 +430,12 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
         tenant_id: &str,
         link_id: &str,
     ) -> Result<Vec<HandoffSourceReference>, String> {
-        self.lock()
+        self.read_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .list_handoff_source_references_for_link(tenant_id, link_id)
     }
     fn save_continuity_turn(&self, turn: &ContinuityTurn) -> Result<ContinuityTurn, String> {
-        self.lock()
+        self.write_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .save_continuity_turn(turn)
     }
@@ -362,7 +446,7 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
         response_turn_id: &str,
         now: DateTime<Utc>,
     ) -> Result<(), String> {
-        self.lock()
+        self.write_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .mark_handoff_source_references_consumed(
                 tenant_id,
@@ -379,7 +463,7 @@ impl ChatStore for std::sync::Mutex<kura_store::SQLiteStore> {
         // The store mutates item ids/order in place; the trait exposes an
         // immutable slice, so hand it an owned copy.
         let mut items = items.to_vec();
-        self.lock()
+        self.write_lock()
             .map_err(|_| "lock sqlite store".to_string())?
             .save_continuity_preview(preview.clone(), &mut items)
     }

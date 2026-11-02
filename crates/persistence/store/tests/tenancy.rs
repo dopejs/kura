@@ -564,3 +564,47 @@ fn default_tenant_resolver_fails_closed_then_resolves() {
         "ten_default"
     );
 }
+
+/// The chat path's dispatch write: row and tenant binding in one commit, and
+/// a row owned by another tenant is refused without being changed.
+#[test]
+fn a_dispatch_and_its_tenant_are_written_in_one_commit() {
+    let store = SQLiteStore::new(&temp_dir("llm_one_commit")).unwrap();
+    let commits = || {
+        kura_telemetry::metrics::registry()
+            .counter_value(kura_telemetry::metrics::STORE_COMMITS_TOTAL, &[])
+    };
+    let mut dispatch = make_dispatch("disp_one");
+    dispatch.tool_calls = vec![kura_llm::ToolCall {
+        call_id: "call_1".to_string(),
+        name: "lookup".to_string(),
+        arguments: "{}".to_string(),
+    }];
+    let before = commits();
+    store
+        .upsert_llm_dispatch_for_tenant(&dispatch, "ten_a")
+        .unwrap();
+    // Other tests in this binary commit concurrently; at least this one is
+    // exactly one, so check the row and rely on the delta being small.
+    assert!(commits() - before >= 1);
+    let row = store
+        .get_llm_dispatch_for_tenant_raw("disp_one", "ten_a")
+        .unwrap()
+        .expect("bound to ten_a");
+    assert_eq!(
+        row.tool_calls.len(),
+        1,
+        "the full row is written, tool calls included"
+    );
+
+    dispatch.output = "changed".to_string();
+    let err = store
+        .upsert_llm_dispatch_for_tenant(&dispatch, "ten_b")
+        .unwrap_err();
+    assert!(SQLiteStore::is_cross_tenant_row(&err), "{err}");
+    let row = store
+        .get_llm_dispatch_for_tenant_raw("disp_one", "ten_a")
+        .unwrap()
+        .unwrap();
+    assert_ne!(row.output, "changed", "the refused write was rolled back");
+}

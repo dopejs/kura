@@ -117,6 +117,89 @@ pub fn schema_migrations() -> Vec<SchemaMigration> {
     migrations::schema_migrations()
 }
 
+/// How long a connection keeps retrying a lock another connection holds
+/// before the statement fails with `SQLITE_BUSY` (as `busy_timeout` was).
+const BUSY_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The busy handler every connection gets: retry after 50 µs, doubling to
+/// 1 ms, then every 1 ms, for [`BUSY_LIMIT`] in all.
+///
+/// SQLite's own (`busy_timeout`) sleeps 1, 2, 5, 10, 15, 20, 25, 25, 25, 50,
+/// 50 then 100 ms between tries. A write lock held for a fraction of a
+/// millisecond could leave a waiting writer asleep for 20 ms: with tens of
+/// connections writing one file, turns waited on sleep rather than on the
+/// lock, and the process sat mostly idle (measured: 128 concurrent agent
+/// turns used one core of fourteen; agent-runtime-program.md 4.5).
+fn retry_busy(attempts: i32) -> bool {
+    let step = busy_step(attempts);
+    if busy_waited(attempts) + step > BUSY_LIMIT {
+        return false;
+    }
+    std::thread::sleep(step);
+    true
+}
+
+fn busy_step(attempts: i32) -> std::time::Duration {
+    let doubling = u32::try_from(attempts.clamp(0, 5)).unwrap_or(5);
+    std::time::Duration::from_micros((50_u64 << doubling).min(1_000))
+}
+
+/// Time already spent waiting after `attempts` retries.
+fn busy_waited(attempts: i32) -> std::time::Duration {
+    (0..attempts.max(0)).map(busy_step).sum()
+}
+
+/// SQLite `synchronous` for the connections this process opens. Set once at
+/// boot, before the first store opens ([`set_synchronous`]); WAL either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Synchronous {
+    /// Sync the WAL on every commit (SQLite's default, and this daemon's).
+    Full,
+    /// Sync the WAL at checkpoints only. Never corrupts the database under
+    /// WAL; the last commits before a power loss or OS crash can be lost.
+    Normal,
+}
+
+impl Synchronous {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "full" => Ok(Self::Full),
+            "normal" => Ok(Self::Normal),
+            other => Err(format!(
+                "store synchronous mode {other:?} is not full or normal"
+            )),
+        }
+    }
+
+    #[must_use]
+    pub fn pragma(self) -> &'static str {
+        match self {
+            Self::Full => "FULL",
+            Self::Normal => "NORMAL",
+        }
+    }
+}
+
+static SYNCHRONOUS_NORMAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Sets the mode every connection opened from now on uses.
+pub fn set_synchronous(mode: Synchronous) {
+    SYNCHRONOUS_NORMAL.store(
+        mode == Synchronous::Normal,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+}
+
+#[must_use]
+pub fn synchronous() -> Synchronous {
+    if SYNCHRONOUS_NORMAL.load(std::sync::atomic::Ordering::SeqCst) {
+        Synchronous::Normal
+    } else {
+        Synchronous::Full
+    }
+}
+
 pub struct SQLiteStore {
     data_dir: String,
     db_path: String,
@@ -303,15 +386,31 @@ impl SQLiteStore {
         current_schema_version(&self.conn)
     }
 
-    /// Applies the SQLite pragmas used by the Go store.
+    /// Applies the SQLite pragmas used by the Go store, the process's
+    /// [`Synchronous`] mode, and the commit counter
+    /// (`kura_store_commits_total`): every write path in the daemon opens
+    /// its connection here, so this is the one place all of them pass.
     fn configure(&self) -> Result<(), String> {
         self.conn
-            .execute_batch(
+            .execute_batch(&format!(
                 "PRAGMA foreign_keys = ON;
                  PRAGMA journal_mode = WAL;
-                 PRAGMA busy_timeout = 5000;",
-            )
-            .map_err(|e| format!("apply pragmas: {e}"))
+                 PRAGMA busy_timeout = 5000;
+                 PRAGMA synchronous = {};",
+                synchronous().pragma()
+            ))
+            .map_err(|e| format!("apply pragmas: {e}"))?;
+        // After the pragmas: `busy_timeout` installs SQLite's own handler,
+        // and installing this one replaces it.
+        self.conn
+            .busy_handler(Some(retry_busy))
+            .map_err(|e| format!("install busy handler: {e}"))?;
+        self.conn.commit_hook(Some(|| {
+            kura_telemetry::metrics::registry()
+                .inc(kura_telemetry::metrics::STORE_COMMITS_TOTAL, &[]);
+            false // never veto the commit
+        }));
+        Ok(())
     }
 
     /// Ensures the bookkeeping table and applies any migrations newer than the current version.
@@ -438,4 +537,36 @@ fn resolve_data_dir(data_dir: &str) -> Result<String, String> {
             .to_string());
     }
     Ok(data_dir.to_string())
+}
+
+#[cfg(test)]
+mod busy_and_sync_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn the_busy_handler_retries_finely_and_gives_up_at_the_limit() {
+        assert_eq!(busy_step(0), Duration::from_micros(50));
+        assert_eq!(busy_step(1), Duration::from_micros(100));
+        assert_eq!(busy_step(4), Duration::from_micros(800));
+        assert_eq!(busy_step(5), Duration::from_millis(1));
+        assert_eq!(busy_step(5_000), Duration::from_millis(1));
+        // The first retries cost microseconds, not SQLite's 1-100 ms steps.
+        assert!(busy_waited(5) < Duration::from_millis(2));
+        // It stops once the next step would pass the limit: about 5 s, as
+        // busy_timeout was.
+        let last = (0..10_000).find(|n| busy_waited(*n) + busy_step(*n) > BUSY_LIMIT);
+        let last = last.expect("bounded");
+        assert!(busy_waited(last) <= BUSY_LIMIT);
+        assert!(busy_waited(last) > BUSY_LIMIT - Duration::from_millis(2));
+    }
+
+    #[test]
+    fn the_synchronous_mode_is_full_unless_normal_is_asked_for() {
+        assert_eq!(Synchronous::parse("").unwrap(), Synchronous::Full);
+        assert_eq!(Synchronous::parse("FULL").unwrap(), Synchronous::Full);
+        assert_eq!(Synchronous::parse(" normal ").unwrap(), Synchronous::Normal);
+        assert!(Synchronous::parse("off").is_err(), "OFF is never allowed");
+        assert_eq!(Synchronous::Normal.pragma(), "NORMAL");
+    }
 }

@@ -166,7 +166,11 @@ fn test_config(model_url: &str) -> (tempfile::TempDir, Config) {
         llm,
         connectors: Default::default(),
         egress: Default::default(),
-        store: kura_config::StoreConfig::default(),
+        // `KURA_LOAD_SYNCHRONOUS=normal` measures the store's other mode.
+        store: kura_config::StoreConfig {
+            synchronous: std::env::var("KURA_LOAD_SYNCHRONOUS").unwrap_or_default(),
+            ..kura_config::StoreConfig::default()
+        },
     };
     std::fs::write(
         dir.path().join(kura_plugin::PROFILE_FILE_NAME),
@@ -372,6 +376,8 @@ async fn tenants_run_parallel_tool_turns_and_swarms_without_failing_writes() {
         "turn_queue_timeout",
     ];
     let refused_before: u64 = refusals.iter().map(|o| admissions(o)).sum();
+    let commits_before = kura_telemetry::metrics::registry()
+        .counter_value(kura_telemetry::metrics::STORE_COMMITS_TOTAL, &[]);
     let queued_before = admissions("queued");
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -503,6 +509,14 @@ async fn tenants_run_parallel_tool_turns_and_swarms_without_failing_writes() {
     let queued = admissions("queued") - queued_before;
     let refused = refusals.iter().map(|o| admissions(o)).sum::<u64>() - refused_before;
     eprintln!("admission: {queued} turns waited for a slot, {refused} refused");
+    let commits = kura_telemetry::metrics::registry()
+        .counter_value(kura_telemetry::metrics::STORE_COMMITS_TOTAL, &[])
+        - commits_before;
+    eprintln!(
+        "store: {commits} commits ({:.1} per turn incl. swarm children), synchronous={}",
+        commits as f64 / (turn_count + runs.len() * SWARM_GOALS_PER_RUN) as f64,
+        kura_store::synchronous().pragma()
+    );
 
     for run in &finished {
         assert_eq!(run.status, kura_swarm::RunStatus::Completed, "{run:?}");

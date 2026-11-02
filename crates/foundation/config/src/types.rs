@@ -65,6 +65,12 @@ pub struct StoreConfig {
     /// through the writer. Reads on a reader connection run concurrently
     /// with writes under WAL.
     pub readers: usize,
+    /// SQLite `synchronous` for every connection: `full` (the default, as
+    /// before) syncs the WAL on every commit; `normal` syncs it at
+    /// checkpoints only, which under WAL never corrupts the database but can
+    /// lose the last commits on power loss or an OS crash (not on a daemon
+    /// crash). Checked when the store opens.
+    pub synchronous: String,
 }
 
 /// Reader connections opened when the config does not say. Every route and
@@ -76,6 +82,7 @@ impl Default for StoreConfig {
     fn default() -> Self {
         Self {
             readers: DEFAULT_STORE_READERS,
+            synchronous: "full".to_string(),
         }
     }
 }

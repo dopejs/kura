@@ -840,7 +840,13 @@ fn build_chat(asm: &mut Assembly) -> Result<(), AppError> {
         asm.state.providers.clone(),
         asm.state.skills.clone(),
         Some((*asm.event_bus).clone()),
-        Some(asm.secondary.clone() as Arc<dyn ChatStore>),
+        // Reads on the store pool's readers, writes on the chat's own
+        // connection: with one connection for both, every turn's reads
+        // queued behind every other turn's writes (4.5).
+        Some(Arc::new(kura_chat::PooledChatStore::new(
+            asm.secondary.clone(),
+            asm.state.store_pool.clone(),
+        )) as Arc<dyn ChatStore>),
     );
     if let Some(hooks) = asm.state.hooks.clone() {
         chat.set_hooks(hooks);

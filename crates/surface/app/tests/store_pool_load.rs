@@ -33,7 +33,10 @@ fn test_config(readers: usize) -> (tempfile::TempDir, Config) {
         },
         connectors: Default::default(),
         egress: Default::default(),
-        store: StoreConfig { readers },
+        store: StoreConfig {
+            readers,
+            ..StoreConfig::default()
+        },
     };
     (dir, config)
 }

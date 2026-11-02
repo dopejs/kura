@@ -628,6 +628,61 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
       *Limit:* above ~128 simultaneous connects the fake model's listen
       backlog (macOS `somaxconn` 128) resets connections; that is the
       harness, not the daemon.
+- [x] **4.5 Write path under load** (from the 2026-11-02 gap review: "the
+      single writer is the bottleneck"). Measured before changing anything,
+      with a new commit counter, `kura_store_commits_total`, installed on
+      every connection by the one place they are all opened
+      (`SQLiteStore::configure`).
+      *Findings* (the 4.3 load test; macOS figures in parentheses):
+      - A chat turn made 27 commits. Event appends were 9.6 of them, the
+        dispatch was 8 (each round's upsert then a separate tenant-bind
+        `UPDATE`), turn checkpoints 4.6, and the rest memory, projections
+        and swarm documents.
+      - At 128 concurrent turns the Mac was idle: 1.7 s of CPU in 1.7 s of
+        wall time on 14 cores. Two causes:
+        - SQLite's default busy handler waits by sleeping 1–100 ms between
+          tries, so writers slept through locks that were free after a
+          fraction of a millisecond;
+        - every chat read and write went through one connection behind one
+          mutex (`secondary`), so reads queued behind other turns' writes
+          and their file-lock waits.
+      - On the cell host (dopejs-sg-2, cloud disk) every commit fsyncs
+        under `synchronous=FULL`: an ordinary write takes ~8 ms at p50, and
+        the host tops out near 440 commits/s.
+      *Done:*
+      - Each round's dispatch row and its tenant binding are written in one
+        transaction (`upsert_llm_dispatch_for_tenant`), down to 23 commits a
+        turn. This also closes a window where the row existed without its
+        tenant.
+      - Every connection gets a fine-grained busy handler: 50 µs doubling
+        to 1 ms, 5 s in all as before. At 128 sessions (Mac), writer-mutex
+        wait p95 went from 60 to 10 ms, and turn p50 from 455 to 373 ms.
+      - The chat service reads on the store pool's query-only readers and
+        writes on its own connection (`PooledChatStore`). A reader is
+        query-only, so a "read" that writes fails loudly: that is how
+        `active_agent_profile_selection` (which creates the default
+        profile) was found to be a write.
+      - `store.synchronous` / `KURA_STORE_SYNCHRONOUS`: `full` (default,
+        unchanged) or `normal`. Under WAL, `normal` never corrupts the
+        database and loses nothing on a daemon crash, but the last commits
+        before a power loss or OS crash can be lost. The boot refuses
+        anything else (no `off`).
+      *Measured on dopejs-sg-2* (2 vCPU; same load, 3 tool calls a turn):
+
+      | Sessions | `full` turn p50 / p95, run | `normal` turn p50 / p95, run |
+      |---|---|---|
+      | 8 | 589 ms / 1.20 s, 2.6 s | 189 ms / 338 ms, 0.97 s |
+      | 32 | 1.73 s / 3.37 s, 10.7 s | 392 ms / 585 ms, 2.6 s |
+      | 128 | 7.25 s / 10.6 s, 25.1 s | 1.71 s / 2.47 s, 6.4 s |
+
+      `normal` is about 4× at every size. The default stays `full` because
+      it is a durability choice; the shared host should set `normal`.
+      *Not done, in order of the measured share:*
+      - batch event appends into one transaction per few milliseconds (42%
+        of commits), which delays an event's arrival in the ledger;
+      - fewer checkpoint writes per turn;
+      - more than one replica needs a store that is not one file on one
+        host (Postgres), plus a shared turn limiter.
 - [x] **4.4** Collapse the per-route tenant helpers (H4) into one extractor.
       *Done 2026-11-01:* `middleware::ActingTenant` (infallible
       `FromRequestParts`) replaces the twelve per-family copies

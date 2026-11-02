@@ -31,7 +31,10 @@ fn test_config(dir: &std::path::Path) -> Config {
         },
         connectors: Default::default(),
         egress: Default::default(),
-        store: StoreConfig { readers: 2 },
+        store: StoreConfig {
+            readers: 2,
+            ..StoreConfig::default()
+        },
     }
 }
 

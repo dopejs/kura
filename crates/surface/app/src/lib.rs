@@ -285,6 +285,10 @@ impl App {
         // embedded daemon is a single local host process, like test.
         let hosted = cfg.environment == Environment::Prod;
 
+        // Before the first connection opens: every one takes it.
+        kura_store::set_synchronous(
+            kura_store::Synchronous::parse(&cfg.store.synchronous).map_err(AppError::Store)?,
+        );
         // --- kernel: SQLite store (migrations run inside SQLiteStore::new).
         // The primary handle is shared by the API state and the
         // parking_lot::Mutex-based managers; sandbox/mcp/chat require a
@@ -4088,7 +4092,10 @@ mod browser_driver_tests {
             llm: Default::default(),
             connectors: Default::default(),
             egress: Default::default(),
-            store: kura_config::StoreConfig { readers: 2 },
+            store: kura_config::StoreConfig {
+                readers: 2,
+                ..kura_config::StoreConfig::default()
+            },
         };
         (dir, config)
     }

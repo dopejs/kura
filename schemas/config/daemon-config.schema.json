@@ -125,6 +125,12 @@
           "minimum": 0,
           "default": 2,
           "description": "Query-only reader connections beside the single writer. 0 = every read goes through the writer (pre-pool behaviour)."
+        },
+        "synchronous": {
+          "type": "string",
+          "enum": ["full", "normal"],
+          "default": "full",
+          "description": "SQLite synchronous mode for every connection (WAL). full syncs the WAL on every commit. normal syncs at checkpoints only: never corrupts the database, but the last commits before a power loss or OS crash can be lost. Env: KURA_STORE_SYNCHRONOUS."
         }
       }
     },

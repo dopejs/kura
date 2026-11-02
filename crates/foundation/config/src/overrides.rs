@@ -18,6 +18,7 @@ pub(crate) fn apply_env_overrides(cfg: &mut Config) {
     cfg.store.readers =
         usize::try_from(getenv_int("KURA_STORE_READERS", cfg.store.readers as i64).max(0))
             .unwrap_or(0);
+    cfg.store.synchronous = getenv("KURA_STORE_SYNCHRONOUS", &cfg.store.synchronous);
 
     cfg.llm.default_provider = getenv("KURA_LLM_DEFAULT_PROVIDER", &cfg.llm.default_provider);
     cfg.llm.default_model = getenv("KURA_LLM_DEFAULT_MODEL", &cfg.llm.default_model);

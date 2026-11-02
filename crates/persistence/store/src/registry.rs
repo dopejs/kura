@@ -327,6 +327,35 @@ impl SQLiteStore {
         Ok(())
     }
 
+    /// [`Self::upsert_llm_dispatch`] and the row's tenant binding
+    /// ([`Self::bind_row_tenant`]) in one transaction: one commit instead of
+    /// two (they were a fifth of a chat turn's commits), and no moment where
+    /// the row exists without its tenant. A row bound to another tenant
+    /// fails the whole write.
+    pub fn upsert_llm_dispatch_for_tenant(
+        &self,
+        dispatch: &kura_llm::Dispatch,
+        tenant_id: &str,
+    ) -> Result<(), String> {
+        let tenant_id = tenant_id.trim();
+        if tenant_id.is_empty() {
+            return self.upsert_llm_dispatch(dispatch);
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin llm dispatch write: {e}"))?;
+        self.upsert_llm_dispatch(dispatch)?;
+        self.bind_row_tenant(
+            "llm_dispatches",
+            "dispatch_id",
+            &dispatch.dispatch_id,
+            tenant_id,
+        )?;
+        tx.commit()
+            .map_err(|e| format!("commit llm dispatch {}: {e}", dispatch.dispatch_id))
+    }
+
     pub fn list_llm_dispatches(&self) -> Result<Vec<kura_llm::Dispatch>, String> {
         let mut stmt = self
             .conn
