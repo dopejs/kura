@@ -253,9 +253,34 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       tail is not marked: a cache write costs more than plain input and
       nothing would read it. A 400 naming `cache_control` (a compatible
       gateway without caching) is retried once unmarked and the client stops
-      marking. **Not verified live:** the round ≥ 2 cache-read check needs a
-      real Anthropic key and is the operator's to run (the dispatch span's
-      `cacheReadInputTokens`). **Open:** recalled memory sits ahead of the
+      marking. **Verified offline 2026-11-02**
+      (`surface/app/tests/prompt_cache_prefix.rs`): the real assembly runs
+      against a local `/v1/messages` that records every body, over four
+      turns on two threads, with continuity on.
+      - Tools and `system` are byte-identical in every request.
+      - Each round's messages are an exact prefix of the next round's.
+      - The history from earlier turns comes back in the same bytes turn
+        after turn.
+      - The breakpoints are on the last `system` block and the last message.
+      *Found by it:* every tool name went out as Kura names it
+      (`memory.lookup`, `browser.open`). The OpenAI and Anthropic APIs
+      accept only `[a-zA-Z0-9_-]{1,64}`, so a turn offering tools would
+      have been refused by both; every test used fakes that never checked.
+      All three wires now send a sanitized, unique, deterministic name and
+      map the model's calls back (`tool_names.rs`).
+      *What it shows about the savings:*
+      - Within a turn the tool loop re-reads each earlier round; that is
+        where caching pays.
+      - Across turns only tools + `system` are shared. Earlier turns are
+        injected ahead of the profile messages, and a previous request
+        ended in tool calls that continuity does not keep, so no message
+        prefix carries over.
+      - In a minimal assembly that frame is about 250 tokens, under
+        Anthropic's 1,024-token minimum, so the frame breakpoint caches
+        nothing until tools, MCP servers and skills make the frame larger.
+      **Not verified live:** that Anthropic accepts the markers and reports
+      `cacheReadInputTokens` on round ≥ 2 needs any real Messages endpoint;
+      it is the operator's to run. **Open:** recalled memory sits ahead of the
       history and changes with each query, so across turns only the frame is
       reused; moving recall after the history would let the history cache
       too, but changes what the model sees and needs its own evaluation.
