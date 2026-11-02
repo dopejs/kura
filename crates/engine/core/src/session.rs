@@ -216,8 +216,13 @@ impl Session {
         for round in checkpoint.rounds {
             rounds += 1;
             self.resumed.rounds += 1;
+            // Read before the model asked for this round: they come before
+            // its calls, as they did the first time.
+            self.replay_steered(&round.steered_before, emit);
             self.run_calls(round, emit).await;
         }
+        self.replay_steered(&checkpoint.steered, emit);
+        self.checkpoint.steered = checkpoint.steered;
         loop {
             // `>=`, checked before the round it would allow. With `>` the cap
             // permitted one round more than it named -- a cap of three ran
@@ -326,6 +331,7 @@ impl Session {
             }
 
             let round = CheckpointRound {
+                steered_before: std::mem::take(&mut self.checkpoint.steered),
                 calls: pending_calls
                     .into_iter()
                     .map(|(call_id, name, arguments)| CheckpointCall {
@@ -340,15 +346,33 @@ impl Session {
         }
     }
 
-    /// Appends messages sent to the running turn, as the user's.
+    /// Appends messages sent to the running turn, as the user's, and
+    /// journals them before the model call that reads them: the inbox has
+    /// let go of them, so the checkpoint is now their only copy.
     fn steer(&mut self, messages: Vec<String>, emit: &mut dyn FnMut(Event)) {
+        if messages.is_empty() {
+            return;
+        }
+        self.replay_steered(&messages, emit);
+        self.checkpoint.steered.extend(messages);
+        self.journal();
+    }
+
+    /// Puts messages into the history (a resumed turn's, from its
+    /// checkpoint), without journaling them again.
+    fn replay_steered(&mut self, messages: &[String], emit: &mut dyn FnMut(Event)) {
         for message in messages {
             self.steered += 1;
             self.history.push(ResponseItem::Message {
                 role: Role::User,
                 content: message.clone(),
             });
-            self.publish(emit, EventMsg::SteerMessage { message });
+            self.publish(
+                emit,
+                EventMsg::SteerMessage {
+                    message: message.clone(),
+                },
+            );
         }
     }
 
@@ -992,7 +1016,9 @@ mod tests {
                     checkpoint_call("w1", "write", settled("earlier w1")),
                     checkpoint_call("w2", "write", CallState::Started),
                 ],
+                ..Default::default()
             }],
+            ..Default::default()
         };
         let journal = Arc::new(Recorded::default());
         let mut session =
@@ -1059,7 +1085,9 @@ mod tests {
                     checkpoint_call("r1", "read", CallState::Started),
                     checkpoint_call("w2", "write", CallState::Planned),
                 ],
+                ..Default::default()
             }],
+            ..Default::default()
         };
         let mut session = Session::new(provider, timed.registry.clone());
         let (mut emit, _) = collect_events();
@@ -1086,8 +1114,10 @@ mod tests {
             rounds: (0..2)
                 .map(|i| CheckpointRound {
                     calls: vec![checkpoint_call(&format!("c{i}"), "read", settled("x"))],
+                    ..Default::default()
                 })
                 .collect(),
+            ..Default::default()
         };
         let mut session =
             Session::new(provider.clone(), timed.registry.clone()).with_max_tool_rounds(3);
@@ -1110,7 +1140,9 @@ mod tests {
                     checkpoint_call("b", "write", CallState::Started),
                     checkpoint_call("c", "write", settled("ok")),
                 ],
+                ..Default::default()
             }],
+            ..Default::default()
         };
         let json = serde_json::to_value(&checkpoint).unwrap();
         assert_eq!(
@@ -1286,6 +1318,95 @@ mod tests {
         }));
         assert_eq!(*inbox.asked.lock(), vec!["take", "take", "take_or_close"]);
         assert!(inbox.closed());
+    }
+
+    /// A message the turn read is journaled before the model call that
+    /// reads it, so a turn that dies then and is resumed still has it, in
+    /// the same place: after the round that ran before it.
+    #[tokio::test]
+    async fn a_message_sent_to_the_turn_survives_a_crash_and_resume() {
+        let provider = Arc::new(FakeProvider::with_rounds(vec![
+            vec![ResponseEvent::FunctionCall {
+                call_id: "c1".into(),
+                name: "echo".into(),
+                arguments: "{}".into(),
+            }],
+            vec![ResponseEvent::FunctionCall {
+                call_id: "c2".into(),
+                name: "echo".into(),
+                arguments: "{}".into(),
+            }],
+            vec![ResponseEvent::OutputTextDelta("only the PDFs".into())],
+        ]));
+        let inbox = ScriptedInbox::new(vec![
+            vec![],
+            vec!["only the PDFs, please"],
+            vec!["and sort them"],
+        ]);
+        let journal = Arc::new(Recorded::default());
+        let mut session = Session::new(provider, echo_registry())
+            .with_inbox(inbox)
+            .with_journal(journal.clone());
+        let (mut emit, _) = collect_events();
+        session.run_turn("list the files", &mut emit).await.unwrap();
+
+        let recorded = journal.0.lock().clone();
+        // The first message is attached to the round its model call asked
+        // for; the second was read before the last call, which asked for no
+        // tools, so it is still pending when the turn ends.
+        let last = recorded.last().unwrap();
+        assert_eq!(last.rounds[1].steered_before, ["only the PDFs, please"]);
+        assert_eq!(last.steered, ["and sort them"]);
+        // The process died right after the second message was journaled,
+        // with the last model call under way.
+        let at_crash = recorded
+            .iter()
+            .find(|checkpoint| checkpoint.steered == ["and sort them"])
+            .cloned()
+            .expect("journaled before the model call");
+
+        let resumed_provider = Arc::new(FakeProvider::with_rounds(vec![vec![
+            ResponseEvent::OutputTextDelta("sorted PDFs".into()),
+        ]]));
+        let mut resumed = Session::new(resumed_provider.clone(), echo_registry());
+        let (mut emit, events) = collect_events();
+        let outcome = resumed
+            .resume_turn("list the files", at_crash, &mut emit)
+            .await
+            .unwrap();
+        assert_eq!(outcome.final_message.as_deref(), Some("sorted PDFs"));
+        assert_eq!(resumed.steered(), 2);
+        let prompts = resumed_provider.prompts.lock();
+        let input = &prompts[0].input;
+        let position = |text: &str| input.iter().position(|item| item == &user(text)).unwrap();
+        let outputs: Vec<usize> = input
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| matches!(item, ResponseItem::FunctionCallOutput { .. }))
+            .map(|(index, _)| index)
+            .collect();
+        // question, round 1, message 1, round 2, message 2: as first run.
+        assert!(position("list the files") < outputs[0]);
+        assert!(outputs[0] < position("only the PDFs, please"));
+        assert!(position("only the PDFs, please") < outputs[1]);
+        assert_eq!(input.last(), Some(&user("and sort them")));
+        assert!(events.lock().contains(&EventMsg::SteerMessage {
+            message: "and sort them".into()
+        }));
+    }
+
+    #[test]
+    fn a_checkpoint_from_before_steering_was_journaled_still_reads() {
+        let old = r#"{"rounds":[{"calls":[{"callId":"c1","name":"echo","arguments":"{}","state":{"state":"started"}}]}]}"#;
+        let checkpoint: TurnCheckpoint = serde_json::from_str(old).expect("reads");
+        assert!(checkpoint.steered.is_empty());
+        assert!(checkpoint.rounds[0].steered_before.is_empty());
+        // And nothing new is written when nothing was steered.
+        assert!(
+            !serde_json::to_string(&checkpoint)
+                .unwrap()
+                .contains("steered")
+        );
     }
 
     #[tokio::test]

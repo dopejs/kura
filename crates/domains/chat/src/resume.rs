@@ -102,7 +102,9 @@ impl TurnResume {
         match store.get_turn_checkpoint(&key) {
             Ok(Some(record)) if record.tenant_id == tenant_id.trim() => {
                 match serde_json::from_str::<TurnCheckpoint>(&record.checkpoint_json) {
-                    Ok(checkpoint) if !checkpoint.rounds.is_empty() => {
+                    Ok(checkpoint)
+                        if !checkpoint.rounds.is_empty() || !checkpoint.steered.is_empty() =>
+                    {
                         count(RESUMED);
                         resume.checkpoint = checkpoint;
                     }
@@ -242,7 +244,9 @@ mod tests {
                     arguments: "{}".into(),
                     state: CallState::Started,
                 }],
+                ..Default::default()
             }],
+            ..Default::default()
         }
     }
 
@@ -257,6 +261,20 @@ mod tests {
 
         let retry = claim(&running, &store).expect("after the first ended");
         assert_eq!(retry.checkpoint, one_round());
+    }
+
+    /// A message sent to the turn before it ran any tool is all the record
+    /// holds; it is still resumed, or the message would be lost.
+    #[test]
+    fn a_checkpoint_holding_only_a_steered_message_is_resumed() {
+        let (_dir, store) = sqlite();
+        let running = Arc::new(RunningTurns::default());
+        let steered = TurnCheckpoint {
+            steered: vec!["in French, please".to_string()],
+            ..TurnCheckpoint::default()
+        };
+        claim(&running, &store).unwrap().journal.record(&steered);
+        assert_eq!(claim(&running, &store).unwrap().checkpoint, steered);
     }
 
     #[test]

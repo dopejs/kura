@@ -545,8 +545,11 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
       already-cancelled token against a fresh attempt, so a cancelled
       round could still start a provider request; it now does not start
       one. *Not covered:* ~~streamed queries (one dispatch, no loop)~~
-      (closed 2026-11-02, below); a message is not in the 2.7 checkpoint, so a turn resumed after a
-      crash has lost the messages it was sent; reaching a turn running in
+      (closed 2026-11-02, below); ~~a message is not in the 2.7 checkpoint, so a turn resumed after a
+      crash has lost the messages it was sent~~ (closed 2026-11-02: a
+      message is journaled when the loop reads it, before the model call
+      that reads it, and a resumed turn puts it back in the same place;
+      older checkpoints still read); reaching a turn running in
       another daemon process.
 
 - [x] **2.9 Streamed turns run the agent loop** (found in the 2026-11-02

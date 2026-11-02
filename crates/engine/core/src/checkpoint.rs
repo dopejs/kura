@@ -22,6 +22,12 @@ pub const INTERRUPTED_CALL_OUTPUT: &str = "this call was interrupted before it r
 #[serde(rename_all = "camelCase")]
 pub struct TurnCheckpoint {
     pub rounds: Vec<CheckpointRound>,
+    /// Messages sent to the running turn (2.8) that the loop has read since
+    /// the last round: they went to the model call that is under way. A
+    /// resumed turn puts them back where they were read, so a message is not
+    /// lost to a crash. Absent in checkpoints written before 2026-11-02.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steered: Vec<String>,
 }
 
 impl TurnCheckpoint {
@@ -40,6 +46,9 @@ impl TurnCheckpoint {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckpointRound {
+    /// Messages read just before the model call that asked for this round.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steered_before: Vec<String>,
     pub calls: Vec<CheckpointCall>,
 }
 
