@@ -271,10 +271,9 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       *What it shows about the savings:*
       - Within a turn the tool loop re-reads each earlier round; that is
         where caching pays.
-      - Across turns only tools + `system` are shared. Earlier turns are
-        injected ahead of the profile messages, and a previous request
-        ended in tool calls that continuity does not keep, so no message
-        prefix carries over.
+      - Across turns only tools + `system` were shared: earlier turns were
+        injected ahead of the profile messages, and recalled memory ahead of
+        both. (Closed the same day, below.)
       - In a minimal assembly that frame is about 250 tokens, under
         Anthropic's 1,024-token minimum, so the frame breakpoint caches
         nothing until tools, MCP servers and skills make the frame larger.
@@ -283,10 +282,30 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       round ≥ 2 is not run. The offline test covers Kura's side; the marker
       format is checked against the documented shape. If a deployment
       reports no cache reads, the dispatch span's `cacheReadInputTokens` is
-      where to look first. **Open:** recalled memory sits ahead of the
+      where to look first. ~~**Open:** recalled memory sits ahead of the
       history and changes with each query, so across turns only the frame is
-      reused; moving recall after the history would let the history cache
-      too, but changes what the model sees and needs its own evaluation.
+      reused~~ (closed 2026-11-02, user's call to change the order).
+      *Cross-turn caching:*
+      - The prompt is now, in order:
+        - the frame (`system`);
+        - the standing messages: overlays, skills, the profile persona
+          and safety posture, the memory bootstrap;
+        - earlier turns;
+        - recalled memory;
+        - the question.
+        Profile messages used to follow the question; recall used to sit
+        in front of the history.
+      - Anthropic gets a third breakpoint at the end of the history, so
+        the next turn on the thread reads the standing messages and every
+        earlier turn from the cache.
+      - Measured by the offline test over four turns: turn 3 reads 3 of
+        its 6 messages from the cache, turn 4 reads 5 of 8, plus tools
+        and `system`.
+      - *Changed for the model:* recalled memory is now next to the
+        question it was recalled for, and the persona is part of `system`
+        when no overlay comes first.
+      - *Rollback:* revert the commit; no stored data depends on the
+        order.
 - [x] **2.4 Built-in embedder (G10).** When the `embed` role is routed, use
       it as the embedder; hashed n-gram stays the fallback. Re-embedding the
       corpus is an explicit operator action, not a boot side effect.

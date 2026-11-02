@@ -894,9 +894,18 @@ impl Service {
         {
             dispatch_input.model = profile.default_provider_preference.model.trim().to_string();
         }
+        // With the other standing instructions (overlays, skills), in front
+        // of the question and of the history continuity adds: they are the
+        // same every turn, so they belong to the cached prefix (2.3). They
+        // used to follow the question, which put them after the history.
         let profile_messages = profile_context_messages(&profile);
         if !profile_messages.is_empty() {
-            dispatch_input.messages.extend(profile_messages);
+            let at = dispatch_input
+                .messages
+                .iter()
+                .position(|message| message.role != MessageRole::System)
+                .unwrap_or(dispatch_input.messages.len());
+            dispatch_input.messages.splice(at..at, profile_messages);
         }
         Ok((profile, selection, true))
     }

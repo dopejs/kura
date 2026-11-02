@@ -10,7 +10,9 @@
 //! - every request carries the same `tools` and `system`;
 //! - within a turn, each round's messages are an exact prefix of the next
 //!   round's;
-//! - the breakpoints are where the provider puts them.
+//! - the breakpoints are where the provider puts them;
+//! - across turns, everything before the history's end (standing messages
+//!   and earlier turns) comes back unchanged in the next turn's request.
 //!
 //! Found by it: every tool name went out as Kura names it (`memory.lookup`),
 //! which the OpenAI and Anthropic APIs refuse; the fakes never checked.
@@ -282,13 +284,14 @@ async fn every_request_keeps_the_cached_prefix_byte_stable() {
     ask(&app, &secret, "thr_cache_a", "What did I say about apples?").await;
     ask(&app, &secret, "thr_cache_a", "And about pears?").await;
     ask(&app, &secret, "thr_cache_a", "Which did I like more?").await;
+    ask(&app, &secret, "thr_cache_a", "Why?").await;
     ask(&app, &secret, "thr_cache_b", "Anything about plums?").await;
 
     let bodies = recorded.lock().clone();
     // Each turn: a round that asks for the lookup, a round that answers.
     // Summaries or memory consolidation may add dispatches without tools.
     let rounds: Vec<&Value> = bodies.iter().filter(|b| b.get("tools").is_some()).collect();
-    assert_eq!(rounds.len(), 8, "two rounds per turn: {}", bodies.len());
+    assert_eq!(rounds.len(), 10, "two rounds per turn: {}", bodies.len());
     eprintln!(
         "tools offered: {:?}",
         rounds[0]["tools"]
@@ -379,29 +382,55 @@ async fn every_request_keeps_the_cached_prefix_byte_stable() {
         assert_eq!(block["cache_control"]["type"], "ephemeral", "{last}");
     }
 
-    // 4. Earlier turns come back (continuity) in the same bytes every time:
-    //    turn three's history begins with turn two's.
-    let history = |body: &Value| -> Vec<Value> {
-        let messages = unmarked(&body["messages"]);
-        let messages = messages.as_array().unwrap();
-        // Everything before the profile messages, which follow the history.
-        let end = messages
-            .iter()
-            .position(|m| m.to_string().contains("Agent profile"))
-            .unwrap_or(0);
-        messages[..end].to_vec()
+    // 4. Across turns. Each request marks the end of its history, in front
+    //    of this turn's recall and question. What precedes that mark must
+    //    come back byte for byte in the next turn's request on the thread:
+    //    that is the part the next turn reads from the cache.
+    let history_mark = |body: &Value| -> Option<usize> {
+        let messages = body["messages"].as_array().unwrap();
+        let last = messages.len() - 1;
+        messages.iter().enumerate().position(|(index, m)| {
+            index != last
+                && m["content"]
+                    .as_array()
+                    .is_some_and(|blocks| blocks.iter().any(|b| b.get("cache_control").is_some()))
+        })
     };
-    let (second, third) = (history(rounds[2]), history(rounds[4]));
-    assert_eq!(second.len(), 2, "turn two sees turn one: {second:?}");
+    // Thread a: turns at rounds 0, 2, 4, 6; thread b's turn is at 8.
+    let (first, second, third, fourth) = (rounds[0], rounds[2], rounds[4], rounds[6]);
     assert_eq!(
-        third.len(),
-        4,
-        "turn three sees turns one and two: {third:?}"
-    );
-    assert_eq!(
-        first_difference(&second, &third),
+        history_mark(first),
         None,
-        "history rewritten between turns"
+        "a first turn has no history to mark"
+    );
+    for (earlier, later, label) in [
+        (second, third, "turn two -> three"),
+        (third, fourth, "turn three -> four"),
+    ] {
+        let mark = history_mark(earlier).unwrap_or_else(|| panic!("{label}: no history mark"));
+        let earlier = unmarked(&earlier["messages"]);
+        let later = unmarked(&later["messages"]);
+        let (earlier, later) = (earlier.as_array().unwrap(), later.as_array().unwrap());
+        assert_eq!(
+            first_difference(&earlier[..=mark], later),
+            None,
+            "{label}: the cached prefix changed:\n{}\nvs\n{}",
+            Value::Array(earlier.to_vec()),
+            Value::Array(later.to_vec())
+        );
+        eprintln!(
+            "{label}: the next turn reads {} of its {} messages from the cache",
+            mark + 1,
+            later.len()
+        );
+    }
+    // The mark sits on the previous turn's answer, after the question it
+    // answered: the history is everything up to and including it.
+    let mark = history_mark(third).expect("turn three marks its history");
+    assert_eq!(
+        third["messages"][mark]["role"], "assistant",
+        "{}",
+        third["messages"]
     );
 
     let frame = unmarked(&rounds[0]["tools"]).to_string().len()
@@ -410,26 +439,10 @@ async fn every_request_keeps_the_cached_prefix_byte_stable() {
         "frame (tools + system): {frame} bytes, about {} tokens",
         frame / 4
     );
-
-    // What the next turn on the same thread reuses beyond the frame: its
-    // first round against the previous turn's last. Printed, not asserted:
-    // recalled memory sits ahead of the history (2.3, open).
-    let previous = unmarked(&rounds[1]["messages"]);
-    let next = unmarked(&rounds[2]["messages"]);
-    let shared = previous
-        .as_array()
-        .unwrap()
-        .iter()
-        .zip(next.as_array().unwrap())
-        .take_while(|(a, b)| a == b)
-        .count();
     if std::env::var("KURA_CACHE_DUMP").is_ok() {
-        for (label, messages) in [
-            ("previous turn, last round", &previous),
-            ("next turn, first round", &next),
-        ] {
-            eprintln!("--- {label}");
-            for message in messages.as_array().unwrap() {
+        for (label, body) in [("turn two", second), ("turn three", third)] {
+            eprintln!("--- {label}, first round");
+            for message in body["messages"].as_array().unwrap() {
                 eprintln!(
                     "{} {}",
                     message["role"],
@@ -442,9 +455,5 @@ async fn every_request_keeps_the_cached_prefix_byte_stable() {
             }
         }
     }
-    eprintln!(
-        "next turn reuses {shared} of the previous turn's {} messages",
-        previous.as_array().unwrap().len()
-    );
     app.close();
 }

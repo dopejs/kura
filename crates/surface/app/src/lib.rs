@@ -2256,6 +2256,31 @@ mod tests {
             first_memory_at,
             "the notice comes right before the memory"
         );
+        // Bootstrap joins the standing messages, in front of the history;
+        // recall depends on the question and sits right before it, so the
+        // history stays a stable, cacheable prefix across turns (2.3).
+        let position = |needle: &str| {
+            messages
+                .iter()
+                .position(|m| m["content"].as_str().is_some_and(|c| c.contains(needle)))
+                .unwrap_or_else(|| panic!("{needle} not found: {messages:?}"))
+        };
+        let bootstrap_at = position(&format!("Memory[l3 {}]", asset.asset_id));
+        let recalled_at = position(&format!("Memory[l1 {}]", l1.asset_id));
+        let question_at = messages.len() - 1;
+        assert_eq!(
+            recalled_at + 1,
+            question_at,
+            "recall right before the question"
+        );
+        assert!(bootstrap_at < recalled_at);
+        assert_eq!(messages[0]["content"], "frame", "the frame stays first");
+        assert!(
+            messages[1..bootstrap_at]
+                .iter()
+                .all(|m| m["role"] == "system"),
+            "only standing messages before the bootstrap: {messages:?}"
+        );
         assert_eq!(
             messages
                 .iter()

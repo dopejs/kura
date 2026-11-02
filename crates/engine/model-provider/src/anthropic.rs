@@ -448,7 +448,11 @@ fn build_request(
         );
     }
     if cache {
-        mark_cache_breakpoints(&mut body, !prompt.tools.is_empty());
+        mark_cache_breakpoints(
+            &mut body,
+            !prompt.tools.is_empty(),
+            history_boundary(&prompt.input),
+        );
     }
     body
 }
@@ -464,15 +468,20 @@ fn cache_marker() -> Value {
 /// - The last `system` block (or, with no system prompt, the last tool)
 ///   caches the frame. It is the same request after request — deterministic
 ///   and free of timestamps — so it is read across turns.
+/// - The end of the history (`boundary`): the next turn on the thread sends
+///   the same standing messages and history, plus this turn's question and
+///   answer, so it reads this from the cache. Recalled memory and the
+///   question come after it, because they change every turn.
 /// - The last message block, only when tools are offered: another round may
 ///   follow, and it resends everything up to here. A turn without tools is a
 ///   single dispatch, and writing its tail to the cache (which costs more
-///   than plain input) would buy nothing. Later turns do not reuse it either:
-///   recalled memory sits ahead of the history and changes with the query.
+///   than plain input) would buy nothing.
+///
+/// Three of the four breakpoints the API allows.
 ///
 /// A prefix shorter than the model's minimum is not cached and the marker is
 /// ignored, so marking a short prompt is harmless.
-fn mark_cache_breakpoints(body: &mut Value, rolling: bool) {
+fn mark_cache_breakpoints(body: &mut Value, rolling: bool, boundary: Option<usize>) {
     // `get_mut`, not indexing: indexing a missing key on a mutable `Value`
     // inserts it as null, and `"system": null` is a request the endpoint
     // rejects.
@@ -484,6 +493,19 @@ fn mark_cache_breakpoints(body: &mut Value, rolling: bool) {
     if let Some(block) = last_item(body, frame_key) {
         block["cache_control"] = cache_marker();
     }
+    // One message per input item, so the item index is the message index.
+    if let Some(at) = boundary {
+        let block = body
+            .get_mut("messages")
+            .and_then(Value::as_array_mut)
+            .and_then(|messages| messages.get_mut(at))
+            .and_then(|message| message.get_mut("content"))
+            .and_then(Value::as_array_mut)
+            .and_then(|content| content.last_mut());
+        if let Some(block) = block {
+            block["cache_control"] = cache_marker();
+        }
+    }
     if rolling {
         let last_block = last_item(body, "messages")
             .and_then(|message| message.get_mut("content"))
@@ -493,6 +515,34 @@ fn mark_cache_breakpoints(body: &mut Value, rolling: bool) {
             block["cache_control"] = cache_marker();
         }
     }
+}
+
+/// The last item before this turn's new content: the question (the last user
+/// message) and the system notes right before it (recalled memory). `None`
+/// when nothing precedes them, as on a thread's first turn.
+fn history_boundary(input: &[ResponseItem]) -> Option<usize> {
+    let question = input.iter().rposition(|item| {
+        matches!(
+            item,
+            ResponseItem::Message {
+                role: Role::User,
+                ..
+            }
+        )
+    })?;
+    let mut start = question;
+    while start > 0
+        && matches!(
+            input[start - 1],
+            ResponseItem::Message {
+                role: Role::System,
+                ..
+            }
+        )
+    {
+        start -= 1;
+    }
+    start.checked_sub(1)
 }
 
 /// The last element of the array at `key`, if there is one.
@@ -641,6 +691,84 @@ mod tests {
         // Off means no marker anywhere.
         let body = build_request("m", &prompt, 10, false, false);
         assert!(!body.to_string().contains("cache_control"), "{body}");
+    }
+
+    fn said(role: Role, text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            role,
+            content: text.into(),
+        }
+    }
+
+    /// The history's end is a breakpoint, so the next turn reads standing
+    /// messages and history from the cache; recall and the question, which
+    /// change every turn, come after it.
+    #[test]
+    fn the_end_of_the_history_is_a_breakpoint() {
+        let input = vec![
+            said(Role::System, "persona"),
+            said(Role::User, "first question"),
+            said(Role::Assistant, "first answer"),
+            said(Role::System, "recalled memory"),
+            said(Role::User, "second question"),
+        ];
+        assert_eq!(
+            history_boundary(&input),
+            Some(2),
+            "after the answer, before recall"
+        );
+        let prompt = Prompt {
+            instructions: Some("frame".into()),
+            input: input.clone(),
+            tools: vec![tool("a")],
+            ..Prompt::default()
+        };
+        let body = build_request("m", &prompt, 10, false, true);
+        let messages = body["messages"].as_array().unwrap();
+        let marks: Vec<usize> = messages
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m["content"].as_array().unwrap().iter().any(marked))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            marks,
+            [2, 4],
+            "history end and the tool loop's tail: {body}"
+        );
+        assert_eq!(
+            body.to_string().matches("cache_control").count(),
+            3,
+            "within the API's four"
+        );
+
+        // A later round of the same turn: the boundary does not move.
+        let mut later = input.clone();
+        later.push(ResponseItem::FunctionCall {
+            call_id: "c".into(),
+            name: "a".into(),
+            arguments: "{}".into(),
+        });
+        later.push(ResponseItem::FunctionCallOutput {
+            call_id: "c".into(),
+            output: "out".into(),
+        });
+        assert_eq!(history_boundary(&later), Some(2));
+
+        // A first turn: nothing before the question but standing notes.
+        assert_eq!(
+            history_boundary(&[said(Role::System, "persona"), said(Role::User, "q")]),
+            None
+        );
+        assert_eq!(history_boundary(&[said(Role::User, "q")]), None);
+        // No tools: the history end is still marked (the next turn reads it).
+        let plain = Prompt {
+            tools: Vec::new(),
+            ..prompt
+        };
+        let body = build_request("m", &plain, 10, false, true);
+        assert!(marked(&body["messages"][2]["content"][0]), "{body}");
+        assert!(!marked(&body["messages"][4]["content"][0]), "{body}");
     }
 
     #[tokio::test]

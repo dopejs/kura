@@ -1235,6 +1235,8 @@ impl kura_plugin::Hook for ContextHook {
         let frame = self.config.frame_memory();
         let (mut injected, mut record) =
             kura_context::assemble_framed(&candidates, self.config.bootstrap_budget(), frame);
+        // Everything after this many is query-time recall (below).
+        let bootstrapped = injected.len();
         record.excluded.extend(visibility_excluded);
 
         // Query-time recall of L1 atoms (BM25 + recency, RRF fusion) over
@@ -1359,23 +1361,34 @@ impl kura_plugin::Hook for ContextHook {
             return kura_plugin::HookOutcome::Continue;
         }
 
-        // The notice goes once, before the items it describes.
-        if frame && !injected.is_empty() {
-            injected.insert(0, kura_context::memory_notice_message());
+        // Two places, so the prompt cache (2.3) reaches across turns:
+        // - the bootstrap is the same turn after turn, so it joins the frame
+        //   (persona, skills), in front of the history;
+        // - recall depends on this question, so it goes right before it,
+        //   after the history. In front of the history it changed the prefix
+        //   every turn, and nothing after it could be read from the cache.
+        // The notice goes once, before whichever comes first.
+        let mut recalled = injected.split_off(bootstrapped);
+        let mut bootstrap = injected;
+        if frame {
+            if !bootstrap.is_empty() {
+                bootstrap.insert(0, kura_context::memory_notice_message());
+            } else if !recalled.is_empty() {
+                recalled.insert(0, kura_context::memory_notice_message());
+            }
         }
-        // Splice the bootstrap in front of the first non-system message so
-        // it joins the frame (persona/skills) rather than the history.
         if let Some(messages) = payload.get_mut("messages").and_then(Value::as_array_mut) {
-            let insert_at = messages
+            let as_json = |message: &kura_context::ContextMessage| serde_json::json!({ "role": message.role, "content": message.content });
+            let frame_end = messages
                 .iter()
                 .position(|m| m.get("role").and_then(Value::as_str) != Some("system"))
                 .unwrap_or(messages.len());
-            for (offset, message) in injected.iter().enumerate() {
-                messages.insert(
-                    insert_at + offset,
-                    serde_json::json!({ "role": message.role, "content": message.content }),
-                );
-            }
+            messages.splice(frame_end..frame_end, bootstrap.iter().map(as_json));
+            let question_at = messages
+                .iter()
+                .rposition(|m| m.get("role").and_then(Value::as_str) == Some("user"))
+                .unwrap_or(messages.len());
+            messages.splice(question_at..question_at, recalled.iter().map(as_json));
         }
 
         // Inspectability: the assembly decision is an event (best effort).
