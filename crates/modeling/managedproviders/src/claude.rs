@@ -611,6 +611,24 @@ pub fn parse_claude_result(
     struct ClaudeUsage {
         input_tokens: i64,
         output_tokens: i64,
+        cache_read_input_tokens: i64,
+        cache_creation_input_tokens: i64,
+    }
+    // The CLI reports the API's usage object: `input_tokens` is only the
+    // uncached part, and the CLI caches its large system prompt, so most of
+    // the input is in the cache counts (measured 2026-11-02: 2 uncached,
+    // 11,607 read, 14,832 written for a two-word reply). Kura counts input
+    // with its cached part, as the Anthropic API provider does.
+    fn claude_usage(usage: &ClaudeUsage) -> Usage {
+        let input =
+            usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens;
+        Usage {
+            input_tokens: input,
+            output_tokens: usage.output_tokens,
+            total_tokens: input + usage.output_tokens,
+            cache_read_input_tokens: usage.cache_read_input_tokens,
+            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+        }
     }
     if let Ok(payload) = serde_json::from_str::<ClaudePayload>(result.stdout.trim()) {
         if payload.is_error {
@@ -626,12 +644,7 @@ pub fn parse_claude_result(
             tool_calls: Vec::new(),
             output: payload.result,
             finish_reason: "stop".to_string(),
-            usage: Usage {
-                input_tokens: payload.usage.input_tokens,
-                output_tokens: payload.usage.output_tokens,
-                total_tokens: payload.usage.input_tokens + payload.usage.output_tokens,
-                ..Default::default()
-            },
+            usage: claude_usage(&payload.usage),
         });
     }
     if let Some(run_err) = run_err {
@@ -642,4 +655,39 @@ pub fn parse_claude_result(
         format!("decode claude CLI response: {}", result.stdout.trim()),
         false,
     ))
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+
+    /// The CLI's usage, from a real `claude -p --output-format json` reply
+    /// (2026-11-02, trimmed): most of the input is cached, and is counted.
+    #[test]
+    fn claude_cli_usage_counts_its_cached_input() {
+        let stdout = r#"{"type":"result","subtype":"success","is_error":false,"result":"ok",
+            "usage":{"input_tokens":2,"cache_creation_input_tokens":14832,"cache_read_input_tokens":11607,
+            "output_tokens":4,"output_tokens_details":{"thinking_tokens":0},"service_tier":"standard"}}"#;
+        let result = crate::bridge::RunResult {
+            stdout: stdout.to_string(),
+            ..Default::default()
+        };
+        let response = parse_claude_result(&result, None).expect("parsed");
+        assert_eq!(response.output, "ok");
+        assert_eq!(response.usage.input_tokens, 2 + 11_607 + 14_832);
+        assert_eq!(response.usage.cache_read_input_tokens, 11_607);
+        assert_eq!(response.usage.cache_creation_input_tokens, 14_832);
+        assert_eq!(response.usage.output_tokens, 4);
+        assert_eq!(response.usage.total_tokens, 2 + 11_607 + 14_832 + 4);
+
+        // An older CLI without cache fields still parses.
+        let result = crate::bridge::RunResult {
+            stdout:
+                r#"{"is_error":false,"result":"ok","usage":{"input_tokens":3,"output_tokens":1}}"#
+                    .to_string(),
+            ..Default::default()
+        };
+        let response = parse_claude_result(&result, None).expect("parsed");
+        assert_eq!(response.usage.total_tokens, 4);
+    }
 }
