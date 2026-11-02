@@ -71,6 +71,14 @@ enum Command {
         /// Hostnames (and their subdomains) tenants may not reach
         #[arg(long = "block-host")]
         block_hosts: Vec<String>,
+        /// The key shared with the daemon (`KURA_SANDBOX_EGRESS_KEY_FILE`):
+        /// 32 bytes or 64 hex characters. Set, every request must carry its
+        /// tenant's credential and is logged with that tenant
+        #[arg(long)]
+        tenant_key_file: Option<PathBuf>,
+        /// Most connections one tenant may hold at once (with a tenant key)
+        #[arg(long, default_value_t = 64)]
+        per_tenant_connections: usize,
     },
 }
 
@@ -126,7 +134,15 @@ fn main() -> ExitCode {
             listen,
             allow_ports,
             block_hosts,
-        } => egress_proxy(listen, allow_ports, block_hosts),
+            tenant_key_file,
+            per_tenant_connections,
+        } => egress_proxy(
+            listen,
+            allow_ports,
+            block_hosts,
+            tenant_key_file,
+            per_tenant_connections,
+        ),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -161,6 +177,8 @@ fn egress_proxy(
     listen: std::net::SocketAddr,
     allow_ports: Vec<u16>,
     block_hosts: Vec<String>,
+    tenant_key_file: Option<PathBuf>,
+    per_tenant_connections: usize,
 ) -> Result<(), AnyError> {
     let mut config = kura_egress_proxy::ProxyConfig::new(kura_egress::EgressPolicy {
         blocked_hostnames: block_hosts,
@@ -169,14 +187,26 @@ fn egress_proxy(
     if !allow_ports.is_empty() {
         config.allowed_ports = allow_ports;
     }
+    if let Some(path) = tenant_key_file {
+        config.tenant_key = Some(kura_egress::EgressKey::from_file(&path)?);
+    }
+    config.per_tenant_connections = per_tenant_connections;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     runtime.block_on(async move {
         let listener = tokio::net::TcpListener::bind(listen).await?;
         eprintln!(
-            "[kura] egress-proxy: listening on {listen}, ports {:?}",
-            config.allowed_ports
+            "[kura] egress-proxy: listening on {listen}, ports {:?}, {}",
+            config.allowed_ports,
+            if config.tenant_key.is_some() {
+                format!(
+                    "tenant credentials required, {} connections per tenant",
+                    config.per_tenant_connections
+                )
+            } else {
+                "no tenant key: requests are unattributed".to_string()
+            }
         );
         kura_egress_proxy::serve(listener, Arc::new(config)).await?;
         Ok::<(), AnyError>(())

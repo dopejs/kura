@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 url.workspace = true
 kura-config.workspace = true
+kura-egress.workspace = true
 kura-store.workspace = true
 kura-events.workspace = true
 kura-policy.workspace = true

@@ -187,7 +187,22 @@ impl Manager {
         self.inner.write().tenant_egress = Some(crate::TenantEgress {
             network: network.to_string(),
             proxy_url: proxy_url.to_string(),
+            key: None,
         });
+        Ok(())
+    }
+
+    /// Agent-runtime-program 3.6: give each tenant's containers a proxy
+    /// credential derived from `key`, which the proxy shares
+    /// (`kura egress-proxy --tenant-key-file`). Needs tenant egress
+    /// configured first, with a proxy URL that can carry a credential.
+    pub fn configure_tenant_egress_key(&self, key: kura_egress::EgressKey) -> Result<(), String> {
+        let mut inner = self.inner.write();
+        let Some(egress) = inner.tenant_egress.as_mut() else {
+            return Err("tenant egress is not configured".to_string());
+        };
+        key.proxy_url_for(&egress.proxy_url, "ten_check")?;
+        egress.key = Some(key);
         Ok(())
     }
 
@@ -235,6 +250,11 @@ impl Manager {
     #[must_use]
     pub fn tenant_egress_configured(&self) -> bool {
         self.inner.read().tenant_egress.is_some()
+    }
+
+    /// Back to no tenant network: isolated runs that ask for one are refused.
+    pub fn disable_tenant_egress(&self) {
+        self.inner.write().tenant_egress = None;
     }
 
     /// Go `SetSecretManager`.

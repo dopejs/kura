@@ -694,12 +694,33 @@ fn configure_tenant_egress(sandboxes: &SandboxManager) {
         read("KURA_SANDBOX_EGRESS_PROXY"),
     ) {
         (None, None) => {}
-        (Some(network), Some(proxy)) => match sandboxes.configure_tenant_egress(&network, &proxy) {
-            Ok(()) => eprintln!(
-                "[kura] sandbox: tenant egress through {proxy} on internal network {network}"
-            ),
-            Err(err) => eprintln!("[kura] sandbox: tenant egress disabled: {err}"),
-        },
+        (Some(network), Some(proxy)) => {
+            if let Err(err) = sandboxes.configure_tenant_egress(&network, &proxy) {
+                eprintln!("[kura] sandbox: tenant egress disabled: {err}");
+                return;
+            }
+            // 3.6: with the key the proxy also holds, each tenant's requests
+            // carry its own credential. A key that cannot be used turns
+            // egress off rather than running without attribution the
+            // operator asked for (the proxy would refuse every request).
+            let attribution = match read("KURA_SANDBOX_EGRESS_KEY_FILE") {
+                None => "unattributed (no KURA_SANDBOX_EGRESS_KEY_FILE)",
+                Some(path) => match kura_egress::EgressKey::from_file(std::path::Path::new(&path))
+                    .and_then(|key| sandboxes.configure_tenant_egress_key(key))
+                {
+                    Ok(()) => "each tenant with its own proxy credential",
+                    Err(err) => {
+                        sandboxes.disable_tenant_egress();
+                        eprintln!("[kura] sandbox: tenant egress disabled: {err}");
+                        return;
+                    }
+                },
+            };
+            eprintln!(
+                "[kura] sandbox: tenant egress through {proxy} on internal network {network}, \
+                 {attribution}"
+            );
+        }
         _ => eprintln!(
             "[kura] sandbox: tenant egress disabled: set both KURA_SANDBOX_TENANT_NETWORK \
              and KURA_SANDBOX_EGRESS_PROXY"

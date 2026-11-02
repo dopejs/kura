@@ -38,11 +38,31 @@ const state = {
   sessions: new Map(),
 };
 
+// In a tenant container the egress proxy arrives as HTTPS_PROXY, with the
+// tenant's credential as userinfo. Chromium ignores userinfo in a proxy URL,
+// so it is handed to Playwright, which answers the proxy's 407 challenge.
+function proxyFromEnv() {
+  const raw = process.env.HTTPS_PROXY || process.env.https_proxy;
+  if (!raw) return {};
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return {};
+  }
+  const proxy = { server: `${url.protocol}//${url.host}` };
+  if (url.username) {
+    proxy.username = decodeURIComponent(url.username);
+    proxy.password = decodeURIComponent(url.password);
+  }
+  return { proxy };
+}
+
 async function ensureBrowser() {
   if (state.browser) return state.browser;
   const { chromium } = loadPlaywright();
   const headless = (process.env.KURA_BROWSER_HEADLESS ?? "1") !== "0";
-  state.browser = await chromium.launch({ headless });
+  state.browser = await chromium.launch({ headless, ...proxyFromEnv() });
   state.context = await state.browser.newContext();
   return state.browser;
 }

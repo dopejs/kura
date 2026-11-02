@@ -139,6 +139,25 @@ pub struct IsolatedRun {
 pub struct TenantEgress {
     pub network: String,
     pub proxy_url: String,
+    /// Shared with the proxy (agent-runtime-program 3.6). Set, each
+    /// tenant's containers get a proxy URL carrying that tenant's
+    /// credential, so the proxy knows whose request it is.
+    pub key: Option<kura_egress::EgressKey>,
+}
+
+impl TenantEgress {
+    /// The proxy URL `tenant_id`'s containers use.
+    #[must_use]
+    pub fn proxy_url_for(&self, tenant_id: &str) -> String {
+        match &self.key {
+            // Validated when the key was configured; a URL that cannot carry
+            // a credential was refused then.
+            Some(key) => key
+                .proxy_url_for(&self.proxy_url, tenant_id)
+                .unwrap_or_else(|_| self.proxy_url.clone()),
+            None => self.proxy_url.clone(),
+        }
+    }
 }
 
 /// Why a tenant cannot run isolated work.
@@ -325,8 +344,12 @@ pub fn isolated_docker_args(
         // goes to a dead upstream, so lookups cannot carry data out either;
         // the proxy's own name still resolves through docker's embedded DNS.
         args.extend(["--dns".into(), "127.0.0.1".into()]);
+        // With a tenant key the URL carries the tenant's credential. It is
+        // visible in this command line and `docker inspect` on the host, which
+        // are the operator's; inside, only this tenant's containers see it.
+        let proxy_url = egress.proxy_url_for(&run.tenant_id);
         for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-            args.extend(["-e".into(), format!("{key}={}", egress.proxy_url)]);
+            args.extend(["-e".into(), format!("{key}={proxy_url}")]);
         }
         args.extend([
             "-e".into(),
@@ -534,6 +557,7 @@ mod tests {
         run.egress = Some(TenantEgress {
             network: "kura-tenant".to_string(),
             proxy_url: "http://kura-egress-proxy:3128".to_string(),
+            key: None,
         });
         let args = isolated_docker_args(&run, "n", "img", &[]);
         assert_eq!(flag_value(&args, "--network"), ["kura-tenant"]);
@@ -546,6 +570,30 @@ mod tests {
         let offline = isolated_docker_args(&self::tests::run(), "n", "img", &[]);
         assert_eq!(flag_value(&offline, "--network"), ["none"]);
         assert!(flag_value(&offline, "--dns").is_empty());
+    }
+
+    #[test]
+    fn with_a_key_each_tenant_gets_its_own_proxy_credential() {
+        let key = kura_egress::EgressKey::from_bytes(&[5u8; 32]).unwrap();
+        let mut run = run();
+        run.egress = Some(TenantEgress {
+            network: "kura-tenant".to_string(),
+            proxy_url: "http://172.31.0.2:3128".to_string(),
+            key: Some(key.clone()),
+        });
+        let args = isolated_docker_args(&run, "n", "img", &[]);
+        let expected = format!(
+            "HTTPS_PROXY=http://ten_a:{}@172.31.0.2:3128/",
+            key.credential("ten_a")
+        );
+        assert!(
+            flag_value(&args, "-e").contains(&expected.as_str()),
+            "{args:?}"
+        );
+        let mut other = run.clone();
+        other.tenant_id = "ten_b".into();
+        let other_args = isolated_docker_args(&other, "n", "img", &[]);
+        assert!(!flag_value(&other_args, "-e").contains(&expected.as_str()));
     }
 
     #[test]

@@ -16,15 +16,26 @@
 //! A refusal is `403` with an `X-Kura-Egress-Denial` reason. The proxy never
 //! sees inside TLS: policy is by destination, not content.
 //!
+//! **Which tenant** (agent-runtime-program 3.6): with a tenant key
+//! configured, every request must carry `Proxy-Authorization: Basic` with
+//! the tenant id and its [`EgressKey`] credential, which the daemon puts in
+//! each tenant container's proxy URL. Anything else is `407`. Each
+//! connection is then logged with its tenant, and a tenant may hold at most
+//! `per_tenant_connections` of the proxy's slots, so one tenant cannot use
+//! up the exit for everyone. Without a key the proxy cannot tell tenants
+//! apart (they share one network) and every request is `unattributed`.
+//!
 //! What makes this the *only* path is topology, not this crate: tenant
 //! containers sit on a docker `--internal` network whose one exit is this
 //! proxy (see `docs/harness/sandbox-execution-plane.md`).
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use kura_egress::{EgressDenial, EgressPolicy};
+use base64::Engine as _;
+use kura_egress::{EgressDenial, EgressKey, EgressPolicy};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
@@ -45,6 +56,11 @@ pub struct ProxyConfig {
     /// must not hold a connection slot forever.
     pub head_timeout: Duration,
     pub resolver: Resolver,
+    /// Set: requests must name their tenant (module docs). `None`: no
+    /// authentication, every request is unattributed.
+    pub tenant_key: Option<EgressKey>,
+    /// Most connections one tenant may hold at once (only with a key).
+    pub per_tenant_connections: usize,
 }
 
 impl ProxyConfig {
@@ -58,6 +74,8 @@ impl ProxyConfig {
             connect_timeout: Duration::from_secs(10),
             head_timeout: Duration::from_secs(10),
             resolver: Arc::new(move |host, port| policy.resolve_pinned(host, port)),
+            tenant_key: None,
+            per_tenant_connections: 64,
         }
     }
 }
@@ -65,13 +83,15 @@ impl ProxyConfig {
 /// Accept and serve connections until the listener fails.
 pub async fn serve(listener: TcpListener, config: Arc<ProxyConfig>) -> std::io::Result<()> {
     let slots = Arc::new(Semaphore::new(config.max_connections.max(1)));
+    let tenants = TenantSlots::default();
     loop {
         let (client, _) = listener.accept().await?;
         let config = Arc::clone(&config);
+        let tenants = tenants.clone();
         match Arc::clone(&slots).try_acquire_owned() {
             Ok(permit) => {
                 tokio::spawn(async move {
-                    handle(client, &config).await;
+                    handle(client, &config, &tenants).await;
                     drop(permit);
                 });
             }
@@ -91,6 +111,78 @@ pub async fn serve(listener: TcpListener, config: Arc<ProxyConfig>) -> std::io::
             }
         }
     }
+}
+
+/// Open connections per tenant.
+#[derive(Clone, Default)]
+struct TenantSlots(Arc<Mutex<HashMap<String, usize>>>);
+
+/// One tenant connection; frees its slot when dropped.
+struct TenantSlot {
+    slots: TenantSlots,
+    tenant: String,
+}
+
+impl TenantSlots {
+    fn acquire(&self, tenant: &str, limit: usize) -> Option<TenantSlot> {
+        let mut open = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let count = open.entry(tenant.to_string()).or_insert(0);
+        if *count >= limit.max(1) {
+            return None;
+        }
+        *count += 1;
+        Some(TenantSlot {
+            slots: self.clone(),
+            tenant: tenant.to_string(),
+        })
+    }
+}
+
+impl Drop for TenantSlot {
+    fn drop(&mut self) {
+        let mut open = self.slots.0.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(count) = open.get_mut(&self.tenant) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                open.remove(&self.tenant);
+            }
+        }
+    }
+}
+
+/// The `Proxy-Authorization: Basic` user and password, if the head has one.
+fn proxy_credentials(head: &str) -> Option<(String, String)> {
+    let value = head.split("\r\n").skip(1).find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("proxy-authorization")
+            .then(|| value.trim())
+    })?;
+    let (scheme, encoded) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("basic") {
+        return None;
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .ok()?;
+    let (user, password) = String::from_utf8(decoded)
+        .ok()?
+        .split_once(':')
+        .map(|(u, p)| (u.to_string(), p.to_string()))?;
+    Some((user, password))
+}
+
+/// Who a request is for: `Ok(None)` without a key, the tenant id with one,
+/// `Err` when the key demands a credential the request lacks.
+fn authenticate(head: &str, key: Option<&EgressKey>) -> Result<Option<String>, &'static str> {
+    let Some(key) = key else {
+        return Ok(None);
+    };
+    let (tenant, password) = proxy_credentials(head).ok_or("tenant credential missing")?;
+    if tenant.is_empty() || !key.verify(&tenant, &password) {
+        return Err("tenant credential invalid");
+    }
+    Ok(Some(tenant))
 }
 
 fn record(method: &str, outcome: &str) {
@@ -113,6 +205,11 @@ async fn respond(
     );
     if !denial.is_empty() {
         head.push_str(&format!("X-Kura-Egress-Denial: {denial}\r\n"));
+    }
+    if status == 407 {
+        // Clients that wait for a challenge (Chromium via Playwright) send
+        // their credential only after this.
+        head.push_str("Proxy-Authenticate: Basic realm=\"kura-egress\"\r\n");
     }
     head.push_str("\r\n");
     client.write_all(head.as_bytes()).await?;
@@ -230,7 +327,7 @@ fn parse_target(head: &str) -> Result<Target, String> {
     })
 }
 
-async fn handle(mut client: TcpStream, config: &ProxyConfig) {
+async fn handle(mut client: TcpStream, config: &ProxyConfig, tenants: &TenantSlots) {
     let head = tokio::time::timeout(config.head_timeout, read_head(&mut client)).await;
     let (head, rest) = match head {
         Ok(Ok(parsed)) => parsed,
@@ -252,6 +349,45 @@ async fn handle(mut client: TcpStream, config: &ProxyConfig) {
             return;
         }
     };
+    let tenant = match authenticate(&head, config.tenant_key.as_ref()) {
+        Ok(tenant) => tenant,
+        Err(reason) => {
+            record("any", "unauthenticated");
+            eprintln!("[kura] egress-proxy: refused a request: {reason}");
+            let _ = respond(
+                &mut client,
+                407,
+                "Proxy Authentication Required",
+                "tenant_credential",
+                reason,
+            )
+            .await;
+            return;
+        }
+    };
+    let who = tenant.as_deref().unwrap_or("unattributed");
+    let _tenant_slot = match &tenant {
+        Some(tenant) => match tenants.acquire(tenant, config.per_tenant_connections) {
+            Some(slot) => Some(slot),
+            None => {
+                record("any", "tenant_over_capacity");
+                eprintln!(
+                    "[kura] egress-proxy: tenant={tenant} refused: {} connections already open",
+                    config.per_tenant_connections
+                );
+                let _ = respond(
+                    &mut client,
+                    429,
+                    "Too Many Requests",
+                    "tenant_over_capacity",
+                    "this tenant has too many connections open",
+                )
+                .await;
+                return;
+            }
+        },
+        None => None,
+    };
     let target = match parse_target(&head) {
         Ok(target) => target,
         Err(reason) => {
@@ -264,7 +400,7 @@ async fn handle(mut client: TcpStream, config: &ProxyConfig) {
         record(target.method, "denied");
         let body = format!("port {} is not an allowed egress port", target.port);
         eprintln!(
-            "[kura] egress-proxy: refused {}:{} ({body})",
+            "[kura] egress-proxy: tenant={who} refused {}:{} ({body})",
             target.host, target.port
         );
         let _ = respond(&mut client, 403, "Forbidden", "port_not_allowed", &body).await;
@@ -280,7 +416,7 @@ async fn handle(mut client: TcpStream, config: &ProxyConfig) {
         Ok(Err(denial)) => {
             record(target.method, "denied");
             eprintln!(
-                "[kura] egress-proxy: refused {}:{} ({denial})",
+                "[kura] egress-proxy: tenant={who} refused {}:{} ({denial})",
                 target.host, target.port
             );
             let _ = respond(
@@ -334,7 +470,23 @@ async fn handle(mut client: TcpStream, config: &ProxyConfig) {
         return;
     }
     record(target.method, "allowed");
-    let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+    // The attribution record: who went where (on open, so a tunnel that
+    // stays up for hours is visible while it is up), then how much.
+    eprintln!(
+        "[kura] egress-proxy: tenant={who} {} {}:{} -> {address} opened",
+        target.method, target.host, target.port
+    );
+    let started = Instant::now();
+    let (up, down) = tokio::io::copy_bidirectional(&mut client, &mut upstream)
+        .await
+        .unwrap_or((0, 0));
+    eprintln!(
+        "[kura] egress-proxy: tenant={who} {} {}:{} -> {address} closed up={up} down={down} ms={}",
+        target.method,
+        target.host,
+        target.port,
+        started.elapsed().as_millis()
+    );
 }
 
 #[cfg(test)]
@@ -513,6 +665,114 @@ mod tests {
             .expect("echo from the pinned address");
         assert_eq!(&buffer, b"ping");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    fn tenant_key() -> EgressKey {
+        EgressKey::from_bytes(&[3u8; 32]).unwrap()
+    }
+
+    fn basic(user: &str, password: &str) -> String {
+        base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"))
+    }
+
+    #[tokio::test]
+    async fn with_a_key_only_a_valid_tenant_credential_gets_through() {
+        let upstream = echo_upstream().await;
+        let proxy = start(ProxyConfig {
+            tenant_key: Some(tenant_key()),
+            ..loopback_config(vec![upstream.port()])
+        })
+        .await;
+        let key = tenant_key();
+        let good = basic("ten_a", &key.credential("ten_a"));
+        let borrowed = basic("ten_b", &key.credential("ten_a"));
+        let forged = basic("ten_a", &"0".repeat(64));
+
+        let (_, reply) = exchange(proxy, &format!("CONNECT {upstream} HTTP/1.1\r\n\r\n")).await;
+        assert!(reply.starts_with("HTTP/1.1 407"), "{reply}");
+        assert!(
+            reply.contains("Proxy-Authenticate: Basic realm=\"kura-egress\""),
+            "{reply}"
+        );
+        for credential in [&borrowed, &forged] {
+            let (_, reply) = exchange(
+                proxy,
+                &format!(
+                    "CONNECT {upstream} HTTP/1.1\r\nProxy-Authorization: Basic {credential}\r\n\r\n"
+                ),
+            )
+            .await;
+            assert!(reply.starts_with("HTTP/1.1 407"), "{reply}");
+        }
+        let (_, reply) = exchange(
+            proxy,
+            &format!("CONNECT {upstream} HTTP/1.1\r\nProxy-Authorization: Basic {good}\r\n\r\n"),
+        )
+        .await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    }
+
+    #[tokio::test]
+    async fn one_tenant_cannot_take_every_slot() {
+        let upstream = echo_upstream().await;
+        let proxy = start(ProxyConfig {
+            tenant_key: Some(tenant_key()),
+            per_tenant_connections: 2,
+            ..loopback_config(vec![upstream.port()])
+        })
+        .await;
+        let key = tenant_key();
+        let connect = |tenant: &str| {
+            format!(
+                "CONNECT {upstream} HTTP/1.1\r\nProxy-Authorization: Basic {}\r\n\r\n",
+                basic(tenant, &key.credential(tenant))
+            )
+        };
+        let (first, reply) = exchange(proxy, &connect("ten_a")).await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        let (_second, reply) = exchange(proxy, &connect("ten_a")).await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        let (_, reply) = exchange(proxy, &connect("ten_a")).await;
+        assert!(reply.starts_with("HTTP/1.1 429"), "{reply}");
+        assert!(
+            reply.contains("X-Kura-Egress-Denial: tenant_over_capacity"),
+            "{reply}"
+        );
+        // Another tenant is unaffected.
+        let (_, reply) = exchange(proxy, &connect("ten_b")).await;
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        // Closing a connection frees its slot.
+        drop(first);
+        let mut freed = false;
+        for _ in 0..50 {
+            let (_, reply) = exchange(proxy, &connect("ten_a")).await;
+            if reply.starts_with("HTTP/1.1 200") {
+                freed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(freed, "the slot was not released");
+    }
+
+    #[test]
+    fn proxy_credentials_parse_only_basic() {
+        let head = format!(
+            "CONNECT a:443 HTTP/1.1\r\nproxy-authorization: basic {}\r\n\r\n",
+            basic("ten_a", "pw")
+        );
+        assert_eq!(
+            proxy_credentials(&head),
+            Some(("ten_a".to_string(), "pw".to_string()))
+        );
+        assert_eq!(
+            proxy_credentials("CONNECT a:443 HTTP/1.1\r\nProxy-Authorization: Bearer x\r\n\r\n"),
+            None
+        );
+        assert_eq!(
+            authenticate("CONNECT a:443 HTTP/1.1\r\n\r\n", None),
+            Ok(None)
+        );
     }
 
     #[tokio::test]

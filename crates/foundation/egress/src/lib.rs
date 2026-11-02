@@ -25,6 +25,9 @@
 //! sometimes does not is how a validation call gets mistaken for a security
 //! boundary.
 
+pub mod tenant_key;
+pub use tenant_key::EgressKey;
+
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 
 use serde::{Deserialize, Serialize};

@@ -148,6 +148,11 @@ must then be addressed by IP: give it a fixed address on the tenant network
 `docker network connect --ip …`). The daemon refuses to start with runsc
 and a proxy named by host, and says so.
 
+With a tenant egress key (sandbox plane §8, 3.6), the worker's proxy URL
+carries the tenant's credential. Chromium ignores credentials in a proxy
+URL, so the worker hands them to Playwright, which answers the proxy's
+`407` challenge. Verified on sg-2 under runc and runsc.
+
 Chromium skips the proxy for link-local addresses (169.254.0.0/16). On the
 internal network those have no route, so the metadata service stays
 unreachable. The proxy refuses everything else that is not public.

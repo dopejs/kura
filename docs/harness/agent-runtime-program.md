@@ -423,6 +423,41 @@ Done when a tenant can run code and MCP tools, a hostile workload cannot read
 another tenant's workspace or the daemon's data dir (test proves it), and
 resource exhaustion in one run does not degrade others beyond the limits.
 
+- [x] **3.6 Which tenant went where** (from the 2026-11-02 gap review:
+      "the egress proxy is one policy with no attribution"). All tenant
+      containers share one internal network, so the proxy could not tell
+      them apart.
+      - The daemon and the proxy share a key
+        (`KURA_SANDBOX_EGRESS_KEY_FILE`, `kura egress-proxy
+        --tenant-key-file`). Each tenant's containers get a proxy URL
+        carrying `tenant id : HMAC(key, tenant id)`.
+      - The proxy refuses a request without a valid credential (`407` with
+        a challenge). It logs every connection under its tenant when it
+        opens and again when it closes, with bytes and duration. It caps a
+        tenant at `--per-tenant-connections` (default 64 of 256 slots).
+      - Chromium ignores proxy credentials in a URL, so the browser worker
+        hands them to Playwright, which answers the `407`.
+      - Without a key, behavior is unchanged and requests are logged as
+        `unattributed`. Roll out the daemon first, then the proxy.
+      *Verified:*
+      - unit tests: credential derivation, the proxy's `407` / `429` /
+        slot release, per-tenant URLs in the container flags, and the key
+        needing egress;
+      - `scripts/tenant-egress-e2e/` on dopejs-sg-2, under runc and
+        runsc. A tenant's browser turn loads a page through the
+        authenticated proxy. The proxy logs `tenant=… connect
+        example.com:443 … opened`, then `closed up=2553 down=6954`. No
+        credential, or another tenant's name with this credential, gets
+        `407`. The private-address policy still applies, and the refusal
+        carries the tenant.
+      *Found by the end to end:* the first version logged a connection
+      only when it closed, so a browser's kept-alive tunnel was invisible
+      while it was in use.
+      *Not done:* per-tenant destination policy, i.e. different allow
+      lists per tenant. That is a product decision (what may a tenant
+      reach), and the credential now makes it possible without changing
+      the topology.
+
 ## Stage 2b — Runtime Core: Long Tasks
 
 Sequenced after Stage 3 because resume semantics depend on where tools run.

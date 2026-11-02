@@ -785,6 +785,53 @@ start with runsc and a proxy named by host. Measured on dopejs-sg-2: by
 name it fails, by IP it works, on both runtimes (agent-runtime-program.md
 3.3).
 
+**Which tenant** (Agent Runtime Program 3.6, 2026-11-02). Every tenant
+container sits on the same network, so by address the proxy cannot tell
+tenants apart. With a key shared by the daemon and the proxy, it can:
+
+```
+# 32 random bytes as hex, readable by the daemon and mounted into the proxy
+python3 -c 'import secrets;print(secrets.token_hex(32))' > /etc/kura/egress.key
+KURA_SANDBOX_EGRESS_KEY_FILE=/etc/kura/egress.key           # daemon
+kura egress-proxy --tenant-key-file /egress.key \
+  [--per-tenant-connections 64]                                # proxy
+```
+
+- **Credential.** The daemon puts each tenant's own credential in the
+  proxy URL of that tenant's containers: user = tenant id, password =
+  HMAC-SHA256(key, tenant id) (`kura_egress::EgressKey`). A tenant can
+  read its own credential but cannot compute another tenant's.
+- **Refusal.** With a key, the proxy refuses a request without a valid
+  credential with `407` and a `Proxy-Authenticate` challenge. That
+  includes a request using another tenant's name. curl, pip and git send
+  the credential from the URL. The browser worker passes it to
+  Playwright, which answers the challenge, because Chromium ignores
+  credentials in a proxy URL.
+- **Attribution.** Every connection is logged under its tenant when it
+  opens, `tenant=… connect host:443 -> addr opened`, and again when it
+  closes, with bytes each way and duration. Refusals carry the tenant too.
+- **Fair share.** One tenant may hold at most `--per-tenant-connections`
+  of the proxy's slots (default 64 of 256). Past that it gets `429`
+  `tenant_over_capacity`, and other tenants are unaffected.
+
+Without a key everything works as before and requests are logged as
+`unattributed`. A key file the daemon cannot use turns tenant egress off
+and logs why.
+
+Rollout order: the daemon first, then the proxy.
+- A daemon with a key in front of a proxy without one works; the proxy
+  ignores the credential.
+- A proxy with a key in front of a daemon without one refuses every
+  tenant request.
+
+The credential is visible on the host in the `docker run` command line and
+in `docker inspect`; both are the operator's.
+
+Not done: per-tenant destination policy. Every tenant has the same allow
+list (public addresses, ports 80/443). Giving one tenant more, or less, is
+a product decision (what tenants may reach), and the credential makes it
+possible later without a topology change.
+
 ### 9. gVisor For Isolated Runs (Agent Runtime Program 3.4, 2026-11-02)
 
 The isolated backend can run every tenant container under another OCI

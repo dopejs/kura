@@ -370,6 +370,25 @@ fn a_networked_run_goes_through_the_configured_proxy_without_approval() {
     }
 }
 
+#[test]
+fn an_egress_key_needs_egress_and_can_be_turned_off_with_it() {
+    let manager = manager(&temp_dir("egress_key"));
+    let key = kura_egress::EgressKey::from_bytes(&[9u8; 32]).unwrap();
+    let err = manager
+        .configure_tenant_egress_key(key.clone())
+        .expect_err("no egress yet");
+    assert!(err.contains("not configured"), "{err}");
+    manager
+        .configure_tenant_egress_with("kura-tenant", "http://172.31.0.2:3128", &|_| Ok(true))
+        .expect("configured");
+    manager.configure_tenant_egress_key(key).expect("key");
+    assert!(manager.tenant_egress_configured());
+    manager.disable_tenant_egress();
+    assert!(!manager.tenant_egress_configured());
+    let decision = as_tenant("ten_a", || manager.explain(networked("true"))).expect("explain");
+    assert_eq!(denial(&decision), Some("isolation:network"));
+}
+
 fn docker_tests_enabled(test: &str) -> bool {
     let enabled = std::env::var("KURA_DOCKER_TESTS").is_ok_and(|v| v == "1");
     if !enabled {
