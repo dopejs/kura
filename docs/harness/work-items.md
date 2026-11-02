@@ -48,8 +48,8 @@ Three things are also missing:
 
 Two constraints follow from this table:
 - **Shared hosting.** Connectors, webhooks, delivery, triage and routines
-  are not on the tenant route allowlist (`surface/api/src/hosting.rs`
-  tenant list, around `:100-176`). Only chat, sessions, threads, reminders
+  are not on the tenant route allowlist (`TENANT_ROUTES`,
+  `surface/api/src/hosting.rs:84-185`). Only chat, sessions, threads, reminders
   and approvals are. In shared mode a tenant can therefore only create
   work items through chat or the API until those families are
   tenant-scoped. This design does not widen them.
