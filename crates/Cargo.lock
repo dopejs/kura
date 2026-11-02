@@ -1559,6 +1559,7 @@ dependencies = [
  "kura-policy",
  "kura-runtime",
  "kura-store",
+ "kura-telemetry",
  "parking_lot",
  "rusqlite",
  "serde",
@@ -2205,6 +2206,7 @@ dependencies = [
  "sha1",
  "sha2",
  "thiserror 2.0.20",
+ "url",
  "uuid",
 ]
 

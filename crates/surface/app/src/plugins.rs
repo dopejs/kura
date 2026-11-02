@@ -2174,8 +2174,161 @@ fn build_computer_use(asm: &mut Assembly) -> Result<(), AppError> {
     {
         asm.wiring.computeruse_recorder = Some(computeruse_recorder);
     }
+    build_tenant_browsers(asm);
     Ok(())
 }
+
+/// 3.3 (`docs/harness/tenant-browser.md`): the tenants' throwaway browsers,
+/// offered to turns as `browser.*` tools. Needs the worker image
+/// (`KURA_BROWSER_WORKER_IMAGE`) and the tenant egress path: a browser with
+/// no network is no use, and the sandbox refuses network without it. Any
+/// missing piece leaves the tools off and says which.
+fn build_tenant_browsers(asm: &mut Assembly) {
+    let read = |key: &str| {
+        std::env::var(key)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    let sandboxes = asm.state.sandboxes.clone();
+    let egress = sandboxes
+        .as_ref()
+        .is_some_and(|s| s.tenant_egress_configured());
+    let (image, limits) = match browser_settings(&read, sandboxes.is_some(), egress) {
+        Ok(Some(settings)) => settings,
+        Ok(None) => return,
+        Err(reason) => {
+            eprintln!("[kura] browser: off: {reason}");
+            return;
+        }
+    };
+    let sandboxes = sandboxes.expect("checked by browser_settings");
+    let container = kura_sandbox::ContainerSpec {
+        image: image.clone(),
+        limits: kura_sandbox::IsolationLimits {
+            cpus: 1.0,
+            memory_mb: 1024,
+            pids: 512,
+            tmpfs_mb: 256,
+        },
+    };
+    let launcher = Arc::new(crate::adapters::SandboxBrowserLauncher::new(
+        sandboxes, container,
+    ));
+    let browsers = kura_computeruse::TenantBrowsers::new(launcher, limits);
+    if let Err(err) = browsers.spawn_reaper() {
+        eprintln!("[kura] browser: off: cannot start the idle reaper: {err}");
+        return;
+    }
+    eprintln!(
+        "[kura] browser: tenant browsers from {image}: up to {} at once, closed after {}s idle",
+        limits.max_sessions,
+        limits.idle.as_secs()
+    );
+    asm.state.tenant_browsers = Some(browsers);
+    asm.lifecycle.on_close(
+        "tenant-browsers",
+        Box::new(|state| {
+            if let Some(browsers) = &state.tenant_browsers {
+                browsers.close_all();
+            }
+        }),
+    );
+}
+
+/// The tenant browser's image and limits, `None` when it is not asked for,
+/// or why it cannot be offered.
+fn browser_settings(
+    read: &dyn Fn(&str) -> Option<String>,
+    has_sandbox: bool,
+    egress_configured: bool,
+) -> Result<Option<(String, kura_computeruse::BrowserLimits)>, &'static str> {
+    let Some(image) = read("KURA_BROWSER_WORKER_IMAGE") else {
+        return Ok(None);
+    };
+    if !has_sandbox {
+        return Err("the sandbox plane is not built");
+    }
+    if !egress_configured {
+        return Err(
+            "tenant egress is not configured (KURA_SANDBOX_TENANT_NETWORK + KURA_SANDBOX_EGRESS_PROXY)",
+        );
+    }
+    let number = |key: &str, default: u64| {
+        read(key)
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(default)
+    };
+    Ok(Some((
+        image,
+        kura_computeruse::BrowserLimits {
+            max_sessions: number("KURA_BROWSER_MAX_SESSIONS", DEFAULT_BROWSER_SESSIONS) as usize,
+            idle: Duration::from_secs(number(
+                "KURA_BROWSER_IDLE_SECONDS",
+                DEFAULT_BROWSER_IDLE_SECS,
+            )),
+        },
+    )))
+}
+
+#[cfg(test)]
+mod browser_settings_tests {
+    use super::*;
+
+    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let pairs: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        move |key| pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn the_browser_is_offered_only_with_an_image_a_sandbox_and_egress() {
+        assert_eq!(browser_settings(&env(&[]), true, true), Ok(None));
+        let image = [(
+            "KURA_BROWSER_WORKER_IMAGE",
+            "ghcr.io/x/kura-browser-worker@sha256:1",
+        )];
+        assert!(browser_settings(&env(&image), false, true).is_err());
+        assert!(
+            browser_settings(&env(&image), true, false)
+                .unwrap_err()
+                .contains("egress")
+        );
+        let (got, limits) = browser_settings(&env(&image), true, true).unwrap().unwrap();
+        assert_eq!(got, image[0].1);
+        assert_eq!(limits.max_sessions, 4);
+        assert_eq!(limits.idle, Duration::from_secs(600));
+    }
+
+    #[test]
+    fn limits_can_be_set_and_nonsense_keeps_the_default() {
+        let settings = |extra: &[(&str, &str)]| {
+            let mut pairs = vec![("KURA_BROWSER_WORKER_IMAGE", "img")];
+            pairs.extend_from_slice(extra);
+            browser_settings(&env(&pairs), true, true)
+                .unwrap()
+                .unwrap()
+                .1
+        };
+        let set = settings(&[
+            ("KURA_BROWSER_MAX_SESSIONS", "2"),
+            ("KURA_BROWSER_IDLE_SECONDS", "60"),
+        ]);
+        assert_eq!((set.max_sessions, set.idle), (2, Duration::from_secs(60)));
+        let bad = settings(&[
+            ("KURA_BROWSER_MAX_SESSIONS", "0"),
+            ("KURA_BROWSER_IDLE_SECONDS", "soon"),
+        ]);
+        assert_eq!((bad.max_sessions, bad.idle), (4, Duration::from_secs(600)));
+    }
+}
+
+/// Measured on the cell host: 160-210 MiB per idle session (tenant-browser.md §3).
+const DEFAULT_BROWSER_SESSIONS: u64 = 4;
+const DEFAULT_BROWSER_IDLE_SECS: u64 = 600;
 
 /// `plugins.json` → `entries.computer-use.config`.
 #[derive(Debug, Clone, Default, serde::Deserialize)]

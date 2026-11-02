@@ -776,6 +776,15 @@ The CI Linux job proves it with the real binary as the sidecar: proxied
 HTTP works, the metadata address is refused by the proxy, a request that
 bypasses the proxy has no route, and an outside DNS lookup fails.
 
+**Under gVisor** (`KURA_SANDBOX_DOCKER_RUNTIME=runsc`, §9), docker's
+embedded DNS does not answer inside the container, so the proxy's container
+name does not resolve. Address the proxy by IP: create the tenant network
+with a subnet, connect the proxy with a fixed address, and set
+`KURA_SANDBOX_EGRESS_PROXY=http://<that ip>:3128`. The daemon refuses to
+start with runsc and a proxy named by host. Measured on dopejs-sg-2: by
+name it fails, by IP it works, on both runtimes (agent-runtime-program.md
+3.3).
+
 ### 9. gVisor For Isolated Runs (Agent Runtime Program 3.4, 2026-11-02)
 
 The isolated backend can run every tenant container under another OCI
@@ -840,6 +849,20 @@ workload, alternating runtimes; harness in
 
 **Rollback:** unset the variable. To remove gVisor from the host, delete
 the `runtimes` entry, reload docker, and delete the binaries.
+
+### 10. Attached Executions Are Sessions (2026-11-02)
+
+An attached execution (an MCP stdio server, a tenant browser) is a session
+that its owner ends by cancelling it. The profile's run timeout is a bound
+for batch commands, so it no longer applies to attached executions. Before
+this, every attached process was killed at the profile default of 30 s, and
+MCP servers silently restarted every 30 s. Only a `timeout_ms` the caller
+sets bounds an attached session (`attached_watchdog`).
+
+An in-process caller can give an isolated run a different image and limits
+(`ExecutionRequest.container`, never read from JSON); the tenant browser
+uses it for its worker image. Everything else about the container is the
+isolated profile's.
 
 ## Explicit Prerequisites Before MCP
 

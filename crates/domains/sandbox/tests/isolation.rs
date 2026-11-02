@@ -758,3 +758,97 @@ fn an_isolated_run_uses_the_configured_runtime() {
     }
     assert_eq!(out[1..], [tenant_uid("ten_a").to_string().as_str(), "hi"]);
 }
+
+// --- Attached executions are sessions, not batch runs ---------------------
+
+#[test]
+fn an_attached_session_is_bounded_only_by_a_timeout_its_caller_sets() {
+    assert_eq!(
+        kura_sandbox::attached_watchdog(0, Duration::from_secs(30)),
+        Duration::ZERO,
+        "the profile's batch default does not end a session"
+    );
+    assert_eq!(
+        kura_sandbox::attached_watchdog(2_000, Duration::from_secs(2)),
+        Duration::from_secs(2)
+    );
+}
+
+/// The process behind an attached session outlives a short request bound
+/// only when there is none: with an explicit bound it is gone after it.
+#[cfg(unix)]
+#[test]
+fn an_explicit_attached_timeout_still_ends_the_session() {
+    use std::io::{BufRead, BufReader, Write};
+    let manager = manager(&temp_dir("attached_timeout"));
+    let start = |timeout_ms| {
+        let (_, attached) = manager
+            .start_attached_execution(ExecutionRequest {
+                command: "/bin/cat".to_string(),
+                requested_by: "test".to_string(),
+                timeout_ms,
+                ..ExecutionRequest::default()
+            })
+            .expect("start");
+        let attached = attached.expect("attached");
+        (
+            attached.stdin.expect("stdin"),
+            BufReader::new(attached.stdout.expect("stdout")),
+        )
+    };
+    let echoes = |stdin: &mut std::process::ChildStdin,
+                  stdout: &mut BufReader<std::process::ChildStdout>| {
+        if writeln!(stdin, "ping")
+            .and_then(|()| stdin.flush())
+            .is_err()
+        {
+            return false;
+        }
+        let mut line = String::new();
+        stdout.read_line(&mut line).unwrap_or(0) > 0
+    };
+    let (mut bounded_in, mut bounded_out) = start(500);
+    let (mut open_in, mut open_out) = start(0);
+    std::thread::sleep(Duration::from_millis(1_500));
+    assert!(
+        !echoes(&mut bounded_in, &mut bounded_out),
+        "a 500 ms session outlived its bound"
+    );
+    assert!(
+        echoes(&mut open_in, &mut open_out),
+        "an unbounded session was ended"
+    );
+}
+
+/// Under gVisor docker's embedded DNS does not answer, so the proxy has to
+/// be an IP; a name is refused in whichever order the two are configured.
+#[test]
+fn under_runsc_the_egress_proxy_must_be_an_ip() {
+    let registered = || Ok(vec!["runc".to_string(), "runsc".to_string()]);
+    let internal = |_: &str| Ok(true);
+
+    let by_name = manager(&temp_dir("runsc_proxy_name"));
+    by_name
+        .configure_tenant_egress_with("kura-tenant", "http://kura-egress-proxy:3128", &internal)
+        .expect("a name is fine on runc");
+    let err = by_name
+        .configure_tenant_runtime_with("runsc", &registered)
+        .expect_err("runsc with a proxy name");
+    assert!(err.contains("by IP"), "{err}");
+    by_name
+        .configure_tenant_runtime_with("runc", &registered)
+        .expect("runc resolves names");
+
+    let runtime_first = manager(&temp_dir("runsc_proxy_order"));
+    runtime_first
+        .configure_tenant_runtime_with("runsc", &registered)
+        .expect("runtime");
+    assert!(
+        runtime_first
+            .configure_tenant_egress_with("kura-tenant", "http://kura-egress-proxy:3128", &internal)
+            .is_err()
+    );
+    runtime_first
+        .configure_tenant_egress_with("kura-tenant", "http://172.31.0.2:3128", &internal)
+        .expect("an IP works under runsc");
+}

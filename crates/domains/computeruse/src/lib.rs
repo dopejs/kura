@@ -8,9 +8,15 @@ use serde::{Deserialize, Serialize};
 mod manager;
 mod sqlite_artifact_recorder;
 pub mod subprocess_driver;
+pub mod tenant_browsers;
 pub use manager::*;
 pub use sqlite_artifact_recorder::SqliteArtifactRecorder;
-pub use subprocess_driver::{SubprocessDriver, SubprocessDriverConfig, WorkerSupervisor};
+pub use subprocess_driver::{
+    AttachedWorker, SubprocessDriver, SubprocessDriverConfig, WorkerSupervisor,
+};
+pub use tenant_browsers::{
+    BrowserLauncher, BrowserLimits, BrowserOp, LaunchedBrowser, Page, TenantBrowsers,
+};
 
 macro_rules! string_enum {
     ($name:ident { $first:ident => $first_s:literal $(, $v:ident => $s:literal)* $(,)? }) => {

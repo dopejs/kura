@@ -144,6 +144,9 @@ pub struct AppState {
     pub capabilities: Option<Arc<CapabilitiesSupervisor>>,
     /// Go Dependencies.ComputerUse.
     pub computer_use: Option<Arc<ComputerUseManager>>,
+    /// The tenants' throwaway browsers behind the `browser.*` chat tools
+    /// (agent-runtime-program.md 3.3). Absent = no browser tools.
+    pub tenant_browsers: Option<Arc<kura_computeruse::TenantBrowsers>>,
     /// Go Dependencies.Scheduler.
     ///
     pub scheduler: Option<Arc<Scheduler>>,
@@ -241,6 +244,7 @@ impl AppState {
             connectors: None,
             capabilities: None,
             computer_use: None,
+            tenant_browsers: None,
             scheduler: None,
             delivery: None,
             billing: None,

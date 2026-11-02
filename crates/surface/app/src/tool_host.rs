@@ -17,6 +17,11 @@
 //!   adapter, so approval rules apply — with the quota reservation held
 //!   around the call; `builtin_stub` answers without network.
 //!
+//! - `browser.*` (3.3): the tenant's throwaway browser, when the daemon has
+//!   one to offer (`AppState::tenant_browsers`). The page comes back as
+//!   text; the browser runs in the tenant's container behind the egress
+//!   proxy and keeps nothing between sessions.
+//!
 //! Every tool is wrapped so that a call runs the `chat/tool-call` hook point
 //! first (a veto is reported to the model as a failed call, never silently
 //! dropped), is recorded as a `chat.tool.called` event, and is counted.
@@ -80,6 +85,9 @@ impl ToolSource for AppTools {
             }));
         }
         tools.extend(profile_tools(state, &turn.tenant_id));
+        if let Some(browsers) = state.tenant_browsers.clone() {
+            tools.extend(BrowserTool::all(&browsers, &turn.tenant_id));
+        }
         for tool in tools {
             registry.register(Arc::new(Observed {
                 inner: tool,
@@ -480,6 +488,167 @@ impl Observed {
     }
 }
 
+/// One `browser.*` tool (3.3). Every call is serial: they share the tenant's
+/// one page, and click/type act on a site.
+struct BrowserTool {
+    browsers: Arc<kura_computeruse::TenantBrowsers>,
+    tenant_id: String,
+    kind: BrowserToolKind,
+}
+
+#[derive(Clone, Copy)]
+enum BrowserToolKind {
+    Open,
+    Read,
+    Click,
+    Type,
+    Back,
+    Close,
+}
+
+impl BrowserTool {
+    fn all(
+        browsers: &Arc<kura_computeruse::TenantBrowsers>,
+        tenant_id: &str,
+    ) -> Vec<Arc<dyn Tool>> {
+        [
+            BrowserToolKind::Open,
+            BrowserToolKind::Read,
+            BrowserToolKind::Click,
+            BrowserToolKind::Type,
+            BrowserToolKind::Back,
+            BrowserToolKind::Close,
+        ]
+        .into_iter()
+        .map(|kind| {
+            Arc::new(BrowserTool {
+                browsers: Arc::clone(browsers),
+                tenant_id: tenant_id.to_string(),
+                kind,
+            }) as Arc<dyn Tool>
+        })
+        .collect()
+    }
+}
+
+/// The page as the model reads it.
+fn render_page(page: &kura_computeruse::Page) -> String {
+    truncate_tool_output(&format!(
+        "URL: {}\nTitle: {}\n\n{}",
+        page.url,
+        page.title,
+        page.text.trim()
+    ))
+}
+
+impl Tool for BrowserTool {
+    fn spec(&self) -> ToolSpec {
+        let selector = json!({ "type": "string", "description": "A CSS selector, e.g. \"#submit\" or \"a[href='/next']\"." });
+        let (name, description, parameters) = match self.kind {
+            BrowserToolKind::Open => (
+                "browser.open",
+                "Open a web page in your browser (starting it if needed) and read it. Only \
+                 http and https. The browser keeps no logins or cookies between sessions and \
+                 closes after a while unused.",
+                json!({
+                    "type": "object",
+                    "properties": { "url": { "type": "string", "description": "The page to open." } },
+                    "required": ["url"]
+                }),
+            ),
+            BrowserToolKind::Read => (
+                "browser.read",
+                "Read the page your browser is on: URL, title and visible text.",
+                json!({ "type": "object", "properties": {}, "required": [] }),
+            ),
+            BrowserToolKind::Click => (
+                "browser.click",
+                "Click an element on the current page, then read the page.",
+                json!({ "type": "object", "properties": { "selector": selector }, "required": ["selector"] }),
+            ),
+            BrowserToolKind::Type => (
+                "browser.type",
+                "Fill a field on the current page with text, then read the page.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "selector": selector,
+                        "text": { "type": "string", "description": "What to type." }
+                    },
+                    "required": ["selector", "text"]
+                }),
+            ),
+            BrowserToolKind::Back => (
+                "browser.back",
+                "Go back one page, then read it.",
+                json!({ "type": "object", "properties": {}, "required": [] }),
+            ),
+            BrowserToolKind::Close => (
+                "browser.close",
+                "Close your browser when you are done with it.",
+                json!({ "type": "object", "properties": {}, "required": [] }),
+            ),
+        };
+        ToolSpec {
+            name: name.to_string(),
+            description: description.to_string(),
+            parameters,
+        }
+    }
+
+    fn call<'a>(&'a self, invocation: &'a ToolInvocation) -> ToolFuture<'a> {
+        Box::pin(async move {
+            let args = match parse_arguments(&invocation.arguments) {
+                Ok(args) => args,
+                Err(reason) => return Ok(ToolOutput::failed(reason)),
+            };
+            let arg = |key: &str| {
+                args.get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string()
+            };
+            let browsers = Arc::clone(&self.browsers);
+            let tenant = self.tenant_id.clone();
+            let kind = self.kind;
+            let (url, selector, text) = (arg("url"), arg("selector"), arg("text"));
+            // The pool blocks (pipes, docker); keep it off the runtime's
+            // worker threads.
+            let outcome = tokio::task::spawn_blocking(move || {
+                use kura_computeruse::BrowserOp;
+                match kind {
+                    BrowserToolKind::Open => browsers.open(&tenant, &url).map(|p| render_page(&p)),
+                    BrowserToolKind::Read => browsers
+                        .act(&tenant, &BrowserOp::Read)
+                        .map(|p| render_page(&p)),
+                    BrowserToolKind::Click => browsers
+                        .act(&tenant, &BrowserOp::Click { selector })
+                        .map(|p| render_page(&p)),
+                    BrowserToolKind::Type => browsers
+                        .act(&tenant, &BrowserOp::Type { selector, text })
+                        .map(|p| render_page(&p)),
+                    BrowserToolKind::Back => browsers
+                        .act(&tenant, &BrowserOp::Back)
+                        .map(|p| render_page(&p)),
+                    BrowserToolKind::Close => browsers.close(&tenant).map(|closed| {
+                        if closed {
+                            "The browser is closed.".to_string()
+                        } else {
+                            "No browser was open.".to_string()
+                        }
+                    }),
+                }
+            })
+            .await;
+            Ok(match outcome {
+                Ok(Ok(text)) => ToolOutput::ok(text),
+                Ok(Err(reason)) => ToolOutput::failed(reason),
+                Err(err) => ToolOutput::failed(format!("the browser call did not finish: {err}")),
+            })
+        })
+    }
+}
+
 fn parse_arguments(raw: &str) -> Result<Value, String> {
     if raw.trim().is_empty() {
         return Ok(json!({}));
@@ -552,4 +721,130 @@ async fn resolve_credential(
         .await
         .ok()
         .map(|resolved| resolved.value)
+}
+
+#[cfg(test)]
+mod browser_tool_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+
+    /// A worker speaking the protocol on one end of a socket pair: every
+    /// page is "https://example.org/" with text naming the last action.
+    fn fake_worker() -> kura_computeruse::AttachedWorker {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        std::thread::spawn(move || {
+            let mut out = theirs.try_clone().expect("clone");
+            for line in BufReader::new(theirs).lines() {
+                let Ok(line) = line else { return };
+                let request: Value = serde_json::from_str(&line).expect("request");
+                let id = request["id"].clone();
+                let mut session = request["session"].clone();
+                session["status"] = json!("active");
+                let response = match request["op"].as_str() {
+                    Some("execute_action") => {
+                        let mut action = request["action"].clone();
+                        action["status"] = json!("completed");
+                        let page = json!({
+                            "url": "https://example.org/",
+                            "title": "Example",
+                            "text": format!("after {}", action["actionKind"].as_str().unwrap_or("")),
+                        });
+                        json!({ "id": id, "ok": true, "session": session, "action": action, "captures": [{
+                            "kind": "page_snapshot", "mimeType": "application/json", "fileName": "page-snapshot.json",
+                            "contentBase64": kura_computeruse::subprocess_driver::encode_base64(page.to_string().as_bytes()),
+                        }]})
+                    }
+                    _ => json!({ "id": id, "ok": true, "session": session }),
+                };
+                if writeln!(out, "{response}").is_err() {
+                    return;
+                }
+            }
+        });
+        let reader = ours.try_clone().expect("clone");
+        kura_computeruse::AttachedWorker::new(Box::new(ours), Box::new(reader), 2_000)
+            .expect("attach")
+    }
+
+    struct Launcher;
+
+    impl kura_computeruse::BrowserLauncher for Launcher {
+        fn launch(&self, _tenant_id: &str) -> Result<kura_computeruse::LaunchedBrowser, String> {
+            Ok(kura_computeruse::LaunchedBrowser {
+                handle: "exec_1".to_string(),
+                worker: fake_worker(),
+            })
+        }
+        fn stop(&self, _handle: &str) {}
+    }
+
+    async fn call(tools: &[Arc<dyn Tool>], name: &str, arguments: Value) -> ToolOutput {
+        let tool = tools
+            .iter()
+            .find(|t| t.spec().name == name)
+            .unwrap_or_else(|| panic!("no tool {name}"));
+        let invocation = ToolInvocation {
+            call_id: "call_1".to_string(),
+            name: name.to_string(),
+            arguments: arguments.to_string(),
+        };
+        assert!(!tool.parallel_safe(&invocation), "{name} is serial");
+        tool.call(&invocation).await.expect("tool call")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_browser_tools_drive_the_tenants_browser_and_read_back_text() {
+        let browsers = kura_computeruse::TenantBrowsers::new(
+            Arc::new(Launcher),
+            kura_computeruse::BrowserLimits {
+                max_sessions: 1,
+                idle: std::time::Duration::from_secs(600),
+            },
+        );
+        let tools = BrowserTool::all(&browsers, "ten_a");
+        let names: Vec<String> = tools.iter().map(|t| t.spec().name).collect();
+        assert_eq!(
+            names,
+            [
+                "browser.open",
+                "browser.read",
+                "browser.click",
+                "browser.type",
+                "browser.back",
+                "browser.close"
+            ]
+        );
+
+        let read = call(&tools, "browser.read", json!({})).await;
+        assert!(!read.success, "nothing is open yet");
+        let opened = call(
+            &tools,
+            "browser.open",
+            json!({ "url": "https://example.org/" }),
+        )
+        .await;
+        assert!(opened.success, "{}", opened.content);
+        assert!(
+            opened
+                .content
+                .starts_with("URL: https://example.org/\nTitle: Example\n\nafter navigate")
+        );
+        let clicked = call(&tools, "browser.click", json!({ "selector": "#go" })).await;
+        assert!(
+            clicked.content.ends_with("after click"),
+            "{}",
+            clicked.content
+        );
+        let refused = call(
+            &tools,
+            "browser.open",
+            json!({ "url": "file:///etc/passwd" }),
+        )
+        .await;
+        assert!(!refused.success);
+        let closed = call(&tools, "browser.close", json!({})).await;
+        assert_eq!(closed.content, "The browser is closed.");
+        assert_eq!(browsers.active(), 0);
+    }
 }

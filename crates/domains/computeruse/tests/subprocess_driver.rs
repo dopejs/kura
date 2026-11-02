@@ -209,3 +209,80 @@ fn a_missing_worker_binary_is_a_clear_error() {
         .expect_err("missing");
     assert!(err.contains("spawn browser worker"), "{err}");
 }
+
+/// Starts the fake worker the way a sandbox would and hands over its pipes.
+fn attached(env: &[(&str, &str)]) -> (kura_computeruse::AttachedWorker, std::process::Child) {
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_fake_browser_worker"))
+        .envs(env.iter().copied())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn fake worker");
+    let stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let worker = kura_computeruse::AttachedWorker::new(Box::new(stdin), Box::new(stdout), 2_000)
+        .expect("attach");
+    (worker, child)
+}
+
+#[test]
+fn an_attached_worker_speaks_the_protocol_over_handed_in_pipes() {
+    let (worker, mut child) = attached(&[]);
+    let started = worker
+        .start_session(
+            session(),
+            CreateSessionInput {
+                initial_url: "https://example.org/start".to_string(),
+                ..CreateSessionInput::default()
+            },
+        )
+        .expect("start");
+    assert_eq!(started.status, SessionStatus::Active);
+    let (_, shot, captures) = worker
+        .execute_action(
+            started.clone(),
+            action(ActionKind::Screenshot, serde_json::json!({})),
+        )
+        .expect("screenshot");
+    assert_eq!(shot.status, ActionStatus::Completed);
+    assert_eq!(captures.len(), 1);
+    let closed = worker.close_session(started).expect("close");
+    assert_eq!(closed.status, SessionStatus::Closed);
+    assert!(worker.alive());
+    drop(worker);
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// No respawn: a worker that dies or hangs is gone for good, and says so.
+#[test]
+fn an_attached_worker_that_dies_or_hangs_is_gone_for_good() {
+    for knob in [
+        ("FAKE_WORKER_EXIT_AFTER", "1"),
+        ("FAKE_WORKER_HANG_ON", "2"),
+    ] {
+        let (worker, mut child) = attached(&[knob]);
+        worker
+            .start_session(session(), CreateSessionInput::default())
+            .expect("first request answers");
+        let err = worker
+            .execute_action(
+                session(),
+                action(ActionKind::Screenshot, serde_json::json!({})),
+            )
+            .expect_err("the second request fails");
+        assert!(
+            err.contains("exited")
+                || err.contains("write failed")
+                || err.contains("did not answer"),
+            "{knob:?}: {err}"
+        );
+        assert!(!worker.alive());
+        let err = worker
+            .close_session(session())
+            .expect_err("nothing answers after a failure");
+        assert!(err.contains("gone"), "{err}");
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}

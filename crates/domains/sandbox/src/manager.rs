@@ -183,6 +183,7 @@ impl Manager {
                  could bypass the egress proxy"
             ));
         }
+        proxy_reachable_under(self.inner.read().tenant_runtime.as_deref(), proxy_url)?;
         self.inner.write().tenant_egress = Some(crate::TenantEgress {
             network: network.to_string(),
             proxy_url: proxy_url.to_string(),
@@ -215,6 +216,9 @@ impl Manager {
         {
             return Err(format!("{runtime:?} is not a container runtime name"));
         }
+        if let Some(egress) = self.inner.read().tenant_egress.as_ref() {
+            proxy_reachable_under(Some(runtime), &egress.proxy_url)?;
+        }
         let known = registered()?;
         if !known.iter().any(|name| name == runtime) {
             return Err(format!(
@@ -224,6 +228,13 @@ impl Manager {
         }
         self.inner.write().tenant_runtime = Some(runtime.to_string());
         Ok(())
+    }
+
+    /// Whether isolated runs have a way out (Stage 3.5): a run that asks for
+    /// network is refused without one.
+    #[must_use]
+    pub fn tenant_egress_configured(&self) -> bool {
+        self.inner.read().tenant_egress.is_some()
     }
 
     /// Go `SetSecretManager`.
@@ -368,10 +379,16 @@ impl Manager {
 
     /// Go `StartAttachedExecution`: prepares and spawns the subprocess,
     /// returning live stdin/stdout pipes and a streaming runner thread.
+    ///
+    /// An attached process is a session (an MCP server, a browser) that its
+    /// owner ends by cancelling it, so the profile's run timeout, which is a
+    /// bound for batch commands, does not apply. Only a `timeout_ms` the
+    /// caller sets does.
     pub fn start_attached_execution(
         &self,
         request: ExecutionRequest,
     ) -> Result<(Execution, Option<crate::execution::AttachedExecution>), SandboxError> {
+        let requested_timeout_ms = request.timeout_ms;
         let outcome = self.prepare(request, true)?;
         let mut execution = outcome.execution;
         let decision = outcome.decision;
@@ -536,7 +553,7 @@ impl Manager {
                 execution.clone(),
                 stderr_capture,
                 pid,
-                launch.timeout,
+                attached_watchdog(requested_timeout_ms, launch.timeout),
                 container_name,
             )
         });
@@ -885,7 +902,8 @@ impl Manager {
             let gate = acting_tenant(&request.owner_tenant_id).and_then(|acting| {
                 self.hosting_floor(&profile, &acting)?;
                 if profile.isolation == crate::IsolationMode::Tenant {
-                    self.isolation_for(&execution, &acting.tenant_id).map(Some)
+                    self.isolation_for(&execution, &acting.tenant_id, request.container.as_ref())
+                        .map(Some)
                 } else {
                     Ok(None)
                 }
@@ -961,7 +979,10 @@ impl Manager {
         };
         if execution.backend_kind == BackendKind::Docker {
             launch.container_name = format!("kura-exec-{}", execution.execution_id);
-            launch.docker_image = docker_image_for_execution();
+            launch.docker_image = match (&isolated_run, &request.container) {
+                (Some(_), Some(container)) => container.image.clone(),
+                _ => docker_image_for_execution(),
+            };
             match isolated_run {
                 Some(run) => {
                     execution
@@ -1021,6 +1042,7 @@ impl Manager {
         &self,
         execution: &Execution,
         tenant_id: &str,
+        container: Option<&crate::ContainerSpec>,
     ) -> Result<crate::IsolatedRun, (&'static str, String)> {
         let access = &execution.access;
         // Per-run host/port lists and loopback cannot be honoured: the proxy
@@ -1071,7 +1093,10 @@ impl Manager {
             ));
         }
         crate::WorkspaceRoots::for_data_dir(&self.cfg.data_dir)
-            .resolve(tenant_id, crate::IsolationLimits::from_env())
+            .resolve(
+                tenant_id,
+                container.map_or_else(crate::IsolationLimits::from_env, |c| c.limits.clone()),
+            )
             .map(|run| crate::IsolatedRun {
                 egress,
                 runtime: self.inner.read().tenant_runtime.clone(),
@@ -2043,6 +2068,32 @@ pub fn docker_access_mismatch(access: &AccessRequest) -> String {
 }
 
 /// Go `markDecisionUnsupported`.
+/// gVisor's network stack does not apply the iptables redirect behind
+/// docker's embedded DNS (127.0.0.11), so under runsc a tenant container
+/// cannot resolve the proxy's container name and has no way out at all.
+/// Measured on the cell host (agent-runtime-program.md 3.3): by name it
+/// fails, by IP it works. So under runsc the proxy URL must be an IP: give
+/// the proxy a fixed address on the tenant network
+/// (`docker network connect --ip`).
+fn proxy_reachable_under(runtime: Option<&str>, proxy_url: &str) -> Result<(), String> {
+    if runtime != Some("runsc") {
+        return Ok(());
+    }
+    let host = url::Url::parse(proxy_url).ok().and_then(|url| {
+        url.host()
+            .map(|host| matches!(host, url::Host::Ipv4(_) | url::Host::Ipv6(_)))
+    });
+    match host {
+        Some(true) => Ok(()),
+        _ => Err(format!(
+            "under runsc the egress proxy must be addressed by IP ({proxy_url} names a host): \
+             docker's embedded DNS does not work inside gVisor. Give the proxy a fixed \
+             address on the tenant network (docker network connect --ip) and use it in \
+             KURA_SANDBOX_EGRESS_PROXY"
+        )),
+    }
+}
+
 /// The runtimes docker has registered (`docker info`).
 fn docker_runtimes() -> Result<Vec<String>, String> {
     let output = std::process::Command::new("docker")
@@ -2546,6 +2597,19 @@ fn build_environment(profile: &Profile, request_env: &HashMap<String, String>) -
         }
     }
     items
+}
+
+/// The watchdog for an attached execution: the bound the caller asked for
+/// (already clamped to the profile's maximum), or none. The profile's
+/// default timeout is for batch runs; an attached session left to it was
+/// killed after 30 s, and an MCP server restarted every 30 s.
+#[must_use]
+pub fn attached_watchdog(requested_ms: i64, effective: Duration) -> Duration {
+    if requested_ms > 0 {
+        effective
+    } else {
+        Duration::ZERO
+    }
 }
 
 /// Go `effectiveTimeout`.

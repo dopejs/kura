@@ -626,6 +626,86 @@ impl kura_mcp::AttachedExecutionStarter for McpExecutionStarter {
 }
 
 // ---------------------------------------------------------------------------
+// 3.3: the tenant browser's launcher. Each browser is an attached execution
+// on the tenant-isolated profile, in the tenant's own container, with the
+// browser worker image and the limits a browser needs; the egress proxy is
+// its only way out. The execution id is the handle that ends it.
+// ---------------------------------------------------------------------------
+
+/// Where the browser worker lives in its image
+/// (`capabilities/browser/Dockerfile`).
+pub const BROWSER_WORKER_ENTRY: &str = "/opt/kura-browser/worker.mjs";
+
+pub struct SandboxBrowserLauncher {
+    sandbox: Arc<kura_sandbox::Manager>,
+    container: kura_sandbox::ContainerSpec,
+}
+
+impl SandboxBrowserLauncher {
+    #[must_use]
+    pub fn new(
+        sandbox: Arc<kura_sandbox::Manager>,
+        container: kura_sandbox::ContainerSpec,
+    ) -> Self {
+        Self { sandbox, container }
+    }
+}
+
+impl kura_computeruse::BrowserLauncher for SandboxBrowserLauncher {
+    fn launch(&self, tenant_id: &str) -> Result<kura_computeruse::LaunchedBrowser, String> {
+        let request = kura_sandbox::ExecutionRequest {
+            profile_id: kura_sandbox::PROFILE_ID_TENANT_ISOLATED.to_string(),
+            command: "node".to_string(),
+            args: vec![BROWSER_WORKER_ENTRY.to_string()],
+            access: kura_sandbox::AccessRequest {
+                network_mode: Some(kura_sandbox::NetworkMode::Full),
+                ..kura_sandbox::AccessRequest::default()
+            },
+            requested_by: "browser".to_string(),
+            resource_kind: "browser_session".to_string(),
+            resource_id: tenant_id.to_string(),
+            scope: "browser".to_string(),
+            reason: "tenant browser".to_string(),
+            owner_tenant_id: tenant_id.to_string(),
+            container: Some(self.container.clone()),
+            ..kura_sandbox::ExecutionRequest::default()
+        };
+        let (execution, attached) = self
+            .sandbox
+            .start_attached_execution(request)
+            .map_err(|err| err.to_string())?;
+        let Some(attached) = attached else {
+            // Refused by the sandbox: say why, from its own decision.
+            let reason = [
+                execution.result.error.as_str(),
+                execution.decision.explanation.as_str(),
+            ]
+            .into_iter()
+            .find(|text| !text.trim().is_empty())
+            .unwrap_or("the sandbox did not start the browser")
+            .to_string();
+            return Err(reason);
+        };
+        let handle = attached.execution.execution_id.clone();
+        let (Some(stdin), Some(stdout)) = (attached.stdin, attached.stdout) else {
+            let _ = self.sandbox.cancel_execution(&handle);
+            return Err("the browser container has no pipes".to_string());
+        };
+        match kura_computeruse::AttachedWorker::new(Box::new(stdin), Box::new(stdout), 30_000) {
+            Ok(worker) => Ok(kura_computeruse::LaunchedBrowser { handle, worker }),
+            Err(err) => {
+                let _ = self.sandbox.cancel_execution(&handle);
+                Err(err)
+            }
+        }
+    }
+
+    fn stop(&self, handle: &str) {
+        let _ = self.sandbox.cancel_execution(handle);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Roadmap 75: deferred hook wiring — webhook trigger quota gate and the
 // catalog requirement/permission gates. These replace the permissive
 // AllowAllQuota / AllMet / AllowAll defaults in the production assembly.

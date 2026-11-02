@@ -303,7 +303,7 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       server's owner. Consequence until 3.3: on a shared daemon, a tenant's
       MCP stdio server and any unowned server are refused rather than run on
       the host.
-- [ ] **3.3** MCP stdio servers and per-tenant browser contexts in the same
+- [x] **3.3** MCP stdio servers and per-tenant browser contexts in the same
       plane.
       *MCP stdio done 2026-10-31.* An attached execution on the isolated
       backend runs `docker run -i` with live stdin/stdout, so an MCP stdio
@@ -317,7 +317,45 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       `docker` argv, which any host user can read with `ps`. `-e KEY` takes
       them from the client's environment, and client-steering names
       (`PATH`, `HOME`, `DOCKER_*`) go inline to the container only.
-      *Open:* per-tenant browser contexts, sequenced after 3.5. A browser
+      *Browser done 2026-11-02* (decision: a throwaway browser per tenant,
+      no saved logins). Design in `tenant-browser.md`.
+      - *What tenants get:* the agent drives the browser through chat
+        tools (`browser.open/read/click/type/back/close`). Each tenant gets
+        one Playwright/Chromium worker in its own isolated container,
+        started as an attached sandbox execution with an in-process-only
+        image and limits (1 GiB, 512 pids). The worker image is
+        `capabilities/browser/Dockerfile`, Chromium only (1.2 GB); CI
+        builds it, runs the protocol under the isolated flags, and pushes
+        `kura-browser-worker`.
+      - *Bounds:* the egress proxy is the browser's only network.
+        `KURA_BROWSER_MAX_SESSIONS` (4) caps browsers daemon-wide;
+        `KURA_BROWSER_IDLE_SECONDS` (600) closes idle ones and removes
+        their containers. Only `http`/`https` URLs open.
+      - *Measured on sg-2:* session start ~1.3 s on runc and ~2.2 s on
+        runsc; actions 10–150 ms; about 200 MiB per session.
+      - *Found on the way and fixed:* the sandbox ended every attached
+        execution at the profile's batch timeout (30 s). So MCP stdio
+        servers, on the host and in tenant containers, were killed and
+        auto-restarted every 30 s. An attached session is now bounded
+        only by a timeout its caller sets.
+      - *Found on the way and fixed (2):* under runsc, docker's embedded
+        DNS does not answer inside gVisor. A tenant container could not
+        resolve the proxy's name, so no networked run (browser included)
+        got out. The proxy must be an IP under runsc, and the daemon now
+        refuses to start otherwise. 3.4's "egress under runsc" gap is now
+        verified.
+      - *Verified end to end on dopejs-sg-2* (`scripts/tenant-browser-e2e/`),
+        runc and runsc, all checks passing:
+        - a tenant's chat calls `browser.open` and gets the page text;
+        - one container per tenant, under the runtime, internal network
+          only, read-only, no capabilities;
+        - private addresses are refused by the proxy, metadata is
+          unreachable, and with the proxy down nothing loads;
+        - the idle container is removed.
+      - *Not covered:* screenshots for the model (the loop is text only),
+        downloads, and saved logins (the decision excluded them).
+      *Earlier note (kept for the history):* per-tenant browser contexts,
+      sequenced after 3.5. A browser
       needs network, and tenant containers get network only through 3.5's
       egress proxy. Until then tenants have no browser path at all: the
       computer-use session/action routes are operator-only in shared mode
@@ -349,7 +387,8 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       *Host state:* sg-2 has runsc registered next to runc, the default.
       The pilot's `smoke` cell was not restarted.
       *Not covered:*
-      - the egress-proxy path under runsc (proven on runc only);
+      - the egress-proxy path under runsc (proven on runc only; verified
+        in 3.3, which found that runsc needs the proxy addressed by IP);
       - the KVM platform (needs a host with nested virtualization);
       - running the cell pilot's daemons under runsc (`kura-node` would
         need a runtime option; the daemon image boots under it);

@@ -11,6 +11,7 @@ This module defines the execution substrate above the daemon core: skills, memor
 - [agent-runtime-program.md](agent-runtime-program.md) — current plan: shared-hosting M2–M4 and agent runtime core (context, caching, tracing, parallel tools, resume)
 - [shared-hosting.md](shared-hosting.md) — one daemon, many tenants: design and milestones
 - [turn-admission.md](turn-admission.md) — per-tenant turn limits and the fair queue (M4 / 4.1)
+- [tenant-browser.md](tenant-browser.md) — a throwaway browser per tenant behind the browser.* chat tools (3.3)
 
 ## Suggested Reading Order
 

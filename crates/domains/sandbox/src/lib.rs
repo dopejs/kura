@@ -612,6 +612,20 @@ pub struct ExecutionRequest {
     /// a request context is also present the two must agree.
     #[serde(skip)]
     pub owner_tenant_id: String,
+    /// The container an isolated run gets, when an in-process caller needs
+    /// a different one from the operator's default (the tenant browser's
+    /// image and limits). Never read from or written to JSON: a tenant cannot
+    /// pick an image or raise its own limits. Ignored by every backend but
+    /// the isolated one.
+    #[serde(skip)]
+    pub container: Option<ContainerSpec>,
+}
+
+/// An isolated run's image and limits, set by an in-process caller.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContainerSpec {
+    pub image: String,
+    pub limits: IsolationLimits,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

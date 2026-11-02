@@ -117,8 +117,10 @@ struct WireCapture {
 }
 
 struct Worker {
-    child: Child,
-    stdin: ChildStdin,
+    /// The process when this driver spawned it; `None` for pipes handed in
+    /// (their owner ends the process).
+    child: Option<Child>,
+    stdin: Box<dyn Write + Send>,
     /// Lines from the worker's stdout, read on a dedicated thread so a
     /// request can time out without blocking on a dead pipe.
     lines: mpsc::Receiver<std::io::Result<String>>,
@@ -138,8 +140,18 @@ impl Worker {
         let mut child = command
             .spawn()
             .map_err(|err| format!("spawn browser worker `{}`: {err}", config.command))?;
-        let stdin = child.stdin.take().ok_or("worker stdin unavailable")?;
+        let stdin: ChildStdin = child.stdin.take().ok_or("worker stdin unavailable")?;
         let stdout: ChildStdout = child.stdout.take().ok_or("worker stdout unavailable")?;
+        let mut worker = Worker::attach(Box::new(stdin), Box::new(stdout))?;
+        worker.child = Some(child);
+        Ok(worker)
+    }
+
+    /// A worker on pipes someone else started (a sandboxed container).
+    fn attach(
+        stdin: Box<dyn Write + Send>,
+        stdout: Box<dyn std::io::Read + Send>,
+    ) -> Result<Self, String> {
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new()
             .name("browser-worker-stdout".to_string())
@@ -153,15 +165,52 @@ impl Worker {
             })
             .map_err(|err| format!("spawn worker reader thread: {err}"))?;
         Ok(Worker {
-            child,
+            child: None,
             stdin,
             lines: rx,
         })
     }
 
     fn kill(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    /// One request and its answer. Any error means the worker is unusable:
+    /// the caller drops it.
+    fn send(&mut self, request: &Request<'_>, timeout_ms: u64) -> Result<Response, String> {
+        let mut line = serde_json::to_string(request).map_err(|err| err.to_string())?;
+        line.push('\n');
+        self.stdin
+            .write_all(line.as_bytes())
+            .and_then(|()| self.stdin.flush())
+            .map_err(|err| format!("browser worker write failed: {err}"))?;
+        let received = match self
+            .lines
+            .recv_timeout(Duration::from_millis(timeout_ms.max(1)))
+        {
+            Ok(Ok(text)) => text,
+            Ok(Err(err)) => return Err(format!("browser worker read failed: {err}")),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(format!(
+                    "browser worker did not answer within {timeout_ms}ms"
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("browser worker exited".to_string());
+            }
+        };
+        let response: Response = serde_json::from_str(&received)
+            .map_err(|err| format!("browser worker answered malformed JSON: {err}"))?;
+        if response.id != request.id {
+            return Err(format!(
+                "browser worker answered out of order (expected {}, got {})",
+                request.id, response.id
+            ));
+        }
+        Ok(response)
     }
 }
 
@@ -227,55 +276,14 @@ impl SubprocessDriver {
             *guard = Some(worker);
         }
         let worker = guard.as_mut().expect("worker spawned");
-        let mut line = serde_json::to_string(request).map_err(|err| err.to_string())?;
-        line.push('\n');
-        if let Err(err) = worker
-            .stdin
-            .write_all(line.as_bytes())
-            .and_then(|()| worker.stdin.flush())
-        {
-            worker.kill();
-            *guard = None;
-            return Err(self.fail(&format!("browser worker write failed: {err}")));
-        }
-        let timeout = Duration::from_millis(self.config.timeout_ms.max(1));
-        let received = match worker.lines.recv_timeout(timeout) {
-            Ok(Ok(text)) => text,
-            Ok(Err(err)) => {
-                worker.kill();
-                *guard = None;
-                return Err(self.fail(&format!("browser worker read failed: {err}")));
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                worker.kill();
-                *guard = None;
-                return Err(self.fail(&format!(
-                    "browser worker did not answer within {}ms",
-                    self.config.timeout_ms
-                )));
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                worker.kill();
-                *guard = None;
-                return Err(self.fail("browser worker exited"));
-            }
-        };
-        let response: Response = match serde_json::from_str(&received) {
+        let response = match worker.send(request, self.config.timeout_ms) {
             Ok(response) => response,
             Err(err) => {
                 worker.kill();
                 *guard = None;
-                return Err(self.fail(&format!("browser worker answered malformed JSON: {err}")));
+                return Err(self.fail(&err));
             }
         };
-        if response.id != request.id {
-            worker.kill();
-            *guard = None;
-            return Err(self.fail(&format!(
-                "browser worker answered out of order (expected {}, got {})",
-                request.id, response.id
-            )));
-        }
         if let Some(sup) = &self.supervisor {
             sup.report_healthy(&self.config.capability_id);
         }
@@ -294,20 +302,12 @@ impl Driver for SubprocessDriver {
         session: Session,
         input: CreateSessionInput,
     ) -> Result<Session, String> {
-        let request = Request {
-            id: self.request_id(),
-            op: "start_session",
-            session: &session,
-            input: Some(&input),
-            action: None,
-        };
-        let response = self.exchange(&request)?;
-        if !response.ok {
-            return Err(worker_error(&response));
-        }
-        response
-            .session
-            .ok_or_else(|| "worker returned no session".to_string())
+        start_session_via(
+            &|request| self.exchange(request),
+            self.request_id(),
+            session,
+            input,
+        )
     }
 
     fn execute_action(
@@ -315,53 +315,188 @@ impl Driver for SubprocessDriver {
         session: Session,
         action: Action,
     ) -> Result<(Session, Action, Vec<ArtifactCaptureRequest>), String> {
-        let request = Request {
-            id: self.request_id(),
-            op: "execute_action",
-            session: &session,
-            input: None,
-            action: Some(&action),
-        };
-        let response = self.exchange(&request)?;
-        if !response.ok {
-            return Err(worker_error(&response));
-        }
-        let next_session = response.session.ok_or("worker returned no session")?;
-        let next_action = response.action.ok_or("worker returned no action")?;
-        let mut captures = Vec::with_capacity(response.captures.len());
-        for capture in response.captures {
-            let content = decode_base64(&capture.content_base64)
-                .map_err(|err| format!("capture {}: {err}", capture.file_name))?;
-            captures.push(ArtifactCaptureRequest {
-                run_id: next_session.run_id.clone(),
-                computer_use_session_id: next_session.computer_use_session_id.clone(),
-                computer_use_action_id: next_action.computer_use_action_id.clone(),
-                kind: capture.kind,
-                mime_type: capture.mime_type,
-                file_name: capture.file_name,
-                estimated_byte_size: content.len() as i64,
-                content,
-            });
-        }
-        Ok((next_session, next_action, captures))
+        execute_action_via(
+            &|request| self.exchange(request),
+            self.request_id(),
+            session,
+            action,
+        )
     }
 
     fn close_session(&self, session: Session) -> Result<Session, String> {
-        let request = Request {
-            id: self.request_id(),
-            op: "close_session",
-            session: &session,
-            input: None,
-            action: None,
-        };
-        let response = self.exchange(&request)?;
-        if !response.ok {
-            return Err(worker_error(&response));
-        }
-        response
-            .session
-            .ok_or_else(|| "worker returned no session".to_string())
+        close_session_via(
+            &|request| self.exchange(request),
+            self.request_id(),
+            session,
+        )
     }
+}
+
+/// A [`Driver`] over a worker whose pipes were handed in: a browser worker
+/// in a tenant's sandboxed container (3.3). Unlike [`SubprocessDriver`] it
+/// never respawns: the first transport failure ends it for good, and the
+/// owner of the pipes ends the process.
+pub struct AttachedWorker {
+    worker: Mutex<Option<Worker>>,
+    timeout_ms: u64,
+    next_id: std::sync::atomic::AtomicU64,
+}
+
+impl AttachedWorker {
+    pub fn new(
+        stdin: Box<dyn Write + Send>,
+        stdout: Box<dyn std::io::Read + Send>,
+        timeout_ms: u64,
+    ) -> Result<Self, String> {
+        Ok(AttachedWorker {
+            worker: Mutex::new(Some(Worker::attach(stdin, stdout)?)),
+            timeout_ms: if timeout_ms == 0 {
+                DEFAULT_TIMEOUT_MS
+            } else {
+                timeout_ms
+            },
+            next_id: std::sync::atomic::AtomicU64::new(1),
+        })
+    }
+
+    /// False once a request failed in transport; nothing will answer again.
+    #[must_use]
+    pub fn alive(&self) -> bool {
+        self.worker.lock().is_some()
+    }
+
+    fn exchange(&self, request: &Request<'_>) -> Result<Response, String> {
+        let mut guard = self.worker.lock();
+        let Some(worker) = guard.as_mut() else {
+            return Err("browser worker is gone".to_string());
+        };
+        worker.send(request, self.timeout_ms).inspect_err(|_| {
+            *guard = None;
+        })
+    }
+
+    fn request_id(&self) -> u64 {
+        self.next_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Driver for AttachedWorker {
+    fn start_session(
+        &self,
+        session: Session,
+        input: CreateSessionInput,
+    ) -> Result<Session, String> {
+        start_session_via(
+            &|request| self.exchange(request),
+            self.request_id(),
+            session,
+            input,
+        )
+    }
+
+    fn execute_action(
+        &self,
+        session: Session,
+        action: Action,
+    ) -> Result<(Session, Action, Vec<ArtifactCaptureRequest>), String> {
+        execute_action_via(
+            &|request| self.exchange(request),
+            self.request_id(),
+            session,
+            action,
+        )
+    }
+
+    fn close_session(&self, session: Session) -> Result<Session, String> {
+        close_session_via(
+            &|request| self.exchange(request),
+            self.request_id(),
+            session,
+        )
+    }
+}
+
+type Exchange<'e> = dyn Fn(&Request<'_>) -> Result<Response, String> + 'e;
+
+fn start_session_via(
+    exchange: &Exchange<'_>,
+    id: u64,
+    session: Session,
+    input: CreateSessionInput,
+) -> Result<Session, String> {
+    let request = Request {
+        id,
+        op: "start_session",
+        session: &session,
+        input: Some(&input),
+        action: None,
+    };
+    let response = exchange(&request)?;
+    if !response.ok {
+        return Err(worker_error(&response));
+    }
+    response
+        .session
+        .ok_or_else(|| "worker returned no session".to_string())
+}
+
+fn execute_action_via(
+    exchange: &Exchange<'_>,
+    id: u64,
+    session: Session,
+    action: Action,
+) -> Result<(Session, Action, Vec<ArtifactCaptureRequest>), String> {
+    let request = Request {
+        id,
+        op: "execute_action",
+        session: &session,
+        input: None,
+        action: Some(&action),
+    };
+    let response = exchange(&request)?;
+    if !response.ok {
+        return Err(worker_error(&response));
+    }
+    let next_session = response.session.ok_or("worker returned no session")?;
+    let next_action = response.action.ok_or("worker returned no action")?;
+    let mut captures = Vec::with_capacity(response.captures.len());
+    for capture in response.captures {
+        let content = decode_base64(&capture.content_base64)
+            .map_err(|err| format!("capture {}: {err}", capture.file_name))?;
+        captures.push(ArtifactCaptureRequest {
+            run_id: next_session.run_id.clone(),
+            computer_use_session_id: next_session.computer_use_session_id.clone(),
+            computer_use_action_id: next_action.computer_use_action_id.clone(),
+            kind: capture.kind,
+            mime_type: capture.mime_type,
+            file_name: capture.file_name,
+            estimated_byte_size: content.len() as i64,
+            content,
+        });
+    }
+    Ok((next_session, next_action, captures))
+}
+
+fn close_session_via(
+    exchange: &Exchange<'_>,
+    id: u64,
+    session: Session,
+) -> Result<Session, String> {
+    let request = Request {
+        id,
+        op: "close_session",
+        session: &session,
+        input: None,
+        action: None,
+    };
+    let response = exchange(&request)?;
+    if !response.ok {
+        return Err(worker_error(&response));
+    }
+    response
+        .session
+        .ok_or_else(|| "worker returned no session".to_string())
 }
 
 fn worker_error(response: &Response) -> String {
