@@ -324,8 +324,37 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       (pinned in `hosting.rs` `OPERATOR_ROUTES`), there is no browser chat
       tool, and workflow browser steps run through operator-only
       `POST /v1/runs`. The operator's browser worker remains a host process.
-- [ ] **3.4** Measure gVisor on the cell hosts; adopt as a second backend only
+- [x] **3.4** Measure gVisor on the cell hosts; adopt as a second backend only
       if overhead fits.
+      *Done 2026-11-02*; numbers and setup in
+      `sandbox-execution-plane.md` §9, harness in
+      `scripts/sandbox-runtime-bench/`. Measured on dopejs-sg-2 with gVisor
+      `release-20261026.0` on systrap (the VM has no nested
+      virtualization) and kura's isolated flags:
+      - container start, CPU work and the kura daemon's boot are unchanged;
+      - syscall-heavy work is 3–10× slower (5 ms per process spawn, 10×
+        on `stat`, 6× on small workspace files, 2.9× on a Python start);
+      - each container uses about 17 MiB more.
+      *Decision:* it fits short agent tool runs and is the right choice
+      for strangers' code. It is offered as an operator choice, not made
+      the default. `KURA_SANDBOX_DOCKER_RUNTIME=runsc` runs every isolated
+      container under it. The boot stops if docker lacks the runtime,
+      rather than falling back to runc.
+      *Verified:* unit tests for the argv and the config check. On sg-2 the
+      Docker-gated isolation suite ran with `KURA_DOCKER_TEST_RUNTIME=runsc`:
+      16 of 17 passed. The run's kernel is gVisor's, with the same uid,
+      read-only root and workspace. The egress-proxy test needs a full
+      `kura` binary as its sidecar (`KURA_EGRESS_PROXY_BIN`), which was
+      not built there; CI runs it, on runc.
+      *Host state:* sg-2 has runsc registered next to runc, the default.
+      The pilot's `smoke` cell was not restarted.
+      *Not covered:*
+      - the egress-proxy path under runsc (proven on runc only);
+      - the KVM platform (needs a host with nested virtualization);
+      - running the cell pilot's daemons under runsc (`kura-node` would
+        need a runtime option; the daemon image boots under it);
+      - dependency installs and builds, which the numbers say will be
+        several times slower.
 - [x] **3.5** G11 DNS rebinding (from 1.5): tenant workloads reach the network
       only through an egress proxy that resolves once, checks the address
       with `kura-egress`, and connects to that address. Daemon-side clients

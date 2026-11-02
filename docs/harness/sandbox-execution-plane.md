@@ -776,6 +776,71 @@ The CI Linux job proves it with the real binary as the sidecar: proxied
 HTTP works, the metadata address is refused by the proxy, a request that
 bypasses the proxy has no route, and an outside DNS lookup fails.
 
+### 9. gVisor For Isolated Runs (Agent Runtime Program 3.4, 2026-11-02)
+
+The isolated backend can run every tenant container under another OCI
+runtime, chosen by the operator:
+
+```
+KURA_SANDBOX_DOCKER_RUNTIME=runsc
+```
+
+With `runsc` (gVisor), a tenant's code meets gVisor's kernel, written in Go
+and running in user space, instead of the host's. The flags and limits from
+§5 still apply. Unset keeps docker's default runtime. The daemon asks docker
+at boot whether the runtime is registered. If it is not, the boot stops,
+because falling back to runc would quietly drop isolation the operator
+asked for.
+
+**Measured on the cell host** (dopejs-sg-2: a 2 vCPU / 3.6 GiB VM with no
+nested virtualization, so gVisor runs on its systrap platform; gVisor
+`release-20261026.0`; docker 29.8; kura's isolated flags; 3 runs per
+workload, alternating runtimes; harness in
+`scripts/sandbox-runtime-bench/`):
+
+| Workload | runc | runsc | Ratio |
+|---|---|---|---|
+| `docker run --rm` start, p50 / p90 | 278 / 322 ms | 278 / 294 ms | same |
+| sha256 of 256 MiB (CPU) | ~870 ms | ~775 ms | same |
+| 200 MiB write + fsync + read, workspace bind mount | ~510 ms | ~667 ms | 1.3× |
+| 2000 × 1 KiB files write/read/delete, tmpfs | ~105 ms | ~580 ms | 5.5× |
+| the same on the workspace bind mount | ~180 ms | ~1080 ms | 6× |
+| 300 process spawns | ~200 ms | ~1530 ms | 7.5× |
+| 100k `stat` on the workspace | ~245 ms | ~2590 ms | 10× |
+| 10 Python starts importing json/email/http/asyncio/sqlite3/ssl | 8.0 s | 23.2 s | 2.9× |
+| idle memory per container (host `MemAvailable`) | 7 MiB | 24 MiB | +17 MiB |
+| kura daemon image: boot to `/healthz` | 557 ms | 581 ms | same |
+| kura daemon image: idle memory | 24 MiB | 41 MiB | +17 MiB |
+
+**What it costs:**
+- Computation and container start-up cost nothing extra.
+- Work made of system calls (spawning processes, file metadata, interpreter
+  start-up) is 3–10× slower, and each container uses about 17 MiB more.
+- For agent tool runs, which are short commands between model calls that
+  take seconds, the added time is tens to hundreds of milliseconds per
+  command, plus about 1.5 s per fresh Python process.
+- Dependency installs and builds would feel it.
+
+**Decision:** adopt as an operator choice, not the default.
+- A shared daemon that runs strangers' code should set `runsc`.
+- A single-owner daemon or the cell pilot keeps runc.
+- The KVM platform (much less syscall overhead) needs nested virtualization,
+  which these VMs lack. Measure it again on a host that has it.
+
+**Host setup** (done on dopejs-sg-2):
+1. Install `runsc` and `containerd-shim-runsc-v1` from the release tarball
+   (`releases/release/<version>/x86_64/gvisor.tar.bz2`, verified with its
+   `.sha512`) into `/usr/local/bin`. The tarball's `gvisor-bin/` must go to
+   `/usr/local/bin/gvisor-bin/`; this release's runsc refuses to start
+   without `gvisor_sentry` there.
+2. Register the runtime in `/etc/docker/daemon.json` with
+   `{"runtimes":{"runsc":{"path":"/usr/local/bin/runsc"}}}`, then
+   `systemctl reload docker`. A reload rereads the runtimes without
+   restarting docker or its containers.
+
+**Rollback:** unset the variable. To remove gVisor from the host, delete
+the `runtimes` entry, reload docker, and delete the binaries.
+
 ## Explicit Prerequisites Before MCP
 
 The next roadmap should not be "MCP immediately" without these prerequisites being explicit:

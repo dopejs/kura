@@ -36,4 +36,6 @@ pub enum AppError {
     Rehearsal(String),
     #[error("hosting mode: {0}")]
     Hosting(String),
+    #[error("sandbox: {0}")]
+    Sandbox(String),
 }

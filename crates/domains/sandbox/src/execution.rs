@@ -1390,6 +1390,7 @@ mod docker_client_tests {
             workspace_source: "/data/tenants/ten_a/workspace".to_string(),
             limits: crate::isolation::IsolationLimits::default(),
             egress: None,
+            runtime: None,
         };
         let client = docker_client_launch(&launch(Some(run)), vec!["run".to_string()]);
         assert_eq!(client.command, "docker");

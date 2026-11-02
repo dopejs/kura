@@ -698,3 +698,63 @@ fn a_tenant_container_reaches_the_network_only_through_the_egress_proxy() {
     let logs = proxy_logs();
     assert!(logs.contains("refused 169.254.169.254:80"), "{logs}");
 }
+
+// --- Stage 3.4: the container runtime (gVisor) ----------------------------
+
+#[test]
+fn a_tenant_runtime_must_be_registered_with_docker() {
+    let manager = manager(&temp_dir("runtime_config"));
+    let registered = || Ok(vec!["runc".to_string(), "runsc".to_string()]);
+    for bad in ["", "run sc", "runsc;rm", "../runsc"] {
+        assert!(
+            manager
+                .configure_tenant_runtime_with(bad, &registered)
+                .is_err(),
+            "accepted {bad:?}"
+        );
+    }
+    let err = manager
+        .configure_tenant_runtime_with("kata", &registered)
+        .expect_err("an unregistered runtime is refused");
+    assert!(
+        err.contains("no runtime kata") && err.contains("runsc"),
+        "{err}"
+    );
+    assert!(
+        manager
+            .configure_tenant_runtime_with("runsc", &|| Err("docker is down".into()))
+            .is_err()
+    );
+    manager
+        .configure_tenant_runtime_with("runsc", &registered)
+        .expect("a registered runtime is accepted");
+}
+
+/// With `KURA_DOCKER_TESTS=1` and `KURA_DOCKER_TEST_RUNTIME=runsc` on a host
+/// with gVisor registered: the tenant's code runs on gVisor's kernel, with
+/// the same isolation as on the default runtime.
+#[test]
+fn an_isolated_run_uses_the_configured_runtime() {
+    if !docker_tests_enabled("an_isolated_run_uses_the_configured_runtime") {
+        return;
+    }
+    let Ok(runtime) = std::env::var("KURA_DOCKER_TEST_RUNTIME") else {
+        eprintln!("skipping: set KURA_DOCKER_TEST_RUNTIME (e.g. runsc) to a registered runtime");
+        return;
+    };
+    let manager = manager(&temp_dir("docker_runtime"));
+    manager
+        .configure_tenant_runtime(&runtime)
+        .expect("runtime registered with docker");
+    let run = run_as(
+        &manager,
+        "ten_a",
+        "uname -r; id -u; touch /probe 2>/dev/null && echo ROOTFS_WRITABLE; echo hi > /workspace/f && cat /workspace/f",
+    );
+    assert_eq!(run.status, ExecutionStatus::Completed, "{:?}", run.result);
+    let out: Vec<&str> = run.result.stdout.lines().collect();
+    if runtime == "runsc" {
+        assert!(out[0].contains("gvisor"), "kernel {:?}", out[0]);
+    }
+    assert_eq!(out[1..], [tenant_uid("ten_a").to_string().as_str(), "hi"]);
+}

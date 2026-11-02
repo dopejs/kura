@@ -707,6 +707,26 @@ fn configure_tenant_egress(sandboxes: &SandboxManager) {
     }
 }
 
+/// Stage 3.4: `KURA_SANDBOX_DOCKER_RUNTIME` names the OCI runtime isolated
+/// runs use (`runsc` for gVisor, measured in agent-runtime-program.md 3.4).
+/// Unset keeps docker's default. A runtime docker does not have stops the
+/// boot: falling back to the default would quietly drop isolation the
+/// operator asked for.
+fn configure_tenant_runtime(sandboxes: &SandboxManager) -> Result<(), AppError> {
+    let Some(runtime) = std::env::var("KURA_SANDBOX_DOCKER_RUNTIME")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    sandboxes
+        .configure_tenant_runtime(&runtime)
+        .map_err(|err| AppError::Sandbox(format!("KURA_SANDBOX_DOCKER_RUNTIME: {err}")))?;
+    eprintln!("[kura] sandbox: isolated runs use the {runtime} container runtime");
+    Ok(())
+}
+
 fn build_sandbox(asm: &mut Assembly) -> Result<(), AppError> {
     let sandboxes = Arc::new(SandboxManager::new(
         asm.cfg.clone(),
@@ -729,6 +749,7 @@ fn build_sandbox(asm: &mut Assembly) -> Result<(), AppError> {
     sandboxes.set_secret_manager(SecretsManager::new(secret_store, secret_backend));
     apply_hosting_floor(&sandboxes, &asm.state.hosting);
     configure_tenant_egress(&sandboxes);
+    configure_tenant_runtime(&sandboxes)?;
     asm.state.sandboxes = Some(sandboxes);
     asm.lifecycle.on_close(
         "sandbox",

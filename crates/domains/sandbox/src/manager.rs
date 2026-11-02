@@ -104,6 +104,9 @@ pub(crate) struct ManagerInner {
     pub(crate) shared_operator_tenant: Option<String>,
     /// Stage 3.5: the tenant egress path; `None` keeps isolated runs offline.
     pub(crate) tenant_egress: Option<crate::TenantEgress>,
+    /// Stage 3.4: the OCI runtime isolated runs use (`runsc` = gVisor);
+    /// `None` is docker's default.
+    pub(crate) tenant_runtime: Option<String>,
 }
 
 /// Thread-safe sandbox manager mirroring the Go `Manager`: an in-memory
@@ -184,6 +187,42 @@ impl Manager {
             network: network.to_string(),
             proxy_url: proxy_url.to_string(),
         });
+        Ok(())
+    }
+
+    /// Stage 3.4: run every isolated container under `runtime` (`runsc`
+    /// for gVisor: the tenant's code meets gVisor's kernel, not the host's).
+    ///
+    /// Refused unless docker has the runtime registered, so a typo cannot
+    /// leave tenants on the default runtime while the operator believes
+    /// otherwise.
+    pub fn configure_tenant_runtime(&self, runtime: &str) -> Result<(), String> {
+        self.configure_tenant_runtime_with(runtime, &docker_runtimes)
+    }
+
+    /// [`Self::configure_tenant_runtime`] with the runtime list supplied by
+    /// the caller (a test).
+    pub fn configure_tenant_runtime_with(
+        &self,
+        runtime: &str,
+        registered: &dyn Fn() -> Result<Vec<String>, String>,
+    ) -> Result<(), String> {
+        let runtime = runtime.trim();
+        if runtime.is_empty()
+            || !runtime
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        {
+            return Err(format!("{runtime:?} is not a container runtime name"));
+        }
+        let known = registered()?;
+        if !known.iter().any(|name| name == runtime) {
+            return Err(format!(
+                "docker has no runtime {runtime} (registered: {})",
+                known.join(", ")
+            ));
+        }
+        self.inner.write().tenant_runtime = Some(runtime.to_string());
         Ok(())
     }
 
@@ -1033,7 +1072,11 @@ impl Manager {
         }
         crate::WorkspaceRoots::for_data_dir(&self.cfg.data_dir)
             .resolve(tenant_id, crate::IsolationLimits::from_env())
-            .map(|run| crate::IsolatedRun { egress, ..run })
+            .map(|run| crate::IsolatedRun {
+                egress,
+                runtime: self.inner.read().tenant_runtime.clone(),
+                ..run
+            })
             .map_err(|err| {
                 let rule = match err {
                     crate::IsolationError::TenantRequired => "isolation:tenant_required",
@@ -2000,6 +2043,28 @@ pub fn docker_access_mismatch(access: &AccessRequest) -> String {
 }
 
 /// Go `markDecisionUnsupported`.
+/// The runtimes docker has registered (`docker info`).
+fn docker_runtimes() -> Result<Vec<String>, String> {
+    let output = std::process::Command::new("docker")
+        .args([
+            "info",
+            "--format",
+            "{{range $name, $_ := .Runtimes}}{{$name}} {{end}}",
+        ])
+        .output()
+        .map_err(|err| format!("asking docker for its runtimes: {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "docker info failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .map(str::to_string)
+        .collect())
+}
+
 /// Whether docker reports `network` as `--internal` (no route out).
 fn docker_network_is_internal(network: &str) -> Result<bool, String> {
     let output = std::process::Command::new("docker")

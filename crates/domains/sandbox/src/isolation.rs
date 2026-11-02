@@ -128,6 +128,9 @@ pub struct IsolatedRun {
     /// path: the container joins that network and reaches the world only
     /// through its proxy. `None` is `--network none`.
     pub egress: Option<TenantEgress>,
+    /// The OCI runtime the container runs under (Stage 3.4), e.g. `runsc`
+    /// for gVisor. `None` is docker's default runtime.
+    pub runtime: Option<String>,
 }
 
 /// The tenant egress path (Stage 3.5): a docker `--internal` network whose
@@ -226,6 +229,7 @@ impl WorkspaceRoots {
                 .into_owned(),
             limits,
             egress: None,
+            runtime: None,
         })
     }
 }
@@ -313,6 +317,9 @@ pub fn isolated_docker_args(
         "-e".into(),
         format!("HOME={CONTAINER_WORKSPACE}"),
     ];
+    if let Some(runtime) = &run.runtime {
+        args.extend(["--runtime".into(), runtime.clone()]);
+    }
     if let Some(egress) = &run.egress {
         // Every route out is the proxy. DNS for anything but container names
         // goes to a dead upstream, so lookups cannot carry data out either;
@@ -397,6 +404,7 @@ mod tests {
             workspace_source: "/srv/kura/tenants/ten_a/workspace".into(),
             limits: IsolationLimits::default(),
             egress: None,
+            runtime: None,
         }
     }
 
@@ -538,5 +546,18 @@ mod tests {
         let offline = isolated_docker_args(&self::tests::run(), "n", "img", &[]);
         assert_eq!(flag_value(&offline, "--network"), ["none"]);
         assert!(flag_value(&offline, "--dns").is_empty());
+    }
+
+    #[test]
+    fn a_configured_runtime_is_passed_and_the_default_adds_nothing() {
+        let mut run = run();
+        assert!(flag_value(&isolated_docker_args(&run, "n", "img", &[]), "--runtime").is_empty());
+        run.runtime = Some("runsc".to_string());
+        let args = isolated_docker_args(&run, "n", "img", &[]);
+        assert_eq!(flag_value(&args, "--runtime"), ["runsc"]);
+        // Every other isolation flag is still there.
+        assert_eq!(flag_value(&args, "--network"), ["none"]);
+        assert_eq!(flag_value(&args, "--cap-drop"), ["ALL"]);
+        assert!(args.contains(&"--read-only".to_string()));
     }
 }
