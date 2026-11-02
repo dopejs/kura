@@ -20,3 +20,4 @@ kura-telemetry.workspace = true
 [dev-dependencies]
 kura-store.workspace = true
 rusqlite.workspace = true
+tempfile = "3"

@@ -40,6 +40,24 @@ recorder.
 
 `kind` is one of `screenshot`, `page_snapshot`, `download`.
 
+**Downloads.** A `download` action takes `input.url` (fetched in the page's
+browser context, so through the same proxy with the same cookies) or a
+selector to click that starts a download. Files over
+`KURA_BROWSER_MAX_DOWNLOAD_BYTES` (default 50 MiB) fail the action with
+`failureClass: "download_failure"`.
+- Without `KURA_BROWSER_DOWNLOAD_DIR`, the file comes back inline as a
+  `download` capture.
+- With it set (tenant browsers: `/workspace/downloads`), the file is saved
+  there and reported by path, with no content.
+
+The saved file is never overwritten (`report.pdf`, `report-1.pdf`, …). Its
+name is sanitized, and a name without an extension gets one from the
+content type.
+
+```json
+{"kind":"download","mimeType":"application/pdf","fileName":"/workspace/downloads/report.pdf","contentBase64":"","byteSize":48213}
+```
+
 ## Errors
 
 `{"id":n,"ok":false,"error":"…"}`. An action that fails *as an action*

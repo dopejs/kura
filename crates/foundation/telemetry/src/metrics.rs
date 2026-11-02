@@ -31,6 +31,7 @@ pub const CHAT_TURN_CONTROLS_TOTAL: &str = "kura_chat_turn_controls_total";
 pub const CHAT_TURN_ADMISSIONS_TOTAL: &str = "kura_chat_turn_admissions_total";
 pub const CHAT_TURN_QUEUE_WAIT_SECONDS: &str = "kura_chat_turn_queue_wait_seconds";
 pub const BROWSER_SESSIONS_TOTAL: &str = "kura_browser_sessions_total";
+pub const BROWSER_DOWNLOADS_TOTAL: &str = "kura_browser_downloads_total";
 pub const SESSION_WINDOW_SHADOW_TOTAL: &str = "kura_session_window_shadow_total";
 pub const SESSION_SUMMARY_WINDOWS_TOTAL: &str = "kura_session_summary_windows_total";
 pub const SESSION_SUMMARY_UPDATES_TOTAL: &str = "kura_session_summary_updates_total";
@@ -104,6 +105,10 @@ const HELP: &[(&str, &str)] = &[
     (
         BROWSER_SESSIONS_TOTAL,
         "Tenant browser sessions by outcome (started|closed|idle_closed|failed|refused_capacity).",
+    ),
+    (
+        BROWSER_DOWNLOADS_TOTAL,
+        "Tenant browser downloads by outcome (saved|failed).",
     ),
     (
         SESSION_WINDOW_SHADOW_TOTAL,

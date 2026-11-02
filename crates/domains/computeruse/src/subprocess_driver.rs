@@ -114,6 +114,10 @@ struct WireCapture {
     file_name: String,
     #[serde(default)]
     content_base64: String,
+    /// A file the worker saved to its download directory instead of sending
+    /// (content empty, `file_name` its path there).
+    #[serde(default)]
+    byte_size: i64,
 }
 
 struct Worker {
@@ -471,7 +475,11 @@ fn execute_action_via(
             kind: capture.kind,
             mime_type: capture.mime_type,
             file_name: capture.file_name,
-            estimated_byte_size: content.len() as i64,
+            estimated_byte_size: if content.is_empty() {
+                capture.byte_size.max(0)
+            } else {
+                content.len() as i64
+            },
             content,
         });
     }

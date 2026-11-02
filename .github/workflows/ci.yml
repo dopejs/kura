@@ -97,23 +97,28 @@ jobs:
           cache-to: type=gha,mode=max,scope=browser-worker
       # The image as a tenant browser runs it (docs/harness/tenant-browser.md
       # §3): another uid, no capabilities, read-only root, no network. A
-      # start, a click and a snapshot must answer over the worker protocol.
+      # start, a click and a snapshot must answer over the worker protocol,
+      # and a click that downloads must save the file to the download dir.
       - name: Protocol smoke under the tenant-isolated flags
         run: |
           session='{"computerUseSessionId":"cus_ci","runId":"run_ci","status":"starting","driverKind":"browser","startedAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}'
-          page='data:text/html,<title>ci</title><h1>hello from ci</h1><a id=go href=%23x>go</a>'
+          page='data:text/html,<title>ci</title><h1>hello from ci</h1><a id=go href=%23x>go</a><a id=dl download=hello.txt href=data:text/plain,hello>dl</a>'
           action='{"computerUseActionId":"cua_1","computerUseSessionId":"cus_ci","runId":"run_ci","actionKind":"click","status":"requested","input":{"selector":"#go"},"requestedAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}'
+          download=$(echo "$action" | sed 's/"cua_1"/"cua_2"/; s/"click"/"download"/; s/#go/#dl/')
           out=$( (printf '%s\n' \
               "{\"id\":1,\"op\":\"start_session\",\"session\":$session,\"input\":{\"initialUrl\":\"$page\"}}" \
-              "{\"id\":2,\"op\":\"execute_action\",\"session\":$session,\"action\":$action}"; sleep 15) | \
+              "{\"id\":2,\"op\":\"execute_action\",\"session\":$session,\"action\":$action}" \
+              "{\"id\":3,\"op\":\"execute_action\",\"session\":$session,\"action\":$download}"; sleep 15) | \
             timeout 60 docker run --rm -i --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges \
               --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m --network none --ipc private --init \
-              --memory 1024m --memory-swap 1024m --pids-limit 512 \
+              --memory 1024m --memory-swap 1024m --pids-limit 512 -e KURA_BROWSER_DOWNLOAD_DIR=/tmp/downloads \
               kura-browser-worker:ci node /opt/kura-browser/worker.mjs) || true
           echo "$out" | cut -c1-300
           echo "$out" | grep -q '"id":1,"ok":true' || { echo "start_session failed" >&2; exit 1; }
           echo "$out" | grep '"id":2,' | grep -q '"status":"completed"' || { echo "click failed" >&2; exit 1; }
           echo "$out" | grep '"id":2,' | grep -q 'page_snapshot' || { echo "no page snapshot" >&2; exit 1; }
+          echo "$out" | grep '"id":3,' | grep -q '"fileName":"/tmp/downloads/hello.txt"' || { echo "download not saved" >&2; exit 1; }
+          echo "$out" | grep '"id":3,' | grep -q '"byteSize":5' || { echo "download size wrong" >&2; exit 1; }
       - name: Log in to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v3

@@ -10,10 +10,17 @@
 //
 // The worker holds no credentials and reads no config beyond its
 // environment: KURA_PLAYWRIGHT_PATH (optional module path when playwright is
-// not resolvable from this file), KURA_BROWSER_HEADLESS (default "1").
+// not resolvable from this file), KURA_BROWSER_HEADLESS (default "1"),
+// KURA_BROWSER_DOWNLOAD_DIR (set: downloads are saved there and reported by
+// path; unset: returned inline) and KURA_BROWSER_MAX_DOWNLOAD_BYTES (default
+// 50 MiB).
 
 import { createInterface } from "node:readline";
 import { createRequire } from "node:module";
+import { mkdir, stat, writeFile, copyFile } from "node:fs/promises";
+import path from "node:path";
+
+const MAX_DOWNLOAD_BYTES = Number(process.env.KURA_BROWSER_MAX_DOWNLOAD_BYTES) || 50 * 1024 * 1024;
 
 const require = createRequire(import.meta.url);
 
@@ -186,6 +193,123 @@ async function screenshotCapture(page) {
   };
 }
 
+// A name that stays inside the download directory: no separators, no
+// leading dots, no control characters, bounded length.
+function safeFileName(raw) {
+  let name = path.basename(String(raw || "").replace(/\\/g, "/"));
+  name = name.replace(/[\x00-\x1f\x7f/:*?"<>|]/g, "_").replace(/^\.+/, "").trim();
+  if (name.length > 120) {
+    const ext = path.extname(name).slice(0, 16);
+    name = name.slice(0, 120 - ext.length) + ext;
+  }
+  return name || "download";
+}
+
+const EXTENSIONS = {
+  "text/html": ".html", "text/plain": ".txt", "text/csv": ".csv", "application/pdf": ".pdf",
+  "application/json": ".json", "application/xml": ".xml", "text/xml": ".xml", "application/zip": ".zip",
+  "image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp", "image/svg+xml": ".svg",
+};
+
+// A name without an extension gets one from the content type, so tools that
+// go by extension know what the file is.
+function withExtension(name, mimeType) {
+  if (path.extname(name)) return name;
+  return name + (EXTENSIONS[mimeType] || "");
+}
+
+function nameFromDisposition(header) {
+  if (!header) return "";
+  const star = /filename\*\s*=\s*(?:UTF-8'')?([^;]+)/i.exec(header);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1].trim().replace(/^"|"$/g, ""));
+    } catch {}
+  }
+  const plain = /filename\s*=\s*("?)([^";]+)\1/i.exec(header);
+  return plain ? plain[2].trim() : "";
+}
+
+function nameFromUrl(url) {
+  try {
+    return decodeURIComponent(path.basename(new URL(url).pathname));
+  } catch {
+    return "";
+  }
+}
+
+// Writes without replacing: report.pdf, report-1.pdf, report-2.pdf, ...
+async function claimPath(dir, name, write) {
+  await mkdir(dir, { recursive: true });
+  const ext = path.extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  for (let n = 0; n < 1000; n++) {
+    const candidate = path.join(dir, n === 0 ? name : `${stem}-${n}${ext}`);
+    try {
+      await write(candidate);
+      return candidate;
+    } catch (err) {
+      if (err?.code !== "EEXIST") throw err;
+    }
+  }
+  throw new Error("too many files with this name in the download directory");
+}
+
+function tooLarge(bytes) {
+  return new Error(`the file is ${bytes} bytes; the limit is ${MAX_DOWNLOAD_BYTES}`);
+}
+
+// A file by URL (fetched in the page's browser context: same proxy and
+// cookies) or by clicking a link that starts a download.
+async function downloadCapture(page, action) {
+  const url = inputString(action, "url");
+  const selector = selectorFor(action);
+  const dir = process.env.KURA_BROWSER_DOWNLOAD_DIR;
+  let name;
+  let mimeType = "application/octet-stream";
+  let body = null; // Buffer, or null when the file is on disk at `source`
+  let source = "";
+  let size = 0;
+  if (url) {
+    const response = await page.context().request.get(url, { timeout: 30000, maxRedirects: 5 });
+    if (!response.ok()) throw new Error(`the server answered HTTP ${response.status()}`);
+    const headers = response.headers();
+    const declared = Number(headers["content-length"] || 0);
+    if (declared > MAX_DOWNLOAD_BYTES) throw tooLarge(declared);
+    body = await response.body();
+    size = body.length;
+    mimeType = (headers["content-type"] || mimeType).split(";")[0].trim() || mimeType;
+    name = nameFromDisposition(headers["content-disposition"]) || nameFromUrl(response.url()) || nameFromUrl(url);
+  } else if (selector) {
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 30000 }),
+      page.click(selector, { timeout: 10000 }),
+    ]);
+    const failure = await download.failure();
+    if (failure) throw new Error(`the download failed: ${failure}`);
+    source = await download.path();
+    size = (await stat(source)).size;
+    name = download.suggestedFilename();
+  } else {
+    throw new Error("download needs a url or a selector");
+  }
+  if (size > MAX_DOWNLOAD_BYTES) throw tooLarge(size);
+  name = withExtension(safeFileName(name), mimeType);
+  if (!dir) {
+    if (body === null) {
+      const { readFile } = await import("node:fs/promises");
+      body = await readFile(source);
+    }
+    return { kind: "download", mimeType, fileName: name, contentBase64: body.toString("base64") };
+  }
+  const saved = await claimPath(dir, name, (candidate) =>
+    body === null ? copyFile(source, candidate, 1 /* COPYFILE_EXCL */) : writeFile(candidate, body, { flag: "wx" }),
+  );
+  // Reported by path, without content: the file is already where the caller
+  // wants it.
+  return { kind: "download", mimeType, fileName: saved, contentBase64: "", byteSize: size };
+}
+
 async function executeAction(session, action) {
   const entry = state.sessions.get(session.computerUseSessionId);
   if (!entry) {
@@ -240,7 +364,8 @@ async function executeAction(session, action) {
         break;
       }
       case "download":
-        return { session: next, action: fail(action, "unsupported_action", "download is not supported by the browser worker yet"), captures };
+        captures.push(await downloadCapture(page, action));
+        break;
       case "close_session": {
         next = await closeSession(next);
         return { session: next, action: complete({ ...action, pageAfter: action.pageBefore }), captures };
@@ -251,7 +376,9 @@ async function executeAction(session, action) {
   } catch (err) {
     const cls = action.actionKind === "navigate" || action.actionKind === "back" || action.actionKind === "forward"
       ? "navigation_failure"
-      : "target_mismatch";
+      : action.actionKind === "download"
+        ? "download_failure"
+        : "target_mismatch";
     return { session: next, action: fail(action, cls, String(err?.message ?? err)), captures };
   }
 

@@ -87,6 +87,25 @@ fn handle(driver: &MemoryDriver, id: u64, request: &Value) -> Value {
                     let captures: Vec<Value> = captures
                         .into_iter()
                         .map(|c| {
+                            // As the real worker: with a download directory a
+                            // file is saved there and reported by path.
+                            let dir =
+                                std::env::var("KURA_BROWSER_DOWNLOAD_DIR").unwrap_or_default();
+                            if c.kind == kura_computeruse::ArtifactKind::Download && !dir.is_empty()
+                            {
+                                let path = std::path::Path::new(&dir).join(&c.file_name);
+                                let saved = std::fs::create_dir_all(&dir)
+                                    .and_then(|()| std::fs::write(&path, &c.content));
+                                if saved.is_ok() {
+                                    return json!({
+                                        "kind": c.kind,
+                                        "mimeType": c.mime_type,
+                                        "fileName": path.to_string_lossy(),
+                                        "contentBase64": "",
+                                        "byteSize": c.content.len(),
+                                    });
+                                }
+                            }
                             json!({
                                 "kind": c.kind,
                                 "mimeType": c.mime_type,

@@ -636,6 +636,10 @@ impl kura_mcp::AttachedExecutionStarter for McpExecutionStarter {
 /// (`capabilities/browser/Dockerfile`).
 pub const BROWSER_WORKER_ENTRY: &str = "/opt/kura-browser/worker.mjs";
 
+/// Where a tenant's downloads land, inside its container: the tenant
+/// workspace (`kura_sandbox::CONTAINER_WORKSPACE`).
+pub const BROWSER_DOWNLOAD_DIR: &str = "/workspace/downloads";
+
 pub struct SandboxBrowserLauncher {
     sandbox: Arc<kura_sandbox::Manager>,
     container: kura_sandbox::ContainerSpec,
@@ -668,6 +672,12 @@ impl kura_computeruse::BrowserLauncher for SandboxBrowserLauncher {
             reason: "tenant browser".to_string(),
             owner_tenant_id: tenant_id.to_string(),
             container: Some(self.container.clone()),
+            // `browser.download` saves into the tenant's own workspace,
+            // where its other tools (MCP servers) can read the file.
+            env: std::collections::HashMap::from([(
+                "KURA_BROWSER_DOWNLOAD_DIR".to_string(),
+                BROWSER_DOWNLOAD_DIR.to_string(),
+            )]),
             ..kura_sandbox::ExecutionRequest::default()
         };
         let (execution, attached) = self

@@ -18,7 +18,24 @@ sessions, and is removed when the session ends or sits idle.
 | `browser.click` `{selector}` | clicks, then returns the page | no |
 | `browser.type` `{selector, text}` | fills a field, then returns the page | no |
 | `browser.back` | history back, then returns the page | no |
+| `browser.download` `{url}` or `{selector}` | saves a file to the tenant's workspace, `/workspace/downloads/` | no |
 | `browser.close` | ends the session and removes the container | no |
+
+Downloads (2026-11-02):
+- **What it does:** `browser.download` takes a URL, or a selector to
+  click on the open page. It saves the file into the tenant's own
+  workspace and returns its path, size and type. Tools that work on the
+  workspace can read it there, such as an MCP server running in the
+  tenant's container.
+- **Through the proxy:** a download by URL is fetched in the browser's
+  context, so it goes through the same egress proxy under the tenant's
+  credential.
+- **Limits:** files over 50 MiB are refused. A file is never overwritten,
+  names are sanitized, and a name without an extension gets one from the
+  content type.
+- **Not done:** screenshots. The chat loop is text-only, so the model
+  could not see one, and tenants have no file API to fetch one (decided
+  2026-11-02: downloads only, screenshots wait for image tool results).
 
 What the model gets back:
 - The page as text (url, title, `innerText`), bounded like every tool
@@ -107,6 +124,8 @@ daemon the operator's own turns use the same path.
 
 ## 6. Observability
 
+- `kura_browser_downloads_total{outcome}`, `saved` or `failed`, and a
+  `[kura] browser: tenant=… downloaded <path> (<bytes> bytes)` log line.
 - `kura_browser_sessions_total{outcome}`. `outcome` is one of `started`,
   `closed`, `idle_closed`, `failed` or `refused_capacity`.
 - `[kura] browser:` log lines on start, close and failure, with the tenant
@@ -139,6 +158,15 @@ daemon the operator's own turns use the same path.
   - with the proxy stopped, nothing loads (no other way out);
   - the idle container is removed;
   - no call used the operator's key.
+
+- **Downloads (2026-11-02):**
+  - in CI, a click on a `download` link in a `data:` page saves the file
+    under the isolated flags;
+  - on sg-2, `scripts/tenant-egress-e2e/` under runc and runsc: a tenant's
+    `browser.download https://example.com/` goes out under the tenant's
+    proxy credential. It lands in
+    `data/tenants/<id>/workspace/downloads/` on the host, owned by the
+    tenant's uid.
 
 **Found by the end to end:** under runsc a tenant container cannot resolve
 the proxy's container name, because docker's embedded DNS does not answer

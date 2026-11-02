@@ -15,7 +15,8 @@ pub use subprocess_driver::{
     AttachedWorker, SubprocessDriver, SubprocessDriverConfig, WorkerSupervisor,
 };
 pub use tenant_browsers::{
-    BrowserLauncher, BrowserLimits, BrowserOp, LaunchedBrowser, Page, TenantBrowsers,
+    BrowserLauncher, BrowserLimits, BrowserOp, DownloadTarget, Downloaded, LaunchedBrowser, Page,
+    TenantBrowsers,
 };
 
 macro_rules! string_enum {

@@ -52,6 +52,24 @@ pub struct Page {
     pub text: String,
 }
 
+/// What `download` fetches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadTarget {
+    /// A file by URL, fetched in the browser (same proxy, same cookies).
+    Url(String),
+    /// A link or button on the open page that starts a download.
+    Selector(String),
+}
+
+/// A file saved in the tenant's workspace.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Downloaded {
+    /// Where it is, as the tenant's containers see it.
+    pub path: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+}
+
 /// An action on the open page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserOp {
@@ -156,6 +174,66 @@ impl TenantBrowsers {
                 &[("selector", selector), ("value", text)],
             ),
         }
+    }
+
+    /// Saves a file into the tenant's workspace. By URL, a browser is started
+    /// if the tenant has none; by selector, it acts on the open page.
+    pub fn download(&self, tenant_id: &str, target: &DownloadTarget) -> Result<Downloaded, String> {
+        let tenant = tenant_key(tenant_id)?;
+        let url = match target {
+            DownloadTarget::Url(url) => Some(checked_url(url)?),
+            DownloadTarget::Selector(_) => None,
+        };
+        let slot = self.slot(&tenant);
+        let mut live = slot.live.lock();
+        if live.as_ref().is_some_and(|l| !l.worker.alive()) {
+            self.teardown(&tenant, live.take().expect("checked"), "failed");
+        }
+        if live.is_none() {
+            if url.is_none() {
+                return Err("no browser is open; call browser.open first".to_string());
+            }
+            *live = Some(self.start(&tenant)?);
+        }
+        let input: Vec<(&str, &str)> = match (&url, target) {
+            (Some(url), _) => vec![("url", url.as_str())],
+            (None, DownloadTarget::Selector(selector)) => vec![("selector", selector.as_str())],
+            (None, DownloadTarget::Url(_)) => unreachable!("checked above"),
+        };
+        let l = live.as_mut().expect("live");
+        let (session, action, captures) = l
+            .worker
+            .execute_action(
+                l.session.clone(),
+                self.action(&l.session, ActionKind::Download, &input),
+            )
+            .inspect_err(|_| self.drop_if_dead(&tenant, &mut live))?;
+        let l = live.as_mut().expect("still live");
+        l.session = session;
+        l.last_used = Instant::now();
+        if action.status != ActionStatus::Completed {
+            record_download("failed");
+            return Err(first_non_empty(&action.failure_reason, "the download failed").to_string());
+        }
+        let capture = captures
+            .iter()
+            .find(|c| c.kind == ArtifactKind::Download)
+            .ok_or_else(|| "the browser returned no file".to_string())?;
+        // A worker without a download directory sends the bytes instead; the
+        // tenant launcher always sets one, so this is a misconfiguration.
+        if !capture.content.is_empty() || capture.file_name.is_empty() {
+            return Err("this browser cannot save downloads".to_string());
+        }
+        record_download("saved");
+        eprintln!(
+            "[kura] browser: tenant={tenant} downloaded {} ({} bytes)",
+            capture.file_name, capture.estimated_byte_size
+        );
+        Ok(Downloaded {
+            path: capture.file_name.clone(),
+            mime_type: capture.mime_type.clone(),
+            size_bytes: capture.estimated_byte_size,
+        })
     }
 
     /// Ends the tenant's browser. False when it had none.
@@ -457,6 +535,13 @@ fn first_non_empty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
     } else {
         value
     }
+}
+
+fn record_download(outcome: &str) {
+    kura_telemetry::metrics::registry().inc(
+        kura_telemetry::metrics::BROWSER_DOWNLOADS_TOTAL,
+        &[("outcome", outcome)],
+    );
 }
 
 fn record(outcome: &str) {

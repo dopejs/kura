@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use kura_computeruse::{
-    AttachedWorker, BrowserLauncher, BrowserLimits, BrowserOp, LaunchedBrowser, TenantBrowsers,
+    AttachedWorker, BrowserLauncher, BrowserLimits, BrowserOp, DownloadTarget, LaunchedBrowser,
+    TenantBrowsers,
 };
 use parking_lot::Mutex;
 
@@ -231,4 +232,66 @@ fn shutdown_closes_every_browser() {
     browsers.close_all();
     assert_eq!(browsers.active(), 0);
     assert_eq!(launcher.stopped.lock().len(), 2);
+}
+
+#[test]
+fn a_download_is_saved_to_the_download_dir_and_reported_by_path() {
+    let dir = tempfile::tempdir().expect("dir");
+    let downloads = dir.path().join("downloads");
+    let launcher = Arc::new(FakeLauncher::with(
+        &[("KURA_BROWSER_DOWNLOAD_DIR", downloads.to_str().unwrap())],
+        false,
+    ));
+    let (browsers, _reap) = pool(&launcher, 4);
+
+    // By selector there must be a page to click on.
+    let err = browsers
+        .download("ten_a", &DownloadTarget::Selector("#dl".to_string()))
+        .expect_err("nothing open");
+    assert!(err.contains("browser.open"), "{err}");
+    assert!(launcher.launched.lock().is_empty());
+
+    // By URL the browser starts if needed.
+    let file = browsers
+        .download(
+            "ten_a",
+            &DownloadTarget::Url("https://example.org/report.txt".to_string()),
+        )
+        .expect("download");
+    assert!(
+        file.path.starts_with(downloads.to_str().unwrap()),
+        "{file:?}"
+    );
+    let on_disk = std::fs::metadata(&file.path).expect("saved");
+    assert_eq!(on_disk.len() as i64, file.size_bytes);
+    assert!(file.size_bytes > 0);
+    assert_eq!(launcher.launched.lock().len(), 1);
+
+    let file = browsers
+        .download("ten_a", &DownloadTarget::Selector("#dl".to_string()))
+        .expect("by selector on the open page");
+    assert!(std::path::Path::new(&file.path).exists());
+
+    let refused = browsers
+        .download(
+            "ten_a",
+            &DownloadTarget::Url("file:///etc/passwd".to_string()),
+        )
+        .expect_err("not a web URL");
+    assert!(!refused.is_empty());
+}
+
+/// A worker with no download directory would send the bytes back; the
+/// tenant pool refuses that rather than drop them.
+#[test]
+fn a_worker_without_a_download_dir_cannot_save_for_a_tenant() {
+    let launcher = Arc::new(FakeLauncher::default());
+    let (browsers, _reap) = pool(&launcher, 4);
+    let err = browsers
+        .download(
+            "ten_a",
+            &DownloadTarget::Url("https://example.org/report.txt".to_string()),
+        )
+        .expect_err("no directory");
+    assert!(err.contains("cannot save downloads"), "{err}");
 }

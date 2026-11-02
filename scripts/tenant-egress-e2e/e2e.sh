@@ -77,6 +77,19 @@ docker logs $PROXY 2>&1 | grep "tenant=" | head -5 | sed "s/^/[$RT] proxy: /"
 check "the proxy logged the open connection under the tenant" 1 \
   "$(docker logs $PROXY 2>&1 | grep -E "tenant=$TENANT connect example\.com:443 -> .* opened" | head -1 | wc -l)"
 
+# A download by URL goes through the same authenticated proxy (Playwright's
+# request API, not the page) and lands in the tenant's workspace.
+r=$(curl -sS -m 120 -X POST http://$API/v1/chat/query -H "Authorization: Bearer $USER" -H 'Content-Type: application/json' \
+  -d '{"provider":"openai_compatible","model":"fake","query":"Please download https://example.com/ for me"}')
+reply=$(echo "$r" | j 'd.get("reply","")')
+echo "[$RT] download reply: ${reply:0:200}"
+check "the download tool saved the file" 1 "$(grep -c 'Saved /workspace/downloads/' <<<"$reply")"
+saved=$(find "$D/data" -path '*/workspace/downloads/*' -type f | head -1)
+check "the file is in the tenant's workspace on the host" 1 "$( [[ -n "$saved" ]] && grep -c 'Example Domain' "$saved" | awk '{print ($1>0)?1:0}' || echo 0)"
+[[ -n "$saved" ]] && echo "[$RT] saved: ${saved#$D/} owner=$(stat -c %u "$saved") size=$(stat -c %s "$saved")"
+check "the download went out under the tenant" 1 \
+  "$(docker logs $PROXY 2>&1 | grep -cE "tenant=$TENANT connect example\.com:443 -> .* opened" | awk '{print ($1>1)?1:0}')"
+
 # Raw requests from a container on the tenant network.
 raw() { docker run --rm --network $NET alpine:3.20 sh -c "printf '$1' | nc -w 5 $PROXY_IP 3128 | head -1"; }
 cred=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$cid" 2>/dev/null | sed -n "s#^HTTPS_PROXY=http://$TENANT:\([0-9a-f]*\)@.*#\1#p")

@@ -1,7 +1,8 @@
 """OpenAI-compatible fake model for the tenant-browser end to end.
 
 Round 1 (no tool result yet): asks for the browser-open tool with the URL
-named in the user's message. Round 2: answers "PAGE SAID: <first 300 chars
+named in the user's message (the download tool instead when the message
+says "download"). Round 2: answers "PAGE SAID: <first 300 chars
 of the tool result>" so the run can check what the browser read. Logs every
 call (key, tool names offered, whether a tool result was present).
 """
@@ -54,11 +55,12 @@ class Handler(BaseHTTPRequestHandler):
         with open(LOG, "a") as f:
             f.write(json.dumps({"key": key, "tools": tools, "toolResults": len(tool_results)}) + "\n")
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-        open_tool = next((t for t in tools if re.search(r"browser.?open", t)), None)
         user = next((m for m in reversed(messages) if m.get("role") == "user"), {})
         content = user.get("content")
         if isinstance(content, list):
             content = " ".join(part.get("text", "") for part in content if isinstance(part, dict))
+        wanted = r"browser.?download" if "download" in (content or "").lower() else r"browser.?open"
+        open_tool = next((t for t in tools if re.search(wanted, t)), None)
         url = re.search(r"https?://\S+", content or "")
         if not tool_results and open_tool and url:
             msg = {"role": "assistant", "content": None, "tool_calls": [{

@@ -503,6 +503,7 @@ enum BrowserToolKind {
     Click,
     Type,
     Back,
+    Download,
     Close,
 }
 
@@ -517,6 +518,7 @@ impl BrowserTool {
             BrowserToolKind::Click,
             BrowserToolKind::Type,
             BrowserToolKind::Back,
+            BrowserToolKind::Download,
             BrowserToolKind::Close,
         ]
         .into_iter()
@@ -583,6 +585,21 @@ impl Tool for BrowserTool {
                 "Go back one page, then read it.",
                 json!({ "type": "object", "properties": {}, "required": [] }),
             ),
+            BrowserToolKind::Download => (
+                "browser.download",
+                "Save a file into your workspace, by its URL or by clicking the link or button \
+                 on the current page that downloads it. Give exactly one of url or selector. \
+                 Returns where the file was saved; tools that work on your workspace can read \
+                 it there. Files over 50 MiB are refused.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string", "description": "The file's http or https URL." },
+                        "selector": selector
+                    },
+                    "required": []
+                }),
+            ),
             BrowserToolKind::Close => (
                 "browser.close",
                 "Close your browser when you are done with it.",
@@ -630,6 +647,20 @@ impl Tool for BrowserTool {
                     BrowserToolKind::Back => browsers
                         .act(&tenant, &BrowserOp::Back)
                         .map(|p| render_page(&p)),
+                    BrowserToolKind::Download => {
+                        use kura_computeruse::DownloadTarget;
+                        let target = match (url.trim().is_empty(), selector.trim().is_empty()) {
+                            (false, true) => DownloadTarget::Url(url),
+                            (true, false) => DownloadTarget::Selector(selector),
+                            _ => return Err("give exactly one of url or selector".to_string()),
+                        };
+                        browsers.download(&tenant, &target).map(|file| {
+                            format!(
+                                "Saved {} ({} bytes, {}).",
+                                file.path, file.size_bytes, file.mime_type
+                            )
+                        })
+                    }
                     BrowserToolKind::Close => browsers.close(&tenant).map(|closed| {
                         if closed {
                             "The browser is closed.".to_string()
@@ -745,6 +776,21 @@ mod browser_tool_tests {
                     Some("execute_action") => {
                         let mut action = request["action"].clone();
                         action["status"] = json!("completed");
+                        if action["actionKind"] == "download" {
+                            let name = if action["input"]["url"].is_string() {
+                                "report.pdf"
+                            } else {
+                                "clicked.csv"
+                            };
+                            let response = json!({ "id": id, "ok": true, "session": session, "action": action, "captures": [{
+                                "kind": "download", "mimeType": "application/pdf",
+                                "fileName": format!("/workspace/downloads/{name}"), "contentBase64": "", "byteSize": 1234,
+                            }]});
+                            if writeln!(out, "{response}").is_err() {
+                                return;
+                            }
+                            continue;
+                        }
                         let page = json!({
                             "url": "https://example.org/",
                             "title": "Example",
@@ -812,6 +858,7 @@ mod browser_tool_tests {
                 "browser.click",
                 "browser.type",
                 "browser.back",
+                "browser.download",
                 "browser.close"
             ]
         );
@@ -843,6 +890,32 @@ mod browser_tool_tests {
         )
         .await;
         assert!(!refused.success);
+
+        let by_url = call(
+            &tools,
+            "browser.download",
+            json!({ "url": "https://example.org/report.pdf" }),
+        )
+        .await;
+        assert!(by_url.success, "{}", by_url.content);
+        assert_eq!(
+            by_url.content,
+            "Saved /workspace/downloads/report.pdf (1234 bytes, application/pdf)."
+        );
+        let by_click = call(&tools, "browser.download", json!({ "selector": "#csv" })).await;
+        assert!(
+            by_click
+                .content
+                .contains("/workspace/downloads/clicked.csv")
+        );
+        for arguments in [
+            json!({}),
+            json!({ "url": "https://example.org/a", "selector": "#a" }),
+            json!({ "url": "file:///etc/shadow" }),
+        ] {
+            let refused = call(&tools, "browser.download", arguments.clone()).await;
+            assert!(!refused.success, "{arguments}");
+        }
         let closed = call(&tools, "browser.close", json!({})).await;
         assert_eq!(closed.content, "The browser is closed.");
         assert_eq!(browsers.active(), 0);
