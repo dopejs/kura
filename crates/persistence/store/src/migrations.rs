@@ -3181,5 +3181,32 @@ pub fn schema_migrations() -> Vec<SchemaMigration> {
                 .to_string(),
         ],
     },
+    SchemaMigration {
+        version: 8,
+        name: "reminders_tenant_backfill".to_string(),
+        statements: vec![
+            // Reminders were written without their tenant, so every tenant
+            // could list and act on every reminder. New rows carry it; this
+            // gives the old ones the tenant a create would have chosen
+            // without a tenant context: the default (oldest) personal
+            // tenant. Occurrences and actions follow their reminder. Safe to
+            // run twice: only NULL tenants are touched.
+            r#"UPDATE reminders SET tenant_id = (
+                    SELECT tenant_id FROM tenants WHERE tenant_kind = 'personal'
+                    ORDER BY created_at ASC LIMIT 1)
+                WHERE tenant_id IS NULL;"#
+                .to_string(),
+            r#"UPDATE reminder_occurrences SET tenant_id = (
+                    SELECT r.tenant_id FROM reminders r
+                    WHERE r.reminder_id = reminder_occurrences.reminder_id)
+                WHERE tenant_id IS NULL;"#
+                .to_string(),
+            r#"UPDATE reminder_actions SET tenant_id = (
+                    SELECT r.tenant_id FROM reminders r
+                    WHERE r.reminder_id = reminder_actions.reminder_id)
+                WHERE tenant_id IS NULL;"#
+                .to_string(),
+        ],
+    },
 ]
 }

@@ -324,6 +324,9 @@ impl ManagerInner {
         let reminder = Reminder {
             reminder_id: new_reminder_id(),
             environment_scope: self.env.clone(),
+            // The acting tenant owns it (the default personal tenant without
+            // one); occurrences and actions inherit it in the store.
+            tenant_id: crate::follow_up::resolve_tenant_id(&self.store),
             title: input.title.trim().to_string(),
             details: input.details.trim().to_string(),
             behavior_mode: input.behavior_mode,

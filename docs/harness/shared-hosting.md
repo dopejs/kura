@@ -1,9 +1,10 @@
 # Shared hosting: one daemon, many tenants
 
 > Status: M1 implemented (2026-10-08): boundary fixes (§4.5), shared mode
-> (§4.1-4.4). M2 in progress: provisioning and per-user tokens implemented
-> 2026-10-28 (§6); per-tenant LLM credentials 2026-10-29 (§7); gateway
-> sign-up next. Owner: daemon.
+> (§4.1-4.4). M2 implemented: provisioning and per-user tokens 2026-10-28
+> (§6); per-tenant LLM credentials 2026-10-29 (§7); gateway OAuth sign-up
+> 2026-11-02 (`kura-gateway` docs/design.md §16). M4 (fairness) 2026-11-02.
+> Owner: daemon.
 > Replaces the "one daemon container per user" pilot in the private
 > `kura-gateway` repo as the target architecture. That pilot stays as a
 > dedicated tier; nothing here removes it.
@@ -166,6 +167,23 @@ is the caller's tenant; anything else is 404 before any side effect. A
 manager's token list for another principal is empty unless that principal is
 an active member of the caller's tenant. `PATCH /v1/principals/{id}` shares
 the same membership helper.
+
+Reminders (found 2026-11-02 by the 1.4 two-user smoke): reminders,
+occurrences and actions were written with a NULL tenant. The by-id guard
+lets NULL rows through, so any tenant could list, read and transition every
+reminder. Since schema v8:
+- a reminder takes the acting tenant when it is created (the default
+  personal tenant without one);
+- occurrences and actions take their reminder's tenant in the store;
+- older rows are backfilled to the default (oldest) personal tenant;
+- the reminder and occurrence lists show only the acting tenant's rows;
+- an occurrence by id is guarded by its own row (the old guard checked the
+  literal id "occurrences" against the reminders table, so it matched
+  nothing).
+
+On a shared daemon, a reminder a tenant created before v8 moves to the
+operator's tenant. It is hidden from its creator rather than shown to
+everyone.
 
 Chat MCP tools (G15): a turn is offered only servers owned by its tenant
 (`kura_mcp::tools_for_tenant`), plus servers with no owner — those predate

@@ -353,3 +353,108 @@ fn secret_scope_binding_round_trips_through_sqlite() {
             .is_empty()
     );
 }
+
+/// Agent-runtime-program 1.4 (found in the shared-hosting smoke): reminders
+/// were written without their tenant. New rows carry it, children inherit
+/// it, and the v8 migration gives old rows the default personal tenant.
+#[test]
+fn reminders_carry_their_tenant_and_old_rows_are_backfilled() {
+    use kura_identity::{LifecycleStatus, Tenant, TenantKind};
+    let dir = temp_dir("reminder_tenant");
+    let now = Utc::now();
+    let reminder = |id: &str, tenant: &str| ReminderRecord {
+        reminder_id: id.to_string(),
+        environment_scope: "test".to_string(),
+        tenant_id: tenant.to_string(),
+        behavior_mode: "notify_only".to_string(),
+        current_state: "pending".to_string(),
+        next_due_at: None,
+        active_occurrence_id: String::new(),
+        updated_at: now,
+        document: format!(r#"{{"reminderId":"{id}"}}"#),
+    };
+    {
+        // A v7 database holding a reminder written the old way.
+        let store = SQLiteStore::new_at_version(&dir, 7).unwrap();
+        for (tenant, at) in [
+            ("ten_first", "2026-01-01T00:00:00Z"),
+            ("ten_later", "2026-02-01T00:00:00Z"),
+        ] {
+            let at = at.parse().unwrap();
+            store
+                .upsert_tenant(&Tenant {
+                    tenant_id: tenant.to_string(),
+                    tenant_kind: TenantKind::Personal,
+                    display_name: tenant.to_string(),
+                    status: LifecycleStatus::Active,
+                    created_at: at,
+                    updated_at: at,
+                    created_by_principal_id: String::new(),
+                    default_owner_principal_id: String::new(),
+                    caller_membership_role: None,
+                    caller_membership_status: None,
+                    caller_permissions: Vec::new(),
+                    default_for_current_token: false,
+                    default_for_current_principal: false,
+                })
+                .unwrap();
+        }
+        store.upsert_reminder(&reminder("rem_old", "")).unwrap();
+        store
+            .upsert_reminder_occurrence(&ReminderOccurrenceRecord {
+                occurrence_id: "occ_old".to_string(),
+                reminder_id: "rem_old".to_string(),
+                environment_scope: "test".to_string(),
+                state: "due".to_string(),
+                scheduled_for: now,
+                updated_at: now,
+                document: "{}".to_string(),
+                ..ReminderOccurrenceRecord::default()
+            })
+            .unwrap();
+        assert_eq!(
+            store
+                .lookup_row_tenant("reminders", "reminder_id", "rem_old")
+                .unwrap(),
+            None
+        );
+    }
+    let store = SQLiteStore::new(&dir).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 8);
+    let tenant = |table: &str, pk: &str, id: &str| store.lookup_row_tenant(table, pk, id).unwrap();
+    assert_eq!(
+        tenant("reminders", "reminder_id", "rem_old").as_deref(),
+        Some("ten_first")
+    );
+    assert_eq!(
+        tenant("reminder_occurrences", "occurrence_id", "occ_old").as_deref(),
+        Some("ten_first")
+    );
+
+    // New rows keep the tenant they were written with; children inherit it,
+    // and a later write cannot move a reminder to another tenant.
+    store
+        .upsert_reminder(&reminder("rem_new", "ten_later"))
+        .unwrap();
+    store
+        .upsert_reminder(&reminder("rem_new", "ten_first"))
+        .unwrap();
+    assert_eq!(
+        tenant("reminders", "reminder_id", "rem_new").as_deref(),
+        Some("ten_later")
+    );
+    store
+        .append_reminder_action(&ReminderActionRecord {
+            action_id: "act_new".to_string(),
+            reminder_id: "rem_new".to_string(),
+            action_kind: "created".to_string(),
+            created_at: now,
+            document: "{}".to_string(),
+            ..ReminderActionRecord::default()
+        })
+        .unwrap();
+    assert_eq!(
+        tenant("reminder_actions", "action_id", "act_new").as_deref(),
+        Some("ten_later")
+    );
+}

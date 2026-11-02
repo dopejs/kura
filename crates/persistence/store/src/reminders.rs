@@ -171,7 +171,9 @@ impl SQLiteStore {
                     null_string(record.active_occurrence_id.trim()),
                     now_rfc3339(&record.updated_at),
                     record.document,
-                    None::<String>,
+                    // The owning tenant, set once: COALESCE above never
+                    // moves a bound reminder to another tenant.
+                    null_string(record.tenant_id.trim()),
                 ],
             )
             .map_err(|e| format!("upsert reminder {}: {e}", record.reminder_id))?;
@@ -230,7 +232,8 @@ impl SQLiteStore {
                     occurrence_id, reminder_id, environment_scope, state, scheduled_for, run_id,
                     workflow_id, latest_delivery_id, latest_delivery_status, updated_at,
                     document_json, tenant_id
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                    (SELECT tenant_id FROM reminders WHERE reminder_id = ?2))
                 ON CONFLICT(occurrence_id) DO UPDATE SET
                     reminder_id = excluded.reminder_id,
                     environment_scope = excluded.environment_scope,
@@ -255,7 +258,6 @@ impl SQLiteStore {
                     null_string(record.latest_delivery_status.trim()),
                     now_rfc3339(&record.updated_at),
                     record.document,
-                    None::<String>,
                 ],
             )
             .map_err(|e| format!("upsert reminder occurrence {}: {e}", record.occurrence_id))?;
@@ -344,7 +346,8 @@ impl SQLiteStore {
                 r#"INSERT INTO reminder_actions (
                     action_id, reminder_id, occurrence_id, action_kind, new_state, run_id,
                     workflow_id, delivery_id, created_at, document_json, tenant_id
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                    (SELECT tenant_id FROM reminders WHERE reminder_id = ?2))"#,
                 params![
                     record.action_id,
                     record.reminder_id,
@@ -356,7 +359,6 @@ impl SQLiteStore {
                     null_string(record.delivery_id.trim()),
                     now_rfc3339(&record.created_at),
                     record.document,
-                    None::<String>,
                 ],
             )
             .map_err(|e| format!("append reminder action {}: {e}", record.action_id))?;

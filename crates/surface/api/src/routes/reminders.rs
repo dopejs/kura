@@ -41,7 +41,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::error::ApiError;
-use crate::middleware::{TenantContext, guard_resource_for_tenant};
+use crate::middleware::{ActingTenant, TenantContext, guard_resource_for_tenant};
 use crate::response::Json;
 use crate::state::AppState;
 use crate::types::{
@@ -110,14 +110,28 @@ fn reminders_manager(state: &AppState) -> Result<&kura_reminders::Manager, ApiEr
         .ok_or_else(|| ApiError::Internal("reminders are not configured".to_string()))
 }
 
-/// GET /v1/reminders — all reminders (Go handleReminders GET).
+/// GET /v1/reminders — the acting tenant's reminders (Go handleReminders
+/// GET). A reminder without a tenant is listed to nobody acting as one,
+/// like the other tenant-aware reads.
 #[allow(clippy::unused_async)]
 pub async fn handle_reminders_list(
     State(state): State<AppState>,
+    tenant: ActingTenant,
 ) -> Result<Json<ListResponse<Reminder>>, ApiError> {
     let manager = reminders_manager(&state)?;
-    let items = manager.list().map_err(ApiError::internal)?;
+    let items = visible_reminders(manager, &tenant)?;
     Ok(Json(ListResponse { items }))
+}
+
+fn visible_reminders(
+    manager: &kura_reminders::Manager,
+    tenant: &ActingTenant,
+) -> Result<Vec<Reminder>, ApiError> {
+    let mut items = manager.list().map_err(ApiError::internal)?;
+    if !tenant.id().is_empty() {
+        items.retain(|item| item.tenant_id == tenant.id());
+    }
+    Ok(items)
 }
 
 /// POST /v1/reminders — create a reminder (Go handleReminders POST; 201).
@@ -193,6 +207,7 @@ pub async fn handle_reminder_occurrences(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
     tenant: Option<Extension<TenantContext>>,
+    acting: ActingTenant,
     method: Method,
     uri: Uri,
 ) -> Result<Json<ListResponse<Occurrence>>, ApiError> {
@@ -208,9 +223,17 @@ pub async fn handle_reminder_occurrences(
     .await?;
     let manager = reminders_manager(&state)?;
     let filter = reminder_occurrence_filter_from_request(&params)?;
-    let items = manager
+    let mut items = manager
         .list_occurrences(&filter)
         .map_err(ApiError::internal)?;
+    // An occurrence belongs to its reminder's tenant.
+    if !acting.id().is_empty() {
+        let visible: std::collections::HashSet<String> = visible_reminders(manager, &acting)?
+            .into_iter()
+            .map(|r| r.reminder_id)
+            .collect();
+        items.retain(|item| visible.contains(&item.reminder_id));
+    }
     Ok(Json(ListResponse { items }))
 }
 
@@ -224,12 +247,16 @@ pub async fn handle_reminder_occurrence_by_id(
     method: Method,
     uri: Uri,
 ) -> Result<Json<Occurrence>, ApiError> {
-    guard_reminder_for_tenant(
+    // Guarded by the occurrence's own row, which carries its reminder's
+    // tenant; the reminders-table guard Go applied here matched nothing.
+    guard_resource_for_tenant(
         &state,
-        &method,
-        &uri,
         tenant.as_ref().map(|e| &e.0),
-        "occurrences",
+        &format!("api:{} {}", method.as_str(), uri.path()),
+        "reminder_occurrences",
+        "occurrence_id",
+        &occurrence_id,
+        "reminder_occurrence",
     )
     .await?;
     let manager = reminders_manager(&state)?;
@@ -1285,65 +1312,103 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST, "body: {json}");
     }
 
+    /// Sends `req` as `tenant`, the way `protected` delivers it: the
+    /// `TenantContext` extension plus the task-local the managers read.
+    async fn send_as(
+        h: &Harness,
+        tenant: &str,
+        mut req: HttpRequest<axum::body::Body>,
+    ) -> (StatusCode, serde_json::Value) {
+        let tc = kura_identity::TenantContext {
+            tenant_id: tenant.to_string(),
+            ..Default::default()
+        };
+        req.extensions_mut().insert(TenantContext(tc.clone()));
+        kura_identity::tenantctx::scope(tc, send(&crate::routes::router(h.state.clone()), req))
+            .await
+    }
+
     #[tokio::test]
-    async fn tenant_scope_guards_by_id() {
-        // withByIDTenantGuard parity: a row owned by another tenant surfaces as
-        // 404 before the handler runs; the owning tenant sees it normally.
+    async fn reminders_belong_to_the_tenant_that_created_them() {
         let h = harness(None);
-        let (status, json) = send(
-            &crate::routes::router(h.state.clone()),
+        let due_at = dt("2026-04-23T10:05:00Z");
+        h.clock.set(due_at - chrono::Duration::minutes(1));
+        let body = r#"{"title":"Tenant reminder","trigger":{"kind":"once","fireAt":"2026-04-23T10:05:00Z"}}"#;
+        let (status, json) =
+            send_as(&h, "tenant-a", request("POST", "/v1/reminders", Some(body))).await;
+        assert_eq!(status, StatusCode::CREATED, "body: {json}");
+        let reminder: Reminder = serde_json::from_value(json).expect("reminder");
+        assert_eq!(reminder.tenant_id, "tenant-a");
+        let (status, json) =
+            send_as(&h, "tenant-b", request("POST", "/v1/reminders", Some(body))).await;
+        assert_eq!(status, StatusCode::CREATED, "body: {json}");
+        let other: Reminder = serde_json::from_value(json).expect("reminder");
+
+        // Each tenant lists only its own.
+        for (tenant, mine) in [("tenant-a", &reminder), ("tenant-b", &other)] {
+            let (status, json) = send_as(&h, tenant, request("GET", "/v1/reminders", None)).await;
+            assert_eq!(status, StatusCode::OK);
+            let list: ListResponse<Reminder> = serde_json::from_value(json).expect("list");
+            let ids: Vec<_> = list.items.iter().map(|r| r.reminder_id.as_str()).collect();
+            assert_eq!(ids, [mine.reminder_id.as_str()], "{tenant} sees {ids:?}");
+        }
+
+        // By id, another tenant's reminder does not exist; its owner's does.
+        let uri = format!("/v1/reminders/{}", reminder.reminder_id);
+        let (status, _) = send_as(&h, "tenant-a", request("GET", &uri, None)).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, json) = send_as(&h, "tenant-b", request("GET", &uri, None)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "body: {json}");
+        let cancel = format!("/v1/reminders/{}/cancel", reminder.reminder_id);
+        let (status, _) = send_as(&h, "tenant-b", request("POST", &cancel, Some("{}"))).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "another tenant cancelled it");
+
+        // Occurrences follow their reminder's tenant.
+        h.clock.set(due_at);
+        h.manager.tick().expect("tick");
+        let (_, json) = send_as(
+            &h,
+            "tenant-a",
+            request("GET", "/v1/reminders/occurrences", None),
+        )
+        .await;
+        let mine: ListResponse<Occurrence> = serde_json::from_value(json).expect("occurrences");
+        assert_eq!(mine.items.len(), 1);
+        assert_eq!(mine.items[0].reminder_id, reminder.reminder_id);
+        let occurrence = format!("/v1/reminders/occurrences/{}", mine.items[0].occurrence_id);
+        let (status, _) = send_as(&h, "tenant-a", request("GET", &occurrence, None)).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = send_as(&h, "tenant-b", request("GET", &occurrence, None)).await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "another tenant read the occurrence"
+        );
+        let (_, json) = send_as(
+            &h,
+            "tenant-b",
+            request("GET", "/v1/reminders/occurrences", None),
+        )
+        .await;
+        let theirs: ListResponse<Occurrence> = serde_json::from_value(json).expect("occurrences");
+        assert!(
+            theirs
+                .items
+                .iter()
+                .all(|o| o.reminder_id == other.reminder_id),
+            "tenant-b sees {theirs:?}"
+        );
+        let (status, json) = send_as(
+            &h,
+            "tenant-b",
             request(
-                "POST",
-                "/v1/reminders",
-                Some(
-                    r#"{"title":"Tenant reminder","trigger":{"kind":"once","fireAt":"2026-04-23T10:05:00Z"}}"#,
-                ),
+                "GET",
+                &format!("/v1/reminders/{}/actions", reminder.reminder_id),
+                None,
             ),
         )
         .await;
-        assert_eq!(status, StatusCode::CREATED, "body: {json}");
-        let reminder: Reminder = serde_json::from_value(json).expect("reminder");
-
-        // Bind the row to an owning tenant via the store's row-tenancy layer
-        // (upsert_reminder intentionally leaves tenant_id to bind_row_tenant).
-        {
-            let store = h.state.store.lock();
-            store
-                .bind_row_tenant(
-                    "reminders",
-                    "reminder_id",
-                    &reminder.reminder_id,
-                    "tenant-a",
-                )
-                .expect("bind row tenant");
-        }
-
-        let uri = format!("/v1/reminders/{}", reminder.reminder_id);
-        let mut owner_req = HttpRequest::builder()
-            .uri(&uri)
-            .body(axum::body::Body::empty())
-            .expect("request");
-        owner_req
-            .extensions_mut()
-            .insert(TenantContext(kura_identity::TenantContext {
-                tenant_id: "tenant-a".to_string(),
-                ..Default::default()
-            }));
-        let (status, _) = send(&crate::routes::router(h.state.clone()), owner_req).await;
-        assert_eq!(status, StatusCode::OK);
-
-        let mut other_req = HttpRequest::builder()
-            .uri(&uri)
-            .body(axum::body::Body::empty())
-            .expect("request");
-        other_req
-            .extensions_mut()
-            .insert(TenantContext(kura_identity::TenantContext {
-                tenant_id: "tenant-b".to_string(),
-                ..Default::default()
-            }));
-        let (status, json) = send(&crate::routes::router(h.state.clone()), other_req).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "body: {json}");
+        assert_eq!(status, StatusCode::NOT_FOUND, "actions body: {json}");
     }
 
     #[tokio::test]
