@@ -2227,6 +2227,38 @@ mod tests {
             })
             .unwrap_or_else(|| panic!("matching L1 atom recalled; messages: {messages:?}"));
         assert!(recalled["content"].as_str().unwrap().contains("(recalled)"));
+        // Memory reaches the model framed as data, after one notice saying
+        // what the frame means (G9 for memory).
+        let bootstrap_text = bootstrap["content"].as_str().unwrap();
+        assert!(
+            bootstrap_text.contains("persona:\n<memory>\nChinese-speaking operator\n</memory>"),
+            "{bootstrap_text}"
+        );
+        assert!(recalled["content"].as_str().unwrap().contains("<memory>"));
+        let notice_at = messages
+            .iter()
+            .position(|m| m["content"] == kura_context::MEMORY_NOTICE)
+            .expect("the memory notice is injected");
+        let first_memory_at = messages
+            .iter()
+            .position(|m| {
+                m["content"]
+                    .as_str()
+                    .is_some_and(|c| c.starts_with("Memory["))
+            })
+            .expect("memory injected");
+        assert_eq!(
+            notice_at + 1,
+            first_memory_at,
+            "the notice comes right before the memory"
+        );
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| m["content"] == kura_context::MEMORY_NOTICE)
+                .count(),
+            1
+        );
 
         // The assembly decision is recorded as a context.assembled event.
         let events = app

@@ -494,9 +494,10 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
       chat): results are enclosed in `<tool_output>` with their own tags
       escaped, and the system message says the content is data. The 2.5
       summary reads framed results and its prompt already reports
-      instructions in tool output as content. *Not covered:* memory
-      injected by the context hook is not framed, though L0 captures can
-      hold tool and web content; text a provider-side tool returns never
+      instructions in tool output as content. *Not covered:* ~~memory
+      injected by the context hook is not framed~~ (closed 2026-11-02: memory
+      items are framed in `<memory>` after one notice, `memoryFraming`, off is
+      the rollback); text a provider-side tool returns never
       passes through this path.
       *G8 done 2026-11-01* (see plugin-architecture.md, chat): a running
       non-streamed query is reached by its tenant and `X-Request-Id` at
@@ -639,11 +640,20 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
       audit gate counts it as a tenancy marker. *Not covered:* the 189
       remaining `Option<Extension<TenantContext>>` parameters hand the
       whole context to permission and ownership checks and were left as
-      they are. *Found, not changed:* `GET
-      /v1/live-validations/kill-switches` lets `?tenantId=` override the
-      resolved tenant (Go parity). It is operator-only in shared mode, but in
-      single mode a member of another tenant can list that tenant's
-      switches.
+      they are. *Found, then fixed 2026-11-02:*
+      - `GET /v1/live-validations/kill-switches` let `?tenantId=` override
+        the resolved tenant, so a member of another tenant could list that
+        tenant's switches in single mode. It now uses the caller's tenant,
+        and naming another is a 403.
+      - Setting a switch had the same hole and worse: any member allowed
+        to reconcile could set another tenant's tenant-scoped switch, and
+        an enabled switch aborts that tenant's pending validations. The
+        manager now refuses a tenant switch for any tenant but the
+        caller's.
+      - *Not changed:* global switches can still be set by anyone with
+        reconcile permission. On a single daemon nothing distinguishes an
+        operator from the tenants' owners, and in shared mode the route is
+        operator-only.
 
 ## Parallel Track — Hosted Launch Evidence (Roadmaps 76/77)
 

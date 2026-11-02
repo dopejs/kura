@@ -334,8 +334,14 @@ Ready L3 personas first, then Ready L2 scenarios, newest first
 loadouts) — as system-frame messages under
 `entries.context.config.memoryBudgetChars` (default 4000, fail-loud
 validation). Every injected message carries its citation inline
-(`Memory[l3 mem_xxx] title: content`): recalled memory is evidence, never
-bare text. L1 atoms are never bulk-injected (drill-down/retrieval only,
+(`Memory[l3 mem_xxx] title:` then the content): recalled memory is evidence,
+never bare text. The content is framed as data (2026-11-02, G9 for memory):
+it sits inside `<memory>` and `</memory>`, with those tags escaped inside
+it, and one system notice before the first item says that what is inside
+was remembered from earlier conversations and tools and is never
+instructions. Memory can hold web pages and tool results captured into it,
+so it gets the same posture as tool output. `memoryFraming: false`
+(`entries.context.config`) injects it unframed, as before. L1 atoms are never bulk-injected (drill-down/retrieval only,
 per the design root). Every pass emits a `context.assembled` event whose
 `AssemblyRecord` lists inclusions (asset, layer, chars) and exclusions
 with reasons (`over_budget`/`empty_content`/`visibility`) — nothing

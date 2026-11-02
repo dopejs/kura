@@ -1203,8 +1203,11 @@ impl kura_plugin::Hook for ContextHook {
             kura_memory::MemoryLayer::L2,
             &mut visibility_excluded,
         ));
+        // Framed as data (G9 for memory): what memory holds can come from
+        // web pages and tool results captured into it.
+        let frame = self.config.frame_memory();
         let (mut injected, mut record) =
-            kura_context::assemble_within(&candidates, self.config.bootstrap_budget());
+            kura_context::assemble_framed(&candidates, self.config.bootstrap_budget(), frame);
         record.excluded.extend(visibility_excluded);
 
         // Query-time recall of L1 atoms (BM25 + recency, RRF fusion) over
@@ -1312,13 +1315,14 @@ impl kura_plugin::Hook for ContextHook {
             // whole corpus — one RPC per atom per turn for an external
             // provider, synchronously on the reply path.
             let doc_vectors = Self::corpus_vectors(state, embedder, &docs);
-            kura_context::retrieve_and_assemble_within(
+            kura_context::retrieve_and_assemble_framed(
                 &query,
                 &docs,
                 Some(embedder),
                 Some(&doc_vectors),
                 self.config.recall_budget(),
                 self.config.min_similarity(),
+                frame,
                 &mut injected,
                 &mut record,
             );
@@ -1328,6 +1332,10 @@ impl kura_plugin::Hook for ContextHook {
             return kura_plugin::HookOutcome::Continue;
         }
 
+        // The notice goes once, before the items it describes.
+        if frame && !injected.is_empty() {
+            injected.insert(0, kura_context::memory_notice_message());
+        }
         // Splice the bootstrap in front of the first non-system message so
         // it joins the frame (persona/skills) rather than the history.
         if let Some(messages) = payload.get_mut("messages").and_then(Value::as_array_mut) {
