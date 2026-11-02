@@ -997,3 +997,57 @@ async fn token_spend_is_counted_per_tenant_for_every_dispatch() {
     // The daemon's own work is counted too, without a tenant.
     assert_eq!(count("", "input"), 5);
 }
+
+/// The usage observer (the turn admission token budget) sees every settled
+/// dispatch once, with its tenant, including one that failed.
+#[tokio::test]
+async fn the_usage_observer_sees_every_settled_dispatch_once() {
+    let dispatcher = Dispatcher::new();
+    let provider = TestProvider::new(
+        "observed",
+        Box::new(|request| {
+            let fail = request.model == "fails";
+            Box::pin(async move {
+                if fail {
+                    return Err(ProviderError::provider("boom", "boom".to_string(), false));
+                }
+                Ok(ProviderResponse {
+                    tool_calls: Vec::new(),
+                    output: "ok".into(),
+                    finish_reason: "stop".into(),
+                    usage: Usage {
+                        total_tokens: 7,
+                        ..Default::default()
+                    },
+                })
+            })
+        }),
+        unused_stream(),
+    );
+    dispatcher.register_provider(Arc::new(provider));
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::<(String, i64)>::new()));
+    let sink = Arc::clone(&seen);
+    dispatcher.set_usage_observer(Arc::new(move |dispatch: &kura_llm::Dispatch| {
+        sink.lock()
+            .push((dispatch.tenant_id.clone(), dispatch.usage.total_tokens));
+    }));
+    for (tenant, model) in [("ten_a", "ok"), ("ten_b", "fails")] {
+        let mut dispatch = dispatcher
+            .prepare(
+                CreateDispatchInput {
+                    provider: "observed".into(),
+                    model: model.into(),
+                    messages: vec![user_message("hi")],
+                    ..CreateDispatchInput::default()
+                },
+                false,
+            )
+            .unwrap();
+        dispatch.tenant_id = tenant.to_string();
+        let _ = dispatcher.dispatch(dispatch, &CancelToken::new()).await;
+    }
+    assert_eq!(
+        *seen.lock(),
+        vec![("ten_a".to_string(), 7), ("ten_b".to_string(), 0)]
+    );
+}

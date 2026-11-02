@@ -324,8 +324,19 @@ impl Service {
     }
 
     /// Puts every turn behind an admission gate with these limits (4.1).
+    ///
+    /// The token budget is charged from the dispatcher, so every dispatch on
+    /// a tenant's behalf counts: the turn's rounds, and the session
+    /// summarizer and memory consolidator that run on the same dispatcher
+    /// outside any turn.
     pub fn set_turn_limits(&mut self, limits: crate::admission::TurnLimits) {
-        self.admission = Some(crate::admission::Admission::new(limits));
+        let admission = crate::admission::Admission::new(limits);
+        let charged = Arc::clone(&admission);
+        self.dispatcher
+            .set_usage_observer(Arc::new(move |dispatch: &kura_llm::Dispatch| {
+                charged.charge_tokens(&dispatch.tenant_id, dispatch.usage.total_tokens);
+            }));
+        self.admission = Some(admission);
     }
 
     /// The admission gate, when one is set.

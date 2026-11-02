@@ -53,7 +53,11 @@ cannot start at all.
    tenant with 100 queued turns gets one slot in turn, the same as a tenant
    with 1.
 5. **Token budget:** charged after each settled dispatch from the usage the
-   provider reported. It is checked only when a turn is admitted. A turn
+   provider reported. The dispatcher does the charging (its usage
+   observer), so every dispatch on a tenant's behalf counts. That includes
+   the session summarizer and memory consolidator, which run outside any
+   turn. Until 2026-11-02 only a turn's own rounds were charged. It is
+   checked only when a turn is admitted. A turn
    that is already running finishes, so the budget can go into debt by at
    most one turn's usage. Estimating usage up front would not be more
    accurate, and stopping a turn mid-tool-loop leaves worse state than

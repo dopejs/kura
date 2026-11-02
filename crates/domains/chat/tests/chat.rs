@@ -3574,3 +3574,87 @@ fn a_stream_whose_caller_stops_listening_ends_the_turn() {
         "the turn stopped instead of going on"
     );
 }
+
+// ------------------------------------------------------------------------
+// Behavior: the token budget counts every dispatch (4.1)
+// ------------------------------------------------------------------------
+
+fn token_limits(tokens_per_minute: u64) -> kura_chat::TurnLimits {
+    kura_chat::TurnLimits {
+        global_concurrency: 0,
+        tenant_concurrency: 0,
+        turns_per_minute: 0,
+        tokens_per_minute,
+        tenant_queue_depth: 0,
+        global_queue_depth: 0,
+        queue_timeout: Duration::from_secs(5),
+        exempt_tenants: Vec::new(),
+    }
+}
+
+/// The session summarizer and memory consolidator dispatch on the chat's
+/// dispatcher outside any turn. Their tokens were spent on the tenant's
+/// behalf, so they count against its budget.
+#[test]
+fn dispatches_outside_a_turn_are_charged_to_the_tenants_token_budget() {
+    let dispatcher = new_dispatcher(Arc::new(TestProvider::new("chat-test")));
+    let mut svc = service(Arc::clone(&dispatcher), None, None);
+    svc.set_turn_limits(token_limits(3));
+    let admission = Arc::clone(svc.admission().expect("admission"));
+
+    // Two background calls of 2 tokens each, as the summarizer makes them.
+    for _ in 0..2 {
+        let mut dispatch = dispatcher
+            .prepare(
+                kura_llm::CreateDispatchInput {
+                    provider: "chat-test".to_string(),
+                    model: "m".to_string(),
+                    messages: vec![Message {
+                        role: MessageRole::User,
+                        content: "summarize".to_string(),
+                        ..Default::default()
+                    }],
+                    ..kura_llm::CreateDispatchInput::default()
+                },
+                false,
+            )
+            .expect("prepare");
+        dispatch.tenant_id = "ten_a".to_string();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(dispatcher.dispatch(dispatch, &CancelToken::new()))
+            .expect("dispatch");
+    }
+    assert!(
+        admission.admit("ten_a").is_err(),
+        "4 tokens against a 3-token budget: the next turn waits"
+    );
+    assert!(
+        admission.admit("ten_b").is_ok(),
+        "another tenant is unaffected"
+    );
+}
+
+/// A turn's rounds are charged once: by the dispatcher, not again when the
+/// chat persists the dispatch.
+#[test]
+fn a_turns_tokens_are_charged_once() {
+    let dispatcher = new_dispatcher(Arc::new(TestProvider::new("chat-test")));
+    let mut svc = service(dispatcher, None, None);
+    svc.set_turn_limits(token_limits(3));
+    let admission = Arc::clone(svc.admission().expect("admission"));
+    let execution = svc
+        .query(
+            QueryInput {
+                tenant_id: "ten_a".to_string(),
+                ..base_query("chat-test", "m", "hello")
+            },
+            &CancellationToken::new(),
+        )
+        .expect("query");
+    assert!(execution.exec_error.is_none());
+    // 2 of 3 tokens spent; charged twice it would be 4 and refused.
+    assert!(admission.admit("ten_a").is_ok());
+}

@@ -46,6 +46,10 @@ fn record_token_spend(dispatch: &Dispatch) {
     }
 }
 
+/// Told about every dispatch once it has settled, however it settled, with
+/// the usage it settled with (the turn admission token budget, 4.1).
+pub type UsageObserver = Arc<dyn Fn(&Dispatch) + Send + Sync>;
+
 /// Validation and lookup failures from [`Dispatcher::prepare`]. Messages
 /// match the Go sentinel errors.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -81,6 +85,7 @@ struct Inner {
     default_timeout: Duration,
     default_retries: i64,
     credential_policy: Option<Arc<dyn CredentialPolicy>>,
+    usage_observer: Option<UsageObserver>,
 }
 
 impl Default for Dispatcher {
@@ -99,10 +104,18 @@ impl Dispatcher {
                 default_timeout: Duration::from_secs(30),
                 default_retries: 0,
                 credential_policy: None,
+                usage_observer: None,
             }),
         };
         dispatcher.register_provider(Arc::new(EchoProvider::new()));
         dispatcher
+    }
+
+    /// Every settled dispatch is reported to `observer`: chat rounds, and
+    /// the summarizer and consolidator calls that run on a tenant's
+    /// credential outside any turn. One observer; a second replaces it.
+    pub fn set_usage_observer(&self, observer: UsageObserver) {
+        self.inner.write().usage_observer = Some(observer);
     }
 
     pub fn register_provider(&self, provider: Arc<dyn Provider>) {
@@ -324,9 +337,15 @@ impl Dispatcher {
             clock.elapsed().as_secs_f64(),
         );
         metrics.inc(kura_telemetry::metrics::LLM_DISPATCHES_TOTAL, &labels);
-        match &result {
-            Ok(settled) => record_token_spend(settled),
-            Err(failed) => record_token_spend(&failed.dispatch),
+        let settled = match &result {
+            Ok(settled) => settled,
+            Err(failed) => &failed.dispatch,
+        };
+        record_token_spend(settled);
+        // Cloned out so the observer never runs under the dispatcher's lock.
+        let observer = self.inner.read().usage_observer.clone();
+        if let Some(observer) = observer {
+            observer(settled);
         }
         result
     }

@@ -638,12 +638,7 @@ impl Service {
         context: &crate::round::RoundContext,
         dispatch: &Dispatch,
     ) -> Result<(), ChatError> {
-        persist_dispatch(
-            self.store.as_deref(),
-            self.admission.as_deref(),
-            &context.input.tenant_id,
-            dispatch,
-        )?;
+        persist_dispatch(self.store.as_deref(), &context.input.tenant_id, dispatch)?;
         publish_dispatch_event(
             self.event_bus.as_ref(),
             self.store.as_deref(),
@@ -661,12 +656,7 @@ impl Service {
         context: &crate::round::RoundContext,
         dispatch: &Dispatch,
     ) -> Result<(), ChatError> {
-        persist_dispatch(
-            self.store.as_deref(),
-            self.admission.as_deref(),
-            &context.input.tenant_id,
-            dispatch,
-        )?;
+        persist_dispatch(self.store.as_deref(), &context.input.tenant_id, dispatch)?;
         publish_dispatch_event(
             self.event_bus.as_ref(),
             self.store.as_deref(),
@@ -1719,22 +1709,13 @@ pub(crate) struct TurnStream<'e> {
     pub template: StreamChunk,
 }
 
-/// Go `persistDispatch`.
-///
-/// A settled dispatch's tokens are charged to the tenant's token budget
-/// here, once: every dispatch is persisted settled exactly once.
+/// Go `persistDispatch`. Token spend and the tenant's token budget are
+/// charged by the dispatcher (`set_turn_limits`), not here.
 fn persist_dispatch(
     store: Option<&dyn ChatStore>,
-    admission: Option<&crate::admission::Admission>,
     tenant_id: &str,
     dispatch: &Dispatch,
 ) -> Result<(), ChatError> {
-    // Token spend is recorded by the dispatcher for every dispatch.
-    if let Some(admission) = admission
-        && is_settled(dispatch)
-    {
-        admission.charge_tokens(tenant_id, dispatch.usage.total_tokens);
-    }
     let Some(store) = store else {
         return Ok(());
     };
@@ -1743,14 +1724,6 @@ fn persist_dispatch(
     store
         .upsert_llm_dispatch_for_tenant(dispatch, tenant_id)
         .map_err(ChatError::Store)
-}
-
-/// Whether a dispatch has ended in a state that carries its final usage.
-fn is_settled(dispatch: &Dispatch) -> bool {
-    matches!(
-        dispatch.status,
-        DispatchStatus::Completed | DispatchStatus::PartialFailed | DispatchStatus::Failed
-    )
 }
 
 /// Go `publishDispatchEvent`: builds the `llm.*` event payload and persists

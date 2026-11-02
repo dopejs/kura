@@ -13,7 +13,7 @@ mod structured;
 mod types;
 
 pub use credential::{ApiKey, CredentialDecision, CredentialPolicy};
-pub use dispatcher::{Dispatcher, FailedDispatch, PrepareError};
+pub use dispatcher::{Dispatcher, FailedDispatch, PrepareError, UsageObserver};
 pub use echo::EchoProvider;
 pub use provider::{
     CancelToken, Provider, ProviderError, ProviderRequest, ProviderResponse, StreamEmitter,
