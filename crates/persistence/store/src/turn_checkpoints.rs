@@ -191,7 +191,10 @@ mod tests {
             assert!(store.get_turn_checkpoint("k").is_err());
         }
         let store = SQLiteStore::new(&dir).unwrap();
-        assert_eq!(store.schema_version().unwrap(), crate::CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            crate::CURRENT_SCHEMA_VERSION
+        );
         store
             .put_turn_checkpoint(&record("k", "{}", Utc::now()))
             .unwrap();
