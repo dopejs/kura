@@ -935,3 +935,65 @@ fn an_api_key_is_never_printed() {
     assert!(!format!("{request:?}").contains("sk-secret"));
     assert!(kura_llm::ApiKey::new("   ").is_none());
 }
+
+/// Every dispatch's tokens are counted under the tenant it ran for, whoever
+/// dispatched it: the summarizer and consolidator dispatch outside a chat
+/// turn, and used to go uncounted (found in the 1.4 shared-mode smoke).
+#[tokio::test]
+async fn token_spend_is_counted_per_tenant_for_every_dispatch() {
+    let dispatcher = Dispatcher::new();
+    let provider = TestProvider::new(
+        "spend-test",
+        Box::new(|_request| {
+            Box::pin(async {
+                Ok(ProviderResponse {
+                    tool_calls: Vec::new(),
+                    output: "ok".into(),
+                    finish_reason: "stop".into(),
+                    usage: Usage {
+                        input_tokens: 5,
+                        output_tokens: 2,
+                        cache_read_input_tokens: 1,
+                        ..Default::default()
+                    },
+                })
+            })
+        }),
+        unused_stream(),
+    );
+    dispatcher.register_provider(Arc::new(provider));
+    let count = |tenant: &str, kind: &str| {
+        kura_telemetry::metrics::registry().counter_value(
+            kura_telemetry::metrics::LLM_TOKENS_TOTAL,
+            &[
+                ("tenant", tenant),
+                ("provider", "spend-test"),
+                ("kind", kind),
+            ],
+        )
+    };
+    for tenant in ["ten_spend", "ten_spend", ""] {
+        let mut dispatch = dispatcher
+            .prepare(
+                CreateDispatchInput {
+                    provider: "spend-test".into(),
+                    model: "m".into(),
+                    messages: vec![user_message("hi")],
+                    ..CreateDispatchInput::default()
+                },
+                false,
+            )
+            .unwrap();
+        dispatch.tenant_id = tenant.to_string();
+        dispatcher
+            .dispatch(dispatch, &CancelToken::new())
+            .await
+            .unwrap();
+    }
+    assert_eq!(count("ten_spend", "input"), 10);
+    assert_eq!(count("ten_spend", "output"), 4);
+    assert_eq!(count("ten_spend", "cache_read"), 2);
+    assert_eq!(count("ten_spend", "cache_write"), 0);
+    // The daemon's own work is counted too, without a tenant.
+    assert_eq!(count("", "input"), 5);
+}

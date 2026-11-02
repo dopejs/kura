@@ -1799,7 +1799,7 @@ fn persist_dispatch(
     tenant_id: &str,
     dispatch: &Dispatch,
 ) -> Result<(), ChatError> {
-    record_token_spend(tenant_id, dispatch);
+    // Token spend is recorded by the dispatcher for every dispatch.
     if let Some(admission) = admission
         && is_settled(dispatch)
     {
@@ -1824,36 +1824,6 @@ fn is_settled(dispatch: &Dispatch) -> bool {
         dispatch.status,
         DispatchStatus::Completed | DispatchStatus::PartialFailed | DispatchStatus::Failed
     )
-}
-
-/// Stage 10.3: token spend by tenant and provider. The dispatcher cannot
-/// label by tenant (it does not know one); the chat service does. Called on
-/// every persist; a not-yet-settled dispatch has zero usage and adds nothing.
-fn record_token_spend(tenant_id: &str, dispatch: &Dispatch) {
-    if !is_settled(dispatch) {
-        return;
-    }
-    let metrics = kura_telemetry::metrics::registry();
-    // `cache_read` and `cache_write` are parts of `input`, not additions:
-    // summing every kind would count cached tokens twice.
-    for (kind, tokens) in [
-        ("input", dispatch.usage.input_tokens),
-        ("output", dispatch.usage.output_tokens),
-        ("cache_read", dispatch.usage.cache_read_input_tokens),
-        ("cache_write", dispatch.usage.cache_creation_input_tokens),
-    ] {
-        if tokens > 0 {
-            metrics.add(
-                kura_telemetry::metrics::LLM_TOKENS_TOTAL,
-                &[
-                    ("tenant", tenant_id.trim()),
-                    ("provider", dispatch.provider.as_str()),
-                    ("kind", kind),
-                ],
-                tokens as u64,
-            );
-        }
-    }
 }
 
 /// Go `publishDispatchEvent`: builds the `llm.*` event payload and persists

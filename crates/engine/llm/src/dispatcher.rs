@@ -17,6 +17,35 @@ use crate::provider::{
 };
 use crate::types::{CreateDispatchInput, Dispatch, DispatchStatus, StreamChunk, Usage};
 
+/// Token spend by tenant and provider (Stage 10.3), recorded here so every
+/// dispatch counts: chat rounds, and the summarizer and consolidator calls
+/// that run on a tenant's credential outside any turn. `tenant` is empty for
+/// the daemon's own work. Usage is whatever the dispatch settled with; a
+/// cancelled or refused dispatch has none.
+fn record_token_spend(dispatch: &Dispatch) {
+    let metrics = kura_telemetry::metrics::registry();
+    // `cache_read` and `cache_write` are parts of `input`, not additions:
+    // summing every kind would count cached tokens twice.
+    for (kind, tokens) in [
+        ("input", dispatch.usage.input_tokens),
+        ("output", dispatch.usage.output_tokens),
+        ("cache_read", dispatch.usage.cache_read_input_tokens),
+        ("cache_write", dispatch.usage.cache_creation_input_tokens),
+    ] {
+        if tokens > 0 {
+            metrics.add(
+                kura_telemetry::metrics::LLM_TOKENS_TOTAL,
+                &[
+                    ("tenant", dispatch.tenant_id.trim()),
+                    ("provider", dispatch.provider.as_str()),
+                    ("kind", kind),
+                ],
+                tokens as u64,
+            );
+        }
+    }
+}
+
 /// Validation and lookup failures from [`Dispatcher::prepare`]. Messages
 /// match the Go sentinel errors.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -295,6 +324,10 @@ impl Dispatcher {
             clock.elapsed().as_secs_f64(),
         );
         metrics.inc(kura_telemetry::metrics::LLM_DISPATCHES_TOTAL, &labels);
+        match &result {
+            Ok(settled) => record_token_spend(settled),
+            Err(failed) => record_token_spend(&failed.dispatch),
+        }
         result
     }
 
