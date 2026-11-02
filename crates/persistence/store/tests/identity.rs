@@ -206,6 +206,38 @@ fn touching_a_token_records_its_use_and_never_its_status() {
 }
 
 #[test]
+fn expiring_a_token_moves_only_an_active_one() {
+    let dir = temp_dir("identity_token_expire");
+    let store = SQLiteStore::new(&dir).unwrap();
+    let active = make_token();
+    store.upsert_access_token(&active).unwrap();
+    let mut revoked = make_token();
+    revoked.token_id = "tok_revoked".to_string();
+    revoked.status = TokenStatus::Revoked;
+    store.upsert_access_token(&revoked).unwrap();
+
+    store.expire_access_token(&active).unwrap();
+    // Found overdue from a snapshot taken before it was revoked.
+    store.expire_access_token(&revoked).unwrap();
+
+    let status = |id: &str| {
+        store
+            .list_access_tokens()
+            .unwrap()
+            .into_iter()
+            .find(|token| token.token_id == id)
+            .unwrap()
+            .status
+    };
+    assert_eq!(status(&active.token_id), TokenStatus::Expired);
+    assert_eq!(
+        status("tok_revoked"),
+        TokenStatus::Revoked,
+        "the revocation sticks"
+    );
+}
+
+#[test]
 fn tenant_round_trips_and_filters() {
     let dir = temp_dir("identity_tenant");
     let store = SQLiteStore::new(&dir).unwrap();

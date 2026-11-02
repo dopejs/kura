@@ -383,6 +383,23 @@ impl SQLiteStore {
         Ok(())
     }
 
+    /// Records that an active token has passed its expiry (found when it was
+    /// presented). Only `active` moves: a token revoked or rotated in the
+    /// meantime keeps that status.
+    pub fn expire_access_token(
+        &self,
+        token: &kura_identity::auth::AccessToken,
+    ) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE auth_tokens SET status = 'expired', updated_at = ?2
+                 WHERE token_id = ?1 AND status = 'active'",
+                params![token.token_id, now_rfc3339(&token.updated_at)],
+            )
+            .map_err(|e| format!("expire access token {}: {e}", token.token_id))?;
+        Ok(())
+    }
+
     pub fn list_access_tokens(&self) -> Result<Vec<kura_identity::auth::AccessToken>, String> {
         let mut stmt = self
             .conn

@@ -269,7 +269,7 @@ pub async fn protected(
         return Ok(next.run(req).await);
     };
 
-    let authenticated = authenticate_request(auth, &req)?;
+    let authenticated = authenticate_request(auth, &state.store, &req)?;
     let token = authenticated.token;
 
     // Go: persistAccessToken(r.Context(), store, token), narrowed to the use
@@ -318,6 +318,7 @@ pub async fn protected(
 /// `ErrAuthRequired` like the Go `if deps.Auth != nil && !ok` branch.
 fn authenticate_request(
     auth: &kura_identity::auth::Manager,
+    store: &parking_lot::Mutex<kura_store::SQLiteStore>,
     req: &Request,
 ) -> Result<kura_identity::auth::Authenticated, ApiError> {
     let header = req
@@ -334,12 +335,22 @@ fn authenticate_request(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ApiError::Unauthorized(AuthError::TokenInvalid.to_string()))?;
-    let token = auth.authenticate_touch(secret).map_err(|err| {
-        // Go: token-expired requests additionally record a
-        // tenant.access_denied audit event (reason_code=token_expired)
-        // when the token identity is known. The Rust auth manager returns
-        // no token alongside the error, so that audit path remains deferred.
-        ApiError::Unauthorized(err.to_string())
+    let token = auth.authenticate_outcome(secret).map_err(|refused| {
+        // The request that finds a token overdue records it, once: the store
+        // otherwise keeps `active` and token lists show it so. A failed write
+        // changes nothing for this request (it is refused either way), and
+        // the next restart finds the token overdue again.
+        if let Some(expired) = &refused.expired {
+            if let Err(err) = store.lock().expire_access_token(expired) {
+                eprintln!(
+                    "[kura] auth: recording token {} as expired failed: {err}",
+                    expired.token_id
+                );
+            }
+        }
+        // Go also records a tenant.access_denied audit event
+        // (reason_code=token_expired); that remains deferred.
+        ApiError::Unauthorized(refused.error.to_string())
     })?;
     Ok(token)
 }
@@ -810,6 +821,62 @@ mod tenant_task_local_tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert!(body_text(response).await.starts_with("ERR:"));
+    }
+
+    /// A token found overdue is recorded as expired in the store, so token
+    /// lists stop showing it as active, and only by the request that found
+    /// it.
+    #[tokio::test]
+    async fn the_request_that_finds_a_token_overdue_records_it_as_expired() {
+        let mut state = test_state();
+        let auth = Arc::new(AuthManager::new());
+        let (token, secret) = auth
+            .issue_token(IssueTokenInput {
+                principal_id: PRINCIPAL.to_string(),
+                label: "probe".to_string(),
+                default_tenant_id: TENANT.to_string(),
+                expires_at: None,
+            })
+            .expect("issue token");
+        state
+            .store
+            .lock()
+            .upsert_access_token(&token)
+            .expect("persist");
+        let mut overdue = token.clone();
+        overdue.expires_at = Some(chrono::Utc::now() - chrono::TimeDelta::seconds(1));
+        auth.update_token(overdue);
+        state.auth = Some(auth);
+
+        let app =
+            Router::new()
+                .route("/probe", get(probe))
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    super::protected,
+                ));
+        let status = || {
+            state
+                .store
+                .lock()
+                .list_access_tokens()
+                .expect("list")
+                .into_iter()
+                .find(|stored| stored.token_id == token.token_id)
+                .expect("stored")
+                .status
+        };
+        assert_eq!(status(), kura_identity::auth::TokenStatus::Active);
+        for _ in 0..2 {
+            let request = Request::builder()
+                .uri("/probe")
+                .header("authorization", format!("Bearer {secret}"))
+                .body(Body::empty())
+                .expect("request");
+            let response = app.clone().oneshot(request).await.expect("oneshot");
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(status(), kura_identity::auth::TokenStatus::Expired);
+        }
     }
 }
 

@@ -628,8 +628,11 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
       restart); `/v1/auth/me` had the same upsert and now relies on
       `protected`. `store.readers` defaults to 2 (`0`, in config or
       `KURA_STORE_READERS`, is the rollback). *Changed for clients:*
-      `lastUsedAt` is accurate to a minute. *Not covered:* an expiry
-      noticed during authentication is still not persisted (as before).
+      `lastUsedAt` is accurate to a minute. *Not covered:* ~~an expiry
+      noticed during authentication is still not persisted (as before)~~
+      (closed 2026-11-02: the request that finds a token overdue records
+      `expired` in the store, only over `active`; the Go
+      `tenant.access_denied` audit event for it is still not written).
 - [x] **4.3** Load test with parallel tools (2.6) and swarm enabled; the
       single writer connection is the expected bottleneck — measure via
       `kura_store_lock_wait_seconds` before changing it.

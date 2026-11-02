@@ -186,6 +186,24 @@ pub struct Authenticated {
     pub touched: bool,
 }
 
+/// Why [`Manager::authenticate_outcome`] refused, and the token it moved to
+/// expired in doing so (only on the call that made the transition).
+#[derive(Debug)]
+pub struct Refused {
+    pub error: AuthError,
+    /// Boxed: a refusal is the common error path and stays small.
+    pub expired: Option<Box<AccessToken>>,
+}
+
+impl From<AuthError> for Refused {
+    fn from(error: AuthError) -> Self {
+        Self {
+            error,
+            expired: None,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct State {
     pairings: HashMap<String, Pairing>,
@@ -462,8 +480,16 @@ impl Manager {
     /// so concurrent requests do not queue on each other; only a refresh or
     /// an expiry takes the write lock.
     pub fn authenticate_touch(&self, token_secret: &str) -> Result<Authenticated, AuthError> {
+        self.authenticate_outcome(token_secret)
+            .map_err(|refused| refused.error)
+    }
+
+    /// [`Self::authenticate_touch`], and on refusal also the token this call
+    /// moved to expired, if it did. That transition happens once, here, so
+    /// the caller can record it once (the store keeps `active` otherwise).
+    pub fn authenticate_outcome(&self, token_secret: &str) -> Result<Authenticated, Refused> {
         if token_secret.is_empty() {
-            return Err(AuthError::AuthRequired);
+            return Err(AuthError::AuthRequired.into());
         }
         let token_hash = hash_secret(token_secret);
         let now = Utc::now();
@@ -471,8 +497,8 @@ impl Manager {
             let state = self.state.read();
             let token = state
                 .token_by_hash(&token_hash)
-                .ok_or(AuthError::TokenInvalid)?;
-            usable(token)?;
+                .ok_or(Refused::from(AuthError::TokenInvalid))?;
+            usable(token).map_err(Refused::from)?;
             if !overdue(token, now) && recently_used(token, now) {
                 return Ok(Authenticated {
                     token: token.clone(),
@@ -486,13 +512,16 @@ impl Manager {
         let mut token = state
             .token_by_hash(&token_hash)
             .cloned()
-            .ok_or(AuthError::TokenInvalid)?;
-        usable(&token)?;
+            .ok_or(Refused::from(AuthError::TokenInvalid))?;
+        usable(&token).map_err(Refused::from)?;
         if overdue(&token, now) {
             token.status = TokenStatus::Expired;
             token.updated_at = now;
-            state.put_token(token);
-            return Err(AuthError::TokenExpired);
+            state.put_token(token.clone());
+            return Err(Refused {
+                error: AuthError::TokenExpired,
+                expired: Some(Box::new(token)),
+            });
         }
         if recently_used(&token, now) {
             return Ok(Authenticated {
@@ -640,6 +669,28 @@ mod tests {
         let third = manager.authenticate_touch(&secret).expect("third use");
         assert!(third.touched, "a use after the resolution is recorded");
         assert!(third.token.last_used_at > first.token.last_used_at);
+    }
+
+    #[test]
+    fn the_expiry_transition_is_reported_once() {
+        let manager = Manager::new();
+        let (token, secret) = issued(&manager);
+        let mut overdue = manager.get_token(&token.token_id).expect("token");
+        overdue.expires_at = Some(Utc::now() - TimeDelta::seconds(1));
+        manager.update_token(overdue);
+
+        let first = manager.authenticate_outcome(&secret).expect_err("overdue");
+        assert!(matches!(first.error, AuthError::TokenExpired));
+        let expired = first.expired.expect("this call moved it");
+        assert_eq!(expired.token_id, token.token_id);
+        assert_eq!(expired.status, TokenStatus::Expired);
+
+        let again = manager.authenticate_outcome(&secret).expect_err("still");
+        assert!(matches!(again.error, AuthError::TokenExpired));
+        assert!(
+            again.expired.is_none(),
+            "already expired: nothing to record"
+        );
     }
 
     #[test]
