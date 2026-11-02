@@ -39,6 +39,15 @@ impl Manager {
         if item.scope == KillSwitchScope::TENANT && item.tenant_id.is_empty() {
             item.tenant_id = tenant_context.tenant_id.clone();
         }
+        // A tenant's switch is that tenant's to set. Naming another tenant
+        // used to be accepted, so a member allowed to reconcile in one tenant
+        // could switch another tenant's validations off (an enabled switch
+        // aborts its pending ones).
+        if item.scope == KillSwitchScope::TENANT
+            && item.tenant_id.trim() != tenant_context.tenant_id.trim()
+        {
+            return Err(LiveValidationError::KillSwitchPermissionDenied);
+        }
         if item.kill_switch_id.is_empty() {
             item.kill_switch_id = format!(
                 "live_validation_kill_switch_{}_{}",

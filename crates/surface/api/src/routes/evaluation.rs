@@ -1195,15 +1195,24 @@ async fn list_kill_switches(
     tenant: ActingTenant,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let manager = live_validation_manager(&state)?;
-    let tenant_id = params
+    // The caller's own tenant, never one named in the query: `?tenantId=`
+    // used to win, so a member of one tenant could list another's switches.
+    // Naming a different tenant is a 403, as on the other tenant-scoped
+    // routes; without a tenant context the request value is used as before.
+    let resolved = resolved_tenant_id(&tenant);
+    let requested = params
         .get("tenantId")
-        .cloned()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            let resolved = resolved_tenant_id(&tenant);
-            (!resolved.is_empty()).then_some(resolved)
-        })
-        .unwrap_or_default();
+        .map(|value| value.trim())
+        .unwrap_or("");
+    let tenant_id = if resolved.is_empty() {
+        requested.to_string()
+    } else if requested.is_empty() || requested == resolved {
+        resolved
+    } else {
+        return Err(ApiError::Forbidden(
+            "the request names a tenant other than the authenticated one".to_string(),
+        ));
+    };
     let filter = KillSwitchFilter {
         tenant_id: tenant_id.clone(),
         scope: KillSwitchScope::new(params.get("scope").cloned().unwrap_or_default()),
@@ -3702,6 +3711,60 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK, "body: {json}");
         assert_eq!(json["tenantId"], "ten_1");
+    }
+
+    /// Kill switches are the caller's tenant's: listing names no other
+    /// tenant, and setting another tenant's switch is refused.
+    #[tokio::test]
+    async fn kill_switches_stay_within_the_callers_tenant() {
+        let h = harness(None, Some(live_validation_manager(false)));
+        let app = crate::routes::router(h.state.clone());
+        let (status, json) = send_with_tenant(
+            &app,
+            request(
+                "GET",
+                "/v1/live-validations/kill-switches?tenantId=ten_other",
+                None,
+            ),
+            admin_context(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "body: {json}");
+        let (status, json) = send_with_tenant(
+            &app,
+            request(
+                "GET",
+                "/v1/live-validations/kill-switches?tenantId=ten_1",
+                None,
+            ),
+            admin_context(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "naming one's own tenant: {json}");
+        assert_eq!(json["tenantId"], "ten_1");
+
+        let (status, json) = send_with_tenant(
+            &app,
+            request(
+                "POST",
+                "/v1/live-validations/kill-switches",
+                Some(r#"{"scope":"tenant","tenantId":"ten_other","enabled":true,"reason":"x"}"#),
+            ),
+            admin_context(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "another tenant's switch: {json}"
+        );
+        let (_, json) = send_with_tenant(
+            &app,
+            request("GET", "/v1/live-validations/kill-switches", None),
+            admin_context(),
+        )
+        .await;
+        assert_eq!(json["items"], serde_json::json!([]), "nothing was set");
     }
 
     // Port of the reconcile legs of Go TestLiveValidationLedgerReconciliationRetentionAndComparisonRoutes.
