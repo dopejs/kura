@@ -226,7 +226,7 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       between turns with no config change to explain it; the operator
       applies it through the token budgets instead. No built-in model-window
       table, deliberately.
-- [ ] **2.3 Prompt caching (G2).** Keep the system frame + memory bootstrap a
+- [x] **2.3 Prompt caching (G2).** Keep the system frame + memory bootstrap a
       byte-stable prefix across rounds; emit the provider's cache marker where
       supported. Verified by 2.1 showing cache-read tokens on round ≥ 2.
       *Usage plumbing done 2026-10-30.* Found on the way: none of the three
@@ -278,9 +278,12 @@ Rollback: unset `KURA_HOSTING`; provisioning rows are ordinary tenant rows.
       - In a minimal assembly that frame is about 250 tokens, under
         Anthropic's 1,024-token minimum, so the frame breakpoint caches
         nothing until tools, MCP servers and skills make the frame larger.
-      **Not verified live:** that Anthropic accepts the markers and reports
-      `cacheReadInputTokens` on round ≥ 2 needs any real Messages endpoint;
-      it is the operator's to run. **Open:** recalled memory sits ahead of the
+      **Not verified live, by decision (user, 2026-11-02):** that
+      Anthropic accepts the markers and reports `cacheReadInputTokens` on
+      round ≥ 2 is not run. The offline test covers Kura's side; the marker
+      format is checked against the documented shape. If a deployment
+      reports no cache reads, the dispatch span's `cacheReadInputTokens` is
+      where to look first. **Open:** recalled memory sits ahead of the
       history and changes with each query, so across turns only the frame is
       reused; moving recall after the history would let the history cache
       too, but changes what the model sees and needs its own evaluation.
