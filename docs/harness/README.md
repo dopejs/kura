@@ -12,6 +12,7 @@ This module defines the execution substrate above the daemon core: skills, memor
 - [shared-hosting.md](shared-hosting.md) — one daemon, many tenants: design and milestones
 - [turn-admission.md](turn-admission.md) — per-tenant turn limits and the fair queue (M4 / 4.1)
 - [tenant-browser.md](tenant-browser.md) — a throwaway browser per tenant behind the browser.* chat tools (3.3)
+- [work-items.md](work-items.md) — design: long-lived work items, proactive rules, attention queue, ordered outbound (adapted from dsh-superagent)
 
 ## Suggested Reading Order
 
