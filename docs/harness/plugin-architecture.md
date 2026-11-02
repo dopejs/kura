@@ -174,6 +174,15 @@ the provider received. `toolOutputFraming: false` (`entries.chat.config`)
 sends results verbatim. This is posture, not a boundary: what stops a tool
 from doing harm is authorization and approval.
 
+Turn admission (agent-runtime-program.md 4.1, `turn-admission.md`): every
+turn takes a slot in `chat/src/admission.rs` before it runs. Over a
+concurrency cap it waits in a queue that hands free slots to tenants in
+round-robin. Over the turn rate or token budget it is refused with 429 and
+`Retry-After`. The limits live in `entries.chat.config.limits`:
+`globalConcurrency`, `tenantConcurrency`, `turnsPerMinute`,
+`tokensPerMinute`, `tenantQueueDepth`, `globalQueueDepth` and
+`queueTimeoutSeconds`. `enabled: false` removes the gate.
+
 Structured output (agent-runtime-program.md 2.8, G7): `POST /v1/chat/query`
 takes `responseFormat: {type: "json_schema", name, schema}`. The schema is
 checked on arrival against the subset `kura_llm::ResponseFormat` can enforce

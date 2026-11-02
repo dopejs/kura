@@ -14,6 +14,7 @@
 //! supports both the Go callback-emitter shape ([`Service::stream`]) and a
 //! `std::thread` + `std::sync::mpsc` variant ([`Service::stream_channel`]).
 
+mod admission;
 mod cancel;
 mod error;
 mod events;
@@ -25,6 +26,9 @@ mod steer;
 mod store;
 mod types;
 
+pub use admission::{
+    Admission, Admitted, QUEUE_RETRY_AFTER, ThrottleReason, Throttled, TurnLimits, TurnPermit,
+};
 pub use cancel::{CancellationToken, KillLink};
 pub use error::ChatError;
 pub use events::{

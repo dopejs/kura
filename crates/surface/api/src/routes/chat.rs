@@ -274,10 +274,27 @@ pub async fn handle_chat_query_stream(
     // emit callback runs inside the service's own runtime, where tokio's
     // blocking_send is forbidden). A pump thread forwards the chunk frames as
     // SSE events onto the tokio channel the response stream reads from.
-    let (chunks, handle) = match chat_service.stream_channel(input, CancellationToken::new(), 32) {
-        Ok(pair) => pair,
-        Err(err) => return llm_prepare_error(&err).into_response(),
+    // Admitted before the response starts, so a refusal is a 429 and not a
+    // 200 whose stream fails. Admission may wait for a slot, so it runs off
+    // the worker.
+    let admit = {
+        let service = chat_service.clone();
+        let tenant_id = input.tenant_id.clone();
+        tokio::task::spawn_blocking(move || service.admit(&tenant_id)).await
     };
+    let admitted = match admit {
+        Ok(Ok(admitted)) => admitted,
+        Ok(Err(err)) => return llm_prepare_error(&err).into_response(),
+        Err(err) => {
+            return ApiError::Internal(format!("chat admission task failed: {err}"))
+                .into_response();
+        }
+    };
+    let (chunks, handle) =
+        match chat_service.stream_channel_admitted(admitted, input, CancellationToken::new(), 32) {
+            Ok(pair) => pair,
+            Err(err) => return llm_prepare_error(&err).into_response(),
+        };
     let (sender, receiver) = tokio::sync::mpsc::channel::<Result<SseEvent, Infallible>>(32);
     std::thread::spawn(move || {
         pump_stream(chunks, handle, sender, query_text);
@@ -582,6 +599,13 @@ fn llm_prepare_status_code(err: &ChatError) -> StatusCode {
 /// A plugin hook veto (pluginization phase 2) is a policy decision, not a
 /// server fault: 403.
 fn llm_prepare_error(err: &ChatError) -> ApiError {
+    if let ChatError::Throttled(throttled) = err {
+        return ApiError::TooManyRequests {
+            code: throttled.reason.code(),
+            message: err.to_string(),
+            retry_after_secs: throttled.retry_after.as_secs_f64().ceil() as u64,
+        };
+    }
     if matches!(err, ChatError::HookVetoed { .. }) {
         return ApiError::Forbidden(err.to_string());
     }
@@ -1135,5 +1159,105 @@ mod tests {
             assert_eq!(response.status(), status);
             assert_eq!(error.code(), code);
         }
+    }
+
+    /// A chat service whose tenants may start one turn a minute.
+    fn rate_limited_service() -> Arc<ChatService> {
+        let mut service = ChatService::new_service(
+            Arc::new(Dispatcher::new()),
+            None,
+            None,
+            Some(Bus::new()),
+            None,
+        );
+        service.set_turn_limits(kura_chat::TurnLimits {
+            global_concurrency: 0,
+            tenant_concurrency: 0,
+            turns_per_minute: 1,
+            tokens_per_minute: 0,
+            tenant_queue_depth: 0,
+            global_queue_depth: 0,
+            queue_timeout: std::time::Duration::from_secs(5),
+            exempt_tenants: Vec::new(),
+        });
+        Arc::new(service)
+    }
+
+    fn tenant_request(uri: &str, tenant_id: &str) -> HttpRequest<Body> {
+        let mut req = request(
+            "POST",
+            uri,
+            Some(r#"{"provider":"echo","model":"echo-model","query":"hello"}"#),
+        );
+        req.extensions_mut()
+            .insert(TenantContext(kura_identity::TenantContext {
+                tenant_id: tenant_id.to_string(),
+                ..Default::default()
+            }));
+        req
+    }
+
+    #[tokio::test]
+    async fn a_turn_over_the_tenant_rate_is_429_with_retry_after() {
+        let app = crate::routes::router(state_with(Some(rate_limited_service())));
+        let first = app
+            .clone()
+            .oneshot(tenant_request("/v1/chat/query", "ten_a"))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = app
+            .clone()
+            .oneshot(tenant_request("/v1/chat/query", "ten_a"))
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry_after: u64 = second.headers()[axum::http::header::RETRY_AFTER]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            (59..=60).contains(&retry_after),
+            "retry after {retry_after}"
+        );
+        let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "turn_rate_limited");
+
+        // Another tenant's rate is its own.
+        let other = app
+            .oneshot(tenant_request("/v1/chat/query", "ten_b"))
+            .await
+            .unwrap();
+        assert_eq!(other.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_refused_stream_is_a_429_and_not_a_failed_stream() {
+        let app = crate::routes::router(state_with(Some(rate_limited_service())));
+        let first = app
+            .clone()
+            .oneshot(tenant_request("/v1/chat/query/stream", "ten_a"))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        // Drain it so the turn finishes.
+        let _ = to_bytes(first.into_body(), usize::MAX).await.unwrap();
+
+        let second = app
+            .oneshot(tenant_request("/v1/chat/query/stream", "ten_a"))
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(
+            second
+                .headers()
+                .contains_key(axum::http::header::RETRY_AFTER)
+        );
+        let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "turn_rate_limited");
     }
 }

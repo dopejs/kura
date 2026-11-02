@@ -22,6 +22,12 @@
 //! timings are printed, since wall-clock thresholds on shared CI hosts are
 //! not a signal. Scale with `KURA_LOAD_TENANTS`, `KURA_LOAD_SESSIONS` (per
 //! tenant) and `KURA_LOAD_ROUNDS`.
+//!
+//! Turns pass the admission gate (4.1) with a daemon-wide cap of
+//! `KURA_LOAD_GLOBAL_TURNS` (default 4, well under the load), so the queue is
+//! exercised: every turn and child still has to complete, none may be
+//! refused, and some must have waited. `KURA_LOAD_GLOBAL_TURNS=off` removes
+//! the gate, which is how the 4.3 numbers were taken.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -39,6 +45,22 @@ const SWARM_GOALS_PER_RUN: usize = 3;
 /// What the fake model takes to answer, so turns overlap as they would
 /// against a real provider instead of finishing back to back.
 const MODEL_LATENCY: Duration = Duration::from_millis(25);
+
+/// `entries.chat.config.limits` for the run, and whether turns must queue.
+fn turn_limits() -> (serde_json::Value, bool) {
+    if std::env::var("KURA_LOAD_GLOBAL_TURNS").as_deref() == Ok("off") {
+        return (serde_json::json!({ "enabled": false }), false);
+    }
+    let global = scale("KURA_LOAD_GLOBAL_TURNS", 4);
+    (serde_json::json!({ "globalConcurrency": global }), true)
+}
+
+fn admissions(outcome: &str) -> u64 {
+    kura_telemetry::metrics::registry().counter_value(
+        kura_telemetry::metrics::CHAT_TURN_ADMISSIONS_TOTAL,
+        &[("outcome", outcome)],
+    )
+}
 
 fn scale(name: &str, default: usize) -> usize {
     std::env::var(name)
@@ -148,11 +170,14 @@ fn test_config(model_url: &str) -> (tempfile::TempDir, Config) {
     };
     std::fs::write(
         dir.path().join(kura_plugin::PROFILE_FILE_NAME),
-        serde_json::json!({ "entries": { "swarm": { "config": {
-            "enabled": true,
-            "maxChildrenPerRun": SWARM_GOALS_PER_RUN,
-            "maxConcurrentChildren": SWARM_GOALS_PER_RUN
-        } } } })
+        serde_json::json!({ "entries": {
+            "swarm": { "config": {
+                "enabled": true,
+                "maxChildrenPerRun": SWARM_GOALS_PER_RUN,
+                "maxConcurrentChildren": SWARM_GOALS_PER_RUN
+            } },
+            "chat": { "config": { "limits": turn_limits().0 } }
+        } })
         .to_string(),
     )
     .expect("write plugin profile");
@@ -340,6 +365,14 @@ async fn tenants_run_parallel_tool_turns_and_swarms_without_failing_writes() {
         kura_telemetry::metrics::CHAT_TOOL_CALLS_TOTAL,
         &[("name", "memory.lookup"), ("outcome", "ok")],
     );
+    let refusals = [
+        "turn_rate_limited",
+        "token_budget_exhausted",
+        "turn_queue_full",
+        "turn_queue_timeout",
+    ];
+    let refused_before: u64 = refusals.iter().map(|o| admissions(o)).sum();
+    let queued_before = admissions("queued");
 
     let stop = Arc::new(AtomicBool::new(false));
     let writer_probe = spawn_probe(stop.clone(), Duration::from_millis(2), move || {
@@ -467,6 +500,9 @@ async fn tenants_run_parallel_tool_turns_and_swarms_without_failing_writes() {
     eprintln!("API writer mutex wait (probe): {:?}", spread(writer_waits));
     eprintln!("own-connection write (probe): {:?}", spread(sqlite_writes));
     eprintln!("pool: {stats:?}");
+    let queued = admissions("queued") - queued_before;
+    let refused = refusals.iter().map(|o| admissions(o)).sum::<u64>() - refused_before;
+    eprintln!("admission: {queued} turns waited for a slot, {refused} refused");
 
     for run in &finished {
         assert_eq!(run.status, kura_swarm::RunStatus::Completed, "{run:?}");
@@ -483,4 +519,8 @@ async fn tenants_run_parallel_tool_turns_and_swarms_without_failing_writes() {
         "a write on its own connection failed under load: {sqlite_errors:?}"
     );
     assert_eq!(stats.reads_via_writer, 0, "reads stayed off the writer");
+    assert_eq!(refused, 0, "no turn was refused at the gate");
+    if turn_limits().1 {
+        assert!(queued > 0, "the load exceeds the cap, so turns queued");
+    }
 }

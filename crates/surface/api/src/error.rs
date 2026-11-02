@@ -30,6 +30,14 @@ pub enum ApiError {
     BadGateway(String),
     #[error("tenant migration in progress")]
     TenantMigrationInProgress,
+    /// 429 with `Retry-After`: the caller may try again after that many
+    /// seconds. `code` names the limit that refused it.
+    #[error("{message}")]
+    TooManyRequests {
+        code: &'static str,
+        message: String,
+        retry_after_secs: u64,
+    },
 }
 
 impl ApiError {
@@ -45,6 +53,7 @@ impl ApiError {
             Self::Internal(_) => "internal",
             Self::BadGateway(_) => "bad_gateway",
             Self::TenantMigrationInProgress => CODE_TENANT_MIGRATION_IN_PROGRESS,
+            Self::TooManyRequests { code, .. } => code,
         }
     }
 
@@ -60,6 +69,7 @@ impl ApiError {
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::BadGateway(_) => StatusCode::BAD_GATEWAY,
             Self::TenantMigrationInProgress => StatusCode::SERVICE_UNAVAILABLE,
+            Self::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
         }
     }
 
@@ -106,6 +116,16 @@ impl IntoResponse for ApiError {
             message: self.to_string(),
             error: self.to_string(),
         };
-        (self.status(), axum::Json(body)).into_response()
+        let mut response = (self.status(), axum::Json(body)).into_response();
+        if let Self::TooManyRequests {
+            retry_after_secs, ..
+        } = self
+        {
+            response.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from(retry_after_secs.max(1)),
+            );
+        }
+        response
     }
 }

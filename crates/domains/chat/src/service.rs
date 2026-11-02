@@ -45,6 +45,7 @@ use serde_json::{Map, Value};
 
 use kura_telemetry::trace::{SpanStatus, TurnRecorder, TurnStart};
 
+use crate::admission::Admitted;
 use crate::cancel::CancellationToken;
 use crate::error::ChatError;
 use crate::events::{
@@ -60,6 +61,13 @@ use crate::types::{
 /// Go `llm.OpenAICompatibleProviderName`.
 pub const OPENAI_COMPATIBLE_PROVIDER_NAME: &str = "openai_compatible";
 
+/// What the channel streaming variants hand back: the chunks, and the turn's
+/// outcome on the thread that runs it.
+type StreamChannel = (
+    mpsc::Receiver<StreamChunk>,
+    JoinHandle<Result<QueryExecution, ChatError>>,
+);
+
 impl Service {
     // ------------------------------------------------------------------
     // Query / stream entry points
@@ -69,11 +77,14 @@ impl Service {
     /// persisting the dispatch lifecycle and continuity evidence. Blocking.
     ///
     /// Every turn is traced, however it ends; the result carries the turn id.
+    /// The turn is admitted first (4.1) and may wait for a slot; a turn
+    /// refused there is [`ChatError::Throttled`] and is not traced.
     pub fn query(
         &self,
         input: QueryInput,
         cancel: &CancellationToken,
     ) -> Result<QueryExecution, ChatError> {
+        let _admitted = self.admit(&input.tenant_id)?;
         let trace = self.start_turn_trace(&input, "chat.query");
         let outcome = self.query_traced(input, cancel, &trace);
         finish_turn_trace(&trace, outcome)
@@ -239,7 +250,21 @@ impl Service {
 
     /// Go `Service.Stream`: prepares and executes a streaming dispatch,
     /// forwarding each chunk through `emit` (Go's callback emitter). Blocking.
+    /// Admitted like [`Service::query`].
     pub fn stream<E>(
+        &self,
+        input: QueryInput,
+        cancel: &CancellationToken,
+        emit: Option<E>,
+    ) -> Result<QueryExecution, ChatError>
+    where
+        E: FnMut(StreamChunk) -> Result<(), ChatError> + Send,
+    {
+        let _admitted = self.admit(&input.tenant_id)?;
+        self.stream_admitted(input, cancel, emit)
+    }
+
+    fn stream_admitted<E>(
         &self,
         input: QueryInput,
         cancel: &CancellationToken,
@@ -322,7 +347,12 @@ impl Service {
         let dispatch_id = dispatch.dispatch_id.clone();
         let dispatch_provider = dispatch.provider.clone();
         let dispatch_model = dispatch.model.clone();
-        persist_dispatch(self.store.as_deref(), &input.tenant_id, &dispatch)?;
+        persist_dispatch(
+            self.store.as_deref(),
+            self.admission.as_deref(),
+            &input.tenant_id,
+            &dispatch,
+        )?;
         if has_active_profile {
             self.record_active_profile_projection(
                 &input,
@@ -392,7 +422,12 @@ impl Service {
         };
         crate::round::record_dispatch_span(trace, dispatch_span, &final_dispatch);
         crate::round::close_like_dispatch(trace, round_span, &final_dispatch);
-        persist_dispatch(self.store.as_deref(), &input.tenant_id, &final_dispatch)?;
+        persist_dispatch(
+            self.store.as_deref(),
+            self.admission.as_deref(),
+            &input.tenant_id,
+            &final_dispatch,
+        )?;
         publish_dispatch_event(
             self.event_bus.as_ref(),
             self.store.as_deref(),
@@ -422,25 +457,47 @@ impl Service {
     /// Thread + `std::sync::mpsc` streaming variant: runs the same pipeline as
     /// [`Service::stream`] on a dedicated `std::thread`, forwarding chunks over
     /// a bounded sync channel. Dropping the receiver aborts the stream (the
-    /// emit error surfaces on the join handle).
+    /// emit error surfaces on the join handle). The turn is admitted on that
+    /// thread; a refusal is the join handle's error.
     pub fn stream_channel(
         &self,
         input: QueryInput,
         cancel: CancellationToken,
         capacity: usize,
-    ) -> Result<
-        (
-            mpsc::Receiver<StreamChunk>,
-            JoinHandle<Result<QueryExecution, ChatError>>,
-        ),
-        ChatError,
-    > {
+    ) -> Result<StreamChannel, ChatError> {
+        self.spawn_stream(None, input, cancel, capacity)
+    }
+
+    /// [`Service::stream_channel`] for a turn already admitted with
+    /// [`Service::admit`], so a caller can answer a refusal before it starts
+    /// streaming (the SSE route answers 429 rather than a failed stream).
+    pub fn stream_channel_admitted(
+        &self,
+        admitted: Admitted,
+        input: QueryInput,
+        cancel: CancellationToken,
+        capacity: usize,
+    ) -> Result<StreamChannel, ChatError> {
+        self.spawn_stream(Some(admitted), input, cancel, capacity)
+    }
+
+    fn spawn_stream(
+        &self,
+        admitted: Option<Admitted>,
+        input: QueryInput,
+        cancel: CancellationToken,
+        capacity: usize,
+    ) -> Result<StreamChannel, ChatError> {
         let service = self.clone();
         let (tx, rx) = mpsc::sync_channel(capacity.max(1));
         let handle = std::thread::Builder::new()
             .name("kura-chat-stream".to_string())
             .spawn(move || {
-                service.stream(
+                let _admitted = match admitted {
+                    Some(admitted) => admitted,
+                    None => service.admit(&input.tenant_id)?,
+                };
+                service.stream_admitted(
                     input,
                     &cancel,
                     Some(move |chunk| {
@@ -451,6 +508,21 @@ impl Service {
             })
             .map_err(|err| ChatError::Runtime(format!("spawn chat stream thread: {err}")))?;
         Ok((rx, handle))
+    }
+
+    /// Admits a turn for `tenant_id` (4.1): waits for a slot when the
+    /// concurrency caps are reached, and refuses at once over the turn rate
+    /// or token budget. Without a gate every turn is admitted. Blocking.
+    pub fn admit(&self, tenant_id: &str) -> Result<Admitted, ChatError> {
+        match &self.admission {
+            Some(admission) => admission
+                .admit(tenant_id)
+                .map(|permit| Admitted {
+                    _permit: Some(permit),
+                })
+                .map_err(ChatError::Throttled),
+            None => Ok(Admitted { _permit: None }),
+        }
     }
 
     /// Go's `s == nil || s.dispatcher == nil` guard: unreachable in Rust
@@ -643,7 +715,12 @@ impl Service {
         context: &crate::round::RoundContext,
         dispatch: &Dispatch,
     ) -> Result<(), ChatError> {
-        persist_dispatch(self.store.as_deref(), &context.input.tenant_id, dispatch)?;
+        persist_dispatch(
+            self.store.as_deref(),
+            self.admission.as_deref(),
+            &context.input.tenant_id,
+            dispatch,
+        )?;
         publish_dispatch_event(
             self.event_bus.as_ref(),
             self.store.as_deref(),
@@ -661,7 +738,12 @@ impl Service {
         context: &crate::round::RoundContext,
         dispatch: &Dispatch,
     ) -> Result<(), ChatError> {
-        persist_dispatch(self.store.as_deref(), &context.input.tenant_id, dispatch)?;
+        persist_dispatch(
+            self.store.as_deref(),
+            self.admission.as_deref(),
+            &context.input.tenant_id,
+            dispatch,
+        )?;
         publish_dispatch_event(
             self.event_bus.as_ref(),
             self.store.as_deref(),
@@ -1708,12 +1790,21 @@ pub fn response_continuity_source_event_key(source_event_key: &str) -> String {
 }
 
 /// Go `persistDispatch`.
+///
+/// A settled dispatch's tokens are charged to the tenant's token budget
+/// here, once: every dispatch is persisted settled exactly once.
 fn persist_dispatch(
     store: Option<&dyn ChatStore>,
+    admission: Option<&crate::admission::Admission>,
     tenant_id: &str,
     dispatch: &Dispatch,
 ) -> Result<(), ChatError> {
     record_token_spend(tenant_id, dispatch);
+    if let Some(admission) = admission
+        && is_settled(dispatch)
+    {
+        admission.charge_tokens(tenant_id, dispatch.usage.total_tokens);
+    }
     let Some(store) = store else {
         return Ok(());
     };
@@ -1727,14 +1818,19 @@ fn persist_dispatch(
         .map_err(ChatError::Store)
 }
 
+/// Whether a dispatch has ended in a state that carries its final usage.
+fn is_settled(dispatch: &Dispatch) -> bool {
+    matches!(
+        dispatch.status,
+        DispatchStatus::Completed | DispatchStatus::PartialFailed | DispatchStatus::Failed
+    )
+}
+
 /// Stage 10.3: token spend by tenant and provider. The dispatcher cannot
 /// label by tenant (it does not know one); the chat service does. Called on
 /// every persist; a not-yet-settled dispatch has zero usage and adds nothing.
 fn record_token_spend(tenant_id: &str, dispatch: &Dispatch) {
-    if !matches!(
-        dispatch.status,
-        DispatchStatus::Completed | DispatchStatus::PartialFailed | DispatchStatus::Failed
-    ) {
+    if !is_settled(dispatch) {
         return;
     }
     let metrics = kura_telemetry::metrics::registry();

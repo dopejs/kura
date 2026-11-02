@@ -80,6 +80,10 @@ pub enum ChatError {
     /// after being asked to correct it.
     #[error("the reply does not conform to the response format: {0}")]
     StructuredOutputInvalid(String),
+    /// The turn was not admitted (4.1): over the tenant's turn rate or token
+    /// budget, or no slot freed. Nothing ran.
+    #[error("turn not admitted: {0}")]
+    Throttled(crate::admission::Throttled),
 }
 
 impl ChatError {
@@ -105,6 +109,7 @@ impl ChatError {
             ChatError::HookPayload { .. } => "hook_payload",
             ChatError::InvalidResponseFormat(_) => "invalid_response_format",
             ChatError::StructuredOutputInvalid(_) => "structured_output_invalid",
+            ChatError::Throttled(throttled) => throttled.reason.code(),
         }
     }
 

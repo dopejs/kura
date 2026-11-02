@@ -223,6 +223,9 @@ pub struct Service {
     /// Whether tool results reach the model framed as untrusted data
     /// (2.8, G9). On by default; off is the rollback.
     pub(crate) frame_tool_output: bool,
+    /// The turn admission gate (4.1). Absent = every turn runs at once, as
+    /// before.
+    pub(crate) admission: Option<Arc<crate::admission::Admission>>,
 }
 
 /// Rounds allowed in a single turn before the turn is failed.
@@ -275,6 +278,7 @@ impl Service {
             active_turns: Arc::default(),
             turn_resume: true,
             frame_tool_output: true,
+            admission: None,
         }
     }
 
@@ -317,6 +321,17 @@ impl Service {
     /// Off, results reach the model exactly as the tool returned them.
     pub fn set_frame_tool_output(&mut self, on: bool) {
         self.frame_tool_output = on;
+    }
+
+    /// Puts every turn behind an admission gate with these limits (4.1).
+    pub fn set_turn_limits(&mut self, limits: crate::admission::TurnLimits) {
+        self.admission = Some(crate::admission::Admission::new(limits));
+    }
+
+    /// The admission gate, when one is set.
+    #[must_use]
+    pub fn admission(&self) -> Option<&Arc<crate::admission::Admission>> {
+        self.admission.as_ref()
     }
 
     /// Attaches the plugin hook bus; the `chat/turn-start`,

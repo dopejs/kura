@@ -846,6 +846,19 @@ fn build_chat(asm: &mut Assembly) -> Result<(), AppError> {
     if config.tool_output_framing == Some(false) {
         chat.set_frame_tool_output(false);
     }
+    if let Some(limits) = turn_limits(&config.limits, &asm.state.hosting)? {
+        eprintln!(
+            "[kura] turn admission: global={} tenant={} turns/min={} tokens/min={} queue={}/{} timeout={}s",
+            limits.global_concurrency,
+            limits.tenant_concurrency,
+            limits.turns_per_minute,
+            limits.tokens_per_minute,
+            limits.tenant_queue_depth,
+            limits.global_queue_depth,
+            limits.queue_timeout.as_secs()
+        );
+        chat.set_turn_limits(limits);
+    }
     asm.state.chat = Some(Arc::new(chat));
     Ok(())
 }
@@ -865,6 +878,138 @@ struct ChatPluginConfig {
     /// Frame tool results as untrusted data for the model (2.8, G9);
     /// absent = on, `false` turns it off.
     tool_output_framing: Option<bool>,
+    /// Turn admission (4.1).
+    limits: TurnLimitsConfig,
+}
+
+/// `entries.chat.config.limits`: per-tenant turn limits and the fair queue
+/// (`docs/harness/turn-admission.md` §3). An absent key takes the hosting
+/// mode's default; `0` is unbounded. Unknown keys fail the boot: a misspelt
+/// limit would otherwise be silently unenforced.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+struct TurnLimitsConfig {
+    /// `false` removes the gate; the rollback.
+    enabled: Option<bool>,
+    global_concurrency: Option<usize>,
+    tenant_concurrency: Option<usize>,
+    turns_per_minute: Option<u64>,
+    tokens_per_minute: Option<u64>,
+    tenant_queue_depth: Option<usize>,
+    global_queue_depth: Option<usize>,
+    queue_timeout_seconds: Option<u64>,
+}
+
+/// Defaults (turn-admission.md §3). Global: 64 sits between the 32 and 128
+/// sessions measured in 4.3; 64 running plus 256 waiting stays under tokio's
+/// 512 blocking threads. Shared, per tenant: a 4-child swarm plus
+/// interactive turns beside it.
+const DEFAULT_GLOBAL_TURNS: usize = 64;
+const DEFAULT_GLOBAL_QUEUE_DEPTH: usize = 256;
+const DEFAULT_QUEUE_TIMEOUT_SECS: u64 = 120;
+const SHARED_TENANT_TURNS: usize = 8;
+const SHARED_TURNS_PER_MINUTE: u64 = 30;
+const SHARED_TENANT_QUEUE_DEPTH: usize = 16;
+
+/// The limits for this hosting mode, or `None` when the gate is off.
+fn turn_limits(
+    config: &TurnLimitsConfig,
+    hosting: &kura_api::hosting::Hosting,
+) -> Result<Option<kura_chat::TurnLimits>, AppError> {
+    if config.enabled == Some(false) {
+        return Ok(None);
+    }
+    let (tenant_turns, turns_per_minute, tenant_queue, exempt_tenants) = match hosting {
+        kura_api::hosting::Hosting::Shared { operator_tenant_id } => (
+            SHARED_TENANT_TURNS,
+            SHARED_TURNS_PER_MINUTE,
+            SHARED_TENANT_QUEUE_DEPTH,
+            vec![operator_tenant_id.clone()],
+        ),
+        kura_api::hosting::Hosting::Single => (0, 0, 0, Vec::new()),
+    };
+    let queue_timeout_secs = config
+        .queue_timeout_seconds
+        .unwrap_or(DEFAULT_QUEUE_TIMEOUT_SECS);
+    if queue_timeout_secs == 0 {
+        return Err(AppError::PluginProfile(
+            "chat config: limits.queueTimeoutSeconds must be at least 1".to_string(),
+        ));
+    }
+    Ok(Some(kura_chat::TurnLimits {
+        global_concurrency: config.global_concurrency.unwrap_or(DEFAULT_GLOBAL_TURNS),
+        tenant_concurrency: config.tenant_concurrency.unwrap_or(tenant_turns),
+        turns_per_minute: config.turns_per_minute.unwrap_or(turns_per_minute),
+        tokens_per_minute: config.tokens_per_minute.unwrap_or(0),
+        tenant_queue_depth: config.tenant_queue_depth.unwrap_or(tenant_queue),
+        global_queue_depth: config
+            .global_queue_depth
+            .unwrap_or(DEFAULT_GLOBAL_QUEUE_DEPTH),
+        queue_timeout: Duration::from_secs(queue_timeout_secs),
+        exempt_tenants,
+    }))
+}
+
+#[cfg(test)]
+mod turn_limits_tests {
+    use super::*;
+    use kura_api::hosting::Hosting;
+
+    fn parse(json: serde_json::Value) -> Result<TurnLimitsConfig, serde_json::Error> {
+        serde_json::from_value(json)
+    }
+
+    #[test]
+    fn single_mode_caps_the_daemon_and_leaves_tenants_unbounded() {
+        let limits = turn_limits(&TurnLimitsConfig::default(), &Hosting::Single)
+            .unwrap()
+            .unwrap();
+        assert_eq!(limits.global_concurrency, 64);
+        assert_eq!(limits.global_queue_depth, 256);
+        assert_eq!(limits.tenant_concurrency, 0);
+        assert_eq!(limits.turns_per_minute, 0);
+        assert_eq!(limits.tokens_per_minute, 0);
+        assert_eq!(limits.queue_timeout, Duration::from_secs(120));
+        assert!(limits.exempt_tenants.is_empty());
+    }
+
+    #[test]
+    fn shared_mode_limits_tenants_and_exempts_the_operator() {
+        let hosting = Hosting::Shared {
+            operator_tenant_id: "ten_op".to_string(),
+        };
+        let limits = turn_limits(&TurnLimitsConfig::default(), &hosting)
+            .unwrap()
+            .unwrap();
+        assert_eq!(limits.tenant_concurrency, 8);
+        assert_eq!(limits.turns_per_minute, 30);
+        assert_eq!(limits.tenant_queue_depth, 16);
+        assert_eq!(limits.tokens_per_minute, 0);
+        assert_eq!(limits.exempt_tenants, ["ten_op"]);
+    }
+
+    #[test]
+    fn configured_values_win_and_disabled_removes_the_gate() {
+        let config = parse(serde_json::json!({
+            "tenantConcurrency": 2,
+            "tokensPerMinute": 50000,
+            "queueTimeoutSeconds": 10
+        }))
+        .unwrap();
+        let limits = turn_limits(&config, &Hosting::Single).unwrap().unwrap();
+        assert_eq!(limits.tenant_concurrency, 2);
+        assert_eq!(limits.tokens_per_minute, 50_000);
+        assert_eq!(limits.queue_timeout, Duration::from_secs(10));
+        let off = parse(serde_json::json!({"enabled": false})).unwrap();
+        assert!(turn_limits(&off, &Hosting::Single).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_misspelt_key_or_a_zero_timeout_is_refused() {
+        assert!(parse(serde_json::json!({"tenantConcurency": 2})).is_err());
+        let zero = parse(serde_json::json!({"queueTimeoutSeconds": 0})).unwrap();
+        assert!(turn_limits(&zero, &Hosting::Single).is_err());
+    }
 }
 
 /// The default context-assembly hook: injects the tenant's Ready L3/L2

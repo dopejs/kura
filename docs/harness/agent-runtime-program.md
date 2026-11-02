@@ -402,7 +402,39 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
 
 ## Stage 4 — Shared Hosting M4: Fairness and Scale
 
-- [ ] **4.1** Per-tenant rate, concurrency and token limits; fair run queue.
+- [x] **4.1** Per-tenant rate, concurrency and token limits; fair run queue.
+      *Done 2026-11-02*, design in `turn-admission.md`. Every turn takes a
+      permit in `kura_chat::Service` (`admission.rs`) before it runs, and
+      holds it to the end. This covers chat query/stream, IM, swarm
+      children, activation and skill proposals.
+      - *Concurrency:* over the global or per-tenant cap, the turn waits
+        with a bounded queue and wait. A freed slot goes to the next
+        tenant in round-robin, and one tenant's turns run in arrival
+        order.
+      - *Turn rate and token budget:* refused at once with 429 and
+        `Retry-After`. Tokens are charged from provider-reported usage
+        when a dispatch settles.
+      - *Defaults:*
+        - global 64 running and 256 waiting, sized from the 4.3 numbers
+          and the 512 blocking threads;
+        - shared mode per tenant: 8 turns, 30 turns a minute, 16 waiting;
+        - token budget off: tenants dispatch with their own key, so it
+          protects them from a runaway loop rather than the platform's
+          spend;
+        - the operator and the daemon's own work are exempt from the
+          per-tenant limits.
+      - *Config:* `entries.chat.config.limits`. `enabled: false` is the
+        rollback. An unknown key fails the boot.
+      - *Stream route:* now admits before it answers, so a refusal is a
+        429, not a 200 followed by a failed stream.
+      - *Metrics:* `kura_chat_turn_admissions_total{outcome}` and
+        `kura_chat_turn_queue_wait_seconds`.
+      - *Not covered:*
+        - the limiter is per process;
+        - `POST /v1/llm/dispatches` is a raw dispatch outside the gate
+          (operator-only when shared);
+        - a future tool that runs a sub-turn from inside a turn would need
+          its parent's permit, or it waits out the timeout.
 - [x] **4.2** Indexed token lookup; no store write per request (the
       `upsert_access_token` in `protected`); reader pool on by default.
       *Done 2026-11-01:* the auth manager keeps a `token_hash -> token_id`
