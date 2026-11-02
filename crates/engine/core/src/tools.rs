@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use kura_model_provider::ToolSpec;
+use kura_protocol::ImagePart;
 
 #[derive(Debug)]
 pub struct ToolInvocation {
@@ -16,6 +17,8 @@ pub struct ToolInvocation {
 pub struct ToolOutput {
     pub content: String,
     pub success: bool,
+    /// Images beside the text, such as a screenshot. Most tools return none.
+    pub images: Vec<ImagePart>,
 }
 
 impl ToolOutput {
@@ -23,6 +26,7 @@ impl ToolOutput {
         Self {
             content: content.into(),
             success: true,
+            images: Vec::new(),
         }
     }
 
@@ -30,7 +34,14 @@ impl ToolOutput {
         Self {
             content: content.into(),
             success: false,
+            images: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_images(mut self, images: Vec<ImagePart>) -> Self {
+        self.images = images;
+        self
     }
 }
 

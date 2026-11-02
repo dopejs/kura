@@ -9,6 +9,7 @@
 //! reported back: whether it took effect is unknown, so the model is told
 //! so and decides. Repeating it would be the one wrong answer.
 
+use kura_protocol::ImagePart;
 use serde::{Deserialize, Serialize};
 
 /// What the model reads in place of a call with side effects that started
@@ -69,7 +70,14 @@ pub enum CallState {
     /// Started and has not reported back.
     Started,
     /// Reported back; this is what the model reads.
-    Settled { output: String, success: bool },
+    Settled {
+        output: String,
+        success: bool,
+        /// The result's images, by reference only (see `ImagePart`): a
+        /// resumed turn shows the model a note where each one was.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ImagePart>,
+    },
 }
 
 /// Receives the turn's checkpoint every time it changes.

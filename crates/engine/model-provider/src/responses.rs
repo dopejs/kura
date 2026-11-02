@@ -21,8 +21,9 @@ use async_stream::try_stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 
+use crate::tool_images;
 use crate::tool_names::{WireNames, restore_names};
-use kura_protocol::{ResponseItem, Role};
+use kura_protocol::{ImagePart, ResponseItem, Role};
 use serde_json::{Value, json};
 
 use crate::openai::{Credential, checked_bytes_stream, refuses_native_format};
@@ -302,11 +303,15 @@ fn build_request(model: &str, prompt: &Prompt, native_format: bool) -> Value {
                     "arguments": arguments,
                 }));
             }
-            ResponseItem::FunctionCallOutput { call_id, output } => {
+            ResponseItem::FunctionCallOutput {
+                call_id,
+                output,
+                images,
+            } => {
                 input.push(json!({
                     "type": "function_call_output",
                     "call_id": call_id,
-                    "output": output,
+                    "output": function_call_output(output, images),
                 }));
             }
         }
@@ -353,6 +358,23 @@ fn build_request(model: &str, prompt: &Prompt, native_format: bool) -> Value {
         });
     }
     body
+}
+
+/// A `function_call_output`'s `output`: the text alone, exactly as before
+/// images existed, or a list of `input_text` then `input_image` parts.
+fn function_call_output(output: &str, images: &[ImagePart]) -> Value {
+    if images.is_empty() {
+        return json!(output);
+    }
+    let text = tool_images::text_with_omissions(output, images);
+    let mut parts = Vec::new();
+    if !text.is_empty() {
+        parts.push(json!({"type": "input_text", "text": text}));
+    }
+    for image in tool_images::present(images) {
+        parts.push(json!({"type": "input_image", "image_url": tool_images::data_url(image)}));
+    }
+    Value::Array(parts)
 }
 
 #[cfg(test)]
@@ -679,6 +701,7 @@ mod tests {
             input: vec![ResponseItem::FunctionCallOutput {
                 call_id: "fc_1".into(),
                 output: "contents".into(),
+                images: Vec::new(),
             }],
             ..Prompt::default()
         };
@@ -699,5 +722,66 @@ mod tests {
         collect(&client, &user("hi")).await;
 
         assert!(seen.lock().expect("lock").contains("Bearer second"));
+    }
+
+    #[test]
+    fn tool_images_go_inside_the_function_call_output() {
+        let shot = crate::tool_images::image("image/jpeg", "SHOT");
+        let gone = ImagePart {
+            data: String::new(),
+            ..shot.clone()
+        };
+        let prompt = Prompt {
+            input: vec![
+                ResponseItem::FunctionCall {
+                    call_id: "c1".into(),
+                    name: "computer.click".into(),
+                    arguments: "{}".into(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "c1".into(),
+                    output: "clicked".into(),
+                    images: vec![gone],
+                },
+                ResponseItem::FunctionCall {
+                    call_id: "c2".into(),
+                    name: "computer.screenshot".into(),
+                    arguments: "{}".into(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "c2".into(),
+                    output: String::new(),
+                    images: vec![shot],
+                },
+                ResponseItem::FunctionCall {
+                    call_id: "c3".into(),
+                    name: "shell".into(),
+                    arguments: "{}".into(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "c3".into(),
+                    output: "plain".into(),
+                    images: Vec::new(),
+                },
+            ],
+            ..Prompt::default()
+        };
+        let body = build_request("m", &prompt, false);
+        let outputs: Vec<&Value> = body["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["type"] == "function_call_output")
+            .map(|item| &item["output"])
+            .collect();
+        assert_eq!(
+            *outputs[0],
+            json!([{"type": "input_text", "text": "clicked\n[image omitted]"}])
+        );
+        assert_eq!(
+            *outputs[1],
+            json!([{"type": "input_image", "image_url": "data:image/jpeg;base64,SHOT"}])
+        );
+        assert_eq!(*outputs[2], json!("plain"));
     }
 }

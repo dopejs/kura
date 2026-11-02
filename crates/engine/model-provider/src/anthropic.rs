@@ -20,8 +20,9 @@ use async_stream::try_stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 
+use crate::tool_images;
 use crate::tool_names::{WireNames, restore_names};
-use kura_protocol::{ResponseItem, Role};
+use kura_protocol::{ImagePart, ResponseItem, Role};
 use serde_json::{Value, json};
 
 use crate::openai::{Credential, checked_bytes_stream};
@@ -391,13 +392,17 @@ fn build_request(
                     }],
                 }));
             }
-            ResponseItem::FunctionCallOutput { call_id, output } => {
+            ResponseItem::FunctionCallOutput {
+                call_id,
+                output,
+                images,
+            } => {
                 messages.push(json!({
                     "role": "user",
                     "content": [{
                         "type": "tool_result",
                         "tool_use_id": call_id,
-                        "content": output,
+                        "content": tool_result_content(output, images),
                     }],
                 }));
             }
@@ -550,6 +555,31 @@ fn last_item<'a>(body: &'a mut Value, key: &str) -> Option<&'a mut Value> {
     body.get_mut(key)
         .and_then(Value::as_array_mut)
         .and_then(|items| items.last_mut())
+}
+
+/// A `tool_result`'s content: the text alone, exactly as before images
+/// existed, or a text block followed by the images. The text block is left
+/// out when empty, which the API refuses.
+fn tool_result_content(output: &str, images: &[ImagePart]) -> Value {
+    if images.is_empty() {
+        return json!(output);
+    }
+    let text = tool_images::text_with_omissions(output, images);
+    let mut blocks = Vec::new();
+    if !text.is_empty() {
+        blocks.push(json!({"type": "text", "text": text}));
+    }
+    for image in tool_images::present(images) {
+        blocks.push(json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": image.media_type,
+                "data": image.data,
+            },
+        }));
+    }
+    Value::Array(blocks)
 }
 
 #[cfg(test)]
@@ -752,6 +782,7 @@ mod tests {
         later.push(ResponseItem::FunctionCallOutput {
             call_id: "c".into(),
             output: "out".into(),
+            images: Vec::new(),
         });
         assert_eq!(history_boundary(&later), Some(2));
 
@@ -999,6 +1030,7 @@ mod tests {
             input: vec![ResponseItem::FunctionCallOutput {
                 call_id: "toolu_1".into(),
                 output: "contents".into(),
+                images: Vec::new(),
             }],
             ..Prompt::default()
         };
@@ -1020,5 +1052,72 @@ mod tests {
         collect(&client, &user("hi")).await;
 
         assert!(seen.lock().expect("lock").contains("Bearer second"));
+    }
+
+    #[test]
+    fn tool_images_go_inside_the_tool_result() {
+        let shot = crate::tool_images::image("image/jpeg", "SHOT");
+        let gone = ImagePart {
+            data: String::new(),
+            ..shot.clone()
+        };
+        let prompt = Prompt {
+            input: vec![
+                ResponseItem::FunctionCall {
+                    call_id: "c1".into(),
+                    name: "computer.click".into(),
+                    arguments: "{}".into(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "c1".into(),
+                    output: "clicked".into(),
+                    images: vec![gone],
+                },
+                ResponseItem::FunctionCall {
+                    call_id: "c2".into(),
+                    name: "computer.screenshot".into(),
+                    arguments: "{}".into(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "c2".into(),
+                    output: String::new(),
+                    images: vec![shot],
+                },
+                ResponseItem::FunctionCall {
+                    call_id: "c3".into(),
+                    name: "shell".into(),
+                    arguments: "{}".into(),
+                },
+                ResponseItem::FunctionCallOutput {
+                    call_id: "c3".into(),
+                    output: "plain".into(),
+                    images: Vec::new(),
+                },
+            ],
+            ..Prompt::default()
+        };
+        let body = build_request("m", &prompt, 10, false, false);
+        let results: Vec<&Value> = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|message| message["content"].as_array().unwrap())
+            .filter(|block| block["type"] == "tool_result")
+            .collect();
+        // An image that left memory reads as a note after the text.
+        assert_eq!(
+            results[0]["content"],
+            json!([{"type": "text", "text": "clicked\n[image omitted]"}])
+        );
+        // No text: no empty text block, which the API refuses.
+        assert_eq!(
+            results[1]["content"],
+            json!([{
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/jpeg", "data": "SHOT"},
+            }])
+        );
+        // A text-only result is the plain string it always was.
+        assert_eq!(results[2]["content"], json!("plain"));
     }
 }

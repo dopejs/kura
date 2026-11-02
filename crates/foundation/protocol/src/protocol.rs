@@ -42,7 +42,54 @@ pub enum ResponseItem {
     FunctionCallOutput {
         call_id: String,
         output: String,
+        /// Images the tool returned beside its text, such as a screenshot.
+        /// Omitted when empty, so a text-only result serializes as before.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ImagePart>,
     },
+}
+
+/// An image a tool returned, such as a screenshot.
+///
+/// `data` is held in memory only and never serialized. Every place that
+/// writes history down (turn checkpoints, dispatch records) would otherwise
+/// store each screenshot again on every round, and the screen may show what
+/// the user would not want kept there. The image itself lives in the
+/// artifact store; a stored copy keeps the reference. A part read back from
+/// storage has no data, and the wires show the model a note in its place:
+/// after a resume the screen has moved on anyway.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePart {
+    /// `image/png`, `image/jpeg`, …
+    pub media_type: String,
+    /// Base64, without a `data:` prefix. Empty once the image left memory.
+    #[serde(skip)]
+    pub data: String,
+    /// The artifact holding the image, when the tool saved one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<String>,
+}
+
+impl ImagePart {
+    /// What the model reads where an image is no longer available.
+    pub const OMITTED: &'static str = "[image omitted]";
+
+    /// Whether the bytes are still here to send.
+    #[must_use]
+    pub fn is_present(&self) -> bool {
+        !self.data.is_empty()
+    }
+
+    /// The part without its bytes, as storage keeps it.
+    #[must_use]
+    pub fn stored(&self) -> Self {
+        Self {
+            media_type: self.media_type.clone(),
+            data: String::new(),
+            artifact: self.artifact.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,5 +176,42 @@ mod tests {
         let json = serde_json::to_value(&item).unwrap();
         assert_eq!(json["type"], "function_call");
         assert_eq!(json["name"], "shell");
+    }
+
+    #[test]
+    fn a_tool_result_stores_its_images_by_reference_only() {
+        // Text only: the same JSON as before images existed, both ways.
+        let plain = r#"{"type":"function_call_output","call_id":"c","output":"o"}"#;
+        let item: ResponseItem = serde_json::from_str(plain).unwrap();
+        assert_eq!(
+            item,
+            ResponseItem::FunctionCallOutput {
+                call_id: "c".into(),
+                output: "o".into(),
+                images: Vec::new(),
+            }
+        );
+        assert_eq!(serde_json::to_string(&item).unwrap(), plain);
+
+        let shot = ResponseItem::FunctionCallOutput {
+            call_id: "c".into(),
+            output: "o".into(),
+            images: vec![ImagePart {
+                media_type: "image/png".into(),
+                data: "BYTES".into(),
+                artifact: Some("art_1".into()),
+            }],
+        };
+        let json = serde_json::to_string(&shot).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"function_call_output","call_id":"c","output":"o","images":[{"mediaType":"image/png","artifact":"art_1"}]}"#
+        );
+        let ResponseItem::FunctionCallOutput { images, .. } = serde_json::from_str(&json).unwrap()
+        else {
+            unreachable!()
+        };
+        assert!(!images[0].is_present());
+        assert_eq!(images[0].artifact.as_deref(), Some("art_1"));
     }
 }

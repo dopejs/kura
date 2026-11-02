@@ -7,6 +7,7 @@ use kura_model_provider::ProviderError;
 use kura_model_provider::ResponseEvent;
 use kura_protocol::Event;
 use kura_protocol::EventMsg;
+use kura_protocol::ImagePart;
 use kura_protocol::ResponseItem;
 use kura_protocol::Role;
 use kura_protocol::ThreadId;
@@ -24,6 +25,10 @@ use crate::tools::ToolRegistry;
 /// Hard cap on model→tool→model rounds inside a single user turn. Prevents
 /// a misbehaving model or tool loop from burning unbounded provider quota.
 const DEFAULT_MAX_TOOL_ROUNDS: usize = 16;
+/// Images the model still sees in a turn. A screen-driving turn takes a
+/// screenshot every step; sending all of them every round would grow the
+/// prompt without bound for pictures of screens long gone.
+const MAX_PROMPT_IMAGES: usize = 3;
 
 /// Calls of one round that may run at once (agent-runtime-program.md 2.6).
 /// Bounded because each is a server process, a sandbox run or a provider
@@ -415,6 +420,7 @@ impl Session {
                     call.state = CallState::Settled {
                         output: INTERRUPTED_CALL_OUTPUT.to_string(),
                         success: false,
+                        images: Vec::new(),
                     };
                 }
                 CallState::Planned => {}
@@ -431,6 +437,10 @@ impl Session {
         let at = self.checkpoint.rounds.len() - 1;
         self.journal();
 
+        // This round's images, bytes included. The checkpoint keeps only
+        // their references, so it is written without them and does not
+        // hold every screenshot of the turn in memory twice.
+        let mut fresh_images: Vec<Vec<ImagePart>> = vec![Vec::new(); invocations.len()];
         let mut start = 0;
         while start < invocations.len() {
             if !pending(&self.checkpoint.rounds[at], start) {
@@ -486,18 +496,31 @@ impl Session {
                 self.checkpoint.rounds[at].calls[index].state = CallState::Settled {
                     output: output.content,
                     success: output.success,
+                    images: output.images.iter().map(ImagePart::stored).collect(),
                 };
+                fresh_images[index] = output.images;
                 self.journal();
             }
             drop(running);
             start = end;
         }
 
-        for call in &self.checkpoint.rounds[at].calls {
-            let output = match &call.state {
-                CallState::Settled { output, .. } => output.clone(),
+        for (call, fresh) in self.checkpoint.rounds[at].calls.iter().zip(fresh_images) {
+            let (output, images) = match &call.state {
+                // A call that ran now has its bytes; one replayed from a
+                // checkpoint has only references.
+                CallState::Settled { output, images, .. } => (
+                    output.clone(),
+                    if fresh.is_empty() {
+                        images.clone()
+                    } else {
+                        fresh
+                    },
+                ),
                 // Unreachable: every pending call ran above.
-                CallState::Planned | CallState::Started => "tool call did not run".to_string(),
+                CallState::Planned | CallState::Started => {
+                    ("tool call did not run".to_string(), Vec::new())
+                }
             };
             self.history.push(ResponseItem::FunctionCall {
                 call_id: call.call_id.clone(),
@@ -507,8 +530,10 @@ impl Session {
             self.history.push(ResponseItem::FunctionCallOutput {
                 call_id: call.call_id.clone(),
                 output,
+                images,
             });
         }
+        keep_recent_images(&mut self.history, MAX_PROMPT_IMAGES);
     }
 
     fn journal(&self) {
@@ -523,6 +548,28 @@ impl Session {
             id: format!("{}-{}", self.thread_id, self.event_seq),
             msg,
         });
+    }
+}
+
+/// Drops the bytes of all but the newest `keep` images in `history`; the
+/// wires show the model a note where each dropped one was. Deterministic,
+/// so the same history always yields the same prompt.
+fn keep_recent_images(history: &mut [ResponseItem], keep: usize) {
+    let mut seen = 0;
+    for item in history.iter_mut().rev() {
+        let ResponseItem::FunctionCallOutput { images, .. } = item else {
+            continue;
+        };
+        for image in images.iter_mut().rev() {
+            if !image.is_present() {
+                continue;
+            }
+            if seen < keep {
+                seen += 1;
+            } else {
+                *image = image.stored();
+            }
+        }
     }
 }
 
@@ -962,6 +1009,7 @@ mod tests {
         CallState::Settled {
             output: output.into(),
             success: true,
+            images: Vec::new(),
         }
     }
 
@@ -1068,6 +1116,7 @@ mod tests {
             CallState::Settled {
                 output: INTERRUPTED_CALL_OUTPUT.into(),
                 success: false,
+                images: Vec::new(),
             }
         );
     }
@@ -1483,5 +1532,107 @@ mod tests {
         // Never asked to take-or-close: the model never answered.
         assert!(!inbox.asked.lock().contains(&"take_or_close"));
         assert!(inbox.closed());
+    }
+
+    /// Returns a numbered screenshot on every call.
+    #[derive(Default)]
+    struct ShotTool(Mutex<usize>);
+
+    impl crate::tools::Tool for ShotTool {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: "shot".into(),
+                description: "take a screenshot".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        }
+
+        fn call<'a>(
+            &'a self,
+            _invocation: &'a ToolInvocation,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, crate::tools::ToolError>> + Send + 'a>>
+        {
+            let n = {
+                let mut count = self.0.lock();
+                *count += 1;
+                *count
+            };
+            Box::pin(async move {
+                Ok(
+                    ToolOutput::ok(format!("shot {n}")).with_images(vec![ImagePart {
+                        media_type: "image/png".into(),
+                        data: format!("IMG{n}"),
+                        artifact: Some(format!("art{n}")),
+                    }]),
+                )
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn only_the_newest_images_reach_the_model_and_none_reach_the_journal() {
+        let shot = |id: &str| ResponseEvent::FunctionCall {
+            call_id: id.into(),
+            name: "shot".into(),
+            arguments: "{}".into(),
+        };
+        let provider = Arc::new(FakeProvider::with_rounds(vec![
+            vec![shot("c1")],
+            vec![shot("c2")],
+            vec![shot("c3")],
+            vec![shot("c4")],
+            vec![ResponseEvent::OutputTextDelta("done".into())],
+        ]));
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(ShotTool::default()));
+        let journal = Arc::new(Recorded::default());
+        let mut session =
+            Session::new(provider.clone(), Arc::new(registry)).with_journal(journal.clone());
+        let (mut emit, _) = collect_events();
+        session.run_turn("look", &mut emit).await.unwrap();
+
+        let images_in = |prompt: &Prompt| -> Vec<(String, Option<String>)> {
+            prompt
+                .input
+                .iter()
+                .filter_map(|item| match item {
+                    ResponseItem::FunctionCallOutput { images, .. } => Some(images.clone()),
+                    _ => None,
+                })
+                .flatten()
+                .map(|image| (image.data, image.artifact))
+                .collect()
+        };
+        let prompts = provider.prompts.lock().clone();
+        // The second round sees its one screenshot.
+        assert_eq!(
+            images_in(&prompts[1]),
+            [("IMG1".into(), Some("art1".into()))]
+        );
+        // The last sees the newest three; the oldest is a reference only.
+        assert_eq!(
+            images_in(&prompts[4]),
+            [
+                (String::new(), Some("art1".into())),
+                ("IMG2".into(), Some("art2".into())),
+                ("IMG3".into(), Some("art3".into())),
+                ("IMG4".into(), Some("art4".into())),
+            ]
+        );
+
+        // The checkpoint keeps references, never bytes, in memory or JSON.
+        let last = journal.0.lock().last().cloned().unwrap();
+        for round in &last.rounds {
+            for call in &round.calls {
+                let CallState::Settled { images, .. } = &call.state else {
+                    panic!("unsettled call {call:?}");
+                };
+                assert!(images.iter().all(|image| !image.is_present()));
+                assert!(images.iter().all(|image| image.artifact.is_some()));
+            }
+        }
+        let json = serde_json::to_string(&last).unwrap();
+        assert!(json.contains("\"artifact\":\"art4\""), "{json}");
+        assert!(!json.contains("IMG"), "{json}");
     }
 }

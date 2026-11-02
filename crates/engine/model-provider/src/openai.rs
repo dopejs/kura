@@ -7,7 +7,9 @@ use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 
+use crate::tool_images;
 use crate::tool_names::{WireNames, restore_names};
+use kura_protocol::ImagePart;
 use kura_protocol::ResponseItem;
 use kura_protocol::Role;
 use serde_json::Value;
@@ -387,6 +389,20 @@ fn accumulate_chunk(
     Ok(events)
 }
 
+/// The user message that carries tool images on the chat-completions wire,
+/// each introduced by the call it came from.
+fn images_message(images: &[(&str, &ImagePart)]) -> Value {
+    let mut content = Vec::new();
+    for (call_id, image) in images {
+        content.push(
+            json!({"type": "text", "text": format!("Image returned by tool call {call_id}:")}),
+        );
+        content
+            .push(json!({"type": "image_url", "image_url": {"url": tool_images::data_url(image)}}));
+    }
+    json!({"role": "user", "content": content})
+}
+
 /// Build the `/chat/completions` request body, mapping conversation history
 /// into OpenAI message shapes.
 fn build_request(model: &str, prompt: &Prompt, sampling: Sampling, fields: Optional) -> Value {
@@ -395,7 +411,8 @@ fn build_request(model: &str, prompt: &Prompt, sampling: Sampling, fields: Optio
     if let Some(instructions) = &prompt.instructions {
         messages.push(json!({"role": "system", "content": instructions}));
     }
-    for item in &prompt.input {
+    let mut pending_images: Vec<(&str, &ImagePart)> = Vec::new();
+    for (index, item) in prompt.input.iter().enumerate() {
         match item {
             ResponseItem::Message { role, content } => {
                 let role = match role {
@@ -420,13 +437,30 @@ fn build_request(model: &str, prompt: &Prompt, sampling: Sampling, fields: Optio
                     }],
                 }));
             }
-            ResponseItem::FunctionCallOutput { call_id, output } => {
+            ResponseItem::FunctionCallOutput {
+                call_id,
+                output,
+                images,
+            } => {
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": call_id,
-                    "content": output,
+                    "content": tool_images::text_with_omissions(output, images),
                 }));
+                pending_images
+                    .extend(tool_images::present(images).map(|image| (call_id.as_str(), image)));
             }
+        }
+        // A `tool` message cannot hold an image, and nothing but `tool`
+        // messages may sit between the calls and their results, so the
+        // images follow the whole run of results as one user message.
+        let run_continues = matches!(
+            prompt.input.get(index + 1),
+            Some(ResponseItem::FunctionCallOutput { .. })
+        );
+        if !run_continues && !pending_images.is_empty() {
+            messages.push(images_message(&pending_images));
+            pending_images.clear();
         }
     }
 
@@ -732,6 +766,7 @@ mod tests {
                 ResponseItem::FunctionCallOutput {
                     call_id: "call_1".into(),
                     output: "file.txt".into(),
+                    images: Vec::new(),
                 },
             ],
             tools: vec![ToolSpec {
@@ -1227,5 +1262,60 @@ mod tests {
         handle.set(Some("live".to_string()));
 
         assert_eq!(client.credential().get().as_deref(), Some("live"));
+    }
+
+    #[test]
+    fn tool_images_follow_the_run_of_tool_messages() {
+        let shot = crate::tool_images::image("image/png", "SHOT");
+        let call = |id: &str| ResponseItem::FunctionCall {
+            call_id: id.into(),
+            name: "computer.screenshot".into(),
+            arguments: "{}".into(),
+        };
+        let result = |id: &str, images: Vec<ImagePart>| ResponseItem::FunctionCallOutput {
+            call_id: id.into(),
+            output: format!("{id} done"),
+            images,
+        };
+        let prompt = Prompt {
+            input: vec![
+                call("c1"),
+                call("c2"),
+                result("c1", vec![shot.clone()]),
+                result("c2", Vec::new()),
+                call("c3"),
+                result("c3", Vec::new()),
+            ],
+            ..Prompt::default()
+        };
+        let body = build_request("m", &prompt, Sampling::default(), NONE);
+        let roles: Vec<&str> = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|message| message["role"].as_str().unwrap())
+            .collect();
+        // Nothing but tool messages between the calls and their results; the
+        // image waits until the run ends, and a run without images adds none.
+        assert_eq!(
+            roles,
+            [
+                "assistant",
+                "assistant",
+                "tool",
+                "tool",
+                "user",
+                "assistant",
+                "tool"
+            ]
+        );
+        assert_eq!(body["messages"][2]["content"], json!("c1 done"));
+        assert_eq!(
+            body["messages"][4]["content"],
+            json!([
+                {"type": "text", "text": "Image returned by tool call c1:"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,SHOT"}},
+            ])
+        );
     }
 }

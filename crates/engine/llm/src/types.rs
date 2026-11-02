@@ -4,7 +4,7 @@
 use crate::provider::ToolCall;
 use crate::structured::ResponseFormat;
 use chrono::{DateTime, Utc};
-use kura_protocol::ToolSpec;
+use kura_protocol::{ImagePart, ToolSpec};
 use serde::{Deserialize, Serialize};
 
 /// Chat message role; wire values match the Go `MessageRole` constants.
@@ -39,6 +39,10 @@ pub struct Message {
     /// The call a `Tool` message is the result of. Empty on every other role.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub tool_call_id: String,
+    /// Images a `Tool` message carries beside its text. Empty on every other
+    /// role. Stored without their bytes (see [`ImagePart`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImagePart>,
 }
 
 /// Token accounting for one dispatch. `total_tokens` is normalized to

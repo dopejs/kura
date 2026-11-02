@@ -74,6 +74,7 @@ fn to_prompt(messages: &[Message], tools: &[ToolSpec]) -> Prompt {
             input.push(ResponseItem::FunctionCallOutput {
                 call_id: message.tool_call_id.clone(),
                 output: message.content.clone(),
+                images: message.images.clone(),
             });
             continue;
         }
@@ -511,6 +512,7 @@ mod tests {
                 ResponseItem::FunctionCallOutput {
                     call_id: "call_1".into(),
                     output: "{\"stage\":\"DISCOVERY\"}".into(),
+                    images: Vec::new(),
                 },
             ]
         );

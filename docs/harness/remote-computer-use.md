@@ -156,16 +156,21 @@ Additive and backward compatible:
   prompt-cache prefix test, `surface/app/tests/prompt_cache_prefix.rs`,
   guards this).
 - `ImagePart { media_type, data: base64, artifact: Option<String> }`.
-  Persisted copies (checkpoint, dispatch journal) keep only `artifact` and
-  drop `data`; resume rehydrates from the artifact store, or substitutes the
-  omission text if the artifact is gone.
+  `data` is `#[serde(skip)]`: every persisted copy (checkpoint, dispatch
+  record) keeps only `artifact`. A resumed turn shows the model
+  `[image omitted]` instead of rehydrating, on purpose: after a restart the
+  screen has changed, and the model should take a new screenshot.
 - `ToolOutput` gains `images` the same way; existing tools are untouched.
 - Wires: Anthropic puts `[{type:text}, {type:image, source:{type:base64}}]`
   in `tool_result.content`; Responses uses an `output` array with
   `input_image`; chat completions cannot put images in a `tool` message, so
   the text stays there and a `user` message with `image_url` parts follows
-  it. A model without vision gets the text and a note that an image was
-  omitted (capability from the model catalog).
+  the run of `tool` messages (nothing else may sit between calls and their
+  results).
+- Implemented 2026-11-02 (slice 1). Not yet done: offering image-returning
+  tools only to vision models (slice 4 gates `computer.*` on the model
+  catalog; a non-vision model would get a 400 today); adapter-RPC and
+  managed CLI providers still see text only.
 
 ## 8. Safety
 

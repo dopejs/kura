@@ -407,6 +407,7 @@ impl Tool for Observed {
             let result = result.map(|output| ToolOutput {
                 content: truncate_tool_output(&output.content),
                 success: output.success,
+                images: output.images,
             });
             let (output, is_error) = match &result {
                 Ok(output) => (output.content.clone(), !output.success),

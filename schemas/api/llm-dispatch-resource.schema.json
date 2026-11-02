@@ -82,6 +82,25 @@
           "toolCallId": {
             "type": "string",
             "description": "The call a tool message is the result of."
+          },
+          "images": {
+            "type": "array",
+            "description": "Images a tool message carried, such as screenshots. Stored by reference only; the bytes are in the artifact store.",
+            "items": {
+              "type": "object",
+              "required": [
+                "mediaType"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "mediaType": {
+                  "type": "string"
+                },
+                "artifact": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       }
