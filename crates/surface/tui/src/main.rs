@@ -294,9 +294,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Some(msg) = stream_rx.recv() => {
                 match msg {
-                    StreamMsg::Delta(d) => {
+                    StreamMsg::Delta(reply) => {
                         if let Some(last) = app.messages.last_mut() {
-                            last.content.push_str(&d);
+                            last.content = reply;
                         }
                     }
                     StreamMsg::Done(result) => {
@@ -538,8 +538,10 @@ fn submit(app: &mut App, client: &Arc<Client>, stream_tx: &mpsc::Sender<StreamMs
     let tx = stream_tx.clone();
     tokio::spawn(async move {
         let result = client
-            .stream_chat(&input, |delta| {
-                let _ = tx.try_send(StreamMsg::Delta(delta));
+            // A dropped frame is superseded by the next: each carries the
+            // round's whole text so far.
+            .stream_chat(&input, |reply| {
+                let _ = tx.try_send(StreamMsg::Delta(reply));
             })
             .await;
         let _ = tx.send(StreamMsg::Done(result)).await;

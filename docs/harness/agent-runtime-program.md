@@ -508,10 +508,37 @@ Sequenced after Stage 3 because resume semantics depend on where tools run.
       unread messages of 32 KiB. Found on the way: the dispatcher raced an
       already-cancelled token against a fresh attempt, so a cancelled
       round could still start a provider request; it now does not start
-      one. *Not covered:* streamed queries (one dispatch, no loop); a
-      message is not in the 2.7 checkpoint, so a turn resumed after a
+      one. *Not covered:* ~~streamed queries (one dispatch, no loop)~~
+      (closed 2026-11-02, below); a message is not in the 2.7 checkpoint, so a turn resumed after a
       crash has lost the messages it was sent; reaching a turn running in
       another daemon process.
+
+- [x] **2.9 Streamed turns run the agent loop** (found in the 2026-11-02
+      gap review). A streamed query was one dispatch: no tools, so IM
+      connectors that stream their replies (the streaming path) offered an
+      agent with no memory lookup, MCP or browser. 2.6–2.8 did not apply
+      to them either.
+      *Done 2026-11-02:*
+      - `Service::stream` runs the same turn as `query` (`turn_traced`).
+      - Each round dispatches streaming into a channel that the turn
+        drains into the caller's emitter inside the same `block_on`, so
+        order is kept and nothing arrives after the turn ends.
+      - A caller that stops listening cancels the turn.
+      - A new round is a new `dispatchId`, and its `reply` starts over
+        (interim text, as in a query). The SSE route (`RoundReply`) and
+        the TUI (renders `reply`) follow this; IM already rendered the
+        round's `reply`. Schema descriptions and the SDK type say so.
+      - Steering now reaches streamed turns too.
+      - Structured output is still refused on streams: text goes out
+        before it could be checked.
+      *Changed for clients:*
+      - a streamed turn's `chat.query.started` no longer carries
+        `requestTurnId` (recorded after the turn now; the terminal event
+        has it);
+      - if the model's first round writes nothing and calls a tool,
+        `started` arrives with the first text of a later round.
+      *Not covered:* no frame announces a tool call while it runs, so the
+      stream is silent during tool calls.
 
 ## Stage 4 — Shared Hosting M4: Fairness and Scale
 

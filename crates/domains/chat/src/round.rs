@@ -46,6 +46,19 @@ pub(crate) struct RoundContext {
     pub cancel: kura_llm::CancelToken,
     /// The turn's trace: each round is a span under the turn.
     pub trace: TurnRecorder,
+    /// Set for a streamed turn: each round dispatches streaming and sends
+    /// its text here as it arrives. The turn forwards it to the caller.
+    pub stream: Option<tokio::sync::mpsc::UnboundedSender<RoundChunk>>,
+}
+
+/// Text a streaming round produced: which dispatch it belongs to, the new
+/// part, and the round's text so far.
+#[derive(Debug, Clone)]
+pub(crate) struct RoundChunk {
+    pub dispatch_id: String,
+    pub provider: String,
+    pub model: String,
+    pub chunk: kura_llm::StreamChunk,
 }
 
 /// What the turn produced, collected as its rounds ran.
@@ -274,12 +287,42 @@ impl DispatcherProvider {
         }
 
         let dispatch_span = trace.open(round_span, "dispatch", &dispatch.provider);
-        let (settled, failure) = match context
-            .service
-            .dispatcher
-            .dispatch(dispatch, &context.cancel)
-            .await
-        {
+        let outcome = match &context.stream {
+            None => {
+                context
+                    .service
+                    .dispatcher
+                    .dispatch(dispatch, &context.cancel)
+                    .await
+            }
+            Some(sender) => {
+                let (dispatch_id, provider, model) = (
+                    dispatch.dispatch_id.clone(),
+                    dispatch.provider.clone(),
+                    dispatch.model.clone(),
+                );
+                // A closed receiver is a caller that stopped listening; the
+                // turn cancels itself when it sees the failed send.
+                let mut forward = |chunk: kura_llm::StreamChunk| {
+                    sender
+                        .send(RoundChunk {
+                            dispatch_id: dispatch_id.clone(),
+                            provider: provider.clone(),
+                            model: model.clone(),
+                            chunk,
+                        })
+                        .map_err(|_| {
+                            kura_llm::ProviderError::Other("stream receiver closed".to_string())
+                        })
+                };
+                context
+                    .service
+                    .dispatcher
+                    .dispatch_stream(dispatch, &context.cancel, &mut forward)
+                    .await
+            }
+        };
+        let (settled, failure) = match outcome {
             Ok(settled) => (settled, None),
             Err(failed) => {
                 let message = failed.error.to_string();

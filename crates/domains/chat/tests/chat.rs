@@ -3420,3 +3420,157 @@ fn a_cancelled_turn_stops_before_its_next_round() {
     );
     assert_eq!(seen.read().len(), 1);
 }
+
+/// Streams each scripted round word by word, then answers with it, tool
+/// calls included: what a streaming provider does.
+struct StreamingScripted {
+    rounds: parking_lot::Mutex<std::collections::VecDeque<ProviderResponse>>,
+    seen: Arc<parking_lot::RwLock<Vec<ProviderRequest>>>,
+}
+
+impl Provider for StreamingScripted {
+    fn name(&self) -> &str {
+        OPENAI_COMPATIBLE_PROVIDER_NAME
+    }
+
+    fn complete<'a>(
+        &'a self,
+        _request: ProviderRequest,
+    ) -> BoxFuture<'a, Result<ProviderResponse, ProviderError>> {
+        panic!("a streamed turn must stream every round");
+    }
+
+    fn stream<'a>(
+        &'a self,
+        request: ProviderRequest,
+        emit: kura_llm::StreamEmitter<'a>,
+    ) -> BoxFuture<'a, Result<ProviderResponse, ProviderError>> {
+        self.seen.write().push(request);
+        let next = self
+            .rounds
+            .lock()
+            .pop_front()
+            .unwrap_or_else(|| answered("unscripted"));
+        Box::pin(async move {
+            for word in next.output.split_inclusive(' ') {
+                emit(kura_llm::StreamChunk {
+                    delta: word.to_string(),
+                    ..kura_llm::StreamChunk::default()
+                })?;
+            }
+            Ok(next)
+        })
+    }
+}
+
+fn streaming_service_with_tool(
+    rounds: Vec<ProviderResponse>,
+    tool: Arc<RecordingTool>,
+) -> (Service, Arc<parking_lot::RwLock<Vec<ProviderRequest>>>) {
+    let seen = Arc::new(parking_lot::RwLock::new(Vec::new()));
+    let provider = Arc::new(StreamingScripted {
+        rounds: parking_lot::Mutex::new(rounds.into()),
+        seen: Arc::clone(&seen),
+    });
+    let mut registry = kura_core::ToolRegistry::new();
+    registry.register(tool);
+    let mut svc = service(new_dispatcher(provider), None, None);
+    svc.set_tools(Arc::new(FixedTools(Arc::new(registry))));
+    (svc, seen)
+}
+
+/// A streamed turn is the same agent turn as a query: the model asks for a
+/// tool, the tool runs, the model answers, and every round's text reaches
+/// the caller as it is written. A new round is a new dispatch id, and its
+/// `reply` starts over, so text before a tool call is interim, as in a query.
+#[test]
+fn a_streamed_turn_runs_tools_and_streams_every_round() {
+    let tool = Arc::new(RecordingTool {
+        name: "lookup".to_string(),
+        answer: "42".to_string(),
+        calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
+    });
+    let mut asked = asked_for("call_1", "lookup", "{\"q\":\"answer\"}");
+    asked.output = "Let me check. ".to_string();
+    let (svc, seen) = streaming_service_with_tool(
+        vec![asked, answered("The answer is 42.")],
+        Arc::clone(&tool),
+    );
+
+    let mut chunks: Vec<StreamChunk> = Vec::new();
+    let execution = svc
+        .stream(
+            base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "what is the answer?"),
+            &CancellationToken::new(),
+            Some(|chunk: StreamChunk| {
+                chunks.push(chunk);
+                Ok(())
+            }),
+        )
+        .expect("stream");
+    assert!(execution.exec_error.is_none(), "{:?}", execution.exec_error);
+    assert_eq!(tool.calls.read().len(), 1, "the tool ran once");
+    assert_eq!(seen.read().len(), 2, "two rounds");
+    assert!(
+        seen.read()[1]
+            .messages
+            .iter()
+            .any(|m| m.tool_call_id == "call_1"),
+        "the second round saw the tool's output"
+    );
+
+    // Both rounds streamed, in order, each under its own dispatch.
+    let rounds: Vec<&str> =
+        chunks
+            .iter()
+            .map(|c| c.dispatch_id.as_str())
+            .fold(Vec::new(), |mut ids, id| {
+                if ids.last() != Some(&id) {
+                    ids.push(id);
+                }
+                ids
+            });
+    assert_eq!(rounds.len(), 2, "{rounds:?}");
+    let text: String = chunks.iter().map(|c| c.delta.as_str()).collect();
+    assert_eq!(text, "Let me check. The answer is 42.");
+    let last = chunks.last().expect("chunks");
+    assert_eq!(
+        last.reply, "The answer is 42.",
+        "reply is the current round's text"
+    );
+    assert_eq!(last.dispatch_id, execution.result.dispatch.dispatch_id);
+    // The answer is the last round's, as for a query.
+    assert_eq!(execution.result.dispatch.output, "The answer is 42.");
+}
+
+/// A caller that stops listening cancels the turn, and the turn says why.
+#[test]
+fn a_stream_whose_caller_stops_listening_ends_the_turn() {
+    let tool = Arc::new(RecordingTool {
+        name: "lookup".to_string(),
+        answer: "42".to_string(),
+        calls: Arc::new(parking_lot::RwLock::new(Vec::new())),
+    });
+    let mut asked = asked_for("call_1", "lookup", "{}");
+    asked.output = "Let me check. ".to_string();
+    let (svc, seen) = streaming_service_with_tool(
+        vec![asked, answered("never seen"), answered("never seen")],
+        tool,
+    );
+    let execution = svc
+        .stream(
+            base_query(OPENAI_COMPATIBLE_PROVIDER_NAME, "m", "what is the answer?"),
+            &CancellationToken::new(),
+            Some(|_: StreamChunk| Err(ChatError::Emit("receiver closed".to_string()))),
+        )
+        .expect("stream");
+    let error = execution
+        .exec_error
+        .expect("the turn reports the failure")
+        .to_string();
+    assert!(error.contains("stream emitter failed"), "{error}");
+    assert!(
+        seen.read().len() <= 2,
+        "the turn stopped instead of going on"
+    );
+}

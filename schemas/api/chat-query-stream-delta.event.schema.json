@@ -2,18 +2,22 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kura.local/schemas/api/chat-query-stream-delta.event.schema.json",
   "title": "ChatQueryStreamDelta",
+  "description": "chat.query.delta. A streamed query runs the same agent loop as a non-streamed one, so a turn that calls tools streams several rounds. Each round is a dispatch: a new dispatchId starts a new round, and its reply starts over. Text before a tool call is interim; the turn's answer is the last round's, as in POST /v1/chat/query.",
   "type": "object",
   "required": ["dispatchId", "delta", "reply"],
   "additionalProperties": false,
   "properties": {
     "dispatchId": {
-      "type": "string"
+      "type": "string",
+      "description": "The round's dispatch. It changes when a new round starts."
     },
     "delta": {
-      "type": "string"
+      "type": "string",
+      "description": "The text this frame adds to the round."
     },
     "reply": {
-      "type": "string"
+      "type": "string",
+      "description": "The current round's text so far."
     }
   }
 }

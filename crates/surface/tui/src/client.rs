@@ -28,8 +28,11 @@ pub struct ChatQueryResponse {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct StreamDelta {
+    /// The current round's text so far. A turn that calls tools streams
+    /// several rounds, and each starts over: what came before a tool call is
+    /// interim, as in a non-streamed query.
     #[serde(default)]
-    delta: String,
+    reply: String,
 }
 
 #[derive(Clone)]
@@ -76,11 +79,12 @@ impl Client {
             .map_err(|e| e.to_string())
     }
 
-    /// Streaming chat query via SSE. Invokes on_delta for each delta; returns the terminal response.
+    /// Streaming chat query via SSE. Invokes `on_reply` with the current
+    /// round's text on every delta; returns the terminal response.
     pub async fn stream_chat(
         &self,
         input: &ChatQueryInput,
-        mut on_delta: impl FnMut(String),
+        mut on_reply: impl FnMut(String),
     ) -> Result<ChatQueryResponse, String> {
         let url = format!("{}/v1/chat/query/stream", self.base_url);
         let resp = self
@@ -117,7 +121,7 @@ impl Client {
                 match event.as_str() {
                     "chat.query.delta" => {
                         if let Ok(d) = serde_json::from_str::<StreamDelta>(&data) {
-                            on_delta(d.delta);
+                            on_reply(d.reply);
                         }
                     }
                     "chat.query.completed" | "chat.query.failed" | "chat.query.cancelled" => {

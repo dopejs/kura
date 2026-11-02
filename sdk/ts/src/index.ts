@@ -136,6 +136,12 @@ export type ChatQueryStreamStarted = {
   continuityStatus?: "applied" | "empty" | "disabled" | "blocked" | "partial" | "failed";
 };
 
+/**
+ * A `chat.query.delta` frame. A streamed query runs the same agent loop as a
+ * non-streamed one, so a turn that calls tools streams several rounds: a new
+ * `dispatchId` starts a new round, and `reply` (that round's text so far)
+ * starts over. Render `reply`; text before a tool call is interim.
+ */
 export type ChatQueryStreamDelta = {
   dispatchId: string;
   delta: string;

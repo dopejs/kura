@@ -302,6 +302,27 @@ pub async fn handle_chat_query_stream(
     Sse::new(ReceiverStream::new(receiver)).into_response()
 }
 
+/// The `reply` a delta frame carries: the current round's text so far. A
+/// streamed turn runs the agent loop, so a new dispatch id is a new round and
+/// the text starts over; what came before a tool call is interim, as in a
+/// query, whose answer is the last round's.
+#[derive(Default)]
+struct RoundReply {
+    dispatch_id: String,
+    text: String,
+}
+
+impl RoundReply {
+    fn push(&mut self, dispatch_id: &str, delta: &str) -> &str {
+        if dispatch_id != self.dispatch_id {
+            self.dispatch_id = dispatch_id.to_string();
+            self.text.clear();
+        }
+        self.text.push_str(delta);
+        &self.text
+    }
+}
+
 /// Pump thread: reads stream chunks off the std mpsc channel (the
 /// `stream_channel` thread's emit side) and forwards SSE frames onto the
 /// tokio channel the response stream reads from. Mirrors Go's handler flow:
@@ -315,7 +336,7 @@ fn pump_stream(
     query_text: String,
 ) {
     let mut started = false;
-    let mut reply = String::new();
+    let mut round = RoundReply::default();
     while let Ok(chunk) = chunks.recv() {
         if !started {
             started = true;
@@ -331,13 +352,13 @@ fn pump_stream(
                 return;
             }
         }
-        reply.push_str(&chunk.delta);
+        let reply = round.push(&chunk.dispatch_id, &chunk.delta).to_string();
         let event = SseEvent::default()
             .event("chat.query.delta")
             .json_data(ChatQueryStreamDelta {
                 dispatch_id: chunk.dispatch_id.clone(),
                 delta: chunk.delta.clone(),
-                reply: reply.clone(),
+                reply,
             })
             .unwrap_or_else(|err| {
                 SseEvent::default()
@@ -1259,5 +1280,14 @@ mod tests {
         let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["code"], "turn_rate_limited");
+    }
+
+    #[test]
+    fn a_delta_frames_reply_is_its_rounds_text_and_starts_over_each_round() {
+        let mut reply = RoundReply::default();
+        assert_eq!(reply.push("d1", "Let me "), "Let me ");
+        assert_eq!(reply.push("d1", "check."), "Let me check.");
+        assert_eq!(reply.push("d2", "The answer"), "The answer");
+        assert_eq!(reply.push("d2", " is 42."), "The answer is 42.");
     }
 }

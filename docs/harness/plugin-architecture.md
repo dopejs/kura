@@ -212,8 +212,8 @@ only a subset of JSON Schema. A 400 that names the field (or `json_schema`)
 is answered by resending without it, and that client stops sending it.
 Anthropic gets the instruction only.
 
-Steering (agent-runtime-program.md 2.8, G8): a non-streamed query that is
-running can be reached by the tenant that sent it, by the `X-Request-Id` it
+Steering (agent-runtime-program.md 2.8, G8): a running query, streamed or
+not, can be reached by the tenant that sent it, by the `X-Request-Id` it
 was sent with (the SDK's `queryChat(input, {requestId})`).
 `POST /v1/chat/turns/{requestId}/messages` with `{message}` answers 202
 `{requestId, pending}`; the loop reads the message as the user's before its
@@ -230,7 +230,16 @@ query answers 408 with a cancelled dispatch. A second turn started with a
 request id a running turn holds runs unreachable. Counted as
 `kura_chat_turn_controls_total{action, outcome}`; a turn's trace carries
 `steerMessages`, and the session emits a `steer_message` event per message.
-Streamed queries are a single dispatch and cannot be steered.
+Streamed turns (2026-11-02): a streamed query (`POST /v1/chat/query/stream`,
+and IM connectors that stream their replies) runs the same agent loop as a
+query, with the same tools, resume, steering, hooks and records. Only the
+text differs: each round streams as it is written. A round is a dispatch, so
+a new `dispatchId` in a `chat.query.delta` frame starts a new round and its
+`reply` starts over. Text before a tool call is interim, and the turn's
+answer is the last round's, as for a query. Chunks reach the caller in the
+order they were written, all before the turn reports done. A caller that
+stops listening cancels the turn, which ends with `stream emitter failed`.
+Before this, a stream was one dispatch with no tools.
 
 A veto surfaces as `ChatError::HookVetoed` → HTTP 403 and is recorded as a
 `chat.hook.vetoed` event. `GET /v1/plugins` reports every hook registration

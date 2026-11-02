@@ -21,9 +21,7 @@ use kura_bindings::{
     EffectiveBindingSelection, ResolutionOutcome, RuntimeBindingEvidenceInput,
     build_runtime_binding_evidence, enforce_executable,
 };
-use kura_llm::{
-    CreateDispatchInput, Dispatch, DispatchStatus, Message, MessageRole, ProviderError,
-};
+use kura_llm::{CreateDispatchInput, Dispatch, DispatchStatus, Message, MessageRole};
 use kura_profiles::{
     APPLIED_BINDING_CLASSIFICATION_MARKER, ActiveSelection, AgentProfile,
     DEFERRED_BINDING_CLASSIFICATION_MARKER, RuntimeProjectionInput, RuntimeResourceKind,
@@ -86,15 +84,19 @@ impl Service {
     ) -> Result<QueryExecution, ChatError> {
         let _admitted = self.admit(&input.tenant_id)?;
         let trace = self.start_turn_trace(&input, "chat.query");
-        let outcome = self.query_traced(input, cancel, &trace);
+        let outcome = self.turn_traced(input, cancel, &trace, None);
         finish_turn_trace(&trace, outcome)
     }
 
-    fn query_traced(
+    /// One turn, streamed or not: the same agent loop, hooks, tools,
+    /// resume, steering and records either way. With `stream`, each round's
+    /// text reaches the caller as it arrives.
+    fn turn_traced(
         &self,
         input: QueryInput,
         cancel: &CancellationToken,
         trace: &TurnRecorder,
+        stream: Option<&mut (dyn FnMut(StreamChunk) -> Result<(), ChatError> + Send)>,
     ) -> Result<QueryExecution, ChatError> {
         self.ensure_configured()?;
         // Refused before anything runs: a format that cannot be enforced
@@ -162,6 +164,21 @@ impl Service {
         let active = self
             .active_turns
             .register(&input.tenant_id, &input.request_id, cancel);
+        // What every streamed chunk carries besides its round's text.
+        let stream = stream.map(|emit| TurnStream {
+            emit,
+            template: StreamChunk {
+                skills: selected_skill_ids_from_skills(&selected_skills),
+                skill_contracts: selected_skill_contracts(&selected_skills),
+                thread_id: continuity.thread_id.clone(),
+                session_segment_id: continuity.session_segment_id.clone(),
+                request_turn_id: continuity.request_turn_id.clone(),
+                continuity_preview_id: continuity.preview_id.clone(),
+                continuity_applied: continuity.applied,
+                continuity_status: continuity.status,
+                ..StreamChunk::default()
+            },
+        });
         // The turn runs as an agent loop, and a round of that loop is a
         // dispatch. `kura-core` owns the looping; what this supplies is what a
         // round means here -- hooked, prepared, persisted, evented.
@@ -207,6 +224,7 @@ impl Service {
                     Ok(())
                 }
             }),
+            stream,
         )?;
         // Outside the per-round callback: continuity is mutated here and read
         // after, so it cannot be borrowed by a closure the loop owns.
@@ -296,162 +314,15 @@ impl Service {
                 "structured output is not available on a streamed query".to_string(),
             ));
         }
-        let mut input = input;
-        self.run_turn_start_hooks(&mut input)?;
-
-        let (mut dispatch_input, selected_skills) = self.build_dispatch_input(&input)?;
-        let (active_profile, active_selection, has_active_profile) =
-            self.resolve_active_profile(&input, &mut dispatch_input)?;
-        let (binding_selection, has_binding, binding_res) = self.resolve_binding_for_work(
-            &input,
-            &active_profile,
-            &active_selection,
-            has_active_profile,
-        );
-        let (binding_selection, has_binding) = match binding_res {
-            Ok(()) => (binding_selection, has_binding),
-            Err(err) => {
-                self.record_blocked_binding_evidence(&input, &binding_selection, has_binding, &err);
-                return Err(err);
-            }
-        };
-        if let Err(err) = self.enforce_capability_visibility(
-            &input,
-            &selected_skills,
-            &binding_selection,
-            has_binding,
-        ) {
-            return Err(err);
-        }
-        if let Some(providers) = &self.providers {
-            let (_, effective) = providers
-                .resolve_dispatch_input(dispatch_input.clone())
-                .map_err(|err| ChatError::Provider(err.to_string()))?;
-            dispatch_input = effective;
-        }
-        self.enforce_provider_setup_gate(&input.tenant_id, &dispatch_input.provider, "chat")?;
-        let mut continuity = self.prepare_continuity(&input, &mut dispatch_input)?;
-        let agent_profile_id = if has_active_profile {
-            active_profile.profile_id.clone()
-        } else {
-            String::new()
-        };
-        self.run_pre_dispatch_hooks(&input, &agent_profile_id, &mut dispatch_input)?;
-
-        let mut dispatch = self
-            .dispatcher
-            .prepare(dispatch_input, true)
-            .map_err(ChatError::Prepare)?;
-        // Selects whose credential the turn runs on (shared-hosting.md §7).
-        dispatch.tenant_id = input.tenant_id.trim().to_string();
-        let dispatch_id = dispatch.dispatch_id.clone();
-        let dispatch_provider = dispatch.provider.clone();
-        let dispatch_model = dispatch.model.clone();
-        persist_dispatch(
-            self.store.as_deref(),
-            self.admission.as_deref(),
-            &input.tenant_id,
-            &dispatch,
-        )?;
-        if has_active_profile {
-            self.record_active_profile_projection(
-                &input,
-                &active_profile,
-                &active_selection,
-                &continuity,
-                &binding_selection,
-                has_binding,
-            )?;
-        }
-        if has_binding {
-            self.record_runtime_binding_evidence(&input, &binding_selection, false)?;
-        }
-        self.persist_continuity_request(&mut continuity, &input, &dispatch_id, input.query.trim())?;
-        publish_dispatch_event(
-            self.event_bus.as_ref(),
-            self.store.as_deref(),
-            &input.scope,
-            &dispatch,
-            &selected_skills,
-            "llm.dispatch.requested",
-        )?;
-
-        let runtime = bridge_runtime()?;
-        let kura_cancel = kura_llm::CancelToken::new();
-        let child = cancel.child();
-        let _link = child.link_to(&kura_cancel);
-        let mut emit = emit.take();
-        // A stream is one round of one dispatch.
-        trace.set_attribute(trace.root(), "provider", dispatch_provider.clone());
-        trace.set_attribute(trace.root(), "model", dispatch_model.clone());
-        trace.set_attribute(trace.root(), "rounds", 1);
-        let round_span = trace.open(trace.root(), "round", "round 1");
-        let dispatch_span = trace.open(round_span, "dispatch", &dispatch_provider);
-        let exec_result = runtime.block_on(async {
-            let mut adapter = |chunk: kura_llm::StreamChunk| -> Result<(), ProviderError> {
-                let Some(emit) = emit.as_mut() else {
-                    return Ok(());
-                };
-                let out = StreamChunk {
-                    dispatch_id: dispatch_id.clone(),
-                    provider: dispatch_provider.clone(),
-                    model: dispatch_model.clone(),
-                    skills: selected_skill_ids_from_skills(&selected_skills),
-                    skill_contracts: selected_skill_contracts(&selected_skills),
-                    delta: chunk.delta,
-                    reply: chunk.output,
-                    finish_reason: chunk.finish_reason,
-                    usage: chunk.usage,
-                    thread_id: continuity.thread_id.clone(),
-                    session_segment_id: continuity.session_segment_id.clone(),
-                    request_turn_id: continuity.request_turn_id.clone(),
-                    continuity_preview_id: continuity.preview_id.clone(),
-                    continuity_applied: continuity.applied,
-                    continuity_status: continuity.status,
-                };
-                emit(out).map_err(|err| ProviderError::Other(err.to_string()))
+        // The same turn as a query: tools, resume and steering included.
+        // Only the text reaches the caller as it is written.
+        let mut discard = |_: StreamChunk| Ok(());
+        let sink: &mut (dyn FnMut(StreamChunk) -> Result<(), ChatError> + Send) =
+            match emit.as_mut() {
+                Some(emit) => emit,
+                None => &mut discard,
             };
-            self.dispatcher
-                .dispatch_stream(dispatch, &kura_cancel, &mut adapter)
-                .await
-        });
-
-        let final_dispatch = match &exec_result {
-            Ok(d) => d.clone(),
-            Err(failed) => failed.dispatch.clone(),
-        };
-        crate::round::record_dispatch_span(trace, dispatch_span, &final_dispatch);
-        crate::round::close_like_dispatch(trace, round_span, &final_dispatch);
-        persist_dispatch(
-            self.store.as_deref(),
-            self.admission.as_deref(),
-            &input.tenant_id,
-            &final_dispatch,
-        )?;
-        publish_dispatch_event(
-            self.event_bus.as_ref(),
-            self.store.as_deref(),
-            &input.scope,
-            &final_dispatch,
-            &selected_skills,
-            &terminal_dispatch_event(&final_dispatch),
-        )?;
-        self.persist_continuity_response(&mut continuity, &input, &final_dispatch)?;
-
-        let mut result = QueryResult {
-            query: input.query.trim().to_string(),
-            skills: selected_skill_ids_from_skills(&selected_skills),
-            skill_contracts: selected_skill_contracts(&selected_skills),
-            dispatch: final_dispatch,
-            ..QueryResult::default()
-        };
-        apply_continuity_result(&mut result, &continuity);
-        self.run_turn_end_hooks(&input, &result);
-        let exec_error = match exec_result {
-            Ok(_) => None,
-            Err(failed) => Some(ChatError::Dispatch(failed.error.to_string())),
-        };
-        Ok(QueryExecution { result, exec_error })
+        self.turn_traced(input, cancel, trace, Some(sink))
     }
 
     /// Thread + `std::sync::mpsc` streaming variant: runs the same pipeline as
@@ -546,6 +417,8 @@ impl Service {
 
     /// `chat/turn-start`: hooks may rewrite the query or veto the turn.
     /// Run one turn as an agent loop, and report the dispatch that answered.
+    /// With `stream`, every round's text is handed to the caller as it
+    /// arrives (a streamed query).
     ///
     /// The loop is `kura-core`'s. It streams a model, runs whatever calls come
     /// back, and goes around until the model answers without asking for more;
@@ -565,6 +438,7 @@ impl Service {
         resume: Option<&crate::resume::TurnResume>,
         inbox: Option<Arc<crate::steer::SteerInbox>>,
         on_first_round: crate::round::OnFirstRound,
+        mut stream: Option<TurnStream<'_>>,
     ) -> Result<(Dispatch, Option<String>), ChatError> {
         // The assembled conversation, split the way the loop reads it: a
         // leading system message is the standing instruction, the last user
@@ -580,7 +454,12 @@ impl Service {
         let _link = child.link_to(&kura_cancel);
 
         let log = Arc::new(parking_lot::Mutex::new(crate::round::RoundLog::default()));
+        // A streamed turn: rounds dispatch streaming into this channel, and
+        // the turn hands the text to the caller as it comes (below).
+        let (round_tx, mut round_rx) = tokio::sync::mpsc::unbounded_channel();
+        let turn_cancel = kura_cancel.clone();
         let context = crate::round::RoundContext {
+            stream: stream.is_some().then_some(round_tx),
             cancel: kura_cancel,
             service: self.clone(),
             input: input.clone(),
@@ -663,7 +542,47 @@ impl Service {
             }
             _ => {}
         };
-        let outcome = runtime.block_on(session.resume_turn(&question, checkpoint, &mut emit));
+        let mut emit_failure: Option<String> = None;
+        let outcome = runtime.block_on(async {
+            let turn = session.resume_turn(&question, checkpoint, &mut emit);
+            let Some(stream) = stream.as_mut() else {
+                return turn.await;
+            };
+            // Text goes out in the order it arrived, and all of it before the
+            // turn reports done. A caller that stopped listening cancels the
+            // turn: nobody would see the rest of it.
+            let mut forward = |round: crate::round::RoundChunk| {
+                if emit_failure.is_some() {
+                    return;
+                }
+                let chunk = StreamChunk {
+                    dispatch_id: round.dispatch_id,
+                    provider: round.provider,
+                    model: round.model,
+                    delta: round.chunk.delta,
+                    reply: round.chunk.output,
+                    finish_reason: round.chunk.finish_reason,
+                    usage: round.chunk.usage,
+                    ..stream.template.clone()
+                };
+                if let Err(err) = (stream.emit)(chunk) {
+                    emit_failure = Some(err.to_string());
+                    turn_cancel.cancel();
+                }
+            };
+            tokio::pin!(turn);
+            let outcome = loop {
+                tokio::select! {
+                    biased;
+                    Some(round) = round_rx.recv() => forward(round),
+                    outcome = &mut turn => break outcome,
+                }
+            };
+            while let Ok(round) = round_rx.try_recv() {
+                forward(round);
+            }
+            outcome
+        });
         trace.set_attribute(trace.root(), "rounds", log.lock().rounds);
         trace.set_attribute(trace.root(), "toolCalls", tool_calls);
         if session.steered() > 0 {
@@ -698,6 +617,10 @@ impl Service {
                 Ok(_) => ChatError::Provider("the turn produced no dispatch".to_string()),
             });
         };
+        if let Some(reason) = emit_failure {
+            // The turn was cancelled because nobody was listening; say why.
+            return Ok((dispatch, Some(format!("stream emitter failed: {reason}"))));
+        }
         if let Err(kura_core::CoreError::AnswerRejected(reason)) = outcome {
             return Err(ChatError::StructuredOutputInvalid(reason));
         }
@@ -1787,6 +1710,13 @@ pub fn response_continuity_source_event_key(source_event_key: &str) -> String {
     } else {
         format!("{trimmed}:assistant")
     }
+}
+
+/// A streamed turn's caller: where text goes, and the fields every chunk
+/// carries (skills, continuity) besides the round's own.
+pub(crate) struct TurnStream<'e> {
+    pub emit: &'e mut (dyn FnMut(StreamChunk) -> Result<(), ChatError> + Send),
+    pub template: StreamChunk,
 }
 
 /// Go `persistDispatch`.
