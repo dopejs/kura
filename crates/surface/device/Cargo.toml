@@ -1,0 +1,46 @@
+[package]
+license.workspace = true
+name = "kura-device"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+description = "Lets a Kura agent use this computer: pairs with a cell, keeps one outbound connection, and acts only inside a session the user granted."
+
+[[bin]]
+name = "kura-device"
+path = "src/main.rs"
+
+[dependencies]
+kura-device-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+chrono = { workspace = true }
+parking_lot = { workspace = true }
+libc = "0.2"
+base64 = "0.22"
+# Scaling and JPEG encoding of screenshots, in pure Rust so the pipeline is
+# tested on every platform.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# The outbound device connection; same stack as the Discord gateway client.
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots", "connect"] }
+# rustls 0.22 (pulled by tokio-tungstenite 0.24) needs an explicit crypto
+# provider; the ring provider reuses the workspace's already-built ring.
+rustls = { version = "0.22", default-features = false, features = ["ring", "logging", "tls12"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSArray", "NSDictionary", "NSValue"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSRunningApplication"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFRunLoop", "CFMachPort", "CFUserNotification", "CFString", "CFArray", "CFDictionary", "CFNumber", "CFCGTypes", "CFDate", "CFURL"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGEvent", "CGEventTypes", "CGEventSource", "CGDirectDisplay", "CGDisplayConfiguration", "CGRemoteOperation", "CGWindow", "CGError", "CGGeometry"] }
+security-framework = "3"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+# The cell's side of the protocol, to test the device against it.
+kura-devices = { workspace = true }
+kura-store = { workspace = true }
