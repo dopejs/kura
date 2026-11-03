@@ -1,7 +1,7 @@
 # Work Items: Long-Lived Work, Proactive Rules and Attention
 
-> Status: design, 2026-11-02; decisions recorded 2026-11-03 (§13). Slice 1
-> implemented 2026-11-03 (§12.1 records where it differs). Adapts docs 000–003 of
+> Status: design, 2026-11-02; decisions recorded 2026-11-03 (§13). Slices 1
+> and 2 implemented 2026-11-03 (§12 records where each differs). Adapts docs 000–003 of
 > DeepSeek's dsh-superagent prototype (Ticket, Mandate, Subscription,
 > accept mode, Attention, recovery note, ordered replies) to kura. Owner:
 > daemon.
@@ -405,7 +405,9 @@ would also fix delivery's restart and tenant gaps.
 
 - **Store:**
   - Migration v10 `work_items` (slice 1; v9 is the devices track's) adds
-    `work_items`, `work_item_rounds` and `work_item_inputs`. Each later
+    `work_items`, `work_item_rounds` and `work_item_inputs`; v11
+    `work_item_subscriptions` (slice 2) adds subscriptions, with a partial
+    unique index for one live owner per source. Each later
     slice adds its own tables (`work_item_subscriptions`,
     `work_item_outbox`, `work_rules`, `work_policy`) in its own migration:
     a shipped migration is never edited. The mandate is JSON in
@@ -515,6 +517,104 @@ Each slice is shippable behind `enabled` and has its own tests.
    - Tests: an IM e2e with the test connector: open → idle → a person's
      message wakes the item → reply. A non-owner message falls through. A
      stopped item does not wake. A revoked allowlist entry falls through.
+   - As built (slice 2), where it differs from or adds to the above
+     (tests: `crates/domains/workitems/tests/im_wake.rs` over the real
+     `MessageLoop`, plus unit tests in `wake.rs` and the store):
+     - **Store.** Migration v11 adds `work_item_subscriptions`, additive.
+       A subscription is never deleted, only dropped with a reason:
+       `stopped`, `revoked`, `superseded` (an ended owner replaced by a
+       new item on the same conversation) or `idle`. Idle expiry
+       (`subscriptionIdleDays`) is applied when the source is looked up;
+       there is no timer. An IM source key is the conversation's
+       `thr_src_<hash>` id, which already carries the tenant.
+     - **Who wakes an item.** Only the mandate's sender on the mandate's
+       connector. Anyone else's message on an owned conversation falls
+       through to the ordinary path, gated by participation as before, and
+       is not recorded on the item: slice 2 creates no context
+       subscriptions. This narrows §5.2's "messages that do not mention the
+       agent still reach the item" to the requester's own messages.
+     - **Open items are checked too.** Every waking message runs the same
+       authority check as revalidation; a requester who no longer passes
+       it falls through and the live item is neither cancelled nor
+       revoked (§5.4). Without this a sender taken off the allowlist could
+       still steer live work.
+     - **Revalidation.** The fast path is never taken (the hash stays empty
+       until slice 6). `im_*`: the connector is not disabled, failed or
+       backing off, and for a group or room whose connector enforces
+       participation, a valid route policy still receives the conversation
+       and allows the sender (the mention is waived); a DM has no allowlist
+       step on the ordinary path, so only the connector is checked. `api`:
+       the principal holds an active membership in the tenant (every role
+       may chat); an item without a principal fails closed. No slice 2
+       route resumes an `api` item, so that check is covered by unit tests
+       only. `rule` fails as `basis_unsupported`. A pass at the
+       `maxOpenItems` cap does not reopen; the message falls through.
+     - **No daemon-wide driver task.** Rounds are driven by whoever woke
+       the item: `POST /v1/work-items` and `work_item.open` on a thread of
+       their own, an IM wake inline on the connector loop, as an ordinary
+       IM turn runs. A wake that finds a round running steers it, or leaves
+       its input to that round's driver, which looks again after the round
+       settles. The driver admits before it records a round, so a refusal
+       records nothing. Not built: the transient-failure retry with backoff
+       and pause. Inputs left queued by the hourly cap
+       (`maxRoundsPerItemPerHour`) or a refused admission wait for the next
+       wake; slice 4's boot scan is the first thing that will pick them up
+       on its own.
+     - **Replies until the outbox (slice 3)** go through the IM loop's own
+       reply path: one reply per round an IM wake ran (the report summary,
+       plus its question and options), a fixed line for a round that ended
+       without a report, `Added to the work item's running round.` for a
+       steered message, and a fixed notice when the cap or admission held
+       the round back. A round nobody's IM message started (the first
+       round after `work_item.open`, a round driven by the API) has no
+       reply channel yet: its report is read through the API and events.
+       The IM turn that opened the item acknowledges it in its own answer.
+     - **Holds.** A person's input releases every hold (a failed round, a
+       question, a blocked or failed report) and the round that reads it
+       clears the question (`attention_cleared`); the IM message is how a
+       person answers until `/answer` (slice 5). A running round counts as
+       "a person spoke since the report" in the stage, so a released item
+       shows `working`, not `person/blocked`.
+     - **Third-party content.** The mandate's title and scope are the
+       round's standing instructions, at the head of its system frame
+       (`QueryInput.instructions`, daemon-set, never on the wire). Inputs
+       are quoted in the question, and steered, inside
+       `<work_item_input kind=… from="requester|other">`, with the tag
+       escaped inside the body; the frame says only the requester may
+       refine the work and anything else is information.
+     - **`work_item.open`** takes `{title, scope, subscribe_origin}`
+       (default true) and returns `{itemId, title, basis, stage,
+       subscribed}`. It is offered to every turn except a round (rounds run
+       on `thr_wi_` threads). An IM turn's origin (connector, conversation,
+       author, shape, route policy) is registered in process for the
+       turn's lifetime under its tenant and run id. A web or TUI turn opens
+       on `api` without a principal: the tool does not see the HTTP
+       principal. `source.ref` is the inbound delivery id and
+       `receivingPolicyId` the route policy the participation decision
+       used; the decision's own id is not recorded (the store does not
+       hand it back).
+     - **D2** is enforced in one transaction and by a partial unique index:
+       a subscribing open on a conversation an open item owns is refused
+       (`work_item_conversation_owned`, 409 on the API); an ended owner is
+       superseded.
+     - **Stop** is `POST /v1/work-items/{id}/stop`, idempotent, on the
+       tenant allowlist: subscriptions dropped, a running round's turn
+       cancelled, and whatever that round reports the item stays stopped
+       (the store keeps `stopped` and `revoked` on settle). Not built:
+       `DELETE …/subscriptions/{sub}`, `/answer`, `/retry`, pause.
+     - **Events:** `woken` (steered or queued, `resumed`), `stopped`,
+       `mandate_revoked` (with a reason), `attention_cleared`; `ended` is
+       not sent for a stop or a revocation. `connector.route_outcome_recorded`
+       now records the outcome `work_item` for every connector kind.
+       Metrics: `kura_work_item_inputs_total{kind, path=steered|queued}`
+       and `kura_work_item_mandate_checks_total{result=pass|revoked}`.
+     - **Config:** `subscriptionIdleDays` (14) and
+       `maxRoundsPerItemPerHour` (20) are accepted keys; `recoverOnBoot`
+       is still refused until slice 4.
+     - **Known gaps:** a steered input whose turn then fails stays
+       `steered` and is not offered again; bots are not told apart
+       (`InboundMessage` has no bot flag), so a bot can wake an item only
+       if it was the requester.
 3. **Outbox with order.**
    - Builds: the outbox table and sender; drop reasons; boot sweep. Rounds
      reply through it.
