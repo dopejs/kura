@@ -56,6 +56,7 @@ pub mod swarm;
 pub mod tools;
 pub mod triage;
 pub mod turn_traces;
+pub mod work_items;
 pub mod workflows;
 pub mod workspace_bindings;
 
@@ -214,6 +215,7 @@ pub fn router(state: AppState) -> Router {
         .merge(tools::router())
         .merge(triage::router())
         .merge(turn_traces::router())
+        .merge(work_items::router())
         // Workflows are addressed under their owning run, so the run is the
         // tenant-owned resource the guard checks; all four routes in the
         // family are covered by the one layer.

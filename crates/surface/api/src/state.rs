@@ -201,6 +201,9 @@ pub struct AppState {
     pub tool_runtime: Option<Arc<kura_tools::ToolRuntime>>,
     /// Bounded concurrent sub-agents (Stage 4); disabled until opted in.
     pub swarm: Option<Arc<kura_swarm::Manager>>,
+    /// Long-lived work items (docs/harness/work-items.md). Absent unless
+    /// `entries.work-items.config.enabled`; the routes then answer 404.
+    pub work_items: Option<Arc<kura_workitems::Manager>>,
     /// Per-child spend bound for swarm runs, reserved before each child spawns.
     pub swarm_quota: Option<Arc<dyn kura_swarm::ChildQuotaGate>>,
     /// Tool provider profiles (Stage 9.1b). Credentials are not here: a
@@ -267,6 +270,7 @@ impl AppState {
             improvement: None,
             tool_runtime: None,
             swarm: None,
+            work_items: None,
             swarm_quota: None,
             tools: None,
             hosting: crate::hosting::Hosting::Single,

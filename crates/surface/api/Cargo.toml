@@ -62,6 +62,7 @@ kura-memory = { workspace = true }
 kura-egress = { workspace = true }
 kura-session = { workspace = true }
 kura-swarm = { workspace = true }
+kura-workitems = { workspace = true }
 kura-tools = { workspace = true }
 kura-threads = { workspace = true }
 kura-profiles = { workspace = true }

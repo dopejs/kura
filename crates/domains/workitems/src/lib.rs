@@ -16,7 +16,8 @@ mod stage;
 mod types;
 
 pub use manager::{
-    MAX_LIST_LIMIT, Manager, OpenRequest, RoundOutcome, RoundTurn, WorkItemError, round_request_id,
+    MAX_LIST_LIMIT, Manager, OpenRequest, RoundOutcome, RoundTurn, WorkItemError, check_open,
+    round_request_id,
 };
 pub use report::{REPORT_FORMAT_NAME, read_report, report_schema, round_query, unreadable_report};
 pub use stage::{StageFacts, derive_stage};

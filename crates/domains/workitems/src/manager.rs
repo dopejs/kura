@@ -132,16 +132,10 @@ impl Manager {
     /// and its first round recorded as running. The caller runs that round
     /// and hands back how it ended to [`Self::settle_round`].
     pub fn open(&self, request: OpenRequest) -> Result<(WorkItem, RoundTurn), WorkItemError> {
+        check_open(&request)?;
         let tenant_id = request.tenant_id.trim().to_string();
-        if tenant_id.is_empty() {
-            return Err(WorkItemError::Invalid(
-                "a work item needs a tenant".to_string(),
-            ));
-        }
         let title = request.title.trim().to_string();
         let scope = request.scope.trim().to_string();
-        check_text("title", &title, MAX_TITLE_CHARS)?;
-        check_text("scope", &scope, MAX_SCOPE_CHARS)?;
 
         let now = Utc::now();
         let hex = uuid::Uuid::now_v7().simple().to_string();
@@ -465,6 +459,18 @@ impl Manager {
         };
         self.bus.publish(event);
     }
+}
+
+/// What [`Manager::open`] refuses before touching the store, so a caller
+/// can refuse a request before it spends anything on it.
+pub fn check_open(request: &OpenRequest) -> Result<(), WorkItemError> {
+    if request.tenant_id.trim().is_empty() {
+        return Err(WorkItemError::Invalid(
+            "a work item needs a tenant".to_string(),
+        ));
+    }
+    check_text("title", request.title.trim(), MAX_TITLE_CHARS)?;
+    check_text("scope", request.scope.trim(), MAX_SCOPE_CHARS)
 }
 
 /// A round's chat request id: `<item>_r<seq>`, so `wi_<hex>_r<seq>`. The

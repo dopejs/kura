@@ -164,6 +164,11 @@ pub const TENANT_ROUTES: &[(&str, &str)] = &[
     ("POST", "/v1/reminders/{id}/reschedule"),
     ("GET", "/v1/reminders/occurrences"),
     ("GET", "/v1/reminders/occurrences/{occurrence_id}"),
+    // Work items: every handler reads and writes the caller's tenant only;
+    // another tenant's item answers 404 (work-items.md §9, D6).
+    ("GET", "/v1/work-items"),
+    ("POST", "/v1/work-items"),
+    ("GET", "/v1/work-items/{item_id}"),
     // Approvals raised for the caller's own tool calls (by-id tenant guard).
     ("GET", "/v1/policy/approvals"),
     ("GET", "/v1/policy/approvals/{approval_id}"),

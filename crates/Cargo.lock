@@ -1339,6 +1339,7 @@ dependencies = [
  "kura-tools",
  "kura-triage",
  "kura-webhook",
+ "kura-workitems",
  "parking_lot",
  "serde",
  "serde_json",
