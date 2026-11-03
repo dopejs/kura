@@ -1,7 +1,7 @@
 # Work Items: Long-Lived Work, Proactive Rules and Attention
 
-> Status: design, 2026-11-02; decisions recorded 2026-11-03 (§13). Not
-> implemented. Adapts docs 000–003 of
+> Status: design, 2026-11-02; decisions recorded 2026-11-03 (§13). Slice 1
+> implemented 2026-11-03 (§12.1 records where it differs). Adapts docs 000–003 of
 > DeepSeek's dsh-superagent prototype (Ticket, Mandate, Subscription,
 > accept mode, Attention, recovery note, ordered replies) to kura. Owner:
 > daemon.
@@ -90,8 +90,9 @@ Two constraints follow from this table:
 5. **The mandate is immutable and records its basis.** It is checked again
    before an ended item resumes, never by a fresh evaluation (§5.4).
 6. **Approvals are reused as one kind of attention, not replaced** (§7).
-7. **Off by default.** `entries.workItems.config.enabled: false` keeps
-   today's behaviour exactly. The proactive accept mode defaults to
+7. **Off by default.** `entries.work-items.config.enabled: false` (the
+   plugin id is `work-items`; profile keys are plugin ids) keeps today's
+   behaviour exactly. The proactive accept mode defaults to
    `observe`.
 8. **Tenant-scoped from day one.** Every new row has `tenant_id NOT NULL`.
    Every read filters on the caller's tenant, and another tenant's id
@@ -132,7 +133,7 @@ Round      (item, seq, request_id, query_text, state: running|settled|failed, re
 
   One shape, matched by equality. The key is not a new id scheme.
 - **Chat thread.** Each item runs its rounds on its own thread,
-  `thr_wi_<hash>`. Its history is the item's history. Each round's query
+  `thr_wi_<hex>`, where the item is `wi_<hex>` (a UUIDv7). Its history is the item's history. Each round's query
   quotes the inputs that woke it, including the IM messages. *Tradeoff:*
   an ordinary IM turn after the item ends does not see the rounds in
   continuity. The connector transcript still has the replies. The
@@ -148,13 +149,13 @@ it. The first matching row wins:
 
 | Stage | Condition | Label |
 |---|---|---|
-| `person/delivery` | The last round could not start (admission refusal, transient provider error) and is in backoff, or an outbound message failed 3 times in a row | Not delivered |
+| `person/delivery` | The last round ended without a report (admission refusal, provider or transport error), or an outbound message failed 3 times in a row. Once the driver retries (slice 2), only after its backoff gives up | Not delivered |
 | `person/approval` | A pending approval is linked as attention | Awaiting approval |
 | `person/answer` | `attention` is set | Awaiting answer |
 | `person/blocked` · `person/failed` | The last report is `blocked` / `failed`, and no person's input arrived since | Blocked · Failed |
 | `queued` | Pending inputs and no round running; waiting for an admission slot | Queued |
 | `working` | A round is running | Working |
-| `idle` | The last report is `waiting`, or `progress` with no pending input | Waiting for an event |
+| `idle` | Anything else: the last report is `waiting`, or `progress` with no pending input | Waiting for an event |
 
 `ready` and `dropped` end the item (`end_reason` = `completed` /
 `dropped`). Ended items have no stage.
@@ -226,6 +227,8 @@ requester (D2).
 ### 5.4 Mandate revalidation (before an ended item resumes)
 
 - **Fast path:** the policy hash equals `mandate.policy_hash` → pass.
+  An empty `mandate.policy_hash` (items opened before work rules exist)
+  never takes the fast path.
   The hash is SHA-256 over the canonical JSON of the tenant's work rules,
   its accept mode, the channel route policy rows and allowlists of the
   mandate's connector, and the webhook endpoint's status.
@@ -401,15 +404,17 @@ would also fix delivery's restart and tenant gaps.
 ## 9. Store, API, contracts, compatibility
 
 - **Store:**
-  - Migration v9 `work_items` adds the tables `work_items`,
-    `work_item_subscriptions`, `work_item_inputs`, `work_item_rounds`,
-    `work_item_outbox`, `work_rules` and `work_policy` (accept mode per
-    tenant). The mandate is JSON in `work_items`, never updated.
-  - Indexes on `(tenant_id, state)`, on subscriptions by `(source_key)`
-    where `dropped_at IS NULL`, and on outbox by
+  - Migration v10 `work_items` (slice 1; v9 is the devices track's) adds
+    `work_items`, `work_item_rounds` and `work_item_inputs`. Each later
+    slice adds its own tables (`work_item_subscriptions`,
+    `work_item_outbox`, `work_rules`, `work_policy`) in its own migration:
+    a shipped migration is never edited. The mandate is JSON in
+    `work_items`, never updated.
+  - Indexes on `(tenant_id, state, updated_at)`, rounds by `state` (the
+    boot scan), inputs by `(item_id, state)`; later, subscriptions by
+    `(source_key)` where `dropped_at IS NULL`, and outbox by
     `(state, next_attempt_at)`.
-  - Purely additive. No existing table is altered. The current last
-    migration is v8 (`persistence/store/src/migrations.rs:3185`).
+  - Purely additive. No existing table is altered.
 - **Existing data:** threads, `agent_turn_checkpoints`, connector messages
   and approvals are read, never rewritten.
   - Checkpoints written before this change carry no item and are never
@@ -438,8 +443,11 @@ would also fix delivery's restart and tenant gaps.
 
 - **Metrics:**
   - `kura_work_items{stage}` — a gauge per tenant class, not per tenant id.
+    Not built yet: the metrics registry has no gauges.
+  - `kura_work_items_opened_total{basis}` (slice 1).
   - `kura_work_item_rounds_total{outcome}`, where `outcome` is a report
-    status, `report_unreadable` or `transient_retry`.
+    status, `report_unreadable`, `turn_error` (the turn ended without a
+    report) or, once the driver retries, `transient_retry`.
   - `kura_work_item_inputs_total{kind, path=steered|queued|recorded_only}`.
   - `kura_work_item_mandate_checks_total{result=pass_fast|pass|revoked}`.
   - `kura_work_rule_matches_total{mode=observe|auto}`.
@@ -452,6 +460,8 @@ would also fix delivery's restart and tenant gaps.
 - **Logs:** one `[kura] work item:` line per state change, with tenant,
   item, from → to and reason. The effective config is logged once at boot.
 - **Traces:** a round's turn trace carries `workItemId` and `roundSeq`.
+  Slice 1 has neither attribute: the trace's request id
+  (`wi_<hex>_r<seq>`) names both.
 
 ## 11. Failure modes and risks
 
@@ -473,11 +483,31 @@ would also fix delivery's restart and tenant gaps.
 Each slice is shippable behind `enabled` and has its own tests.
 
 1. **Items, mandate and API, no wake.**
-   - Builds: migration v9 (items + rounds + inputs); `POST /v1/work-items`
+   - Builds: migration v10 (items + rounds + inputs); `POST /v1/work-items`
      runs one round as a turn with the report schema; stage derivation;
      events; schemas.
    - Tests: store round-trip; stage first-match table; tenant isolation
      (two tenants, 404); report validation → `report_unreadable`.
+   - As built (slice 1), where it differs from or adds to the above:
+     - `POST /v1/work-items {title, scope, provider?, model?}` admits the
+       round's turn before recording anything (a refusal is 429 and opens
+       nothing), opens the item and answers 201 with stage `working`. The
+       round runs after the response on its own thread, through the new
+       `Service::query_admitted`; clients read the outcome with
+       `GET /v1/work-items/{id}` or the events.
+     - The scope text is in the round's query, not the system frame: in
+       slice 1 every input is the requester's own. It moves to the system
+       frame with slice 2, when third-party inputs arrive.
+     - A round that ended without a report is `failed` with the chat error
+       code and shows `person/delivery`; there is no retry until the
+       driver exists. A reply that never conforms is `report_unreadable`
+       → `blocked` (`person/blocked`).
+     - `maxOpenItems` (D7, default 50) is enforced at open (409). The other
+       D7 knobs are refused as unknown keys until their slice ships.
+     - Events: `opened`, `round_settled`, `attention_raised`, `ended`.
+     - Routes: `GET/POST /v1/work-items`, `GET /v1/work-items/{id}`, all on
+       the tenant allowlist. Without a resolved tenant the default tenant
+       is used, as reminders do.
 2. **IM subscriptions and wake.**
    - Builds: `work_item.open` tool; subscriptions; the IM hook; steering
      of a running round; resume of an ended item with revalidation
