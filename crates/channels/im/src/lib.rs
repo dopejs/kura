@@ -75,6 +75,87 @@ pub trait ReplyProgressor: ReplySender {
 }
 
 // ---------------------------------------------------------------------------
+// Work item seam (docs/harness/work-items.md §5.1, §5.2)
+// ---------------------------------------------------------------------------
+
+/// An inbound message offered to the work-item hook, after dedupe and the
+/// archived check and before session routing and participation.
+pub struct WorkItemInbound<'a> {
+    pub connector: &'a Connector,
+    pub inbound: &'a InboundMessage,
+    /// The message's tenant: the inbound's, else the connector's.
+    pub tenant_id: String,
+    /// The conversation's stable source key, its `thr_src_<hash>` id.
+    pub source_key: String,
+    pub shape: ConversationShape,
+    /// The persisted inbound's delivery id.
+    pub delivery_id: String,
+}
+
+/// What the hook did with an inbound message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkItemRoute {
+    /// No work item takes it: the ordinary IM path runs, exactly as without
+    /// the hook.
+    FallThrough,
+    /// A work item took it. The ordinary turn does not run; `replies` are
+    /// sent in order through the loop's own reply path.
+    Claimed {
+        replies: Vec<String>,
+        reason_code: String,
+    },
+}
+
+/// Where an ordinary IM turn came from, so a tool the turn calls can act on
+/// the conversation it was asked in (`work_item.open`). Registered for the
+/// turn's lifetime under its tenant and runtime run id, which reach the
+/// turn's tools as `ToolTurn::tenant_id` and `ToolTurn::scope.run_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImTurnOrigin {
+    /// The turn's tenant, as the chat turn runs it.
+    pub tenant_id: String,
+    pub run_id: String,
+    pub connector_id: String,
+    pub connector_kind: String,
+    pub source_conversation_id: String,
+    /// The conversation's `thr_src_<hash>` id; empty when the message
+    /// carried no valid source key.
+    pub source_key: String,
+    pub author_id: String,
+    pub shape: ConversationShape,
+    pub mentioned: bool,
+    pub delivery_id: String,
+    pub external_message_id: String,
+    /// The route policy the participation decision used; empty when none.
+    pub route_policy_id: String,
+}
+
+/// The work-items feature, as the IM loop sees it. Installed only while the
+/// feature is enabled; without it the loop behaves exactly as before.
+pub trait WorkItemHook: Send + Sync {
+    /// Offered every new inbound message. Must fall through on any failure
+    /// of its own, so a person still gets the ordinary answer.
+    fn route_inbound(&self, inbound: &WorkItemInbound<'_>) -> WorkItemRoute;
+    /// An ordinary turn is about to run for `origin`.
+    fn turn_started(&self, origin: &ImTurnOrigin);
+    /// The turn registered by [`WorkItemHook::turn_started`] has ended.
+    fn turn_finished(&self, tenant_id: &str, run_id: &str);
+}
+
+/// Unregisters a turn's origin however the turn ends.
+struct TurnOriginGuard<'a> {
+    hook: &'a dyn WorkItemHook,
+    tenant_id: String,
+    run_id: String,
+}
+
+impl Drop for TurnOriginGuard<'_> {
+    fn drop(&mut self) {
+        self.hook.turn_finished(&self.tenant_id, &self.run_id);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Error classification (Go classifiedError / classifyError)
 // ---------------------------------------------------------------------------
 
@@ -154,9 +235,17 @@ pub struct MessageLoop {
     event_bus: Option<Bus>,
     store: Arc<SQLiteStore>,
     chat: ChatService,
+    work_items: Option<Arc<dyn WorkItemHook>>,
 }
 
 impl MessageLoop {
+    /// Offers every new inbound message to `hook` before the ordinary path
+    /// (work-items.md §5.2), and tells it which conversation each ordinary
+    /// turn serves.
+    pub fn set_work_item_hook(&mut self, hook: Arc<dyn WorkItemHook>) {
+        self.work_items = Some(hook);
+    }
+
     /// Go NewMessageLoop.
     #[must_use]
     pub fn new(
@@ -174,6 +263,7 @@ impl MessageLoop {
             event_bus,
             store: sqlite_store,
             chat: chat_service,
+            work_items: None,
         }
     }
 }
@@ -675,6 +765,12 @@ impl MessageLoop {
             });
         }
 
+        if let Some(result) =
+            self.route_to_work_item(connector, inbound, replies, &mut persisted_inbound)?
+        {
+            return Ok(result);
+        }
+
         let (session, created_session) = match self.route_session(inbound) {
             Ok(pair) => pair,
             Err(err) => {
@@ -810,6 +906,36 @@ impl MessageLoop {
         if let Some(progressor) = progressor {
             capabilities = progressor.reply_capabilities();
         }
+        // The turn's tools may act on the conversation it was asked in
+        // (`work_item.open`); the origin is known for exactly this turn.
+        let _origin = self.work_items.as_deref().map(|hook| {
+            let origin = ImTurnOrigin {
+                tenant_id: persisted_inbound.tenant_id.clone(),
+                run_id: run.run_id.clone(),
+                connector_id: connector.connector_id.clone(),
+                connector_kind: connector.kind.clone(),
+                source_conversation_id: inbound_channel_or_conversation_id(inbound),
+                source_key: source_continuation_key(connector, inbound)
+                    .map(|key| thread_id_for_source(&key))
+                    .unwrap_or_default(),
+                author_id: inbound.author_id.trim().to_string(),
+                shape: conversation_shape_for_ingress_source(
+                    SourceKind::Channel,
+                    &connector.kind,
+                    inbound,
+                ),
+                mentioned: inbound.mentioned,
+                delivery_id: persisted_inbound.delivery_id.clone(),
+                external_message_id: inbound.external_message_id.clone(),
+                route_policy_id: participation_decision.policy_id.clone(),
+            };
+            hook.turn_started(&origin);
+            TurnOriginGuard {
+                hook,
+                tenant_id: origin.tenant_id,
+                run_id: origin.run_id,
+            }
+        });
         let stop_flag = Arc::new(AtomicBool::new(false));
         let thinking_started = self.start_thinking_progress(
             connector,
@@ -1042,6 +1168,130 @@ impl MessageLoop {
 }
 
 impl MessageLoop {
+    /// Offers the message to the work-item hook (work-items.md §5.2). `None`
+    /// when no hook is installed, the message has no valid source key, or
+    /// no item takes it: the ordinary path runs. When an item takes it, the
+    /// ordinary turn does not run; the hook's replies go out through this
+    /// loop's reply path (until the work-item outbox, slice 3) and the
+    /// route outcome `work_item` is recorded.
+    fn route_to_work_item(
+        &self,
+        connector: &Connector,
+        inbound: &InboundMessage,
+        replies: &dyn ReplySender,
+        persisted_inbound: &mut MessageRecord,
+    ) -> Result<Option<ProcessResult>, String> {
+        let Some(hook) = self.work_items.as_deref() else {
+            return Ok(None);
+        };
+        let Ok(key) = source_continuation_key(connector, inbound) else {
+            return Ok(None);
+        };
+        let route = hook.route_inbound(&WorkItemInbound {
+            connector,
+            inbound,
+            tenant_id: coalesce_trimmed(&[&inbound.tenant_id, &connector.tenant_id]),
+            source_key: thread_id_for_source(&key),
+            shape: conversation_shape_for_ingress_source(
+                SourceKind::Channel,
+                &connector.kind,
+                inbound,
+            ),
+            delivery_id: persisted_inbound.delivery_id.clone(),
+        });
+        let WorkItemRoute::Claimed {
+            replies: texts,
+            reason_code,
+        } = route
+        else {
+            return Ok(None);
+        };
+
+        let max_len = replies.reply_progressor().map_or(0, |progressor| {
+            progressor.reply_capabilities().max_message_length
+        });
+        let session = empty_session();
+        let run = Run::default();
+        let mut send_err = None;
+        let mut sent_ids = Vec::new();
+        'texts: for text in texts.iter().filter(|text| !text.trim().is_empty()) {
+            for part in split_reply_content(text, max_len) {
+                let mut record = new_outbound_record(
+                    connector,
+                    &session,
+                    &run,
+                    inbound,
+                    persisted_inbound,
+                    &part,
+                );
+                self.store.upsert_connector_message(&record)?;
+                match replies.send_reply(OutboundReply {
+                    connector_id: connector.connector_id.clone(),
+                    channel_id: inbound.channel_id.clone(),
+                    content: part.clone(),
+                    reply_to_external_message_id: reply_to_external_message_id(inbound),
+                }) {
+                    Ok(sent) => {
+                        record.external_message_id = sent.external_message_id.clone();
+                        record.status = DeliveryStatus::Replied;
+                        sent_ids.push(sent.external_message_id);
+                    }
+                    Err(err) => {
+                        record.status = DeliveryStatus::Failed;
+                        record.error = safe_reply_failure_reason(None);
+                        send_err = Some(err);
+                    }
+                }
+                record.foreground_outcome_status =
+                    foreground_reply_outcome_status(record.status).to_string();
+                record.updated_at = Utc::now();
+                self.store.upsert_connector_message(&record)?;
+                if send_err.is_some() {
+                    break 'texts;
+                }
+            }
+        }
+        persisted_inbound.status = match (&send_err, sent_ids.is_empty()) {
+            (Some(_), _) => DeliveryStatus::Failed,
+            (None, false) => DeliveryStatus::Replied,
+            (None, true) => persisted_inbound.status,
+        };
+        if send_err.is_some() {
+            persisted_inbound.error = safe_reply_failure_reason(None);
+        }
+        persisted_inbound.updated_at = Utc::now();
+        self.store.upsert_connector_message(persisted_inbound)?;
+        let _ = self.publish_connector_event(
+            "connector.route_outcome_recorded",
+            connector,
+            &session,
+            "",
+            "",
+            object(serde_json::json!({
+                "tenantId": persisted_inbound.tenant_id,
+                "connectorId": connector.connector_id,
+                "outcome": "work_item",
+                "reasonCode": reason_code,
+                "surface": matrix_route_surface(persisted_inbound),
+                "messageDeliveryId": persisted_inbound.delivery_id,
+                "replyMessageIds": sent_ids,
+                "redactionStatus": "redacted",
+            })),
+        );
+        if let Some(err) = send_err {
+            return Err(err);
+        }
+        Ok(Some(ProcessResult {
+            session,
+            run,
+            step: Step::default(),
+            reply: texts.join("\n\n"),
+            outcome: "work_item".to_string(),
+            reason_code,
+            duplicate: false,
+        }))
+    }
+
     /// Go blockArchivedSourceContinuation: rejects new work when the source's
     /// current thread is archived, recording the blocked linkage evidence.
     fn block_archived_source_continuation(
