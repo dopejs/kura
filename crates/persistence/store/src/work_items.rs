@@ -700,7 +700,10 @@ mod tests {
             assert!(store.get_work_item("ten_a", "wi_1").is_err());
         }
         let store = SQLiteStore::new(&dir).unwrap();
-        assert_eq!(store.schema_version().unwrap(), crate::CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            crate::CURRENT_SCHEMA_VERSION
+        );
         let at = Utc::now();
         store
             .create_work_item(&item("ten_a", "wi_1", at), &round("ten_a", "wi_1", at))
