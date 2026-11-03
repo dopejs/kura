@@ -104,6 +104,29 @@ describe("tool provider SDK methods (Stage 9.1b)", () => {
     expect(got.lastReport?.reason).toBe("report_unreadable");
   });
 
+  it("stops a work item and reads its subscriptions (work items slice 2)", async () => {
+    const stopped = {
+      itemId: "wi_1",
+      tenantId: "ten_a",
+      title: "Fix CI",
+      state: "ended",
+      endReason: "stopped",
+      threadId: "thr_wi_1",
+      seq: 1,
+      mandate: { basis: "im_mention", strength: "explicit", policyHash: "", matchedRules: [], sender: { connectorId: "slack-main", authorId: "U1" }, source: { kind: "im", ref: "d1", conversation: "C1" }, scopeText: "s", createdAt: "t" },
+      createdAt: "t",
+      updatedAt: "t",
+      subscriptions: [{ subscriptionId: "wis_1", sourceKind: "im", sourceKey: "thr_src_1", role: "owner", createdAt: "t", lastEventAt: "t", droppedAt: "t", dropReason: "stopped" }],
+    };
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(stopped));
+    const client = createKuraClient({ baseURL: "https://daemon.test", fetchImpl });
+    const got = await client.stopWorkItem("wi_1");
+    expect(String(fetchImpl.mock.calls[0][0])).toContain("/v1/work-items/wi_1/stop");
+    expect(fetchImpl.mock.calls[0][1].method).toBe("POST");
+    expect(got.endReason).toBe("stopped");
+    expect(got.subscriptions?.[0].dropReason).toBe("stopped");
+  });
+
   it("searches skills and records feedback (Stage 3)", async () => {
     const usage = { skillId: "deploy-check", invocations: 2, helpful: 1, corrected: 0 };
     const fetchImpl = vi.fn()

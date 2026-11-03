@@ -3685,6 +3685,21 @@ export interface WorkItemInput {
   createdAt: string;
 }
 
+/** A source the item follows (slice 2). An owner subscription lets the person who asked wake the item from that conversation; at most one live owner per conversation. */
+export interface WorkItemSubscription {
+  subscriptionId: string;
+  sourceKind: "im";
+  /** Matched by equality; for IM, the conversation's `thr_src_` thread id. */
+  sourceKey: string;
+  connectorId?: string;
+  conversationId?: string;
+  role: "owner" | "context";
+  createdAt: string;
+  lastEventAt: string;
+  droppedAt?: string;
+  dropReason?: "stopped" | "revoked" | "superseded" | "idle";
+}
+
 /** Long-lived work whose rounds are chat turns (docs/harness/work-items.md). */
 export interface WorkItem {
   itemId: string;
@@ -3706,6 +3721,8 @@ export interface WorkItem {
   rounds?: WorkItemRound[];
   /** Present on getWorkItem only. */
   inputs?: WorkItemInput[];
+  /** Present on getWorkItem only. */
+  subscriptions?: WorkItemSubscription[];
 }
 
 export interface WorkItemCreateInput {
@@ -4938,6 +4955,11 @@ export class KuraClient {
 
   async getWorkItem(itemId: string, tenantOptions?: TenantRequestOptions): Promise<WorkItem> {
     return this.requestJSON<WorkItem>(`/v1/work-items/${encodeURIComponent(itemId)}`, { tenant: tenantOptions });
+  }
+
+  /** Stops a work item for good: its subscriptions are dropped and a running round is cancelled. Idempotent. */
+  async stopWorkItem(itemId: string, tenantOptions?: TenantRequestOptions): Promise<WorkItem> {
+    return this.requestJSON<WorkItem>(`/v1/work-items/${encodeURIComponent(itemId)}/stop`, { method: "POST", tenant: tenantOptions });
   }
 
   async getSessionFrame(threadId: string, tenantOptions?: TenantRequestOptions): Promise<SessionFrame> {
