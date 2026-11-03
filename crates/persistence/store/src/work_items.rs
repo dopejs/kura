@@ -80,6 +80,27 @@ pub struct WorkItemInputRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// One `work_item_subscriptions` row: a source an item follows (slice 2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkItemSubscriptionRecord {
+    pub subscription_id: String,
+    pub item_id: String,
+    pub tenant_id: String,
+    /// `im` in slice 2.
+    pub source_kind: String,
+    /// Matched by equality. For IM, the conversation's `thr_src_<hash>`.
+    pub source_key: String,
+    pub connector_id: String,
+    pub conversation_id: String,
+    /// `owner` | `context`.
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+    pub last_event_at: DateTime<Utc>,
+    pub dropped_at: Option<DateTime<Utc>>,
+    /// `stopped` | `revoked` | `superseded` | `idle`.
+    pub drop_reason: Option<String>,
+}
+
 /// How a round ended, and what that does to its item. Applied in one
 /// transaction so an item never shows a settled round with a stale report.
 #[derive(Debug, Clone, PartialEq)]
@@ -117,6 +138,9 @@ const ROUND_COLUMNS: &str = "item_id, seq, tenant_id, request_id, query_text, st
 const INPUT_COLUMNS: &str = "item_id, seq, tenant_id, kind, author_is_person, body, source_ref, \
      state, round_seq, created_at";
 
+const SUBSCRIPTION_COLUMNS: &str = "subscription_id, item_id, tenant_id, source_kind, source_key, \
+     connector_id, conversation_id, role, created_at, last_event_at, dropped_at, drop_reason";
+
 impl SQLiteStore {
     /// Writes a new item together with its first round, so an item is never
     /// visible without the round that was started for it. Fails if the id
@@ -130,31 +154,7 @@ impl SQLiteStore {
             .conn
             .unchecked_transaction()
             .map_err(|e| format!("begin create work item: {e}"))?;
-        tx.execute(
-            r#"INSERT INTO work_items
-                (item_id, tenant_id, title, state, end_reason, thread_id, provider, model, seq,
-                 mandate_json, last_report_json, attention_json, policy_hash_seen,
-                 created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"#,
-            params![
-                item.item_id,
-                item.tenant_id,
-                item.title,
-                item.state,
-                item.end_reason,
-                item.thread_id,
-                item.provider,
-                item.model,
-                item.seq,
-                item.mandate_json,
-                item.last_report_json,
-                item.attention_json,
-                item.policy_hash_seen,
-                now_rfc3339(&item.created_at),
-                now_rfc3339(&item.updated_at),
-            ],
-        )
-        .map_err(|e| format!("insert work item {}: {e}", item.item_id))?;
+        insert_item(&tx, item)?;
         insert_round(&tx, round)?;
         tx.commit()
             .map_err(|e| format!("commit work item {}: {e}", item.item_id))
@@ -340,10 +340,13 @@ impl SQLiteStore {
         if changed == 0 {
             return Ok(false);
         }
+        // A stopped or revoked item stays ended whatever the round that was
+        // still running reports: neither end can be undone by a round.
         tx.execute(
             r#"UPDATE work_items SET
-                state = ?3,
-                end_reason = ?4,
+                state = CASE WHEN end_reason IN ('stopped', 'revoked') THEN state ELSE ?3 END,
+                end_reason = CASE WHEN end_reason IN ('stopped', 'revoked')
+                    THEN end_reason ELSE ?4 END,
                 last_report_json = COALESCE(?5, last_report_json),
                 attention_json = COALESCE(?6, attention_json),
                 updated_at = ?7
@@ -363,6 +366,404 @@ impl SQLiteStore {
             .map_err(|e| format!("commit settle work item round {item_id}#{seq}: {e}"))?;
         Ok(true)
     }
+
+    /// [`Self::create_work_item`] for an item that owns a source (D2: one
+    /// live owner per source). In the same transaction an owner whose item
+    /// has ended is superseded (its subscription dropped), while an owner
+    /// whose item is open keeps the source and nothing is written:
+    /// `Ok(Err(owner item id))`.
+    pub fn create_work_item_with_owner(
+        &self,
+        item: &WorkItemRecord,
+        round: &WorkItemRoundRecord,
+        owner: &WorkItemSubscriptionRecord,
+    ) -> Result<Result<(), String>, String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin create owned work item: {e}"))?;
+        let live_owner: Option<String> = tx
+            .query_row(
+                "SELECT s.item_id FROM work_item_subscriptions s \
+                 JOIN work_items i ON i.item_id = s.item_id \
+                 WHERE s.tenant_id = ?1 AND s.source_key = ?2 AND s.role = 'owner' \
+                   AND s.dropped_at IS NULL AND i.state = 'open'",
+                params![owner.tenant_id, owner.source_key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("find owner of {}: {e}", owner.source_key))?;
+        if let Some(owner_item) = live_owner {
+            return Ok(Err(owner_item));
+        }
+        tx.execute(
+            "UPDATE work_item_subscriptions SET dropped_at = ?3, drop_reason = 'superseded' \
+             WHERE tenant_id = ?1 AND source_key = ?2 AND role = 'owner' AND dropped_at IS NULL",
+            params![
+                owner.tenant_id,
+                owner.source_key,
+                now_rfc3339(&owner.created_at)
+            ],
+        )
+        .map_err(|e| format!("supersede owner of {}: {e}", owner.source_key))?;
+        insert_item(&tx, item)?;
+        insert_round(&tx, round)?;
+        insert_subscription(&tx, owner)?;
+        tx.commit()
+            .map_err(|e| format!("commit owned work item {}: {e}", item.item_id))?;
+        Ok(Ok(()))
+    }
+
+    /// The live subscriptions of a source, owner first. Those that saw no
+    /// event before `idle_before` are dropped as `idle` first, so an
+    /// abandoned conversation stops being read without a timer.
+    pub fn live_work_item_subscriptions_for_source(
+        &self,
+        tenant_id: &str,
+        source_key: &str,
+        idle_before: Option<DateTime<Utc>>,
+    ) -> Result<Vec<WorkItemSubscriptionRecord>, String> {
+        if let Some(cutoff) = idle_before {
+            self.conn
+                .execute(
+                    "UPDATE work_item_subscriptions SET dropped_at = ?4, drop_reason = 'idle' \
+                     WHERE tenant_id = ?1 AND source_key = ?2 AND dropped_at IS NULL \
+                       AND last_event_at < ?3",
+                    params![
+                        tenant_id,
+                        source_key,
+                        now_rfc3339(&cutoff),
+                        now_rfc3339(&Utc::now())
+                    ],
+                )
+                .map_err(|e| format!("expire idle subscriptions of {source_key}: {e}"))?;
+        }
+        let mut stmt = self
+            .conn
+            .prepare(&format!(
+                "SELECT {SUBSCRIPTION_COLUMNS} FROM work_item_subscriptions \
+                 WHERE tenant_id = ?1 AND source_key = ?2 AND dropped_at IS NULL \
+                 ORDER BY CASE role WHEN 'owner' THEN 0 ELSE 1 END, created_at ASC"
+            ))
+            .map_err(|e| format!("prepare live subscriptions: {e}"))?;
+        let rows = stmt
+            .query_map(params![tenant_id, source_key], subscription_from_row)
+            .map_err(|e| format!("live subscriptions of {source_key}: {e}"))?;
+        collect(rows, "work item subscription")
+    }
+
+    /// Every subscription the item ever had, live or dropped, oldest first.
+    pub fn list_work_item_subscriptions(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+    ) -> Result<Vec<WorkItemSubscriptionRecord>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!(
+                "SELECT {SUBSCRIPTION_COLUMNS} FROM work_item_subscriptions \
+                 WHERE tenant_id = ?1 AND item_id = ?2 \
+                 ORDER BY created_at ASC, subscription_id ASC"
+            ))
+            .map_err(|e| format!("prepare list subscriptions: {e}"))?;
+        let rows = stmt
+            .query_map(params![tenant_id, item_id], subscription_from_row)
+            .map_err(|e| format!("list subscriptions of {item_id}: {e}"))?;
+        collect(rows, "work item subscription")
+    }
+
+    /// Records that a live subscription saw an event, so it is not idle.
+    pub fn touch_work_item_subscription(
+        &self,
+        tenant_id: &str,
+        subscription_id: &str,
+        at: DateTime<Utc>,
+    ) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE work_item_subscriptions SET last_event_at = ?3 \
+                 WHERE tenant_id = ?1 AND subscription_id = ?2 AND dropped_at IS NULL",
+                params![tenant_id, subscription_id, now_rfc3339(&at)],
+            )
+            .map_err(|e| format!("touch subscription {subscription_id}: {e}"))?;
+        Ok(())
+    }
+
+    /// Records an input as the item's next one and returns its seq. The
+    /// seq is taken in the same transaction, so two writers cannot both
+    /// take it; `input.seq` is ignored.
+    pub fn append_work_item_input(&self, input: &WorkItemInputRecord) -> Result<i64, String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin append work item input: {e}"))?;
+        let seq: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM work_item_inputs WHERE item_id = ?1",
+                params![input.item_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("next input seq of {}: {e}", input.item_id))?;
+        let written = tx
+            .execute(
+                &format!(
+                    "INSERT INTO work_item_inputs ({INPUT_COLUMNS}) \
+                     SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 \
+                     WHERE EXISTS (SELECT 1 FROM work_items \
+                        WHERE item_id = ?1 AND tenant_id = ?3)"
+                ),
+                params![
+                    input.item_id,
+                    seq,
+                    input.tenant_id,
+                    input.kind,
+                    input.author_is_person,
+                    input.body,
+                    input.source_ref,
+                    input.state,
+                    input.round_seq,
+                    now_rfc3339(&input.created_at),
+                ],
+            )
+            .map_err(|e| format!("append work item input {}: {e}", input.item_id))?;
+        if written != 1 {
+            return Err(format!(
+                "append work item input {}: no such item for the tenant",
+                input.item_id
+            ));
+        }
+        tx.commit()
+            .map_err(|e| format!("commit work item input {}#{seq}: {e}", input.item_id))?;
+        Ok(seq)
+    }
+
+    /// Starts the item's next round. `round.seq` must be the item's seq + 1,
+    /// the item open, and no round of it running. In one transaction the
+    /// pending inputs up to `upto_input_seq` become consumed by the round
+    /// (they are what its query quotes) and, with `clear_attention`, the
+    /// item's question is cleared because a person answered it. `false`
+    /// when the item moved on in between; then nothing was written.
+    pub fn start_work_item_round(
+        &self,
+        round: &WorkItemRoundRecord,
+        upto_input_seq: i64,
+        clear_attention: bool,
+    ) -> Result<bool, String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin start work item round: {e}"))?;
+        let changed = tx
+            .execute(
+                "UPDATE work_items SET seq = ?3, updated_at = ?4, \
+                    attention_json = CASE WHEN ?5 THEN NULL ELSE attention_json END \
+                 WHERE tenant_id = ?1 AND item_id = ?2 AND state = 'open' AND seq = ?3 - 1 \
+                   AND NOT EXISTS (SELECT 1 FROM work_item_rounds r \
+                        WHERE r.item_id = ?2 AND r.state = 'running')",
+                params![
+                    round.tenant_id,
+                    round.item_id,
+                    round.seq,
+                    now_rfc3339(&round.started_at),
+                    clear_attention
+                ],
+            )
+            .map_err(|e| format!("start round {}#{}: {e}", round.item_id, round.seq))?;
+        if changed == 0 {
+            return Ok(false);
+        }
+        tx.execute(
+            "UPDATE work_item_inputs SET state = 'consumed', round_seq = ?3 \
+             WHERE tenant_id = ?1 AND item_id = ?2 AND state = 'pending' AND seq <= ?4",
+            params![round.tenant_id, round.item_id, round.seq, upto_input_seq],
+        )
+        .map_err(|e| format!("consume inputs of {}#{}: {e}", round.item_id, round.seq))?;
+        insert_round(&tx, round)?;
+        tx.commit()
+            .map_err(|e| format!("commit start round {}#{}: {e}", round.item_id, round.seq))?;
+        Ok(true)
+    }
+
+    /// Rounds of the item started at or after `since`, for the hourly cap.
+    pub fn count_work_item_rounds_since(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+        since: DateTime<Utc>,
+    ) -> Result<i64, String> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM work_item_rounds \
+                 WHERE tenant_id = ?1 AND item_id = ?2 AND started_at >= ?3",
+                params![tenant_id, item_id, now_rfc3339(&since)],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("count rounds of {item_id}: {e}"))
+    }
+
+    /// Opens again an item that ended on its own report (`completed` or
+    /// `dropped`). `false` for any other item: a stopped or revoked item
+    /// never reopens.
+    pub fn reopen_work_item(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+        at: DateTime<Utc>,
+    ) -> Result<bool, String> {
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE work_items SET state = 'open', end_reason = NULL, updated_at = ?3 \
+                 WHERE tenant_id = ?1 AND item_id = ?2 AND state = 'ended' \
+                   AND end_reason IN ('completed', 'dropped')",
+                params![tenant_id, item_id, now_rfc3339(&at)],
+            )
+            .map_err(|e| format!("reopen work item {item_id}: {e}"))?;
+        Ok(changed == 1)
+    }
+
+    /// Ends the item for good with `reason` and drops its live
+    /// subscriptions with the same reason, in one transaction. `stopped`
+    /// applies to any item not already stopped; `revoked` only to an item
+    /// that ended on its own report. `false` when it did not apply.
+    pub fn end_work_item_finally(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+        reason: &str,
+        at: DateTime<Utc>,
+    ) -> Result<bool, String> {
+        let guard = match reason {
+            "stopped" => "(end_reason IS NULL OR end_reason <> 'stopped')",
+            "revoked" => "state = 'ended' AND end_reason IN ('completed', 'dropped')",
+            other => return Err(format!("{other:?} is not a final end reason")),
+        };
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin end work item: {e}"))?;
+        let when = now_rfc3339(&at);
+        let changed = tx
+            .execute(
+                &format!(
+                    "UPDATE work_items SET state = 'ended', end_reason = ?3, updated_at = ?4 \
+                     WHERE tenant_id = ?1 AND item_id = ?2 AND {guard}"
+                ),
+                params![tenant_id, item_id, reason, when],
+            )
+            .map_err(|e| format!("end work item {item_id}: {e}"))?;
+        if changed == 0 {
+            return Ok(false);
+        }
+        tx.execute(
+            "UPDATE work_item_subscriptions SET dropped_at = ?3, drop_reason = ?4 \
+             WHERE tenant_id = ?1 AND item_id = ?2 AND dropped_at IS NULL",
+            params![tenant_id, item_id, when, reason],
+        )
+        .map_err(|e| format!("drop subscriptions of {item_id}: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit end work item {item_id}: {e}"))?;
+        Ok(true)
+    }
+}
+
+fn insert_item(conn: &rusqlite::Connection, item: &WorkItemRecord) -> Result<(), String> {
+    conn.execute(
+        r#"INSERT INTO work_items
+            (item_id, tenant_id, title, state, end_reason, thread_id, provider, model, seq,
+             mandate_json, last_report_json, attention_json, policy_hash_seen,
+             created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"#,
+        params![
+            item.item_id,
+            item.tenant_id,
+            item.title,
+            item.state,
+            item.end_reason,
+            item.thread_id,
+            item.provider,
+            item.model,
+            item.seq,
+            item.mandate_json,
+            item.last_report_json,
+            item.attention_json,
+            item.policy_hash_seen,
+            now_rfc3339(&item.created_at),
+            now_rfc3339(&item.updated_at),
+        ],
+    )
+    .map_err(|e| format!("insert work item {}: {e}", item.item_id))?;
+    Ok(())
+}
+
+fn insert_subscription(
+    conn: &rusqlite::Connection,
+    sub: &WorkItemSubscriptionRecord,
+) -> Result<(), String> {
+    conn.execute(
+        &format!(
+            "INSERT INTO work_item_subscriptions ({SUBSCRIPTION_COLUMNS}) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"
+        ),
+        params![
+            sub.subscription_id,
+            sub.item_id,
+            sub.tenant_id,
+            sub.source_kind,
+            sub.source_key,
+            sub.connector_id,
+            sub.conversation_id,
+            sub.role,
+            now_rfc3339(&sub.created_at),
+            now_rfc3339(&sub.last_event_at),
+            sub.dropped_at.as_ref().map(now_rfc3339),
+            sub.drop_reason,
+        ],
+    )
+    .map_err(|e| format!("insert subscription {}: {e}", sub.subscription_id))?;
+    Ok(())
+}
+
+/// Collects mapped rows, failing on the first unreadable one.
+fn collect<T>(
+    rows: impl Iterator<Item = rusqlite::Result<Result<T, String>>>,
+    what: &str,
+) -> Result<Vec<T>, String> {
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| format!("read {what}: {e}"))??);
+    }
+    Ok(out)
+}
+
+fn subscription_from_row(row: &Row<'_>) -> Parsed<WorkItemSubscriptionRecord> {
+    let (created_at, last_event_at) = match (time_at(row, 8)?, time_at(row, 9)?) {
+        (Ok(created), Ok(last)) => (created, last),
+        (Err(err), _) | (_, Err(err)) => return Ok(Err(err)),
+    };
+    let dropped_at = match row
+        .get::<_, Option<String>>(10)?
+        .as_deref()
+        .map(parse_rfc3339)
+    {
+        Some(Err(err)) => return Ok(Err(err)),
+        Some(Ok(at)) => Some(at),
+        None => None,
+    };
+    Ok(Ok(WorkItemSubscriptionRecord {
+        subscription_id: row.get(0)?,
+        item_id: row.get(1)?,
+        tenant_id: row.get(2)?,
+        source_kind: row.get(3)?,
+        source_key: row.get(4)?,
+        connector_id: row.get(5)?,
+        conversation_id: row.get(6)?,
+        role: row.get(7)?,
+        created_at,
+        last_event_at,
+        dropped_at,
+        drop_reason: row.get(11)?,
+    }))
 }
 
 fn insert_round(conn: &rusqlite::Connection, round: &WorkItemRoundRecord) -> Result<(), String> {
@@ -709,5 +1110,322 @@ mod tests {
             .create_work_item(&item("ten_a", "wi_1", at), &round("ten_a", "wi_1", at))
             .unwrap();
         assert!(store.get_work_item("ten_a", "wi_1").unwrap().is_some());
+    }
+
+    fn owner(
+        tenant_id: &str,
+        item_id: &str,
+        key: &str,
+        at: DateTime<Utc>,
+    ) -> WorkItemSubscriptionRecord {
+        WorkItemSubscriptionRecord {
+            subscription_id: format!("wis_{item_id}"),
+            item_id: item_id.to_string(),
+            tenant_id: tenant_id.to_string(),
+            source_kind: "im".to_string(),
+            source_key: key.to_string(),
+            connector_id: "slack-main".to_string(),
+            conversation_id: "c1".to_string(),
+            role: "owner".to_string(),
+            created_at: at,
+            last_event_at: at,
+            dropped_at: None,
+            drop_reason: None,
+        }
+    }
+
+    fn settled(item_state: &str, end_reason: Option<&str>) -> WorkItemRoundSettlement {
+        WorkItemRoundSettlement {
+            round_state: "settled".to_string(),
+            outcome: "ready".to_string(),
+            report_json: None,
+            error_code: None,
+            turn_id: None,
+            finished_at: Utc::now(),
+            item_state: item_state.to_string(),
+            end_reason: end_reason.map(str::to_string),
+            last_report_json: None,
+            attention_json: None,
+        }
+    }
+
+    /// Slice 2 upgrade: a v10 database (slice 1's items, no subscriptions)
+    /// keeps its items and gains the subscriptions table.
+    #[test]
+    fn a_v10_database_keeps_its_items_and_gains_subscriptions_on_upgrade() {
+        let dir = temp_dir("upgrade_v10");
+        let at = Utc::now();
+        {
+            let store = SQLiteStore::new_at_version(&dir, 10).unwrap();
+            assert_eq!(store.schema_version().unwrap(), 10);
+            store
+                .create_work_item(&item("ten_a", "wi_1", at), &round("ten_a", "wi_1", at))
+                .unwrap();
+            assert!(
+                store.list_work_item_subscriptions("ten_a", "wi_1").is_err(),
+                "v10 has no subscriptions table"
+            );
+        }
+        let store = SQLiteStore::new(&dir).unwrap();
+        assert_eq!(store.schema_version().unwrap(), 11);
+        assert_eq!(crate::CURRENT_SCHEMA_VERSION, 11);
+        let (read, _) = store.get_work_item("ten_a", "wi_1").unwrap().unwrap();
+        assert_eq!(read.mandate_json, r#"{"basis":"api"}"#);
+        assert!(
+            store
+                .list_work_item_subscriptions("ten_a", "wi_1")
+                .unwrap()
+                .is_empty(),
+            "an existing item gains no subscription"
+        );
+        store
+            .create_work_item_with_owner(
+                &item("ten_a", "wi_2", at),
+                &round("ten_a", "wi_2", at),
+                &owner("ten_a", "wi_2", "thr_src_1", at),
+            )
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn one_open_owner_per_source_and_an_ended_owner_is_superseded() {
+        let store = SQLiteStore::new(&temp_dir("owner")).unwrap();
+        let at = Utc::now();
+        store
+            .create_work_item_with_owner(
+                &item("ten_a", "wi_1", at),
+                &round("ten_a", "wi_1", at),
+                &owner("ten_a", "wi_1", "thr_src_1", at),
+            )
+            .unwrap()
+            .unwrap();
+        // D2: the open owner keeps the conversation; nothing is written.
+        let refused = store
+            .create_work_item_with_owner(
+                &item("ten_a", "wi_2", at),
+                &round("ten_a", "wi_2", at),
+                &owner("ten_a", "wi_2", "thr_src_1", at),
+            )
+            .unwrap();
+        assert_eq!(refused, Err("wi_1".to_string()));
+        assert!(store.get_work_item("ten_a", "wi_2").unwrap().is_none());
+        // Another tenant's conversation with the same key is its own.
+        store
+            .create_work_item_with_owner(
+                &item("ten_b", "wi_3", at),
+                &round("ten_b", "wi_3", at),
+                &owner("ten_b", "wi_3", "thr_src_1", at),
+            )
+            .unwrap()
+            .unwrap();
+
+        // Once wi_1 ends on its own report, a new item takes over.
+        assert!(
+            store
+                .settle_work_item_round("ten_a", "wi_1", 1, &settled("ended", Some("completed")))
+                .unwrap()
+        );
+        store
+            .create_work_item_with_owner(
+                &item("ten_a", "wi_4", at),
+                &round("ten_a", "wi_4", at),
+                &owner("ten_a", "wi_4", "thr_src_1", at),
+            )
+            .unwrap()
+            .unwrap();
+        let live = store
+            .live_work_item_subscriptions_for_source("ten_a", "thr_src_1", None)
+            .unwrap();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].item_id, "wi_4");
+        let old = store.list_work_item_subscriptions("ten_a", "wi_1").unwrap();
+        assert_eq!(old[0].drop_reason.as_deref(), Some("superseded"));
+        assert!(
+            store
+                .live_work_item_subscriptions_for_source("ten_c", "thr_src_1", None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_idle_subscription_is_dropped_when_looked_up() {
+        let store = SQLiteStore::new(&temp_dir("idle")).unwrap();
+        let long_ago = Utc::now() - chrono::Duration::days(30);
+        store
+            .create_work_item_with_owner(
+                &item("ten_a", "wi_1", long_ago),
+                &round("ten_a", "wi_1", long_ago),
+                &owner("ten_a", "wi_1", "thr_src_1", long_ago),
+            )
+            .unwrap()
+            .unwrap();
+        let cutoff = Utc::now() - chrono::Duration::days(14);
+        // Touched recently: still live.
+        store
+            .touch_work_item_subscription("ten_a", "wis_wi_1", Utc::now())
+            .unwrap();
+        assert_eq!(
+            store
+                .live_work_item_subscriptions_for_source("ten_a", "thr_src_1", Some(cutoff))
+                .unwrap()
+                .len(),
+            1
+        );
+        store
+            .touch_work_item_subscription("ten_a", "wis_wi_1", long_ago)
+            .unwrap();
+        assert!(
+            store
+                .live_work_item_subscriptions_for_source("ten_a", "thr_src_1", Some(cutoff))
+                .unwrap()
+                .is_empty()
+        );
+        let subs = store.list_work_item_subscriptions("ten_a", "wi_1").unwrap();
+        assert_eq!(subs[0].drop_reason.as_deref(), Some("idle"));
+    }
+
+    #[test]
+    fn a_round_starts_once_and_consumes_the_inputs_it_quotes() {
+        let store = SQLiteStore::new(&temp_dir("start")).unwrap();
+        let at = Utc::now();
+        store
+            .create_work_item(&item("ten_a", "wi_1", at), &round("ten_a", "wi_1", at))
+            .unwrap();
+        let mut next = round("ten_a", "wi_1", at);
+        next.seq = 2;
+        next.request_id = "wi_1_r2".to_string();
+        // Round 1 still runs: nothing starts.
+        assert!(!store.start_work_item_round(&next, 10, false).unwrap());
+        assert!(
+            store
+                .settle_work_item_round("ten_a", "wi_1", 1, &settled("open", None))
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .append_work_item_input(&input("ten_a", "wi_1", 0, true))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            store
+                .append_work_item_input(&input("ten_a", "wi_1", 0, true))
+                .unwrap(),
+            2
+        );
+        assert!(
+            store
+                .append_work_item_input(&input("ten_b", "wi_1", 0, true))
+                .is_err(),
+            "an input was appended to another tenant's item"
+        );
+        // Only input 1 was read for the query; input 2 stays pending.
+        assert!(store.start_work_item_round(&next, 1, false).unwrap());
+        assert!(
+            !store.start_work_item_round(&next, 2, false).unwrap(),
+            "the same round started twice"
+        );
+        let inputs = store.list_work_item_inputs("ten_a", "wi_1").unwrap();
+        assert_eq!(inputs[0].state, "consumed");
+        assert_eq!(inputs[0].round_seq, Some(2));
+        assert_eq!(inputs[1].state, "pending");
+        let (read, activity) = store.get_work_item("ten_a", "wi_1").unwrap().unwrap();
+        assert_eq!(read.seq, 2);
+        assert_eq!(activity.last_round_state.as_deref(), Some("running"));
+        assert_eq!(
+            store
+                .count_work_item_rounds_since("ten_a", "wi_1", at - chrono::Duration::hours(1))
+                .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_stop_is_final_and_a_round_still_running_cannot_undo_it() {
+        let store = SQLiteStore::new(&temp_dir("stop")).unwrap();
+        let at = Utc::now();
+        store
+            .create_work_item_with_owner(
+                &item("ten_a", "wi_1", at),
+                &round("ten_a", "wi_1", at),
+                &owner("ten_a", "wi_1", "thr_src_1", at),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            !store
+                .end_work_item_finally("ten_a", "wi_1", "revoked", at)
+                .unwrap(),
+            "an open item was revoked"
+        );
+        assert!(
+            !store
+                .end_work_item_finally("ten_b", "wi_1", "stopped", at)
+                .unwrap(),
+            "another tenant stopped the item"
+        );
+        assert!(
+            store
+                .end_work_item_finally("ten_a", "wi_1", "stopped", at)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .end_work_item_finally("ten_a", "wi_1", "stopped", at)
+                .unwrap()
+        );
+        // The round that was running reports progress: the item stays stopped.
+        assert!(
+            store
+                .settle_work_item_round("ten_a", "wi_1", 1, &settled("open", None))
+                .unwrap()
+        );
+        let (read, _) = store.get_work_item("ten_a", "wi_1").unwrap().unwrap();
+        assert_eq!(read.state, "ended");
+        assert_eq!(read.end_reason.as_deref(), Some("stopped"));
+        assert!(!store.reopen_work_item("ten_a", "wi_1", at).unwrap());
+        assert!(
+            store
+                .live_work_item_subscriptions_for_source("ten_a", "thr_src_1", None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn only_an_item_that_ended_on_its_report_reopens_or_is_revoked() {
+        let store = SQLiteStore::new(&temp_dir("reopen")).unwrap();
+        let at = Utc::now();
+        store
+            .create_work_item(&item("ten_a", "wi_1", at), &round("ten_a", "wi_1", at))
+            .unwrap();
+        assert!(!store.reopen_work_item("ten_a", "wi_1", at).unwrap());
+        store
+            .settle_work_item_round("ten_a", "wi_1", 1, &settled("ended", Some("dropped")))
+            .unwrap();
+        assert!(!store.reopen_work_item("ten_b", "wi_1", at).unwrap());
+        assert!(store.reopen_work_item("ten_a", "wi_1", at).unwrap());
+        let (read, _) = store.get_work_item("ten_a", "wi_1").unwrap().unwrap();
+        assert_eq!((read.state.as_str(), read.end_reason), ("open", None));
+
+        store
+            .create_work_item(&item("ten_a", "wi_2", at), &round("ten_a", "wi_2", at))
+            .unwrap();
+        store
+            .settle_work_item_round("ten_a", "wi_2", 1, &settled("ended", Some("completed")))
+            .unwrap();
+        assert!(
+            store
+                .end_work_item_finally("ten_a", "wi_2", "revoked", at)
+                .unwrap()
+        );
+        assert!(!store.reopen_work_item("ten_a", "wi_2", at).unwrap());
+        assert!(
+            store
+                .end_work_item_finally("ten_a", "wi_2", "bogus", at)
+                .is_err()
+        );
     }
 }

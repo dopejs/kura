@@ -3319,5 +3319,48 @@ pub fn schema_migrations() -> Vec<SchemaMigration> {
                 .to_string(),
         ],
     },
+    SchemaMigration {
+        version: 11,
+        name: "work_item_subscriptions".to_string(),
+        statements: vec![
+            // What a work item follows (docs/harness/work-items.md §4, §5.2,
+            // slice 2). `source_key` is matched by equality: for IM it is
+            // the conversation's stable `thr_src_<hash>` id, which already
+            // carries the tenant. A subscription is never deleted; it is
+            // dropped (`dropped_at`, `drop_reason`) when its item is stopped
+            // or revoked, when another item takes the conversation over,
+            // or when it saw no event for `subscriptionIdleDays`.
+            r#"CREATE TABLE IF NOT EXISTS work_item_subscriptions (
+                subscription_id TEXT PRIMARY KEY,
+                item_id TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_key TEXT NOT NULL,
+                connector_id TEXT NOT NULL DEFAULT '',
+                conversation_id TEXT NOT NULL DEFAULT '',
+                role TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_event_at TEXT NOT NULL,
+                dropped_at TEXT,
+                drop_reason TEXT,
+                FOREIGN KEY (item_id) REFERENCES work_items(item_id) ON DELETE CASCADE
+            );"#
+                .to_string(),
+            // The IM hook's lookup: live subscriptions of one source.
+            r#"CREATE INDEX IF NOT EXISTS idx_work_item_subscriptions_source
+                ON work_item_subscriptions(tenant_id, source_key)
+                WHERE dropped_at IS NULL;"#
+                .to_string(),
+            // D2: at most one live owner per conversation, enforced by the
+            // database as well as by the code that subscribes.
+            r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_work_item_subscriptions_owner
+                ON work_item_subscriptions(tenant_id, source_key)
+                WHERE role = 'owner' AND dropped_at IS NULL;"#
+                .to_string(),
+            r#"CREATE INDEX IF NOT EXISTS idx_work_item_subscriptions_item
+                ON work_item_subscriptions(item_id);"#
+                .to_string(),
+        ],
+    },
 ]
 }
