@@ -3310,6 +3310,39 @@ mod tests {
         app.close();
     }
 
+    /// Work items are off unless the profile turns them on: no manager, and
+    /// the routes answer 404 as if they did not exist. On, the assembly
+    /// wires the manager over the same store and bus.
+    #[tokio::test]
+    async fn work_items_assemble_only_when_enabled() {
+        let (_temp_dir, config) = test_config();
+        let mut app = App::new(config).expect("build app");
+        app.state.auth = None;
+        assert!(app.state.work_items.is_none());
+        let request = Request::builder()
+            .method("GET")
+            .uri("/v1/work-items")
+            .body(axum::body::Body::empty())
+            .expect("request");
+        let response = app.router().oneshot(request).await.expect("oneshot");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        app.close();
+
+        let (_temp_dir, config) = test_config();
+        std::fs::write(
+            std::path::Path::new(&config.data_dir).join(kura_plugin::PROFILE_FILE_NAME),
+            serde_json::json!({
+                "entries": { "work-items": { "config": { "enabled": true } } }
+            })
+            .to_string(),
+        )
+        .expect("write profile");
+        let app = App::new(config).expect("build app");
+        let manager = app.state.work_items.clone().expect("work items manager");
+        assert_eq!(manager.config().max_open_items, 50);
+        app.close();
+    }
+
     /// Stage 3.1: distillation runs as a visible chat turn on its own thread
     /// and lands a Pending proposal in the review queue. A canned provider
     /// stands in for the model so the success path is exercised.

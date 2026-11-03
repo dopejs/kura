@@ -456,6 +456,16 @@ pub(crate) const BUILTINS: &[BuiltinPlugin] = &[
     },
     BuiltinPlugin {
         descriptor: PluginDescriptor {
+            id: "work-items",
+            summary: "Long-lived work items (opt-in via work-items.config.enabled)",
+            provides: &["workitems.manager"],
+            // Every round is a chat turn.
+            requires: &["chat"],
+        },
+        build: build_work_items,
+    },
+    BuiltinPlugin {
+        descriptor: PluginDescriptor {
             id: "self-improve",
             summary: "Audited self-improvement proposals over the plugin profile",
             provides: &["improvement.manager"],
@@ -2800,6 +2810,77 @@ fn build_swarm(asm: &mut Assembly) -> Result<(), AppError> {
     asm.state.swarm_quota = Some(Arc::new(crate::adapters::SwarmQuotaGateImpl::new(billing)));
     asm.state.swarm = Some(Arc::new(manager));
     Ok(())
+}
+
+/// Work items (docs/harness/work-items.md). Off unless the profile sets
+/// `entries.work-items.config.enabled`: then nothing is built and every
+/// work-item route answers 404, exactly as before the feature existed.
+fn build_work_items(asm: &mut Assembly) -> Result<(), AppError> {
+    let Some(config) = work_items_config(asm.profile.config_for("work-items"))? else {
+        eprintln!("[kura] work items: disabled");
+        return Ok(());
+    };
+    eprintln!(
+        "[kura] work items: enabled (maxOpenItems {})",
+        config.max_open_items
+    );
+    asm.state.work_items = Some(Arc::new(kura_workitems::Manager::new(
+        asm.state.store_pool.clone(),
+        asm.event_bus.clone(),
+        config,
+    )));
+    Ok(())
+}
+
+/// The work-items config, or `None` when the feature is off. A misspelt
+/// key fails the boot rather than silently running a different daemon.
+fn work_items_config(
+    object: serde_json::Map<String, serde_json::Value>,
+) -> Result<Option<kura_workitems::WorkItemsConfig>, AppError> {
+    let config: kura_workitems::WorkItemsConfig =
+        serde_json::from_value(serde_json::Value::Object(object))
+            .map_err(|err| AppError::PluginProfile(format!("work-items config: {err}")))?;
+    Ok(config.enabled.then_some(config))
+}
+
+#[cfg(test)]
+mod work_items_config_tests {
+    use super::work_items_config;
+
+    fn object(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        value.as_object().cloned().expect("object")
+    }
+
+    #[test]
+    fn off_by_default_and_on_only_when_enabled() {
+        assert!(
+            work_items_config(object(serde_json::json!({})))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            work_items_config(object(
+                serde_json::json!({"enabled": false, "maxOpenItems": 3})
+            ))
+            .unwrap()
+            .is_none()
+        );
+        let on = work_items_config(object(serde_json::json!({"enabled": true})))
+            .unwrap()
+            .expect("enabled");
+        assert_eq!(on.max_open_items, 50);
+        let capped = work_items_config(object(
+            serde_json::json!({"enabled": true, "maxOpenItems": 3}),
+        ))
+        .unwrap()
+        .expect("enabled");
+        assert_eq!(capped.max_open_items, 3);
+    }
+
+    #[test]
+    fn a_misspelt_key_is_refused() {
+        assert!(work_items_config(object(serde_json::json!({"enable": true}))).is_err());
+    }
 }
 
 fn build_self_improve(asm: &mut Assembly) -> Result<(), AppError> {

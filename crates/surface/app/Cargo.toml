@@ -42,6 +42,7 @@ kura-mail = { workspace = true }
 kura-reminders = { workspace = true }
 kura-egress = { workspace = true }
 kura-swarm = { workspace = true }
+kura-workitems = { workspace = true }
 kura-tools = { workspace = true }
 kura-triage = { workspace = true }
 kura-memory.workspace = true
