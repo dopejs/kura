@@ -82,7 +82,21 @@ impl Service {
         input: QueryInput,
         cancel: &CancellationToken,
     ) -> Result<QueryExecution, ChatError> {
-        let _admitted = self.admit(&input.tenant_id)?;
+        let admitted = self.admit(&input.tenant_id)?;
+        self.query_admitted(admitted, input, cancel)
+    }
+
+    /// [`Service::query`] for a turn already admitted with
+    /// [`Service::admit`], so a caller can answer a refusal before it
+    /// records anything (a work item is not opened for a turn that would be
+    /// refused). The slot is held until the turn ends.
+    pub fn query_admitted(
+        &self,
+        admitted: Admitted,
+        input: QueryInput,
+        cancel: &CancellationToken,
+    ) -> Result<QueryExecution, ChatError> {
+        let _admitted = admitted;
         let trace = self.start_turn_trace(&input, "chat.query");
         let outcome = self.turn_traced(input, cancel, &trace, None);
         finish_turn_trace(&trace, outcome)
