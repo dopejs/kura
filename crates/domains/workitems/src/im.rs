@@ -97,6 +97,17 @@ impl Manager {
         if tenant_id.is_empty() {
             return Ok(WorkItemRoute::FallThrough);
         }
+        // Every inbound message of every connector passes here: the common
+        // case, a conversation nothing follows, is answered on a reader
+        // without taking the writer lock.
+        let followed = self
+            .store
+            .read()
+            .live_work_item_subscriptions_for_source(tenant_id, &inbound.source_key, None)
+            .map_err(WorkItemError::Store)?;
+        if followed.is_empty() {
+            return Ok(WorkItemRoute::FallThrough);
+        }
         let idle_before = (self.config.subscription_idle_days > 0)
             .then(|| Utc::now() - Duration::days(i64::from(self.config.subscription_idle_days)));
         let owner = self
