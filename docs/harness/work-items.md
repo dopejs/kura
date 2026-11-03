@@ -1,6 +1,7 @@
 # Work Items: Long-Lived Work, Proactive Rules and Attention
 
-> Status: design, 2026-11-02. Not implemented. Adapts docs 000–003 of
+> Status: design, 2026-11-02; decisions recorded 2026-11-03 (§13). Not
+> implemented. Adapts docs 000–003 of
 > DeepSeek's dsh-superagent prototype (Ticket, Mandate, Subscription,
 > accept mode, Attention, recovery note, ordered replies) to kura. Owner:
 > daemon.
@@ -517,27 +518,23 @@ Slices 1–4 deliver feature 1 plus restart recovery. Slice 5 is the
 attention queue, slices 6–7 are proactive work, and slice 3 is the
 ordered outbound.
 
-## 13. Open decisions
+## 13. Decisions (user, 2026-11-03)
 
-- **D1 — Chat thread per item** (`thr_wi_*`) or reuse of the IM
-  `thr_src_*` thread. Recommended: own thread (§4).
-- **D2 — Owners per thread.** At most one owning item per thread in v1
-  (simpler, no hand-back) or dsh's many items per thread with hand-back.
-  Also: whether owning a group thread needs a confirm step. Recommended:
-  one owner, no confirm.
-- **D3 — Model assessment for inferred candidates.** v1 is deterministic
-  conditions only. Alternatively, a cheap structured-output turn per
-  candidate judges every enabled rule, as dsh does. It costs tokens on
-  every unaddressed event.
-- **D4 — Where the outbox lives.** Keep it in the work-item domain (this
-  doc), or rebuild delivery on it, fixing delivery's ordering, restart
-  and tenant gaps at the same time.
-- **D5 — Webhook thread identity.** A header the sender sets, or a JSON
-  pointer into the payload configured per endpoint. The second parses
-  untrusted payloads in the daemon.
-- **D6 — Shared hosting.** Whether connectors and webhooks join the
-  tenant allowlist as part of this work, or stay operator-only so that
-  shared tenants get API- and chat-originated items only.
-- **D7 — Defaults.** `subscriptionIdleDays` 14, `maxOpenItems` 50,
-  `maxRoundsPerItemPerHour` 20, `recoverOnBoot` true. These are not
-  measured; they are dsh's or guesses.
+- **D1 — Chat thread per item:** each item gets its own thread
+  (`thr_wi_*`); the IM `thr_src_*` thread is only a subscription source
+  and reply channel.
+- **D2 — Owners per thread:** at most one owning item per thread in v1,
+  with no confirm step in group chats. No hand-back.
+- **D3 — Proactive rules:** deterministic conditions only (triage's
+  matcher). No model assessment per unaddressed event.
+- **D4 — Outbox:** lives in the work-item domain, ordered per
+  conversation, sending through delivery's existing connector senders.
+  Delivery's own ordering, restart and tenant gaps stay open, tracked
+  separately.
+- **D5 — Webhook thread identity:** a header the sender sets. The daemon
+  does not parse payloads to find the thread.
+- **D6 — Shared hosting:** connectors and webhooks stay off the tenant
+  allowlist; shared tenants get API- and chat-originated items only.
+- **D7 — Defaults:** `subscriptionIdleDays` 14, `maxOpenItems` 50,
+  `maxRoundsPerItemPerHour` 20, `recoverOnBoot` true, accepted as
+  configuration; revisit with pilot data.
