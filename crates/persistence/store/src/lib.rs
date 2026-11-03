@@ -51,6 +51,7 @@ pub mod thread_handoff;
 pub mod thread_persistence;
 mod tools;
 mod turn_checkpoints;
+pub mod work_items;
 pub mod workflow;
 pub mod workspaces;
 
@@ -94,7 +95,7 @@ pub use turn_checkpoints::TurnCheckpointRecord;
 ///
 /// Must equal the highest `version` in `schema_migrations()`, or a database
 /// written by this build is rejected on reopen as "newer than supported".
-pub const CURRENT_SCHEMA_VERSION: i64 = 9;
+pub const CURRENT_SCHEMA_VERSION: i64 = 10;
 
 /// The last development-era schema version before the baseline collapse.
 /// Databases stamped exactly at this legacy head hold a schema identical to

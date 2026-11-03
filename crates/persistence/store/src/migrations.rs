@@ -3244,5 +3244,80 @@ pub fn schema_migrations() -> Vec<SchemaMigration> {
             .to_string(),
         ],
     },
+    SchemaMigration {
+        version: 10,
+        name: "work_items".to_string(),
+        statements: vec![
+            // Long-lived work (docs/harness/work-items.md). Tenant-scoped
+            // from the start: every row carries its tenant, NOT NULL, and
+            // every read filters on it. `mandate_json` is written once with
+            // the item and never updated. The stage is not stored; it is
+            // derived from these rows on every read (§4.1).
+            r#"CREATE TABLE IF NOT EXISTS work_items (
+                item_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                state TEXT NOT NULL,
+                end_reason TEXT,
+                thread_id TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                seq INTEGER NOT NULL,
+                mandate_json TEXT NOT NULL,
+                last_report_json TEXT,
+                attention_json TEXT,
+                policy_hash_seen TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );"#
+                .to_string(),
+            r#"CREATE INDEX IF NOT EXISTS idx_work_items_tenant_state
+                ON work_items(tenant_id, state, updated_at DESC);"#
+                .to_string(),
+            // One row per round. `request_id` is the round's chat turn
+            // (`<item>_r<seq>`) and `query_text` is stored before the turn
+            // starts, so a rerun rebuilds the same turn key and finds its
+            // checkpoint (§6).
+            r#"CREATE TABLE IF NOT EXISTS work_item_rounds (
+                item_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                tenant_id TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                query_text TEXT NOT NULL,
+                state TEXT NOT NULL,
+                outcome TEXT,
+                report_json TEXT,
+                error_code TEXT,
+                turn_id TEXT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                PRIMARY KEY (item_id, seq),
+                FOREIGN KEY (item_id) REFERENCES work_items(item_id) ON DELETE CASCADE
+            );"#
+                .to_string(),
+            // The boot scan for interrupted rounds reads by state.
+            r#"CREATE INDEX IF NOT EXISTS idx_work_item_rounds_state
+                ON work_item_rounds(state);"#
+                .to_string(),
+            r#"CREATE TABLE IF NOT EXISTS work_item_inputs (
+                item_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                tenant_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                author_is_person INTEGER NOT NULL,
+                body TEXT NOT NULL,
+                source_ref TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL,
+                round_seq INTEGER,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (item_id, seq),
+                FOREIGN KEY (item_id) REFERENCES work_items(item_id) ON DELETE CASCADE
+            );"#
+                .to_string(),
+            r#"CREATE INDEX IF NOT EXISTS idx_work_item_inputs_state
+                ON work_item_inputs(item_id, state);"#
+                .to_string(),
+        ],
+    },
 ]
 }
