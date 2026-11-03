@@ -1701,6 +1701,7 @@ fn query_input_round_trips_camel_case_wire() {
         run_id: "run_9".to_string(),
         // Not on the wire, so empty for the round trip to compare equal.
         request_id: String::new(),
+        instructions: String::new(),
         response_format: Some(kura_llm::ResponseFormat {
             name: "answer".to_string(),
             schema: serde_json::json!({"type": "object"}),
@@ -3188,6 +3189,30 @@ fn a_conforming_reply_comes_back_parsed() {
         "{}",
         system.content
     );
+}
+
+/// A caller's instructions (a work item's mandate) open the system frame
+/// and never reach the question.
+#[test]
+fn caller_instructions_lead_the_system_frame() {
+    let (provider, seen) = ScriptedProvider::new(vec![answered("{\"name\":\"Ada\",\"age\":36}")]);
+    let svc = service(new_dispatcher(provider), None, None);
+    let mut input = structured_query(person_format());
+    input.instructions = "Only work on the CI fix.".to_string();
+    svc.query(input, &CancellationToken::new()).expect("query");
+
+    let seen = seen.read();
+    let system = &seen[0].messages[0];
+    assert_eq!(system.role, MessageRole::System);
+    assert!(
+        system.content.starts_with("Only work on the CI fix."),
+        "{}",
+        system.content
+    );
+    assert!(system.content.contains("named `person`"));
+    let question = seen[0].messages.last().expect("question");
+    assert_eq!(question.role, MessageRole::User);
+    assert!(!question.content.contains("CI fix"));
 }
 
 #[test]

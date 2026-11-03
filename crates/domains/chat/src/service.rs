@@ -459,6 +459,7 @@ impl Service {
         // message is this turn's question, and everything between is what came
         // before it.
         let (instructions, history, question) = split_for_turn(&dispatch_input.messages);
+        let instructions = with_caller_instructions(&input.instructions, instructions);
 
         // One token for the turn, linked to the caller's. The link has to
         // outlive every round, which is why it is held here rather than inside
@@ -1687,6 +1688,20 @@ pub(crate) fn split_for_turn(messages: &[Message]) -> (Option<String>, Vec<Respo
         })
         .collect();
     (instructions, history, question)
+}
+
+/// The turn's standing instruction with the caller's own instructions
+/// (`QueryInput::instructions`) at its head. Empty caller instructions
+/// leave it exactly as assembled.
+pub(crate) fn with_caller_instructions(caller: &str, assembled: Option<String>) -> Option<String> {
+    let caller = caller.trim();
+    if caller.is_empty() {
+        return assembled;
+    }
+    Some(match assembled {
+        Some(assembled) => format!("{caller}\n\n{assembled}"),
+        None => caller.to_string(),
+    })
 }
 
 pub fn terminal_dispatch_event(dispatch: &Dispatch) -> String {

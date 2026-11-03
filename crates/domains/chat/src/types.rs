@@ -64,6 +64,12 @@ pub struct QueryInput {
     /// turn's trace; empty for work with no request. Not part of the wire.
     #[serde(skip)]
     pub request_id: String,
+    /// Standing instructions the caller puts at the head of the turn's
+    /// system frame, before anything the turn assembles itself (a work
+    /// item's mandate, work-items.md §5.3). Daemon-set only: not part of
+    /// the wire, so no client can put text there.
+    #[serde(skip)]
+    pub instructions: String,
     /// The final reply must be JSON conforming to this schema (2.8, G7).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<kura_llm::ResponseFormat>,
