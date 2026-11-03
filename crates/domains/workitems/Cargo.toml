@@ -10,6 +10,17 @@ kura-store.workspace = true
 kura-events.workspace = true
 kura-threads.workspace = true
 kura-telemetry.workspace = true
+# Rounds are chat turns (slice 2 runs them here: the API, the work_item.open
+# tool and the IM hook all start rounds), and the tool is a kura-core Tool.
+kura-chat.workspace = true
+kura-core.workspace = true
+kura-llm.workspace = true
+# The IM hook implements kura-im's WorkItemHook seam.
+kura-im.workspace = true
+kura-imtypes.workspace = true
+kura-connectors.workspace = true
+kura-identity.workspace = true
+parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
@@ -17,5 +28,8 @@ thiserror.workspace = true
 uuid = { workspace = true, features = ["v7"] }
 
 [dev-dependencies]
-kura-llm.workspace = true
-parking_lot.workspace = true
+kura-router.workspace = true
+kura-runtime.workspace = true
+futures.workspace = true
+tempfile = "3"
+tokio = { workspace = true, features = ["time"] }

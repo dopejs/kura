@@ -8,10 +8,14 @@
 //!   before anything is recorded, so a refusal is a 429 and opens nothing.
 //! - `GET /v1/work-items` — the tenant's items (`?state=open|ended`,
 //!   `?limit=`), stage included.
-//! - `GET /v1/work-items/{itemId}` — one item with its rounds and inputs.
+//! - `GET /v1/work-items/{itemId}` — one item with its rounds, inputs and
+//!   subscriptions.
+//! - `POST /v1/work-items/{itemId}/stop` — stops the item for good (slice
+//!   2): its subscriptions are dropped, a running round is cancelled, and
+//!   nothing wakes or reopens it again. Stopping a stopped item is a no-op.
 //!
-//! Execution lives here, as for swarm runs: `kura-workitems` records what
-//! a round is and how it ended, the chat service runs it.
+//! Rounds run in `kura-workitems` (its driver), on the chat service the
+//! manager was built with.
 //!
 //! **Tenancy.** Every read and write is for the acting tenant (the default
 //! tenant without one); another tenant's item answers 404. **Off by
@@ -25,11 +29,9 @@ use axum::body::Bytes;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use kura_chat::{Admitted, CancellationToken, ChatError, QueryInput};
-use kura_workitems::{
-    ItemState, Manager, OpenRequest, RoundOutcome, RoundTurn, WorkItem, WorkItemError,
-};
+use axum::routing::{get, post};
+use kura_chat::ChatError;
+use kura_workitems::{ItemState, Manager, OpenRequest, WorkItem, WorkItemError};
 
 use crate::error::ApiError;
 use crate::middleware::{ActingTenant, RequestContext};
@@ -43,6 +45,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/work-items", get(list_items).post(create_item))
         .route("/v1/work-items/{item_id}", get(get_item))
+        .route("/v1/work-items/{item_id}/stop", post(stop_item))
 }
 
 /// Body of `POST /v1/work-items` (`create-work-item.request.schema.json`).
@@ -94,9 +97,9 @@ fn api_error(err: WorkItemError) -> ApiError {
     match err {
         WorkItemError::Invalid(message) => ApiError::BadRequest(message),
         WorkItemError::NotFound => ApiError::NotFound("work item not found".to_string()),
-        err @ (WorkItemError::OpenLimit { .. } | WorkItemError::RoundNotRunning(_)) => {
-            ApiError::Conflict(err.to_string())
-        }
+        err @ (WorkItemError::OpenLimit { .. }
+        | WorkItemError::RoundNotRunning(_)
+        | WorkItemError::ConversationOwned(_)) => ApiError::Conflict(err.to_string()),
         WorkItemError::Store(message) => ApiError::Internal(message),
     }
 }
@@ -139,6 +142,9 @@ async fn create(
         scope: request.scope,
         provider: request.provider,
         model: request.model,
+        // An API request has no IM conversation to own.
+        origin: None,
+        subscribe_origin: false,
     };
     // Refused before the turn is admitted: a bad request costs no turn.
     kura_workitems::check_open(&open).map_err(api_error)?;
@@ -158,9 +164,8 @@ async fn create(
             .map_err(|err| ApiError::Internal(format!("work item open task failed: {err}")))?
             .map_err(api_error)?
     };
-    std::thread::Builder::new()
-        .name("kura-work-item-round".to_string())
-        .spawn(move || run_round(&chat, &manager, &turn, admitted))
+    manager
+        .spawn_drive(turn, admitted)
         .map_err(|err| ApiError::Internal(format!("spawn work item round: {err}")))?;
     Ok(item)
 }
@@ -174,86 +179,6 @@ fn admission_error(err: &ChatError) -> ApiError {
         },
         other => ApiError::Internal(other.to_string()),
     }
-}
-
-/// Runs one round as a chat turn holding `admitted`, then records how it
-/// ended. Blocking: the caller gives it a thread. A panic in the turn is
-/// recorded as a failed round rather than leaving it running.
-pub fn run_round(
-    chat: &kura_chat::Service,
-    manager: &Manager,
-    turn: &RoundTurn,
-    admitted: Admitted,
-) {
-    let input = QueryInput {
-        query: turn.query_text.clone(),
-        provider: turn.provider.clone(),
-        model: turn.model.clone(),
-        tenant_id: turn.tenant_id.clone(),
-        thread_id: turn.thread_id.clone(),
-        request_id: turn.request_id.clone(),
-        response_format: Some(kura_llm::ResponseFormat {
-            name: kura_workitems::REPORT_FORMAT_NAME.to_string(),
-            schema: kura_workitems::report_schema(),
-        }),
-        ..QueryInput::default()
-    };
-    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        chat.query_admitted(admitted, input, &CancellationToken::new())
-    }));
-    let outcome = match ran {
-        Ok(Ok(execution)) => {
-            let turn_id = Some(execution.result.turn_id.clone()).filter(|id| !id.is_empty());
-            match execution.exec_error {
-                None => RoundOutcome::Answered {
-                    structured: execution.result.structured_output,
-                    turn_id,
-                },
-                Some(err) => {
-                    log_turn_failure(turn, &err.to_string());
-                    RoundOutcome::Failed {
-                        error_code: Some(execution.result.dispatch.error_code.clone())
-                            .filter(|code| !code.is_empty())
-                            .unwrap_or_else(|| err.code().to_string()),
-                        turn_id,
-                    }
-                }
-            }
-        }
-        Ok(Err(ChatError::StructuredOutputInvalid(detail))) => RoundOutcome::Unreadable {
-            detail,
-            turn_id: None,
-        },
-        Ok(Err(err)) => {
-            log_turn_failure(turn, &err.to_string());
-            RoundOutcome::Failed {
-                error_code: err.code().to_string(),
-                turn_id: None,
-            }
-        }
-        Err(_) => {
-            log_turn_failure(turn, "the turn panicked");
-            RoundOutcome::Failed {
-                error_code: "panic".to_string(),
-                turn_id: None,
-            }
-        }
-    };
-    if let Err(err) = manager.settle_round(turn, outcome) {
-        eprintln!(
-            "[kura] work item: tenant={} item={} settling round {} failed: {err}",
-            turn.tenant_id, turn.item_id, turn.seq
-        );
-    }
-}
-
-/// The round's record keeps only the error code; the message goes to the
-/// log, where an operator looks for why.
-fn log_turn_failure(turn: &RoundTurn, message: &str) {
-    eprintln!(
-        "[kura] work item: tenant={} item={} round {} ended without a report: {message}",
-        turn.tenant_id, turn.item_id, turn.seq
-    );
 }
 
 async fn list_items(
@@ -279,6 +204,20 @@ async fn list_items(
         .map_err(|err| ApiError::Internal(format!("work item list task failed: {err}")))?
         .map_err(api_error)?;
     Ok(Json(WorkItemListResponse { items }))
+}
+
+async fn stop_item(
+    State(state): State<AppState>,
+    tenant: ActingTenant,
+    Path(item_id): Path<String>,
+) -> Result<Json<WorkItem>, ApiError> {
+    let manager = manager(&state)?;
+    let tenant_id = tenant_id(&state, &tenant)?;
+    let item = tokio::task::spawn_blocking(move || manager.stop(&tenant_id, &item_id))
+        .await
+        .map_err(|err| ApiError::Internal(format!("work item stop task failed: {err}")))?
+        .map_err(api_error)?;
+    Ok(Json(item))
 }
 
 async fn get_item(
@@ -362,14 +301,17 @@ mod tests {
         let mut state = crate::routes::tests_support::test_state();
         let pool = state.store_pool.clone();
         state.chat = Some(Arc::new(chat));
-        state.work_items = Some(Arc::new(Manager::new(
-            pool,
-            state.event_bus.clone(),
-            kura_workitems::WorkItemsConfig {
-                enabled: true,
-                ..Default::default()
-            },
-        )));
+        state.work_items = Some(Arc::new(
+            Manager::new(
+                pool,
+                state.event_bus.clone(),
+                kura_workitems::WorkItemsConfig {
+                    enabled: true,
+                    ..Default::default()
+                },
+            )
+            .with_chat(state.chat.clone().expect("chat")),
+        ));
         state
     }
 
@@ -442,6 +384,7 @@ mod tests {
             ("POST", "/v1/work-items", Some(open_body())),
             ("GET", "/v1/work-items", None),
             ("GET", "/v1/work-items/wi_1", None),
+            ("POST", "/v1/work-items/wi_1/stop", None),
         ] {
             let (status, json) = send(&state, "ten_a", method, uri, body).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
@@ -573,5 +516,35 @@ mod tests {
         assert_eq!(json["code"], "turn_rate_limited");
         let (_, list) = send(&state, "ten_a", "GET", "/v1/work-items", None).await;
         assert_eq!(list["items"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_stop_is_final_and_only_the_owning_tenant_can_stop() {
+        let state = state(r#"{"status":"waiting","summary":"Waiting for CI."}"#, None);
+        let (_, item) = send(&state, "ten_a", "POST", "/v1/work-items", Some(open_body())).await;
+        let item_id = item["itemId"].as_str().unwrap().to_string();
+        settled(&state, "ten_a", &item_id).await;
+
+        let uri = format!("/v1/work-items/{item_id}/stop");
+        let (status, _) = send(&state, "ten_b", "POST", &uri, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, stopped) = send(&state, "ten_a", "POST", &uri, None).await;
+        assert_eq!(status, StatusCode::OK, "{stopped}");
+        assert_eq!(stopped["state"], "ended");
+        assert_eq!(stopped["endReason"], "stopped");
+        assert!(stopped.get("stage").is_none());
+        let (status, again) = send(&state, "ten_a", "POST", &uri, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(again["endReason"], "stopped");
+        let (_, read) = send(
+            &state,
+            "ten_a",
+            "GET",
+            &format!("/v1/work-items/{item_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(read["endReason"], "stopped");
+        assert_eq!(read["subscriptions"], serde_json::json!([]));
     }
 }

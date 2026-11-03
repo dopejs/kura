@@ -1,28 +1,31 @@
 //! Opening items, settling their rounds, and reading them back.
 //!
-//! The manager does not run turns. A round is an ordinary chat turn, and
-//! whoever holds the chat service runs it (the API route in slice 1): the
-//! manager hands out the round to run ([`RoundTurn`]) and takes back how
-//! it ended ([`RoundOutcome`]). Everything it writes is scoped to the
-//! tenant the caller names.
+//! A round is an ordinary chat turn. The manager hands out the round to
+//! run ([`RoundTurn`]) and takes back how it ended ([`RoundOutcome`]);
+//! `driver.rs` runs rounds through the chat service the manager is given
+//! ([`Manager::with_chat`]). Everything it writes is scoped to the tenant
+//! the caller names.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use kura_events::{Bus, Event, Resource};
+use kura_im::ImTurnOrigin;
 use kura_store::StorePool;
 use kura_store::work_items::{
     WorkItemActivity, WorkItemInputRecord, WorkItemRecord, WorkItemRoundRecord,
-    WorkItemRoundSettlement,
+    WorkItemRoundSettlement, WorkItemSubscriptionRecord,
 };
+use kura_threads::ConversationShape;
 use serde_json::{Map, Value, json};
 
-use crate::report::{read_report, round_query, unreadable_report};
+use crate::report::{read_report, round_instructions, round_query, unreadable_report};
 use crate::stage::{StageFacts, derive_stage};
 use crate::types::{
     Attention, Basis, EndReason, Input, InputKind, InputState, ItemState, Mandate, MandateSource,
-    MandateSourceKind, Report, Round, RoundState, Sender, Stage, Strength, WorkItem,
-    WorkItemsConfig,
+    MandateSourceKind, Report, Round, RoundState, Sender, Stage, Strength, Subscription,
+    SubscriptionRole, WorkItem, WorkItemsConfig,
 };
 
 const MAX_TITLE_CHARS: usize = 200;
@@ -42,6 +45,9 @@ pub enum WorkItemError {
     /// A settlement for a round that is not running: it was settled already.
     #[error("work item round {0} is not running")]
     RoundNotRunning(String),
+    /// D2: the conversation already has an open owning item.
+    #[error("this conversation already has an open work item, {0}; it receives messages here")]
+    ConversationOwned(String),
     #[error("work item store: {0}")]
     Store(String),
 }
@@ -55,12 +61,15 @@ impl WorkItemError {
             Self::NotFound => "work_item_not_found",
             Self::OpenLimit { .. } => "work_item_open_limit",
             Self::RoundNotRunning(_) => "work_item_round_not_running",
+            Self::ConversationOwned(_) => "work_item_conversation_owned",
             Self::Store(_) => "store",
         }
     }
 }
 
-/// A request to open an item on the `api` basis (`POST /v1/work-items`).
+/// A request to open an item: on the `api` basis (`POST /v1/work-items`,
+/// or `work_item.open` from a web or TUI turn), or on an `im_*` basis when
+/// `work_item.open` is called by a turn an IM message started (`origin`).
 #[derive(Debug, Clone, Default)]
 pub struct OpenRequest {
     pub tenant_id: String,
@@ -72,11 +81,16 @@ pub struct OpenRequest {
     pub scope: String,
     pub provider: String,
     pub model: String,
+    /// The IM conversation the asking turn served; `None` off IM.
+    pub origin: Option<ImTurnOrigin>,
+    /// Make the item the owner of `origin`'s conversation, so the person
+    /// who asked wakes it by writing there (§5.2). Ignored without origin.
+    pub subscribe_origin: bool,
 }
 
 /// A round to run as a chat turn: a non-streamed query on `thread_id`, with
-/// `request_id` as its request id and the report schema as its response
-/// format.
+/// `request_id` as its request id, `instructions` (the mandate) at the head
+/// of its system frame, and the report schema as its response format.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoundTurn {
     pub tenant_id: String,
@@ -85,6 +99,7 @@ pub struct RoundTurn {
     pub request_id: String,
     pub thread_id: String,
     pub query_text: String,
+    pub instructions: String,
     pub provider: String,
     pub model: String,
 }
@@ -112,15 +127,33 @@ pub enum RoundOutcome {
 
 /// Work items for every tenant on this daemon.
 pub struct Manager {
-    store: Arc<StorePool>,
+    pub(crate) store: Arc<StorePool>,
     bus: Arc<Bus>,
-    config: WorkItemsConfig,
+    pub(crate) config: WorkItemsConfig,
+    /// Runs rounds (`driver.rs`). Absent in tests that only record.
+    pub(crate) chat: Option<Arc<kura_chat::Service>>,
+    /// Where each ordinary IM turn running now came from, by (tenant,
+    /// run id), for `work_item.open` (registered by the IM hook).
+    origins: parking_lot::Mutex<HashMap<(String, String), ImTurnOrigin>>,
 }
 
 impl Manager {
     #[must_use]
     pub fn new(store: Arc<StorePool>, bus: Arc<Bus>, config: WorkItemsConfig) -> Self {
-        Self { store, bus, config }
+        Self {
+            store,
+            bus,
+            config,
+            chat: None,
+            origins: parking_lot::Mutex::default(),
+        }
+    }
+
+    /// The chat service rounds run on.
+    #[must_use]
+    pub fn with_chat(mut self, chat: Arc<kura_chat::Service>) -> Self {
+        self.chat = Some(chat);
+        self
     }
 
     #[must_use]
@@ -128,9 +161,42 @@ impl Manager {
         &self.config
     }
 
-    /// Opens an item with an explicit `api` mandate, with its own thread
-    /// and its first round recorded as running. The caller runs that round
-    /// and hands back how it ended to [`Self::settle_round`].
+    /// Records where an ordinary IM turn came from while it runs.
+    pub fn register_turn_origin(&self, origin: &ImTurnOrigin) {
+        if origin.tenant_id.trim().is_empty() || origin.run_id.trim().is_empty() {
+            return;
+        }
+        self.origins.lock().insert(
+            (origin.tenant_id.clone(), origin.run_id.clone()),
+            origin.clone(),
+        );
+    }
+
+    pub fn unregister_turn_origin(&self, tenant_id: &str, run_id: &str) {
+        self.origins
+            .lock()
+            .remove(&(tenant_id.to_string(), run_id.to_string()));
+    }
+
+    /// The IM conversation the turn `run_id` of `tenant_id` serves, if it
+    /// is an ordinary IM turn running now.
+    #[must_use]
+    pub fn turn_origin(&self, tenant_id: &str, run_id: &str) -> Option<ImTurnOrigin> {
+        if run_id.trim().is_empty() {
+            return None;
+        }
+        self.origins
+            .lock()
+            .get(&(tenant_id.to_string(), run_id.to_string()))
+            .cloned()
+    }
+
+    /// Opens an item with an explicit mandate, with its own thread and its
+    /// first round recorded as running. The caller runs that round and
+    /// hands back how it ended to [`Self::settle_round`] (or hands both to
+    /// the driver). With an IM origin and `subscribe_origin`, the item also
+    /// becomes the owner of that conversation (D2): refused while another
+    /// open item owns it.
     pub fn open(&self, request: OpenRequest) -> Result<(WorkItem, RoundTurn), WorkItemError> {
         check_open(&request)?;
         let tenant_id = request.tenant_id.trim().to_string();
@@ -142,31 +208,78 @@ impl Manager {
         let item_id = format!("wi_{hex}");
         let thread_id = format!("thr_wi_{hex}");
         let seq = 1;
-        let mandate = Mandate {
-            basis: Basis::Api,
-            strength: Strength::Explicit,
-            policy_hash: String::new(),
-            matched_rules: Vec::new(),
-            sender: Sender {
-                principal_id: request.principal_id.trim().to_string(),
-                ..Sender::default()
+        let mandate = match &request.origin {
+            None => Mandate {
+                basis: Basis::Api,
+                strength: Strength::Explicit,
+                policy_hash: String::new(),
+                matched_rules: Vec::new(),
+                sender: Sender {
+                    principal_id: request.principal_id.trim().to_string(),
+                    ..Sender::default()
+                },
+                source: MandateSource {
+                    kind: MandateSourceKind::Api,
+                    reference: request.request_ref.trim().to_string(),
+                    conversation: String::new(),
+                },
+                receiving_policy_id: String::new(),
+                scope_text: scope.clone(),
+                created_at: now,
             },
-            source: MandateSource {
-                kind: MandateSourceKind::Api,
-                reference: request.request_ref.trim().to_string(),
-                conversation: String::new(),
+            Some(origin) => Mandate {
+                // The gate it already passed: a DM, or a group/room
+                // participation decision (allowlist, sender, mention).
+                basis: if origin.shape == ConversationShape::DirectMessage {
+                    Basis::ImDirect
+                } else {
+                    Basis::ImMention
+                },
+                strength: Strength::Explicit,
+                policy_hash: String::new(),
+                matched_rules: Vec::new(),
+                sender: Sender {
+                    connector_id: origin.connector_id.clone(),
+                    author_id: origin.author_id.clone(),
+                    principal_id: String::new(),
+                },
+                source: MandateSource {
+                    kind: MandateSourceKind::Im,
+                    reference: origin.delivery_id.clone(),
+                    conversation: origin.source_conversation_id.clone(),
+                },
+                receiving_policy_id: origin.route_policy_id.clone(),
+                scope_text: scope.clone(),
+                created_at: now,
             },
-            receiving_policy_id: String::new(),
-            scope_text: scope.clone(),
-            created_at: now,
         };
+        let owner = request
+            .origin
+            .as_ref()
+            .filter(|origin| request.subscribe_origin && !origin.source_key.is_empty())
+            .filter(|origin| !origin.author_id.is_empty())
+            .map(|origin| WorkItemSubscriptionRecord {
+                subscription_id: format!("wis_{}", uuid::Uuid::now_v7().simple()),
+                item_id: item_id.clone(),
+                tenant_id: tenant_id.clone(),
+                source_kind: "im".to_string(),
+                source_key: origin.source_key.clone(),
+                connector_id: origin.connector_id.clone(),
+                conversation_id: origin.source_conversation_id.clone(),
+                role: SubscriptionRole::Owner.as_str().to_string(),
+                created_at: now,
+                last_event_at: now,
+                dropped_at: None,
+                drop_reason: None,
+            });
         let turn = RoundTurn {
             tenant_id: tenant_id.clone(),
             item_id: item_id.clone(),
             seq,
             request_id: round_request_id(&item_id, seq),
             thread_id: thread_id.clone(),
-            query_text: round_query(&title, &scope, seq),
+            query_text: round_query(seq, &[]),
+            instructions: round_instructions(&title, &scope),
             provider: request.provider.trim().to_string(),
             model: request.model.trim().to_string(),
         };
@@ -216,10 +329,23 @@ impl Manager {
                     });
                 }
             }
-            create_thread(&store, &tenant_id, &thread_id, now)?;
-            store
-                .create_work_item(&item, &round)
-                .map_err(WorkItemError::Store)?;
+            match &owner {
+                None => {
+                    create_thread(&store, &tenant_id, &thread_id, now)?;
+                    store
+                        .create_work_item(&item, &round)
+                        .map_err(WorkItemError::Store)?;
+                }
+                Some(owner) => {
+                    // The ownership check and the write are one transaction;
+                    // the thread is written only once the item is.
+                    store
+                        .create_work_item_with_owner(&item, &round, owner)
+                        .map_err(WorkItemError::Store)?
+                        .map_err(WorkItemError::ConversationOwned)?;
+                    create_thread(&store, &tenant_id, &thread_id, now)?;
+                }
+            }
         }
         kura_telemetry::metrics::registry().inc(
             kura_telemetry::metrics::WORK_ITEMS_OPENED_TOTAL,
@@ -378,6 +504,9 @@ impl Manager {
         let inputs = store
             .list_work_item_inputs(&record.tenant_id, &record.item_id)
             .map_err(WorkItemError::Store)?;
+        let subscriptions = store
+            .list_work_item_subscriptions(&record.tenant_id, &record.item_id)
+            .map_err(WorkItemError::Store)?;
         drop(store);
         let mut item = to_view(record, &activity)?;
         item.rounds = Some(
@@ -390,6 +519,12 @@ impl Manager {
             inputs
                 .into_iter()
                 .map(input_view)
+                .collect::<Result<_, _>>()?,
+        );
+        item.subscriptions = Some(
+            subscriptions
+                .into_iter()
+                .map(subscription_view)
                 .collect::<Result<_, _>>()?,
         );
         Ok(item)
@@ -417,7 +552,11 @@ impl Manager {
             .collect()
     }
 
-    fn get_summary(&self, tenant_id: &str, item_id: &str) -> Result<WorkItem, WorkItemError> {
+    pub(crate) fn get_summary(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+    ) -> Result<WorkItem, WorkItemError> {
         let (record, activity) = self
             .store
             .read()
@@ -429,7 +568,7 @@ impl Manager {
 
     /// Records the event and announces it. Events carry the tenant, the
     /// item and the mandate's basis; never a title, a scope or a report.
-    fn publish(&self, item: &WorkItem, name: &str, extra: Value) {
+    pub(crate) fn publish(&self, item: &WorkItem, name: &str, extra: Value) {
         let mut payload = Map::new();
         payload.insert("itemId".to_string(), json!(item.item_id));
         payload.insert("basis".to_string(), json!(item.mandate.basis.as_str()));
@@ -558,7 +697,10 @@ fn decode<T: serde::de::DeserializeOwned>(what: &str, json: &str) -> Result<T, W
     serde_json::from_str(json).map_err(|err| WorkItemError::Store(format!("decode {what}: {err}")))
 }
 
-fn to_view(record: WorkItemRecord, activity: &WorkItemActivity) -> Result<WorkItem, WorkItemError> {
+pub(crate) fn to_view(
+    record: WorkItemRecord,
+    activity: &WorkItemActivity,
+) -> Result<WorkItem, WorkItemError> {
     let state = ItemState::parse(&record.state).map_err(WorkItemError::Store)?;
     let end_reason = record
         .end_reason
@@ -590,7 +732,11 @@ fn to_view(record: WorkItemRecord, activity: &WorkItemActivity) -> Result<WorkIt
         approval_pending: false,
         attention: attention.is_some(),
         last_report: last_report.as_ref().map(|report| report.status),
-        person_input_since_report: activity.pending_person_inputs > 0,
+        // A round consumes every input pending when it starts, and a round
+        // only starts past a blocked or failed report on a person's input:
+        // a running round means a person spoke since the report.
+        person_input_since_report: activity.pending_person_inputs > 0
+            || last_round == Some(RoundState::Running),
         pending_inputs: activity.pending_inputs > 0,
         round_running: last_round == Some(RoundState::Running),
     });
@@ -612,6 +758,22 @@ fn to_view(record: WorkItemRecord, activity: &WorkItemActivity) -> Result<WorkIt
         updated_at: record.updated_at,
         rounds: None,
         inputs: None,
+        subscriptions: None,
+    })
+}
+
+fn subscription_view(record: WorkItemSubscriptionRecord) -> Result<Subscription, WorkItemError> {
+    Ok(Subscription {
+        subscription_id: record.subscription_id,
+        source_kind: record.source_kind,
+        source_key: record.source_key,
+        connector_id: record.connector_id,
+        conversation_id: record.conversation_id,
+        role: SubscriptionRole::parse(&record.role).map_err(WorkItemError::Store)?,
+        created_at: record.created_at,
+        last_event_at: record.last_event_at,
+        dropped_at: record.dropped_at,
+        drop_reason: record.drop_reason,
     })
 }
 
@@ -634,7 +796,7 @@ fn round_view(record: WorkItemRoundRecord) -> Result<Round, WorkItemError> {
     })
 }
 
-fn input_view(record: WorkItemInputRecord) -> Result<Input, WorkItemError> {
+pub(crate) fn input_view(record: WorkItemInputRecord) -> Result<Input, WorkItemError> {
     Ok(Input {
         seq: record.seq,
         kind: InputKind::parse(&record.kind).map_err(WorkItemError::Store)?,
@@ -647,12 +809,12 @@ fn input_view(record: WorkItemInputRecord) -> Result<Input, WorkItemError> {
     })
 }
 
-fn stage_name(stage: Option<Stage>) -> &'static str {
+pub(crate) fn stage_name(stage: Option<Stage>) -> &'static str {
     stage.map_or("ended", Stage::as_str)
 }
 
 /// One line per change: tenant, item, from -> to, and why.
-fn log_change(item: &WorkItem, from: &str, to: Option<Stage>, reason: &str) {
+pub(crate) fn log_change(item: &WorkItem, from: &str, to: Option<Stage>, reason: &str) {
     let to = match (to, item.end_reason) {
         (Some(stage), _) => stage.as_str().to_string(),
         (None, Some(reason)) => format!("ended/{}", reason.as_str()),
@@ -875,6 +1037,7 @@ mod tests {
         let (manager, _) = manager(WorkItemsConfig {
             enabled: true,
             max_open_items: 1,
+            ..WorkItemsConfig::default()
         });
         let (_, turn) = open_as(&manager, "ten_a");
         let refused = manager.open(OpenRequest {

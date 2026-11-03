@@ -5,24 +5,39 @@
 //! ordinary chat turn whose final answer is a structured report. The stage
 //! an item is in is derived from its stored rows on every read.
 //!
-//! Slice 1: items, the mandate and the API, no wake. An item is opened
-//! through `POST /v1/work-items` and runs one round; subscriptions, the IM
-//! hook, the outbox, restart recovery and attention answers arrive in the
-//! later slices. Off unless `entries.work-items.config.enabled` is true.
+//! Slice 1: items, the mandate and the API. Slice 2: the `work_item.open`
+//! tool, owner subscriptions to IM conversations, the IM hook that wakes an
+//! item on its requester's message (steering a running round, or running
+//! the next one), resume of an ended item after its mandate is revalidated,
+//! and stop. The outbox, restart recovery, attention answers, rules and
+//! webhooks arrive in the later slices. Off unless
+//! `entries.work-items.config.enabled` is true.
 
+mod driver;
+mod im;
 mod manager;
+mod mandate;
 mod report;
 mod stage;
+mod tool;
 mod types;
+mod wake;
 
+pub use driver::{Drive, DriveStop, DrivenRound};
+pub use im::{ImHook, round_reply};
 pub use manager::{
     MAX_LIST_LIMIT, Manager, OpenRequest, RoundOutcome, RoundTurn, WorkItemError, check_open,
     round_request_id,
 };
-pub use report::{REPORT_FORMAT_NAME, read_report, report_schema, round_query, unreadable_report};
+pub use report::{
+    QuotedInput, REPORT_FORMAT_NAME, frame_input, read_report, report_schema, round_instructions,
+    round_query, unreadable_report,
+};
 pub use stage::{StageFacts, derive_stage};
+pub use tool::{OPEN_TOOL, OpenTool, is_round_thread};
 pub use types::{
     Attention, Basis, EndReason, Input, InputKind, InputState, ItemState, Mandate, MandateSource,
-    MandateSourceKind, MatchedRule, Report, ReportReason, ReportStatus, Round, RoundState, Sender,
-    Stage, Strength, WorkItem, WorkItemsConfig,
+    MandateSourceKind, MatchedRule, Report, ReportReason, ReportStatus, RevokeReason, Round,
+    RoundState, Sender, Stage, Strength, Subscription, SubscriptionRole, WorkItem, WorkItemsConfig,
 };
+pub use wake::InputPath;

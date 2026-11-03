@@ -45,6 +45,8 @@ pub const DEVICE_ACTIONS_TOTAL: &str = "kura_device_actions_total";
 pub const DEVICE_ACTION_DURATION_SECONDS: &str = "kura_device_action_duration_seconds";
 pub const WORK_ITEM_ROUNDS_TOTAL: &str = "kura_work_item_rounds_total";
 pub const WORK_ITEMS_OPENED_TOTAL: &str = "kura_work_items_opened_total";
+pub const WORK_ITEM_INPUTS_TOTAL: &str = "kura_work_item_inputs_total";
+pub const WORK_ITEM_MANDATE_CHECKS_TOTAL: &str = "kura_work_item_mandate_checks_total";
 
 /// Help text per series, rendered as `# HELP`.
 const HELP: &[(&str, &str)] = &[
@@ -167,6 +169,14 @@ const HELP: &[(&str, &str)] = &[
     (
         WORK_ITEMS_OPENED_TOTAL,
         "Work items opened, by mandate basis (api|im_mention|im_direct|rule).",
+    ),
+    (
+        WORK_ITEM_INPUTS_TOTAL,
+        "Inputs that reached a work item, by kind and path (steered: into the running round; queued: for the next round).",
+    ),
+    (
+        WORK_ITEM_MANDATE_CHECKS_TOTAL,
+        "Mandate revalidations before an ended work item resumes, by result (pass_fast|pass|revoked).",
     ),
 ];
 

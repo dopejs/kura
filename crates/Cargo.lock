@@ -2617,15 +2617,26 @@ name = "kura-workitems"
 version = "0.3.0"
 dependencies = [
  "chrono",
+ "futures",
+ "kura-chat",
+ "kura-connectors",
+ "kura-core",
  "kura-events",
+ "kura-identity",
+ "kura-im",
+ "kura-imtypes",
  "kura-llm",
+ "kura-router",
+ "kura-runtime",
  "kura-store",
  "kura-telemetry",
  "kura-threads",
  "parking_lot",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
+ "tokio",
  "uuid",
 ]
 

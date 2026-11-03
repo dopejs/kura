@@ -169,6 +169,7 @@ pub const TENANT_ROUTES: &[(&str, &str)] = &[
     ("GET", "/v1/work-items"),
     ("POST", "/v1/work-items"),
     ("GET", "/v1/work-items/{item_id}"),
+    ("POST", "/v1/work-items/{item_id}/stop"),
     // Approvals raised for the caller's own tool calls (by-id tenant guard).
     ("GET", "/v1/policy/approvals"),
     ("GET", "/v1/policy/approvals/{approval_id}"),

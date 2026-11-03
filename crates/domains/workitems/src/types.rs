@@ -427,6 +427,90 @@ pub struct WorkItem {
     /// On a single-item read only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inputs: Option<Vec<Input>>,
+    /// On a single-item read only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscriptions: Option<Vec<Subscription>>,
+}
+
+/// What a subscription grants (§4, §5.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriptionRole {
+    /// The person who asked may wake the item from this source (D2: at
+    /// most one live owner per source).
+    Owner,
+    /// Inputs only; grants no authority. Nothing creates one in slice 2.
+    Context,
+}
+
+impl SubscriptionRole {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Context => "context",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "owner" => Ok(Self::Owner),
+            "context" => Ok(Self::Context),
+            other => Err(format!("unknown work item subscription role {other:?}")),
+        }
+    }
+}
+
+/// A source the item follows, live or dropped.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Subscription {
+    pub subscription_id: String,
+    /// `im` in slice 2.
+    pub source_kind: String,
+    /// Matched by equality. For IM, the conversation's `thr_src_` id.
+    pub source_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub connector_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub conversation_id: String,
+    pub role: SubscriptionRole,
+    pub created_at: DateTime<Utc>,
+    pub last_event_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dropped_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_reason: Option<String>,
+}
+
+/// Why a mandate no longer holds (§5.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RevokeReason {
+    /// The connector the request came through is disabled or failing.
+    ConnectorDisabled,
+    /// The route policy no longer lets the connector receive that
+    /// conversation (or there is no valid policy any more).
+    ConversationNotAllowed,
+    /// The sender no longer passes the route policy's sender allowlist.
+    SenderNotAllowed,
+    /// The principal is no longer an active member of the tenant.
+    PrincipalNotMember,
+    /// The basis cannot be revalidated in this slice (`rule`, slice 6).
+    BasisUnsupported,
+}
+
+impl RevokeReason {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ConnectorDisabled => "connector_disabled",
+            Self::ConversationNotAllowed => "conversation_not_allowed",
+            Self::SenderNotAllowed => "sender_not_allowed",
+            Self::PrincipalNotMember => "principal_not_member",
+            Self::BasisUnsupported => "basis_unsupported",
+        }
+    }
 }
 
 /// `entries.work-items.config` in the plugin profile.
@@ -438,6 +522,13 @@ pub struct WorkItemsConfig {
     pub enabled: bool,
     /// Open items one tenant may hold (D7); `0` means unbounded.
     pub max_open_items: usize,
+    /// A subscription that saw no event for this many days is dropped as
+    /// `idle` (D7, §11); `0` means never.
+    pub subscription_idle_days: u32,
+    /// Rounds one item may start in any rolling hour (D7, §11); `0` means
+    /// unbounded. Inputs over the cap stay queued until the item is woken
+    /// again.
+    pub max_rounds_per_item_per_hour: u32,
 }
 
 impl Default for WorkItemsConfig {
@@ -445,6 +536,8 @@ impl Default for WorkItemsConfig {
         Self {
             enabled: false,
             max_open_items: 50,
+            subscription_idle_days: 14,
+            max_rounds_per_item_per_hour: 20,
         }
     }
 }
