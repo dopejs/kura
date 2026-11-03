@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/events/work-item-woken.event.schema.json",
+  "title": "WorkItemWokenEvent",
+  "description": "An input reached an item from a subscribed source (work-items.md \u00a75.2): it steered the running round, or was queued for the next one. `resumed` is true when the input reopened an item that had ended on its own report, after its mandate was revalidated. Carries no message bodies (\u00a710).",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "./runtime-event.schema.json"
+    },
+    {
+      "type": "object",
+      "required": [
+        "tenantId"
+      ],
+      "properties": {
+        "category": {
+          "const": "work_item"
+        },
+        "name": {
+          "const": "work_item.woken"
+        },
+        "tenantId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resource": {
+          "type": "object",
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "work_item"
+            },
+            "id": {
+              "type": "string"
+            }
+          }
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "itemId",
+            "basis",
+            "inputSeq",
+            "kind",
+            "path"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "itemId": {
+              "type": "string"
+            },
+            "basis": {
+              "type": "string",
+              "enum": [
+                "api",
+                "im_mention",
+                "im_direct",
+                "rule"
+              ]
+            },
+            "inputSeq": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "message",
+                "event",
+                "approval",
+                "policy_notice",
+                "recovery",
+                "text"
+              ]
+            },
+            "path": {
+              "type": "string",
+              "enum": [
+                "steered",
+                "queued"
+              ]
+            },
+            "resumed": {
+              "type": "boolean"
+            },
+            "roundSeq": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The running round a steered input reached."
+            }
+          }
+        }
+      }
+    }
+  ]
+}

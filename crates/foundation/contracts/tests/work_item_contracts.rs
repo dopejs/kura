@@ -86,6 +86,58 @@ fn test_work_item_event_schemas_accept_canonical_fixtures() {
     validate_fixtures(&validator, fixtures);
 }
 
+/// Slice 2: an IM-opened item with its owner subscription, one dropped
+/// subscription, a steered input; and the woken, stopped, mandate_revoked
+/// and attention_cleared events.
+const IM_ITEM: &str = r##"{"itemId":"wi_0193a1b2c3d4e5f6a7b8c9d3","tenantId":"ten_a","title":"Fix the flaky build","state":"open","stage":"working","threadId":"thr_wi_0193a1b2c3d4e5f6a7b8c9d3","seq":2,"mandate":{"basis":"im_mention","strength":"explicit","policyHash":"","matchedRules":[],"sender":{"connectorId":"slack-main","authorId":"U1"},"source":{"kind":"im","ref":"delivery_1","conversation":"C1"},"receivingPolicyId":"route_policy_1","scopeText":"Fix CI on main.","createdAt":"2026-11-03T10:00:00Z"},"createdAt":"2026-11-03T10:00:00Z","updatedAt":"2026-11-03T10:05:00Z","inputs":[{"seq":1,"kind":"message","authorIsPerson":true,"body":"also bump the lockfile","sourceRef":"delivery_2","state":"steered","roundSeq":2,"createdAt":"2026-11-03T10:05:00Z"}],"subscriptions":[{"subscriptionId":"wis_0193a1b2c3d4","sourceKind":"im","sourceKey":"thr_src_0a1b2c3d4e5f6a7b8c9d0e1f","connectorId":"slack-main","conversationId":"C1","role":"owner","createdAt":"2026-11-03T10:00:00Z","lastEventAt":"2026-11-03T10:05:00Z"},{"subscriptionId":"wis_0193a1b2c3d5","sourceKind":"im","sourceKey":"thr_src_ffff","role":"owner","createdAt":"2026-10-01T10:00:00Z","lastEventAt":"2026-10-01T10:00:00Z","droppedAt":"2026-10-20T10:00:00Z","dropReason":"idle"}]}"##;
+
+#[test]
+fn test_work_item_slice2_schemas_accept_canonical_fixtures() {
+    let validator = Validator::new(schema_root_dir());
+    let fixtures: &[Fixture] = &[
+        (r##"schemas/api/work-item-resource.schema.json"##, IM_ITEM),
+        (
+            r##"schemas/events/work-item-woken.event.schema.json"##,
+            r##"{"eventId":"evt_5","sequence":5,"tenantId":"ten_a","category":"work_item","name":"work_item.woken","occurredAt":"2026-11-03T10:05:00Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"im_mention","inputSeq":1,"kind":"message","path":"steered","resumed":false,"roundSeq":2}}"##,
+        ),
+        (
+            r##"schemas/events/work-item-stopped.event.schema.json"##,
+            r##"{"eventId":"evt_6","sequence":6,"tenantId":"ten_a","category":"work_item","name":"work_item.stopped","occurredAt":"2026-11-03T10:06:00Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"im_mention","roundCancelled":true}}"##,
+        ),
+        (
+            r##"schemas/events/work-item-mandate-revoked.event.schema.json"##,
+            r##"{"eventId":"evt_7","sequence":7,"tenantId":"ten_a","category":"work_item","name":"work_item.mandate_revoked","occurredAt":"2026-11-03T10:07:00Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"im_direct","reason":"sender_not_allowed"}}"##,
+        ),
+        (
+            r##"schemas/events/work-item-attention-cleared.event.schema.json"##,
+            r##"{"eventId":"evt_8","sequence":8,"tenantId":"ten_a","category":"work_item","name":"work_item.attention_cleared","occurredAt":"2026-11-03T10:08:00Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"api","roundSeq":3}}"##,
+        ),
+        (
+            r##"schemas/events/connector-route-outcome-recorded.event.schema.json"##,
+            r##"{"eventId":"evt_9","sequence":9,"category":"connector","name":"connector.route_outcome_recorded","occurredAt":"2026-11-03T10:05:00Z","scope":{"connectorId":"slack-main"},"resource":{"kind":"connector","id":"slack-main"},"payload":{"tenantId":"ten_a","connectorId":"slack-main","outcome":"work_item","reasonCode":"work_item_round","surface":"room","messageDeliveryId":"delivery_2","replyMessageIds":["m1"],"redactionStatus":"redacted"}}"##,
+        ),
+    ];
+    validate_fixtures(&validator, fixtures);
+
+    // A woken event never carries what was said, and a revocation names
+    // one of its known reasons.
+    for (schema, bad) in [
+        (
+            "schemas/events/work-item-woken.event.schema.json",
+            r##"{"eventId":"evt_5","sequence":5,"tenantId":"ten_a","category":"work_item","name":"work_item.woken","occurredAt":"2026-11-03T10:05:00Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"im_mention","inputSeq":1,"kind":"message","path":"queued","body":"secret"}}"##,
+        ),
+        (
+            "schemas/events/work-item-mandate-revoked.event.schema.json",
+            r##"{"eventId":"evt_7","sequence":7,"tenantId":"ten_a","category":"work_item","name":"work_item.mandate_revoked","occurredAt":"2026-11-03T10:07:00Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"im_direct","reason":"because"}}"##,
+        ),
+    ] {
+        assert!(
+            validator.validate_relative(schema, bad.as_bytes()).is_err(),
+            "{schema} accepted {bad}"
+        );
+    }
+}
+
 #[test]
 fn test_work_item_events_carry_their_tenant() {
     let validator = Validator::new(schema_root_dir());

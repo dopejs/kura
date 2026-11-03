@@ -23,7 +23,12 @@
     "createdAt": { "type": "string", "format": "date-time" },
     "updatedAt": { "type": "string", "format": "date-time" },
     "rounds": { "type": "array", "items": { "$ref": "#/$defs/round" } },
-    "inputs": { "type": "array", "items": { "$ref": "#/$defs/input" } }
+    "inputs": { "type": "array", "items": { "$ref": "#/$defs/input" } },
+    "subscriptions": {
+      "type": "array",
+      "description": "Every source the item follows or followed, live or dropped. Present on GET /v1/work-items/{id} only.",
+      "items": { "$ref": "#/$defs/subscription" }
+    }
   },
   "$defs": {
     "stage": {
@@ -138,6 +143,24 @@
         "state": { "type": "string", "enum": ["pending", "steered", "consumed"] },
         "roundSeq": { "type": "integer", "minimum": 1 },
         "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "subscription": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A source the item follows (work-items.md §4, §5.2). An owner subscription lets the person who asked wake the item from that conversation; at most one live owner per conversation (D2). A dropped subscription is kept with when and why.",
+      "required": ["subscriptionId", "sourceKind", "sourceKey", "role", "createdAt", "lastEventAt"],
+      "properties": {
+        "subscriptionId": { "type": "string", "pattern": "^wis_[0-9a-f]+$" },
+        "sourceKind": { "type": "string", "enum": ["im"] },
+        "sourceKey": { "type": "string", "description": "Matched by equality. For IM, the conversation's thr_src_ thread id." },
+        "connectorId": { "type": "string" },
+        "conversationId": { "type": "string" },
+        "role": { "type": "string", "enum": ["owner", "context"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastEventAt": { "type": "string", "format": "date-time" },
+        "droppedAt": { "type": "string", "format": "date-time" },
+        "dropReason": { "type": "string", "enum": ["stopped", "revoked", "superseded", "idle"] }
       }
     }
   }

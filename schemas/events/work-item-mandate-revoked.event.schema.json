@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/events/work-item-mandate-revoked.event.schema.json",
+  "title": "WorkItemMandateRevokedEvent",
+  "description": "An ended item's mandate no longer held when a person's message would have resumed it (work-items.md \u00a75.4). The item stays ended with end reason `revoked`, its subscriptions are dropped, and the message took the ordinary path. Carries no message bodies (\u00a710).",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "./runtime-event.schema.json"
+    },
+    {
+      "type": "object",
+      "required": [
+        "tenantId"
+      ],
+      "properties": {
+        "category": {
+          "const": "work_item"
+        },
+        "name": {
+          "const": "work_item.mandate_revoked"
+        },
+        "tenantId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resource": {
+          "type": "object",
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "work_item"
+            },
+            "id": {
+              "type": "string"
+            }
+          }
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "itemId",
+            "basis",
+            "reason"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "itemId": {
+              "type": "string"
+            },
+            "basis": {
+              "type": "string",
+              "enum": [
+                "api",
+                "im_mention",
+                "im_direct",
+                "rule"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "connector_disabled",
+                "conversation_not_allowed",
+                "sender_not_allowed",
+                "principal_not_member"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ]
+}
