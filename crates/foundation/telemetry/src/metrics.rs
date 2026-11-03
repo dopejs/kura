@@ -43,6 +43,8 @@ pub const DEVICE_CONNECTIONS_TOTAL: &str = "kura_device_connections_total";
 pub const DEVICE_SESSIONS_TOTAL: &str = "kura_device_sessions_total";
 pub const DEVICE_ACTIONS_TOTAL: &str = "kura_device_actions_total";
 pub const DEVICE_ACTION_DURATION_SECONDS: &str = "kura_device_action_duration_seconds";
+pub const WORK_ITEM_ROUNDS_TOTAL: &str = "kura_work_item_rounds_total";
+pub const WORK_ITEMS_OPENED_TOTAL: &str = "kura_work_items_opened_total";
 
 /// Help text per series, rendered as `# HELP`.
 const HELP: &[(&str, &str)] = &[
@@ -157,6 +159,14 @@ const HELP: &[(&str, &str)] = &[
     (
         DEVICE_ACTION_DURATION_SECONDS,
         "Remote computer-use action round trip by op.",
+    ),
+    (
+        WORK_ITEM_ROUNDS_TOTAL,
+        "Work item rounds that ended, by outcome (progress|waiting|ready|blocked|failed|dropped|report_unreadable|turn_error). turn_error: the turn ended without a report.",
+    ),
+    (
+        WORK_ITEMS_OPENED_TOTAL,
+        "Work items opened, by mandate basis (api|im_mention|im_direct|rule).",
     ),
 ];
 
