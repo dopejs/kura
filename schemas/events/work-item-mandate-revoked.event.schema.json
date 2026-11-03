@@ -67,7 +67,8 @@
                 "connector_disabled",
                 "conversation_not_allowed",
                 "sender_not_allowed",
-                "principal_not_member"
+                "principal_not_member",
+                "basis_unsupported"
               ]
             }
           }
