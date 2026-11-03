@@ -76,6 +76,34 @@ describe("tool provider SDK methods (Stage 9.1b)", () => {
     expect(got.status).toBe("completed");
   });
 
+  it("opens, lists and reads a work item (work items slice 1)", async () => {
+    const item = {
+      itemId: "wi_1",
+      tenantId: "ten_a",
+      title: "Fix CI",
+      state: "open",
+      stage: "working",
+      threadId: "thr_wi_1",
+      seq: 1,
+      mandate: { basis: "api", strength: "explicit", policyHash: "", matchedRules: [], sender: {}, source: { kind: "api" }, scopeText: "s", createdAt: "t" },
+      createdAt: "t",
+      updatedAt: "t",
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(item, 201))
+      .mockResolvedValueOnce(jsonResponse({ items: [item] }))
+      .mockResolvedValueOnce(jsonResponse({ ...item, stage: "person/blocked", lastReport: { status: "blocked", summary: "x", reason: "report_unreadable" } }));
+    const client = createKuraClient({ baseURL: "https://daemon.test", fetchImpl });
+    const opened = await client.createWorkItem({ title: "Fix CI", scope: "s" });
+    expect(opened.stage).toBe("working");
+    expect(fetchImpl.mock.calls[0][1].method).toBe("POST");
+    await client.listWorkItems({ state: "open", limit: 10 });
+    expect(String(fetchImpl.mock.calls[1][0])).toContain("/v1/work-items?state=open&limit=10");
+    const got = await client.getWorkItem("wi_1");
+    expect(got.lastReport?.reason).toBe("report_unreadable");
+  });
+
   it("searches skills and records feedback (Stage 3)", async () => {
     const usage = { skillId: "deploy-check", invocations: 2, helpful: 1, corrected: 0 };
     const fetchImpl = vi.fn()

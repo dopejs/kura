@@ -3620,6 +3620,106 @@ export interface SwarmLaunchInput {
   requestedBy?: string;
 }
 
+export type WorkItemState = "open" | "ended";
+export type WorkItemEndReason = "completed" | "dropped" | "revoked" | "stopped";
+/** Derived by the daemon on every read; absent once the item has ended. */
+export type WorkItemStage =
+  | "person/delivery"
+  | "person/approval"
+  | "person/answer"
+  | "person/blocked"
+  | "person/failed"
+  | "queued"
+  | "working"
+  | "idle";
+export type WorkItemReportStatus = "progress" | "waiting" | "ready" | "blocked" | "failed" | "dropped";
+
+export interface WorkItemAttention {
+  question: string;
+  options?: string[];
+}
+
+export interface WorkItemReport {
+  status: WorkItemReportStatus;
+  summary: string;
+  attention?: WorkItemAttention;
+  /** Set by the daemon when the round's reply could not be read as a report. */
+  reason?: "report_unreadable";
+}
+
+/** Why the agent may do the work. Immutable once written. */
+export interface WorkItemMandate {
+  basis: "api" | "im_mention" | "im_direct" | "rule";
+  strength: "explicit" | "inferred";
+  policyHash: string;
+  matchedRules: { ruleId: string; version: number }[];
+  sender: { connectorId?: string; authorId?: string; principalId?: string };
+  source: { kind: "api" | "im" | "webhook"; ref?: string; conversation?: string };
+  receivingPolicyId?: string;
+  scopeText: string;
+  createdAt: string;
+}
+
+export interface WorkItemRound {
+  seq: number;
+  /** The round's chat turn: `<itemId>_r<seq>`. */
+  requestId: string;
+  state: "running" | "settled" | "failed";
+  queryText: string;
+  outcome?: string;
+  report?: WorkItemReport;
+  errorCode?: string;
+  turnId?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+export interface WorkItemInput {
+  seq: number;
+  kind: "message" | "event" | "approval" | "policy_notice" | "recovery" | "text";
+  authorIsPerson: boolean;
+  body: string;
+  sourceRef?: string;
+  state: "pending" | "steered" | "consumed";
+  roundSeq?: number;
+  createdAt: string;
+}
+
+/** Long-lived work whose rounds are chat turns (docs/harness/work-items.md). */
+export interface WorkItem {
+  itemId: string;
+  tenantId: string;
+  title: string;
+  state: WorkItemState;
+  endReason?: WorkItemEndReason;
+  stage?: WorkItemStage;
+  threadId: string;
+  provider?: string;
+  model?: string;
+  seq: number;
+  mandate: WorkItemMandate;
+  lastReport?: WorkItemReport;
+  attention?: WorkItemAttention;
+  createdAt: string;
+  updatedAt: string;
+  /** Present on getWorkItem only. */
+  rounds?: WorkItemRound[];
+  /** Present on getWorkItem only. */
+  inputs?: WorkItemInput[];
+}
+
+export interface WorkItemCreateInput {
+  title: string;
+  scope: string;
+  provider?: string;
+  model?: string;
+}
+
+export interface WorkItemListOptions {
+  state?: WorkItemState;
+  limit?: number;
+}
+
 export interface SkillUsage {
   skillId: string;
   invocations: number;
@@ -4821,6 +4921,23 @@ export class KuraClient {
 
   async getSwarmRun(runId: string, tenantOptions?: TenantRequestOptions): Promise<SwarmRun> {
     return this.requestJSON<SwarmRun>(`/v1/swarm/runs/${encodeURIComponent(runId)}`, { tenant: tenantOptions });
+  }
+
+  /** Opens a work item and starts its first round (201, stage `working`). 404 until the work-items plugin is enabled. */
+  async createWorkItem(input: WorkItemCreateInput, tenantOptions?: TenantRequestOptions): Promise<WorkItem> {
+    return this.requestJSON<WorkItem>("/v1/work-items", { method: "POST", body: input, tenant: tenantOptions });
+  }
+
+  async listWorkItems(options: WorkItemListOptions = {}, tenantOptions?: TenantRequestOptions): Promise<{ items: WorkItem[] }> {
+    const params = new URLSearchParams();
+    if (options.state) params.set("state", options.state);
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    const query = params.toString();
+    return this.requestJSON<{ items: WorkItem[] }>(`/v1/work-items${query ? `?${query}` : ""}`, { tenant: tenantOptions });
+  }
+
+  async getWorkItem(itemId: string, tenantOptions?: TenantRequestOptions): Promise<WorkItem> {
+    return this.requestJSON<WorkItem>(`/v1/work-items/${encodeURIComponent(itemId)}`, { tenant: tenantOptions });
   }
 
   async getSessionFrame(threadId: string, tenantOptions?: TenantRequestOptions): Promise<SessionFrame> {
