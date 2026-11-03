@@ -195,15 +195,16 @@ the user; the cell cannot override them.
 
 On the device:
 - **Local consent per session.** `session.request` shows a macOS
-  notification with the agent's reason; without an explicit allow within
+  alert with the agent's reason (§9); without an explicit allow within
   60 s it is denied. `--trust-for 30m` can pre-approve sessions for a while;
   the default is ask every time.
 - **Visible state.** A menu-bar item shows idle / in control; while in
-  control the pointer has a coloured halo.
-- **Kill switch.** A global hotkey (default `ctrl+opt+cmd+.`) and the menu
-  item end the session immediately and refuse new ones for 10 minutes.
+  control the pointer has a coloured halo. (Deferred until a signed app
+  bundle exists, §9.)
+- **Kill switch.** A global hotkey (default `ctrl+opt+cmd+.`) and
+  `kura-device stop` end the session immediately and refuse new ones for 10 minutes.
 - **User takes over.** Physical mouse or keyboard input during a session
-  pauses it; the agent's next action gets `user_active` and must ask.
+  ends it; the agent's next action gets `user_active` and must ask again.
 - **Never-touch apps.** A local deny list of bundle ids (defaults: password
   managers, Keychain Access, System Settings › Privacy & Security, Terminal);
   a click or keystroke while one of them is frontmost is refused with
@@ -225,19 +226,65 @@ In the cell:
 
 ## 9. macOS implementation
 
-- Capture: ScreenCaptureKit (`SCScreenshotManager`) via a small Objective-C
-  bridge or a maintained crate; `CGWindowListCreateImage` is deprecated.
-  Requires the Screen Recording permission.
-- Input: Quartz `CGEvent` (mouse, keyboard, scroll). Requires the
-  Accessibility permission.
-- Frontmost app: `NSWorkspace.frontmostApplication`; secure input:
-  `IsSecureEventInputEnabled`.
-- Both permissions are checked at start (`kura-device doctor`) with the
-  exact System Settings pane to open. The binary must be signed for the
-  permissions to stick across upgrades; unsigned dev builds are re-prompted.
-- Crate choice (capture/input bindings) is made in slice 3 after checking
-  maintenance and macOS 15+ support; the device keeps capture and input
-  behind a `Platform` trait so Windows/Linux are additive.
+Implemented 2026-11-03 (slice 3): `crates/surface/device` (package and
+binary `kura-device`). The session rules (`agent.rs`) and the connection
+(`link.rs`) are platform-free and run against a fake computer in tests;
+macOS lives behind the `Platform` and `Consent` traits
+(`platform/macos.rs`), so Windows/Linux are additive.
+
+- Capture: `/usr/sbin/screencapture -x -C -D1` to a private scratch file,
+  read and deleted at once. Chosen over binding ScreenCaptureKit: Apple
+  keeps the tool on whatever capture API the OS uses (`CGDisplayCreateImage`
+  is obsolete), it honours Screen Recording the same way, and it keeps async
+  Objective-C out of the device. Cost: one process per screenshot, measured
+  204 ms capture + 30 ms scale/encode on a 3840×2160 display (release). The
+  device checks Screen Recording before each capture, because without it
+  the tool silently returns only the wallpaper.
+- Scaling and JPEG are pure Rust (`image`), so the pipeline is tested on
+  every platform. The screenshot is always scaled to `fit(display pixels)`,
+  the same size the coordinates are mapped from, so the two cannot drift.
+- Input: Quartz `CGEvent` from a private event source (the person's held
+  modifiers do not leak in), posted at the HID tap. `type` sends Unicode in
+  chunks of 16 UTF-16 units, so any layout and any script type correctly;
+  `\n` and `\t` are the Return and Tab keys. `key` chords use ANSI key
+  codes (as other CUA tools do; a non-US layout presses the same physical
+  keys). Requires Accessibility.
+- Never-touch apps: the window server's window list (owner pid → bundle id
+  through `NSRunningApplication`). The frontmost app is the owner of the
+  topmost layer-0 window; `NSWorkspace.frontmostApplication` goes stale
+  without a main run loop. A click, scroll or either end of a drag that
+  lands on such a window is refused, as is any input while one is in front;
+  their windows are black in every screenshot. The default list covers
+  password managers, Keychain Access, System Settings and common terminals;
+  `--deny-app` adds more.
+- Secure input: `IsSecureEventInputEnabled`; `type` is refused, `key`
+  is not (Return in a password field is how people submit it).
+- Take-over and kill switch: one listen-only event tap on its own run-loop
+  thread. Every event the device posts carries a tag in
+  `kCGEventSourceUserData`; any untagged mouse or key event is the person.
+  Input more than 3 s after the grant ends the session (`user_active`); the
+  grace covers the hand leaving the Allow button. `ctrl+opt+cmd+.` (or
+  `kura-device stop`, which sends SIGUSR1) ends the session
+  (`user_stopped`) and refuses requests for 10 minutes. If the tap cannot be
+  created, `run` refuses to start: no kill switch, no control.
+- Consent: a CoreFoundation alert (`CFUserNotificationDisplayAlert`), which
+  needs no app bundle, with "Deny" as the default button and a 60 s timeout.
+  It states the agent's reason (clipped to 300 characters), the duration,
+  and how to take control back.
+- `doctor` checks Screen Recording (`CGPreflightScreenCaptureAccess`) and
+  Accessibility (`AXIsProcessTrusted`), names the pane, and with `--open`
+  opens it; `run` refuses to start without both. For a CLI the grant
+  belongs to the app that launched it (the terminal) unless it runs under
+  launchd.
+- Files: the token is in the Keychain (service `dev.kura.device`, account
+  the server URL), never on disk; `config.json` (server, device id, name,
+  0600) and the pid file are in `~/Library/Application Support/kura-device`
+  (`KURA_DEVICE_HOME` overrides it); the log is
+  `~/Library/Logs/kura-device.log`, without typed text or secrets.
+- Deferred from §8: the menu-bar item and the pointer halo need an app
+  bundle and a main-thread AppKit loop; until a signed app exists, the
+  consent alert and the log are the visible state, and `kura-device status`
+  shows whether it is running.
 
 ## 10. Observability
 
@@ -281,8 +328,13 @@ Each slice is shippable and tested on its own.
    endpoints, hashed tokens, revocation, the WebSocket endpoint and
    protocol (§5), schemas in `schemas/api`, SDK. Tested with fake devices
    in-process and one real WebSocket client end to end.
-3. **`kura-device` for macOS**: pair, Keychain, connect/reconnect, capture,
-   input, consent, menu-bar state, kill switch, deny list, `doctor`.
+3. **`kura-device` for macOS** (done 2026-11-03, §9): pair, Keychain,
+   connect/reconnect, capture, input, consent, kill switch, take-over,
+   deny list, `doctor`/`status`/`stop`/`unpair`. Tested with a fake
+   computer, against the cell's own `Hub` and connection loop, and by hand
+   on macOS against a test daemon: pair, spent code refused, connect,
+   kill switch, reconnect after a cell restart (1 s → 2 s → 4 s), exit on a
+   revoked token. The menu-bar item is deferred (§9).
 4. **`computer.*` tools and gateway pass-through**: tool host wiring,
    capability gate, approvals for risky chords, audit artifacts, metrics;
    gateway `/v1/devices/*` route-by-token with rate limits. End to end on
