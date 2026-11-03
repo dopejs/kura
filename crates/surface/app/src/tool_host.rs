@@ -22,6 +22,9 @@
 //!   text; the browser runs in the tenant's container behind the egress
 //!   proxy and keeps nothing between sessions.
 //!
+//! - `work_item.open` (work-items.md §5.1): while work items are enabled,
+//!   to every turn that is not itself a work item's round.
+//!
 //! Every tool is wrapped so that a call runs the `chat/tool-call` hook point
 //! first (a veto is reported to the model as a failed call, never silently
 //! dropped), is recorded as a `chat.tool.called` event, and is counted.
@@ -87,6 +90,13 @@ impl ToolSource for AppTools {
         tools.extend(profile_tools(state, &turn.tenant_id));
         if let Some(browsers) = state.tenant_browsers.clone() {
             tools.extend(BrowserTool::all(&browsers, &turn.tenant_id));
+        }
+        // Work items (work-items.md §5.1): only while the feature is on, and
+        // never to a work item's own round.
+        if let Some(work_items) = state.work_items.clone() {
+            if let Some(open) = kura_workitems::OpenTool::for_turn(work_items, turn) {
+                tools.push(Arc::new(open));
+            }
         }
         for tool in tools {
             registry.register(Arc::new(Observed {

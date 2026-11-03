@@ -650,6 +650,10 @@ impl App {
     /// are not Clone, so each connector runtime receives its own loop + router
     /// over the same runtime/checkpoints/bus/store/chat deps — matching Go's
     /// per-runtime im.NewMessageLoop(sessionRouter, ...) construction.
+    ///
+    /// With work items enabled, every loop also offers inbound messages to
+    /// the work-item hook first (work-items.md §5.2); disabled, the loop is
+    /// exactly as before.
     fn connector_message_loop(&self) -> MessageLoop {
         let runtime = self.state.runtime.clone().expect("runtime wired in kernel");
         let chat = self
@@ -657,14 +661,18 @@ impl App {
             .chat
             .clone()
             .expect("chat plugin enabled (channel requires)");
-        MessageLoop::new(
+        let mut message_loop = MessageLoop::new(
             SessionRouter::new(),
             runtime.clone(),
             Some(CheckpointsManager::new(self.state.store.clone(), runtime)),
             Some((*self.event_bus).clone()),
             self.connector_store.clone(),
             (*chat).clone(),
-        )
+        );
+        if let Some(work_items) = self.state.work_items.clone() {
+            message_loop.set_work_item_hook(Arc::new(kura_workitems::ImHook::new(work_items)));
+        }
+        message_loop
     }
 
     /// Resolves a connector secret value through the secret manager (Go
@@ -3340,6 +3348,24 @@ mod tests {
         let app = App::new(config).expect("build app");
         let manager = app.state.work_items.clone().expect("work items manager");
         assert_eq!(manager.config().max_open_items, 50);
+        // Slice 2: ordinary turns are offered work_item.open, rounds never.
+        let late = Arc::new(std::sync::OnceLock::new());
+        late.set(app.state.clone()).ok().expect("late state");
+        let tools = crate::tool_host::AppTools::new(late);
+        let offered = |thread: &str| {
+            kura_chat::ToolSource::registry(
+                &tools,
+                &kura_chat::ToolTurn {
+                    tenant_id: "ten_a".to_string(),
+                    thread_id: thread.to_string(),
+                    ..kura_chat::ToolTurn::default()
+                },
+            )
+            .get(kura_workitems::OPEN_TOOL)
+            .is_some()
+        };
+        assert!(offered("thr_src_1"));
+        assert!(!offered("thr_wi_0193"));
         app.close();
     }
 

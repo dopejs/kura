@@ -2813,22 +2813,28 @@ fn build_swarm(asm: &mut Assembly) -> Result<(), AppError> {
 }
 
 /// Work items (docs/harness/work-items.md). Off unless the profile sets
-/// `entries.work-items.config.enabled`: then nothing is built and every
-/// work-item route answers 404, exactly as before the feature existed.
+/// `entries.work-items.config.enabled`: otherwise nothing is built, every
+/// work-item route answers 404, no chat turn is offered `work_item.open`
+/// and the IM loops get no hook, exactly as before the feature existed.
 fn build_work_items(asm: &mut Assembly) -> Result<(), AppError> {
     let Some(config) = work_items_config(asm.profile.config_for("work-items"))? else {
         eprintln!("[kura] work items: disabled");
         return Ok(());
     };
     eprintln!(
-        "[kura] work items: enabled (maxOpenItems {})",
-        config.max_open_items
+        "[kura] work items: enabled (maxOpenItems {}, subscriptionIdleDays {}, \
+         maxRoundsPerItemPerHour {})",
+        config.max_open_items, config.subscription_idle_days, config.max_rounds_per_item_per_hour
     );
-    asm.state.work_items = Some(Arc::new(kura_workitems::Manager::new(
-        asm.state.store_pool.clone(),
-        asm.event_bus.clone(),
-        config,
-    )));
+    let chat = asm
+        .state
+        .chat
+        .clone()
+        .expect("chat plugin built (required)");
+    asm.state.work_items = Some(Arc::new(
+        kura_workitems::Manager::new(asm.state.store_pool.clone(), asm.event_bus.clone(), config)
+            .with_chat(chat),
+    ));
     Ok(())
 }
 
@@ -2875,11 +2881,30 @@ mod work_items_config_tests {
         .unwrap()
         .expect("enabled");
         assert_eq!(capped.max_open_items, 3);
+        // Slice 2's D7 keys are real configuration now.
+        assert_eq!(on.subscription_idle_days, 14);
+        assert_eq!(on.max_rounds_per_item_per_hour, 20);
+        let tuned = work_items_config(object(serde_json::json!({
+            "enabled": true,
+            "subscriptionIdleDays": 0,
+            "maxRoundsPerItemPerHour": 5
+        })))
+        .unwrap()
+        .expect("enabled");
+        assert_eq!(tuned.subscription_idle_days, 0);
+        assert_eq!(tuned.max_rounds_per_item_per_hour, 5);
     }
 
     #[test]
     fn a_misspelt_key_is_refused() {
         assert!(work_items_config(object(serde_json::json!({"enable": true}))).is_err());
+        // Later slices' keys stay unknown until their slice ships.
+        assert!(
+            work_items_config(object(
+                serde_json::json!({"enabled": true, "recoverOnBoot": true})
+            ))
+            .is_err()
+        );
     }
 }
 
