@@ -420,7 +420,10 @@ fn reminders_carry_their_tenant_and_old_rows_are_backfilled() {
         );
     }
     let store = SQLiteStore::new(&dir).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 8);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        kura_store::CURRENT_SCHEMA_VERSION
+    );
     let tenant = |table: &str, pk: &str, id: &str| store.lookup_row_tenant(table, pk, id).unwrap();
     assert_eq!(
         tenant("reminders", "reminder_id", "rem_old").as_deref(),

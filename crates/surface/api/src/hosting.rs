@@ -182,6 +182,11 @@ pub const TENANT_ROUTES: &[(&str, &str)] = &[
     ("GET", "/v1/providers/{provider_id}"),
     ("GET", "/v1/providers/{provider_id}/models"),
     ("GET", "/v1/model-roles"),
+    // The tenant's own computers (remote computer use). Every handler acts
+    // on the caller's tenant only; another tenant's device is a 404.
+    ("GET", "/v1/devices"),
+    ("POST", "/v1/devices/pairings"),
+    ("POST", "/v1/devices/{device_id}/revoke"),
 ];
 
 fn tenant_route(method: &Method, path: &str) -> bool {

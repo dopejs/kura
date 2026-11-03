@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/pair-device.response.schema.json",
+  "title": "PairDeviceResponse",
+  "description": "The paired device and its token. The token is shown once; the daemon keeps only its hash.",
+  "type": "object",
+  "required": ["device", "token"],
+  "additionalProperties": false,
+  "properties": {
+    "device": { "$ref": "device-resource.schema.json" },
+    "token": { "type": "string", "pattern": "^kdev\\.[A-Za-z0-9_.-]+\\.[0-9a-f]+$" }
+  }
+}

@@ -32,6 +32,7 @@ pub mod memory;
 mod migrations;
 pub mod pool;
 pub use pool::{PoolStats, ReadGuard, StorePool, WaitStats};
+mod devices;
 mod policy;
 pub mod profiles;
 mod providers;
@@ -61,6 +62,7 @@ pub use channel_management::{
 };
 pub use computeruse::ComputerUseStoreHandle;
 pub use consumer_policy::ConsumerPolicyRecordRecord;
+pub use devices::{DevicePairingRecord, DeviceRecord};
 pub use discord_setup::{
     DiscordDestinationValidationRecord, DiscordHostedSetupRecord, DiscordSmokeEvidenceRecord,
 };
@@ -92,7 +94,7 @@ pub use turn_checkpoints::TurnCheckpointRecord;
 ///
 /// Must equal the highest `version` in `schema_migrations()`, or a database
 /// written by this build is rejected on reopen as "newer than supported".
-pub const CURRENT_SCHEMA_VERSION: i64 = 8;
+pub const CURRENT_SCHEMA_VERSION: i64 = 9;
 
 /// The last development-era schema version before the baseline collapse.
 /// Databases stamped exactly at this legacy head hold a schema identical to

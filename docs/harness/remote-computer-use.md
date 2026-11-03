@@ -78,26 +78,42 @@ changing the device protocol).
 
 ## 4. Pairing, credentials, revocation
 
-1. The signed-in user asks for a pairing code (`POST /v1/devices/pairings`,
-   web or TUI). The daemon stores a single-use code, valid 10 minutes, bound
-   to the tenant and principal, and returns `kpair_<route>_<secret>`.
-2. On the Mac: `kura-device pair <code> --server https://…`. The device
-   exchanges the code (`POST /v1/devices/pair`, unauthenticated,
-   rate-limited) for a device token `kdev_<route>_<secret>` and stores it in
-   the macOS Keychain.
-3. Each connection authenticates with that token. The daemon stores only a
-   hash, with the device's name, platform, first/last seen and the principal
-   who paired it. `GET /v1/devices` lists, `DELETE /v1/devices/{id}` revokes
-   and closes any live connection at once.
+Implemented 2026-11-03 (slice 2): `domains/devices` (`registry`, `hub`,
+`connection`), `foundation/device-protocol`, store migration v9
+(`devices`, `device_pairings`), `surface/api/src/routes/devices.rs`.
 
-`<route>` is an opaque routing id (the gateway's placement id for the user,
-or empty when there is no gateway). The gateway's only new job: for exactly
-`/v1/devices/pair` and `/v1/devices/connect`, skip person auth, look up the
-placement by `<route>`, rate-limit per route and per source IP, and forward
-with the cell token **plus** the original device credential in
-`X-Kura-Device-Token`. The cell validates the credential; a forged route
-reaches a cell that rejects it. The gateway never validates or stores device
-secrets, so there is one source of truth.
+1. The signed-in user asks for a pairing code (`POST /v1/devices/pairings`,
+   a tenant route). The daemon stores the hash of a single-use code, valid
+   10 minutes, bound to the tenant and principal, and returns
+   `kpair.<tenant>.<secret>` (128-bit secret).
+2. On the Mac: `kura-device pair <code> --server https://…`. The device
+   exchanges the code (`POST /v1/devices/pair`, an open route; the code is
+   the credential) for a device token `kdev.<tenant>.<secret>` (256-bit)
+   and stores it in the macOS Keychain. The code is spent and the device
+   created in one transaction; an unknown, spent or expired code all answer
+   the same 401.
+3. Each connection (`GET /v1/devices/connect`, WebSocket) sends the token in
+   `X-Kura-Device-Token` and is refused with 401 before the upgrade if it is
+   unknown, revoked, or names another tenant. The daemon stores only
+   SHA-256 hashes, with the device's name, platform, created / last seen
+   (once per connect and disconnect) and the principal who paired it.
+   `GET /v1/devices` lists with online state; `POST
+   /v1/devices/{id}/revoke` revokes and drops a live connection at once
+   (the device is told `session_end{reason: revoked}`). Another tenant's
+   device is a 404.
+
+`<tenant>` is the routing part: the gateway already maps tenants to cells.
+It is not secret, and the secret is free of `.`, so the gateway splits from
+the right. The gateway's only new job: for exactly `/v1/devices/pair` and
+`/v1/devices/connect`, skip person auth, look up the placement by
+`<tenant>`, rate-limit per tenant and per source IP, and forward with the
+cell token **plus** the device's own credential (the code in the body, the
+token in `X-Kura-Device-Token`). The cell validates the credential; a
+forged tenant reaches a cell that rejects it. The gateway never validates or
+stores device secrets, so there is one source of truth. The daemon itself
+does not rate-limit these two routes: guessing a 128-bit code within its ten
+minutes is not a practical attack, and each refusal costs one indexed
+lookup.
 
 Tradeoff: a stolen device token lets someone impersonate the device (feed
 the agent fake screenshots, receive the agent's actions); it does not give
@@ -225,10 +241,13 @@ In the cell:
 
 ## 10. Observability
 
-- Metrics: `kura_devices_connected` (gauge), `kura_device_sessions_total
-  {outcome=granted|denied|timeout}`, `kura_device_actions_total{op,outcome}`,
-  `kura_device_action_seconds{op}` (histogram, round trip),
-  `kura_device_screenshot_bytes` (histogram).
+- Metrics (the registry has counters and histograms, no gauges):
+  `kura_device_connections_total{event=opened|closed|replaced|revoked}`
+  (opened minus the rest is the number connected),
+  `kura_device_sessions_total{outcome=granted|denied|timeout}`,
+  `kura_device_actions_total{op,outcome}`,
+  `kura_device_action_duration_seconds{op}` (round trip). Screenshot size
+  comes with slice 4.
 - Logs: connect/disconnect with device id, protocol, latency; each action
   with session, op, outcome, ms (never the typed text; its length only).
 - Events: `device.connected`, `device.disconnected`, `computer.session.*`,
@@ -258,10 +277,10 @@ Each slice is shippable and tested on its own.
 1. **Images in tool results** (§7): protocol, `kura_llm`, the three wires,
    persistence by artifact reference, last-3 window. Tests per wire with
    fixtures; the prompt-cache prefix test stays green.
-2. **Device registry and hub in the daemon**: pairing endpoints, hashed
-   tokens, revocation, the WebSocket endpoint and protocol (§5), schemas in
-   `schemas/api`, SDK, `make daemon-contract-test`. Tested with a fake
-   device in-process.
+2. **Device registry and hub in the daemon** (done 2026-11-03): pairing
+   endpoints, hashed tokens, revocation, the WebSocket endpoint and
+   protocol (§5), schemas in `schemas/api`, SDK. Tested with fake devices
+   in-process and one real WebSocket client end to end.
 3. **`kura-device` for macOS**: pair, Keychain, connect/reconnect, capture,
    input, consent, menu-bar state, kill switch, deny list, `doctor`.
 4. **`computer.*` tools and gateway pass-through**: tool host wiring,

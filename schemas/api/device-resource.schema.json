@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/device-resource.schema.json",
+  "title": "DeviceResource",
+  "description": "A computer the tenant paired for remote computer use. The token is never part of it.",
+  "type": "object",
+  "required": ["deviceId", "name", "platform", "createdAt", "online"],
+  "additionalProperties": false,
+  "properties": {
+    "deviceId": { "type": "string" },
+    "name": { "type": "string" },
+    "platform": { "type": "string" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "lastSeenAt": { "type": "string", "format": "date-time" },
+    "revokedAt": { "type": "string", "format": "date-time" },
+    "online": { "type": "boolean", "description": "Connected to the cell right now." },
+    "session": { "type": "string", "description": "A control session the user granted that is still live." }
+  }
+}

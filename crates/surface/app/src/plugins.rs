@@ -2223,6 +2223,10 @@ fn build_computer_use(asm: &mut Assembly) -> Result<(), AppError> {
         asm.wiring.computeruse_recorder = Some(computeruse_recorder);
     }
     build_tenant_browsers(asm);
+    // Remote computer use (docs/harness/remote-computer-use.md): the hub
+    // only holds connections the users' devices open; nothing reaches a
+    // device until a tool asks for a session and the user allows it.
+    asm.state.device_hub = Some(Arc::new(kura_devices::Hub::default()));
     Ok(())
 }
 

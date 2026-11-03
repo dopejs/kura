@@ -3208,5 +3208,41 @@ pub fn schema_migrations() -> Vec<SchemaMigration> {
                 .to_string(),
         ],
     },
+    SchemaMigration {
+        version: 9,
+        name: "devices".to_string(),
+        statements: vec![
+            // Computers a tenant paired for remote computer use
+            // (docs/harness/remote-computer-use.md §4). Only the hash of a
+            // device's token is kept; a revoked device keeps its row so the
+            // list can say when and the token can never come back.
+            r#"CREATE TABLE IF NOT EXISTS devices (
+                device_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                principal_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                last_seen_at TEXT,
+                revoked_at TEXT
+            );"#
+            .to_string(),
+            r#"CREATE INDEX IF NOT EXISTS idx_devices_tenant
+                ON devices(tenant_id, created_at);"#
+                .to_string(),
+            // Single-use codes that turn into a device. Also hashed: a code
+            // read from the database after the fact pairs nothing.
+            r#"CREATE TABLE IF NOT EXISTS device_pairings (
+                code_hash TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                principal_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used_at TEXT
+            );"#
+            .to_string(),
+        ],
+    },
 ]
 }

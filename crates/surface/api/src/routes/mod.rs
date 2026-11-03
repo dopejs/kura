@@ -28,6 +28,7 @@ pub mod computer_use;
 pub mod config;
 pub mod connectors;
 pub mod context;
+pub mod devices;
 pub mod evaluation;
 pub mod evidence;
 pub mod execprofile;
@@ -135,6 +136,8 @@ pub fn router(state: AppState) -> Router {
         .route("/version", get(version))
         .route("/v1/system/info", get(system_info))
         .merge(mcp::ingress_router())
+        // Authenticated by the device's own credential, not a bearer token.
+        .merge(devices::open_router())
         .merge(
             auth::open_router()
                 .route_layer(axum::middleware::from_fn_with_state(
@@ -160,6 +163,7 @@ pub fn router(state: AppState) -> Router {
         .merge(config::router())
         .merge(connectors::router())
         .merge(context::router())
+        .merge(devices::router())
         .merge(evaluation::router())
         .merge(evidence::router())
         .merge(execprofile::router())

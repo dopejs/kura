@@ -147,6 +147,9 @@ pub struct AppState {
     /// The tenants' throwaway browsers behind the `browser.*` chat tools
     /// (agent-runtime-program.md 3.3). Absent = no browser tools.
     pub tenant_browsers: Option<Arc<kura_computeruse::TenantBrowsers>>,
+    /// Live connections of the users' own computers (remote computer use).
+    /// Absent = devices can pair but not connect.
+    pub device_hub: Option<Arc<kura_devices::Hub>>,
     /// Go Dependencies.Scheduler.
     ///
     pub scheduler: Option<Arc<Scheduler>>,
@@ -245,6 +248,7 @@ impl AppState {
             capabilities: None,
             computer_use: None,
             tenant_browsers: None,
+            device_hub: None,
             scheduler: None,
             delivery: None,
             billing: None,

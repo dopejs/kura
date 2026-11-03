@@ -39,6 +39,10 @@ pub const TOKEN_ESTIMATE_INPUT_TOKENS_TOTAL: &str = "kura_token_estimate_input_t
 pub const RETRIEVAL_EMBEDDINGS_TOTAL: &str = "kura_retrieval_embeddings_total";
 pub const EMBEDDER_REQUESTS_TOTAL: &str = "kura_embedder_requests_total";
 pub const EGRESS_PROXY_REQUESTS_TOTAL: &str = "kura_egress_proxy_requests_total";
+pub const DEVICE_CONNECTIONS_TOTAL: &str = "kura_device_connections_total";
+pub const DEVICE_SESSIONS_TOTAL: &str = "kura_device_sessions_total";
+pub const DEVICE_ACTIONS_TOTAL: &str = "kura_device_actions_total";
+pub const DEVICE_ACTION_DURATION_SECONDS: &str = "kura_device_action_duration_seconds";
 
 /// Help text per series, rendered as `# HELP`.
 const HELP: &[(&str, &str)] = &[
@@ -137,6 +141,22 @@ const HELP: &[(&str, &str)] = &[
     (
         EGRESS_PROXY_REQUESTS_TOTAL,
         "Tenant egress proxy requests by method (connect|http|any) and outcome (allowed|denied|bad_request|head_timeout|upstream_failed|over_capacity).",
+    ),
+    (
+        DEVICE_CONNECTIONS_TOTAL,
+        "Paired-device connections by event (opened|closed|replaced|revoked); opened minus the rest is the number connected.",
+    ),
+    (
+        DEVICE_SESSIONS_TOTAL,
+        "Remote computer-use session requests by outcome (granted|denied|timeout).",
+    ),
+    (
+        DEVICE_ACTIONS_TOTAL,
+        "Remote computer-use actions by op and outcome (ok|refused|device_offline|outcome_unknown_timeout|...).",
+    ),
+    (
+        DEVICE_ACTION_DURATION_SECONDS,
+        "Remote computer-use action round trip by op.",
     ),
 ];
 

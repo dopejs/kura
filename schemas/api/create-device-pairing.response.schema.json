@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/create-device-pairing.response.schema.json",
+  "title": "CreateDevicePairingResponse",
+  "description": "A single-use code for `kura-device pair`, valid until expiresAt.",
+  "type": "object",
+  "required": ["code", "expiresAt"],
+  "additionalProperties": false,
+  "properties": {
+    "code": { "type": "string", "pattern": "^kpair\\.[A-Za-z0-9_.-]+\\.[0-9a-f]+$" },
+    "expiresAt": { "type": "string", "format": "date-time" }
+  }
+}

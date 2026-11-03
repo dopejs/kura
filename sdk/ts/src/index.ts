@@ -36,6 +36,30 @@ export type ModelRoleListResponse = {
   items: ModelRoleResource[];
 };
 
+/** A computer the tenant paired for remote computer use. */
+export type DeviceResource = {
+  deviceId: string;
+  name: string;
+  platform: string;
+  createdAt: string;
+  lastSeenAt?: string;
+  revokedAt?: string;
+  /** Connected to the cell right now. */
+  online: boolean;
+  /** A control session the user granted that is still live. */
+  session?: string;
+};
+
+export type DeviceListResponse = {
+  items: DeviceResource[];
+};
+
+/** A single-use code for `kura-device pair`, valid until `expiresAt`. */
+export type DevicePairingResponse = {
+  code: string;
+  expiresAt: string;
+};
+
 /**
  * The final reply must be a JSON value conforming to `schema`. The daemon
  * accepts a subset of JSON Schema and answers 400 for anything else; a reply
@@ -3786,6 +3810,21 @@ export class KuraClient {
   /** Unroute a role so the configured default applies again. */
   async clearModelRole(role: ModelRole, tenantOptions?: TenantRequestOptions): Promise<void> {
     await this.requestJSON<void>(`/v1/model-roles/${encodePathComponent(role)}`, { method: "DELETE", tenant: tenantOptions });
+  }
+
+  /** The tenant's paired computers, with which are online. */
+  async listDevices(tenantOptions?: TenantRequestOptions): Promise<DeviceListResponse> {
+    return this.requestJSON<DeviceListResponse>("/v1/devices", { tenant: tenantOptions });
+  }
+
+  /** A code to pair a computer with `kura-device pair <code>`. */
+  async createDevicePairing(tenantOptions?: TenantRequestOptions): Promise<DevicePairingResponse> {
+    return this.requestJSON<DevicePairingResponse>("/v1/devices/pairings", { method: "POST", tenant: tenantOptions });
+  }
+
+  /** Revokes a device; a live connection is dropped at once. */
+  async revokeDevice(deviceId: string, tenantOptions?: TenantRequestOptions): Promise<DeviceResource> {
+    return this.requestJSON<DeviceResource>(`/v1/devices/${encodePathComponent(deviceId)}/revoke`, { method: "POST", tenant: tenantOptions });
   }
 
   async listChannelConnectors(query: { limit?: number; cursor?: string; state?: string; kind?: string } = {}, tenantOptions?: TenantRequestOptions): Promise<ChannelConnectorListResponse> {

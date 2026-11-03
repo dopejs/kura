@@ -11,7 +11,7 @@ kura-plugin = { workspace = true }
 kura-context = { workspace = true }
 kura-improvement = { workspace = true }
 # HTTP server stack (wave 6+): axum router over tower/tower-http, tokio runtime, hyper HTTP/1.
-axum = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
 tower = { workspace = true }
 tower-http = { workspace = true }
 tokio = { workspace = true }
@@ -68,6 +68,7 @@ kura-profiles = { workspace = true }
 kura-bindings = { workspace = true }
 kura-capabilities = { workspace = true }
 kura-computeruse = { workspace = true }
+kura-devices = { workspace = true }
 kura-scheduler = { workspace = true }
 kura-delivery = { workspace = true }
 kura-billing = { workspace = true }
@@ -78,3 +79,8 @@ kura-evaluation = { workspace = true }
 kura-livevalidation = { workspace = true }
 kura-audit = { workspace = true }
 kura-orchestration = { workspace = true }
+
+[dev-dependencies]
+tokio-tungstenite = "0.24"
+kura-device-protocol = { workspace = true }
+kura-contracts = { workspace = true }
