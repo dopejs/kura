@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/create-work-item.request.schema.json",
+  "title": "CreateWorkItemRequest",
+  "description": "POST /v1/work-items: opens a work item for the caller's tenant with an explicit `api` mandate and starts its first round (work-items.md §5.1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "scope"],
+  "properties": {
+    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "scope": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "description": "What the work is: recorded as the mandate's scope text, immutable, and read by every round."
+    },
+    "provider": { "type": "string", "description": "Provider every round dispatches to; empty for the tenant's default." },
+    "model": { "type": "string" }
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/events/work-item-ended.event.schema.json",
+  "title": "WorkItemEndedEvent",
+  "description": "A round's report ended the item. Carries no message bodies (work-items.md \u00a710).",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "./runtime-event.schema.json"
+    },
+    {
+      "type": "object",
+      "required": [
+        "tenantId"
+      ],
+      "properties": {
+        "category": {
+          "const": "work_item"
+        },
+        "name": {
+          "const": "work_item.ended"
+        },
+        "tenantId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resource": {
+          "type": "object",
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "work_item"
+            },
+            "id": {
+              "type": "string"
+            }
+          }
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "itemId",
+            "basis",
+            "endReason"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "itemId": {
+              "type": "string"
+            },
+            "basis": {
+              "type": "string",
+              "enum": [
+                "api",
+                "im_mention",
+                "im_direct",
+                "rule"
+              ]
+            },
+            "endReason": {
+              "type": "string",
+              "enum": [
+                "completed",
+                "dropped",
+                "revoked",
+                "stopped"
+              ]
+            },
+            "roundSeq": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    }
+  ]
+}

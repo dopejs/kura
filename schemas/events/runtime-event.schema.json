@@ -41,7 +41,8 @@
         "mail",
         "reminder",
         "evaluation",
-        "tenant"
+        "tenant",
+        "work_item"
       ]
     },
     "name": {

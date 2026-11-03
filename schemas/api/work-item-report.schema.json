@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/work-item-report.schema.json",
+  "title": "WorkItemReport",
+  "description": "How a work item round ends (work-items.md §3.4). The daemon sends this schema as the round's responseFormat and reads the round's reply against it; a reply that does not conform is recorded as a blocked report with reason report_unreadable. Only keywords the structured-output validator enforces are used.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "summary"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["progress", "waiting", "ready", "blocked", "failed", "dropped"],
+      "description": "ready: the work is done. progress: it moved and goes on when something new arrives. waiting: nothing can happen until an outside event. blocked: a person is needed. failed: it cannot be done. dropped: it is no longer wanted."
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "description": "What the round did and where the work stands, for the person who asked."
+    },
+    "attention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question"],
+      "description": "The one question a person must answer for the work to go on.",
+      "properties": {
+        "question": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "options": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+        }
+      }
+    }
+  }
+}

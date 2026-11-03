@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/work-item-list.response.schema.json",
+  "title": "WorkItemListResponse",
+  "description": "GET /v1/work-items: the caller's tenant's work items, most recently updated first, without rounds or inputs.",
+  "type": "object",
+  "required": ["items"],
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": { "$ref": "./work-item-resource.schema.json" }
+    }
+  }
+}

@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/work-item-resource.schema.json",
+  "title": "WorkItem",
+  "description": "Long-lived work owned by one tenant (docs/harness/work-items.md). Each round is an ordinary chat turn on the item's own thread with request id `<itemId>_r<seq>`. `stage` is derived from stored facts on every read and is absent once the item has ended. `rounds` and `inputs` are present on GET /v1/work-items/{id} only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["itemId", "tenantId", "title", "state", "threadId", "seq", "mandate", "createdAt", "updatedAt"],
+  "properties": {
+    "itemId": { "type": "string", "pattern": "^wi_[0-9a-f]+$" },
+    "tenantId": { "type": "string", "minLength": 1 },
+    "title": { "type": "string" },
+    "state": { "type": "string", "enum": ["open", "ended"] },
+    "endReason": { "type": "string", "enum": ["completed", "dropped", "revoked", "stopped"] },
+    "stage": { "$ref": "#/$defs/stage" },
+    "threadId": { "type": "string", "pattern": "^thr_wi_[0-9a-f]+$" },
+    "provider": { "type": "string" },
+    "model": { "type": "string" },
+    "seq": { "type": "integer", "minimum": 0, "description": "Rounds started so far; the last round's seq." },
+    "mandate": { "$ref": "#/$defs/mandate" },
+    "lastReport": { "$ref": "#/$defs/report" },
+    "attention": { "$ref": "#/$defs/attention" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "rounds": { "type": "array", "items": { "$ref": "#/$defs/round" } },
+    "inputs": { "type": "array", "items": { "$ref": "#/$defs/input" } }
+  },
+  "$defs": {
+    "stage": {
+      "type": "string",
+      "enum": [
+        "person/delivery",
+        "person/approval",
+        "person/answer",
+        "person/blocked",
+        "person/failed",
+        "queued",
+        "working",
+        "idle"
+      ]
+    },
+    "mandate": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Why the agent may do this work. Immutable once written.",
+      "required": ["basis", "strength", "policyHash", "matchedRules", "sender", "source", "scopeText", "createdAt"],
+      "properties": {
+        "basis": { "type": "string", "enum": ["api", "im_mention", "im_direct", "rule"] },
+        "strength": { "type": "string", "enum": ["explicit", "inferred"] },
+        "policyHash": { "type": "string", "description": "Empty until work rules exist; an empty hash never takes the revalidation fast path." },
+        "matchedRules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ruleId", "version"],
+            "properties": {
+              "ruleId": { "type": "string" },
+              "version": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "sender": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "connectorId": { "type": "string" },
+            "authorId": { "type": "string" },
+            "principalId": { "type": "string" }
+          }
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "type": "string", "enum": ["api", "im", "webhook"] },
+            "ref": { "type": "string" },
+            "conversation": { "type": "string" }
+          }
+        },
+        "receivingPolicyId": { "type": "string" },
+        "scopeText": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "attention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question"],
+      "properties": {
+        "question": { "type": "string" },
+        "options": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A round's report as recorded. `reason` is set by the daemon, never by the model: report_unreadable when the reply did not conform to work-item-report.schema.json.",
+      "required": ["status", "summary"],
+      "properties": {
+        "status": { "type": "string", "enum": ["progress", "waiting", "ready", "blocked", "failed", "dropped"] },
+        "summary": { "type": "string" },
+        "attention": { "$ref": "#/$defs/attention" },
+        "reason": { "type": "string", "enum": ["report_unreadable"] }
+      }
+    },
+    "round": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seq", "requestId", "state", "queryText", "startedAt"],
+      "properties": {
+        "seq": { "type": "integer", "minimum": 1 },
+        "requestId": { "type": "string", "pattern": "^wi_[0-9a-f]+_r[0-9]+$" },
+        "state": { "type": "string", "enum": ["running", "settled", "failed"] },
+        "queryText": { "type": "string" },
+        "outcome": {
+          "type": "string",
+          "description": "settled: the report status, or report_unreadable. failed: the chat error code of a turn that ended without a report."
+        },
+        "report": { "$ref": "#/$defs/report" },
+        "errorCode": { "type": "string" },
+        "turnId": { "type": "string" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "finishedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seq", "kind", "authorIsPerson", "body", "state", "createdAt"],
+      "properties": {
+        "seq": { "type": "integer", "minimum": 1 },
+        "kind": { "type": "string", "enum": ["message", "event", "approval", "policy_notice", "recovery", "text"] },
+        "authorIsPerson": { "type": "boolean" },
+        "body": { "type": "string" },
+        "sourceRef": { "type": "string" },
+        "state": { "type": "string", "enum": ["pending", "steered", "consumed"] },
+        "roundSeq": { "type": "integer", "minimum": 1 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}
