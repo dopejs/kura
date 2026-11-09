@@ -2874,8 +2874,11 @@ fn build_work_items(asm: &mut Assembly) -> Result<(), AppError> {
     };
     eprintln!(
         "[kura] work items: enabled (maxOpenItems {}, subscriptionIdleDays {}, \
-         maxRoundsPerItemPerHour {})",
-        config.max_open_items, config.subscription_idle_days, config.max_rounds_per_item_per_hour
+         maxRoundsPerItemPerHour {}, recoverOnBoot {})",
+        config.max_open_items,
+        config.subscription_idle_days,
+        config.max_rounds_per_item_per_hour,
+        config.recover_on_boot
     );
     let chat = asm
         .state
@@ -2895,6 +2898,12 @@ fn build_work_items(asm: &mut Assembly) -> Result<(), AppError> {
             if let Some(work_items) = &state.work_items {
                 if let Err(err) = work_items.start_outbox_sweeper() {
                     eprintln!("[kura] work item: starting the outbox sweeper failed: {err}");
+                }
+                // Restart recovery (slice 4): the rounds a previous run
+                // left running are rerun, or ended without `recoverOnBoot`,
+                // on a thread of its own; boot does not wait for it.
+                if let Err(err) = work_items.start_recovery() {
+                    eprintln!("[kura] work item: starting the boot recovery failed: {err}");
                 }
             }
         }),
@@ -3015,15 +3024,22 @@ mod work_items_config_tests {
         .expect("enabled");
         assert_eq!(tuned.subscription_idle_days, 0);
         assert_eq!(tuned.max_rounds_per_item_per_hour, 5);
+        // Slice 4: restart recovery is on unless turned off (D7).
+        assert!(on.recover_on_boot);
+        let no_recovery = work_items_config(object(
+            serde_json::json!({"enabled": true, "recoverOnBoot": false}),
+        ))
+        .unwrap()
+        .expect("enabled");
+        assert!(!no_recovery.recover_on_boot);
     }
 
     #[test]
     fn a_misspelt_key_is_refused() {
         assert!(work_items_config(object(serde_json::json!({"enable": true}))).is_err());
-        // Later slices' keys stay unknown until their slice ships.
         assert!(
             work_items_config(object(
-                serde_json::json!({"enabled": true, "recoverOnBoot": true})
+                serde_json::json!({"enabled": true, "recoverOnboot": false})
             ))
             .is_err()
         );
