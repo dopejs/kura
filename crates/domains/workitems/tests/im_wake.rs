@@ -30,8 +30,8 @@ use kura_runtime::Manager as RuntimeManager;
 use kura_store::channel_management::RoutePolicy;
 use kura_store::{SQLiteStore, StorePool};
 use kura_workitems::{
-    Basis, EndReason, ImHook, InputState, ItemState, Manager, OpenTool, Stage, WorkItem,
-    WorkItemsConfig,
+    Basis, EndReason, ImHook, InputState, ItemState, Manager, OpenTool, OutboxState, Stage,
+    WorkItem, WorkItemsConfig,
 };
 
 const PROVIDER: &str = "scripted";
@@ -204,6 +204,8 @@ impl ToolSource for Tools {
 struct Replies {
     sent: Mutex<Vec<OutboundReply>>,
     next: AtomicUsize,
+    /// Errors the next sends answer, in order.
+    fail: Mutex<Vec<String>>,
 }
 
 impl Replies {
@@ -223,6 +225,12 @@ impl Replies {
 
 impl ReplySender for Replies {
     fn send_reply(&self, reply: OutboundReply) -> Result<SentReply, String> {
+        {
+            let mut fail = self.fail.lock().unwrap();
+            if !fail.is_empty() {
+                return Err(fail.remove(0));
+            }
+        }
         self.sent.lock().unwrap().push(reply);
         let id = self.next.fetch_add(1, Ordering::SeqCst) + 1;
         Ok(SentReply {
@@ -233,6 +241,7 @@ impl ReplySender for Replies {
 
 struct Harness {
     store: Arc<SQLiteStore>,
+    chat: Arc<Service>,
     manager: Arc<Manager>,
     message_loop: MessageLoop,
     script: Arc<Script>,
@@ -243,6 +252,11 @@ struct Harness {
 }
 
 fn harness() -> Harness {
+    harness_with(true)
+}
+
+/// `hook: false` is a daemon with work items disabled: the loop has no hook.
+fn harness_with(hook: bool) -> Harness {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().to_str().expect("path").to_string();
     // `MessageLoop::new` takes the connector store as an `Arc`, as the
@@ -287,9 +301,12 @@ fn harness() -> Harness {
         store.clone(),
         (*chat).clone(),
     );
-    message_loop.set_work_item_hook(Arc::new(ImHook::new(manager.clone())));
+    if hook {
+        message_loop.set_work_item_hook(Arc::new(ImHook::new(manager.clone())));
+    }
     Harness {
         store,
+        chat,
         manager,
         message_loop,
         script,
@@ -704,4 +721,125 @@ fn a_message_while_a_round_runs_steers_it() {
     // Nothing is left for another round.
     assert_eq!(item.seq, 1);
     assert_eq!(item.stage, Some(Stage::Idle));
+}
+
+/// §12 slice 3 over the real loop: a round's reply that fails to send is
+/// kept in the outbox, not lost, and the message still counts as taken.
+/// The requester's next message sends it first, then the new round's reply,
+/// in order.
+#[test]
+fn a_reply_that_fails_to_send_goes_out_first_on_the_next_message() {
+    let h = harness();
+    allow(&h.store, "ten_a", &[]);
+    let item = h.open("ten_a");
+
+    h.script.round_reply(
+        2,
+        r#"{"status":"progress","summary":"Found the flaky test."}"#,
+    );
+    h.replies
+        .fail
+        .lock()
+        .unwrap()
+        .push("slack web api status 503".to_string());
+    let sent_before = h.replies.texts().len();
+    let result = h.say("ten_a", "U1", "any news?", false);
+    assert_eq!(result.outcome, "work_item", "{result:?}");
+    assert_eq!(result.reason_code, "work_item_round");
+    assert_eq!(result.reply, "Found the flaky test.");
+    assert_eq!(
+        h.replies.texts().len(),
+        sent_before,
+        "nothing reached the chat"
+    );
+    let read = h.manager.get("ten_a", &item.item_id).expect("item");
+    let outbox = read.outbox.expect("outbox");
+    assert_eq!(outbox.len(), 1);
+    assert_eq!(outbox[0].state, OutboxState::Failed);
+    assert_eq!(outbox[0].round_seq, Some(2));
+    assert_eq!(outbox[0].connector_id, "slack-main");
+    assert!(outbox[0].conversation_key.starts_with("thr_src_"));
+
+    h.script
+        .round_reply(3, r#"{"status":"waiting","summary":"Pushed the fix."}"#);
+    let result = h.say("ten_a", "U1", "and now?", false);
+    assert_eq!(result.outcome, "work_item", "{result:?}");
+    assert_eq!(
+        h.replies.texts()[sent_before..].to_vec(),
+        vec!["Found the flaky test.", "Pushed the fix."]
+    );
+    let outbox = h
+        .manager
+        .get("ten_a", &item.item_id)
+        .expect("item")
+        .outbox
+        .expect("outbox");
+    assert!(outbox.iter().all(|row| row.state == OutboxState::Sent));
+    assert!(outbox.iter().all(|row| !row.external_message_id.is_empty()));
+}
+
+/// Off means unchanged: with work items disabled the loop has no hook, so
+/// the requester's message on a conversation an item owns (from a run with
+/// the feature on) takes the ordinary path, and no outbox row is written.
+#[test]
+fn with_work_items_disabled_the_im_path_is_unchanged() {
+    let h = harness_with(false);
+    allow(&h.store, "ten_a", &[]);
+    let conversation = InboundMessage {
+        tenant_id: "ten_a".to_string(),
+        connector_id: "slack-main".to_string(),
+        account_id: "workspace_1".to_string(),
+        connector_account_id: "workspace_1".to_string(),
+        channel_id: "C1".to_string(),
+        channel_or_conversation_id: "C1".to_string(),
+        peer_id: "C1".to_string(),
+        thread_id: "thread_root".to_string(),
+        kind: SessionKind::Group,
+        ..InboundMessage::default()
+    };
+    let key = kura_im::thread_id_for_source(
+        &kura_im::source_continuation_key(&slack("ten_a"), &conversation).expect("source key"),
+    );
+    // The key the hook would match: what an enabled daemon subscribes when
+    // the item is opened from this conversation.
+    let enabled = harness();
+    allow(&enabled.store, "ten_a", &[]);
+    let opened = enabled.open("ten_a");
+    assert_eq!(opened.subscriptions.expect("subs")[0].source_key, key);
+    let (item, _) = h
+        .manager
+        .open(kura_workitems::OpenRequest {
+            tenant_id: "ten_a".to_string(),
+            title: "Fix CI".to_string(),
+            scope: "Fix CI on main.".to_string(),
+            origin: Some(kura_im::ImTurnOrigin {
+                tenant_id: "ten_a".to_string(),
+                run_id: "run_1".to_string(),
+                connector_id: "slack-main".to_string(),
+                connector_kind: "slack".to_string(),
+                source_conversation_id: "C1".to_string(),
+                source_key: key,
+                author_id: "U1".to_string(),
+                shape: kura_threads::ConversationShape::Room,
+                mentioned: true,
+                delivery_id: "delivery_0".to_string(),
+                external_message_id: "m0".to_string(),
+                route_policy_id: String::new(),
+            }),
+            subscribe_origin: true,
+            ..kura_workitems::OpenRequest::default()
+        })
+        .expect("open");
+    assert_eq!(item.subscriptions.map_or(1, |subs| subs.len()), 1);
+
+    // Unaddressed: ignored by the participation gate, as before.
+    let result = h.say("ten_a", "U1", "go ahead and merge it", false);
+    assert_eq!(result.outcome, "ignored", "{result:?}");
+    // Addressed: an ordinary turn, answered inline.
+    let result = h.say("ten_a", "U1", "@kura hello there", true);
+    assert_eq!(result.outcome, "accepted", "{result:?}");
+    assert_eq!(h.replies.last().as_deref(), Some("reply:@kura hello there"));
+    let read = h.manager.get("ten_a", &item.item_id).expect("item");
+    assert!(read.inputs.expect("inputs").is_empty());
+    assert!(read.outbox.expect("outbox").is_empty());
 }
