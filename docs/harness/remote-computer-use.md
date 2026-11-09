@@ -210,8 +210,12 @@ On the device:
   bundle exists, §9.)
 - **Kill switch.** A global hotkey (default `ctrl+opt+cmd+.`) and
   `kura-device stop` end the session immediately and refuse new ones for 10 minutes.
+  An action in flight stops at its next step (one typed chunk, one click,
+  one step of a drag, 50 ms of a wait) and a held mouse button is released.
 - **User takes over.** Physical mouse or keyboard input during a session
-  ends it; the agent's next action gets `user_active` and must ask again.
+  ends it, including in the middle of an action, which stops at its next
+  step; the action and the next one get `user_active`, and the agent must
+  ask again.
 - **Never-touch apps.** A local deny list of bundle ids (defaults: password
   managers, Keychain Access, System Settings › Privacy & Security, Terminal);
   a click or keystroke while one of them is frontmost is refused with
@@ -279,10 +283,15 @@ macOS lives behind the `Platform` and `Consent` traits
   `kura-device stop`, which sends SIGUSR1) ends the session
   (`user_stopped`) and refuses requests for 10 minutes. If the tap cannot be
   created, `run` refuses to start: no kill switch, no control.
-- Consent: a CoreFoundation alert (`CFUserNotificationDisplayAlert`), which
+- Consent: a CoreFoundation alert (`CFUserNotificationCreate`), which
   needs no app bundle, with "Deny" as the default button and a 60 s timeout.
   It states the agent's reason (clipped to 300 characters), the duration,
-  and how to take control back.
+  and how to take control back. It is waited on 250 ms at a time from the
+  thread that created it (Core Foundation does not promise the object is
+  safe to share), so a prompt nobody can answer any more is taken off the
+  screen: the connection dropped, the kill switch, or a newer request
+  (`session_denied` with `cancelled`, or `kill_switch`). Checked on a real
+  Mac by an ignored test (`the_consent_alert_waits_in_short_polls_…`).
 - `doctor` checks Screen Recording (`CGPreflightScreenCaptureAccess`) and
   Accessibility (`AXIsProcessTrusted`), names the pane, and with `--open`
   opens it; `run` refuses to start without both. For a CLI the grant
