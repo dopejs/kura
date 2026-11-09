@@ -157,9 +157,14 @@ Rules:
   Without this a 50-step task re-sends ~50 images every round. The cut moves
   each step, which costs some prompt-cache reuse inside a CUA turn; that is
   the accepted tradeoff.
-- Every screenshot is also saved as a computer-use artifact (existing
-  `save_computer_use_artifact`), tenant-scoped, so the audit trail outlives
-  the prompt window. Retention follows the tenant's artifact retention.
+- Every screenshot is also written to
+  `<data_dir>/artifacts/remote-computer/<tenant>/<session>/<seq>-<call>.jpg`
+  and named on the image (`ImagePart.artifact`), so the audit trail outlives
+  the prompt window: the checkpoint keeps the name, the file keeps the
+  pixels. (As built in slice 4, this is a file and not a
+  `computer_use_artifacts` row: that table's foreign keys tie it to the
+  browser's runs, sessions and actions, which a chat turn does not have.)
+  Nothing prunes these files yet; retention is a follow-up.
 
 ## 7. Prerequisite: images in tool results
 
@@ -184,9 +189,11 @@ Additive and backward compatible:
   the run of `tool` messages (nothing else may sit between calls and their
   results).
 - Implemented 2026-11-02 (slice 1). Not yet done: offering image-returning
-  tools only to vision models (slice 4 gates `computer.*` on the model
-  catalog; a non-vision model would get a 400 today); adapter-RPC and
-  managed CLI providers still see text only.
+  tools only to vision models. The model catalog has no vision flag to gate
+  on, so slice 4 relies on the operator: `computer.remote` is enabled per
+  tenant, and a tenant whose model cannot read images gets the provider's
+  400 on the first screenshot. Adapter-RPC and managed CLI providers still
+  see text only.
 
 ## 8. Safety
 
@@ -213,16 +220,21 @@ On the device:
   focus), `type` is refused.
 
 In the cell:
-- Off by default: the tenant capability `computer.remote` must be enabled,
-  and the tools are offered to the model only while a device is online.
+- Off by default: `entries.computer-use.config.remote` must be enabled
+  (`{"enabled": true, "tenants": [...]}`; a shared daemon must name its
+  tenants or the boot fails), and the tools are offered to a turn only
+  while one of the tenant's devices is online.
 - Risky chords (`cmd+q`, `cmd+w`, `cmd+delete`, `cmd+shift+delete`,
   `cmd+opt+esc`) and `type` containing a newline after a URL-like string go
   through the existing approval flow (`domains/policy`).
 - Screen content is data, never instructions: the tool descriptions and the
   system prompt say so, and the approval rule above blunts an injected
   "press cmd+q".
-- Every action and its screenshot are recorded as computer-use actions and
-  artifacts with the session, turn and tool call ids.
+- Every action is recorded by `chat.tool.called` (thread, call id,
+  arguments, output) and its screenshot by the file above. Typed text is in
+  that event's arguments, as for `browser.type`; it is never in the logs.
+- A session belongs to the turn that started it: when the turn ends its
+  session is ended (`session.end {reason: "turn ended"}`).
 
 ## 9. macOS implementation
 
@@ -293,12 +305,14 @@ macOS lives behind the `Platform` and `Consent` traits
   (opened minus the rest is the number connected),
   `kura_device_sessions_total{outcome=granted|denied|timeout}`,
   `kura_device_actions_total{op,outcome}`,
-  `kura_device_action_duration_seconds{op}` (round trip). Screenshot size
-  comes with slice 4.
+  `kura_device_action_duration_seconds{op}` (round trip),
+  `kura_device_screenshot_bytes_total` (divide by ok actions for the mean
+  size), `kura_computer_approvals_total{outcome=approved|rejected|timeout|error}`.
 - Logs: connect/disconnect with device id, protocol, latency; each action
   with session, op, outcome, ms (never the typed text; its length only).
-- Events: `device.connected`, `device.disconnected`, `computer.session.*`,
-  so clients can show "agent is using your Mac".
+- Events: `chat.tool.called` per action and `policy.approval_requested`
+  per risky one. Not built: `device.connected`, `device.disconnected`,
+  `computer.session.*`, for clients to show "agent is using your Mac".
 - Device side: `~/Library/Logs/kura-device.log`, and `kura-device status`.
 
 ## 11. Failure modes and limits
@@ -339,6 +353,34 @@ Each slice is shippable and tested on its own.
    capability gate, approvals for risky chords, audit artifacts, metrics;
    gateway `/v1/devices/*` route-by-token with rate limits. End to end on
    sg-2 through the gateway with a real Mac.
+
+   As built (daemon side, 2026-11-09):
+   - Tools (`surface/app/src/computer_tools.rs`): `computer.start {reason,
+     device?}` asks for a session and returns the first screenshot;
+     `computer.act {op, …}` takes one protocol action as is, so the cell and
+     the device read the same shape; `computer.stop` hands control back.
+     Errors start with a stable code (`no_session`, `device_offline`,
+     `session_denied`, `session_ended`, `outcome_unknown_*`, `user_active`,
+     `denied_app`, `secure_input`, `approval_rejected`, `approval_timeout`)
+     and say what to do next.
+   - Gate: `entries.computer-use.config.remote` → `AppState::computer_remote`
+     (`kura_devices::RemoteGate`). Pairing and connecting stay available
+     with the gate off; nothing can ask a connected device for a session.
+   - Approvals (`kura_devices::rules`): `cmd+q`/`cmd+w` (any extra
+     modifiers), `cmd+delete`/`cmd+forwarddelete`, `cmd+opt+esc`, a `type`
+     with a newline after an address, and Return right after an address was
+     typed. The chord parser moved into `kura-device-protocol::keys`, so the
+     cell recognises a chord in every dialect the device accepts. The
+     approval is raised like `POST /v1/policy/approvals`, bound to the
+     tenant, and waited on for 180 s.
+   - Tests: the gate in every hosting mode; tools offered only to the
+     allowed tenant with its device online; a turn against a fake device
+     through the real `Hub` (screenshot saved, invalid actions refused before
+     the wire, take-over ends control, the session ends with the turn);
+     approve, reject and time out a risky chord (the device never sees a
+     rejected one).
+   - Not built: vision gating (§7), session events (§10), screenshot
+     retention, a per-turn action budget.
 5. **Evaluation**: a fixed set of desktop tasks (open an app, fill a form,
    find a file) with success rate and steps, to decide whether generic
    tools are good enough or a native mapping is needed.
