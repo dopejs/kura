@@ -48,6 +48,7 @@ import {
   type TenantResource,
   type TenantRole,
   type ThreadListResponse,
+  type WorkItemAttentionEntry,
   type ChannelConnectorListResponse,
   type ChannelManagementActionInput,
   type ChannelManagementSupportEvidence
@@ -80,6 +81,9 @@ type ShellSnapshot = {
   setupSessions: SetupSessionResource[];
   setupDiagnostics: SetupDiagnosticResource[];
   approvals: ApprovalResource[];
+  // Work items waiting on a person (docs/harness/work-items.md section 7); empty while the
+  // work-items plugin is off.
+  workItemAttention: WorkItemAttentionEntry[];
   activity: OperatorActivityListResponse | null;
   diagnostics: OperatorDiagnosticListResponse | null;
   replayCandidates: ReplayCandidateResource[];
@@ -134,6 +138,7 @@ const EMPTY_SHELL: ShellSnapshot = {
   setupSessions: [],
   setupDiagnostics: [],
   approvals: [],
+  workItemAttention: [],
   activity: null,
   diagnostics: null,
   replayCandidates: [],
@@ -178,6 +183,7 @@ export function App() {
   const [detail, setDetail] = useState<DetailView | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [activeActionId, setActiveActionId] = useState("");
+  const [workItemAnswers, setWorkItemAnswers] = useState<Record<string, string>>({});
   const [runGoal, setRunGoal] = useState(DEFAULT_RUN_GOAL);
   const [testQuery, setTestQuery] = useState(DEFAULT_TEST_QUERY);
   const [testThreadId, setTestThreadId] = useState("");
@@ -422,6 +428,13 @@ export function App() {
         .then((value) => value ?? null)
         .catch(() => null);
 
+      // Best-effort as well: the work-items routes answer 404 while the
+      // plugin is off, and then nothing waits.
+      const workItemAttention: WorkItemAttentionEntry[] = await Promise.resolve()
+        .then(() => scopedClient.listWorkItemAttention(scopedOptions))
+        .then((value) => value?.items ?? [])
+        .catch(() => []);
+
       if (generation !== generationRef.current || activeTenantRef.current !== tenant.tenantId) {
         return;
       }
@@ -435,6 +448,7 @@ export function App() {
         setupSessions: setupSessions.items,
         setupDiagnostics,
         approvals: approvals.items,
+        workItemAttention,
         activity,
         diagnostics,
         replayCandidates: replayCandidates.items,
@@ -560,6 +574,52 @@ export function App() {
     } finally {
       if (activeTenantRef.current === tenantId) {
         setDetailLoading(false);
+      }
+    }
+  }
+
+  async function handleWorkItemAnswer(entry: WorkItemAttentionEntry) {
+    const scoped = currentTenantOptions();
+    const text = (workItemAnswers[entry.itemId] ?? "").trim();
+    if (!scoped || !text) {
+      return;
+    }
+    const tenantId = scoped.tenantId!;
+    const generation = generationRef.current;
+    setActiveActionId(entry.itemId);
+    setError("");
+    try {
+      const response = await buildClient(tenantId).answerWorkItem(entry.itemId, text, scoped);
+      if (generation !== generationRef.current || activeTenantRef.current !== tenantId) {
+        return;
+      }
+      setActionMessage(`Answered "${entry.title}".`);
+      setWorkItemAnswers((current) => {
+        const next = { ...current };
+        delete next[entry.itemId];
+        return next;
+      });
+      setDetail({
+        title: `Work item ${entry.itemId}`,
+        route: `/v1/work-items/${entry.itemId}`,
+        tenantId,
+        generation,
+        payload: response
+      });
+      setActiveActionId("");
+      await refreshShell({ soft: true, tenantId });
+    } catch (caught) {
+      if (!isCurrentTenantWork(generation, tenantId)) {
+        return;
+      }
+      if (isTenantDenied(caught)) {
+        markActiveTenantDenied("Tenant access was denied. Choose another allowed tenant before continuing.");
+        return;
+      }
+      setError(errorMessage(caught));
+    } finally {
+      if (activeTenantRef.current === tenantId) {
+        setActiveActionId("");
       }
     }
   }
@@ -2131,6 +2191,63 @@ export function App() {
             <div className="empty-state">No credential setup targets are available for the active tenant.</div>
           )}
         </section>
+
+        {shell.workItemAttention.length ? (
+          <section className="panel approvals-panel work-item-attention-panel" aria-label="Work items waiting on you">
+            <div className="panel-head">
+              <div>
+                <p className="section-kicker">Work Items</p>
+                <h2>Waiting on You</h2>
+              </div>
+              <span className="count-chip">{shell.workItemAttention.length}</span>
+            </div>
+            <div className="stack-list">
+              {shell.workItemAttention.map((entry) => (
+                <article className="stack-card" key={entry.itemId}>
+                  <div className="stack-head">
+                    <strong>{entry.title}</strong>
+                    <span className={`status-chip status-${entry.stage.replace("/", "-")}`}>{entry.stage}</span>
+                  </div>
+                  {entry.attention ? <p>{entry.attention.question}</p> : null}
+                  {entry.attention?.options?.length ? <small>Options: {entry.attention.options.join(", ")}</small> : null}
+                  {entry.summary ? <p>{entry.summary}</p> : null}
+                  {entry.stage === "person/approval" ? (
+                    <small>Resolve approval {entry.attention?.approvalId} in the Approval Inbox.</small>
+                  ) : null}
+                  <div className="inline-actions">
+                    {entry.stage === "person/answer" ? (
+                      <>
+                        <input
+                          aria-label={`Answer for ${entry.title}`}
+                          value={workItemAnswers[entry.itemId] ?? ""}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setWorkItemAnswers((current) => ({ ...current, [entry.itemId]: value }));
+                          }}
+                        />
+                        <button
+                          className="primary"
+                          disabled={!canUseTenantActions || activeActionId === entry.itemId || !(workItemAnswers[entry.itemId] ?? "").trim()}
+                          type="button"
+                          onClick={() => {
+                            void handleWorkItemAnswer(entry);
+                          }}
+                        >
+                          Answer
+                        </button>
+                      </>
+                    ) : null}
+                    <button disabled={!canUseTenantActions} type="button" onClick={() => {
+                      void inspectRoute(`/v1/work-items/${entry.itemId}`, `Work item ${entry.itemId}`);
+                    }}>
+                      Inspect
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         <section className="panel approvals-panel">
           <div className="panel-head">

@@ -34,6 +34,8 @@ const mockClient = {
   getActivity: vi.fn(),
   getDiagnostics: vi.fn(),
   resolveApproval: vi.fn(),
+  listWorkItemAttention: vi.fn(),
+  answerWorkItem: vi.fn(),
   fetchRoute: vi.fn(),
   createRun: vi.fn(),
   queryChat: vi.fn(),
@@ -564,6 +566,8 @@ describe("App", () => {
     mockClient.getActivity.mockReset();
     mockClient.getDiagnostics.mockReset();
     mockClient.resolveApproval.mockReset();
+    mockClient.listWorkItemAttention.mockReset().mockResolvedValue({ items: [] });
+    mockClient.answerWorkItem.mockReset();
     mockClient.fetchRoute.mockReset();
     mockClient.createRun.mockReset();
     mockClient.queryChat.mockReset();
@@ -1240,6 +1244,43 @@ describe("App", () => {
       expect(mockClient.fetchRoute).toHaveBeenCalledWith("/v1/runs/run_1/workflows/wf_1", { tenantId: "ten_personal" });
       expect(screen.getByText(/Authoritative Detail/i)).not.toBeNull();
       expect(screen.getByText(/"workflowId": "wf_1"/i)).not.toBeNull();
+    });
+  });
+
+  it("lists work items waiting on a person first and answers a question", async () => {
+    mockClient.getOnboarding.mockResolvedValue(onboardingFixture());
+    mockClient.listApprovals.mockResolvedValue({ items: [] });
+    mockClient.getActivity.mockResolvedValue({ environmentScope: "test", generatedAt: "2026-11-09T10:00:00Z", items: [] });
+    mockClient.getDiagnostics.mockResolvedValue({ environmentScope: "test", items: [], generatedAt: "2026-11-09T10:00:00Z" });
+    mockClient.listWorkItemAttention.mockResolvedValueOnce({
+      items: [
+        { itemId: "wi_1", title: "Deploy", stage: "person/approval", basis: "api", attention: { kind: "approval", question: "run advance with prod", approvalId: "approval_9" }, summary: "Waiting for approval.", updatedAt: "2026-11-09T10:00:00Z" },
+        { itemId: "wi_2", title: "Fix CI", stage: "person/answer", basis: "api", attention: { kind: "question", question: "Pin or patch?", options: ["pin", "patch"] }, updatedAt: "2026-11-09T10:01:00Z" }
+      ]
+    });
+    mockClient.answerWorkItem.mockResolvedValue({ itemId: "wi_2", title: "Fix CI", stage: "queued" });
+
+    render(<App />);
+    const user = userEvent.setup();
+
+    await user.type(screen.getByLabelText(/access token/i), "token");
+    await user.click(screen.getByRole("button", { name: /load shell/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Waiting on You")).not.toBeNull();
+      expect(screen.getByText("run advance with prod")).not.toBeNull();
+      expect(screen.getByText("Pin or patch?")).not.toBeNull();
+      expect(screen.getByText(/Resolve approval approval_9/)).not.toBeNull();
+    });
+
+    await user.type(screen.getByLabelText("Answer for Fix CI"), "pin");
+    await user.click(screen.getByRole("button", { name: "Answer" }));
+
+    await waitFor(() => {
+      expect(mockClient.answerWorkItem).toHaveBeenCalledWith("wi_2", "pin", { tenantId: "ten_personal" });
+      expect(screen.getByText(/Answered "Fix CI"/)).not.toBeNull();
+      // The refreshed queue is empty, so the panel takes no space.
+      expect(screen.queryByText("Waiting on You")).toBeNull();
     });
   });
 
