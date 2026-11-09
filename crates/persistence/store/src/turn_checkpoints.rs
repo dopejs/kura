@@ -94,6 +94,55 @@ impl SQLiteStore {
         }))
     }
 
+    /// The checkpoints a request left on a thread, most recently written
+    /// first, for a caller that knows the request but not the turn key: the
+    /// work-item boot scan, which reruns a round under its own request id
+    /// and must know whether the rerun resumes (work-items.md §6).
+    pub fn turn_checkpoints_for_request(
+        &self,
+        tenant_id: &str,
+        thread_id: &str,
+        request_id: &str,
+    ) -> Result<Vec<TurnCheckpointRecord>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                r#"SELECT turn_key, tenant_id, thread_id, request_id, checkpoint_json, created_at, updated_at
+                FROM agent_turn_checkpoints
+                WHERE tenant_id = ?1 AND thread_id = ?2 AND request_id = ?3
+                ORDER BY updated_at DESC"#,
+            )
+            .map_err(|e| format!("prepare turn checkpoints of {request_id}: {e}"))?;
+        let rows = stmt
+            .query_map(params![tenant_id, thread_id, request_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })
+            .map_err(|e| format!("turn checkpoints of {request_id}: {e}"))?;
+        let mut records = Vec::new();
+        for row in rows {
+            let (turn_key, tenant_id, thread_id, request_id, checkpoint_json, created, updated) =
+                row.map_err(|e| format!("read turn checkpoint: {e}"))?;
+            records.push(TurnCheckpointRecord {
+                turn_key,
+                tenant_id,
+                thread_id,
+                request_id,
+                checkpoint_json,
+                created_at: parse_rfc3339(&created)?,
+                updated_at: parse_rfc3339(&updated)?,
+            });
+        }
+        Ok(records)
+    }
+
     pub fn delete_turn_checkpoint(&self, turn_key: &str) -> Result<(), String> {
         self.conn
             .execute(

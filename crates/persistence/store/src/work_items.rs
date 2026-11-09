@@ -961,6 +961,173 @@ impl SQLiteStore {
             .map_err(|e| format!("drop outbox {item_id}#{seq}: {e}"))?;
         Ok(changed == 1)
     }
+
+    /// Every tenant's rounds still `running` that started before
+    /// `started_before`, oldest first: at boot, the rounds a previous
+    /// process left behind (slice 4). A round this process starts, or
+    /// claims for a rerun, starts at or after it and is never listed. The
+    /// other daemon-wide read here besides the outbox sweep: the boot scan
+    /// serves every tenant, and each row carries its own.
+    pub fn list_interrupted_work_item_rounds(
+        &self,
+        started_before: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<WorkItemRoundRecord>, String> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut stmt = self
+            .conn
+            .prepare(&format!(
+                "SELECT {ROUND_COLUMNS} FROM work_item_rounds \
+                 WHERE state = 'running' AND started_at < ?1 \
+                 ORDER BY started_at ASC, item_id ASC, seq ASC LIMIT ?2"
+            ))
+            .map_err(|e| format!("prepare interrupted work item rounds: {e}"))?;
+        let rows = stmt
+            .query_map(params![now_rfc3339(&started_before), limit], round_from_row)
+            .map_err(|e| format!("interrupted work item rounds: {e}"))?;
+        collect(rows, "work item round")
+    }
+
+    /// Recovery inputs recorded for the round: how many times a boot has
+    /// rerun it.
+    pub fn count_work_item_round_recoveries(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+        seq: i64,
+    ) -> Result<i64, String> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM work_item_inputs \
+                 WHERE tenant_id = ?1 AND item_id = ?2 AND round_seq = ?3 AND kind = 'recovery'",
+                params![tenant_id, item_id, seq],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("count recoveries of {item_id}#{seq}: {e}"))
+    }
+
+    /// Claims an interrupted round for its rerun: the compare-and-set that
+    /// lets only one scan rerun it. The round must still be `running`, have
+    /// started before `started_before` (a claim moves `started_at` to `at`,
+    /// so a claimed round no longer qualifies) and its item be open. In one
+    /// transaction the round's `started_at` becomes `at` and `note` is
+    /// recorded as the item's next input, consumed by the round (`note.seq`,
+    /// `state` and `round_seq` are ignored). Returns the note's seq, or
+    /// `None` when the round was not claimable; then nothing was written.
+    pub fn claim_work_item_round_recovery(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+        seq: i64,
+        started_before: DateTime<Utc>,
+        note: &WorkItemInputRecord,
+        at: DateTime<Utc>,
+    ) -> Result<Option<i64>, String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin claim work item round: {e}"))?;
+        let when = now_rfc3339(&at);
+        let changed = tx
+            .execute(
+                "UPDATE work_item_rounds SET started_at = ?5 \
+                 WHERE tenant_id = ?1 AND item_id = ?2 AND seq = ?3 AND state = 'running' \
+                   AND started_at < ?4 \
+                   AND EXISTS (SELECT 1 FROM work_items i \
+                        WHERE i.tenant_id = ?1 AND i.item_id = ?2 AND i.state = 'open')",
+                params![tenant_id, item_id, seq, now_rfc3339(&started_before), when],
+            )
+            .map_err(|e| format!("claim round {item_id}#{seq}: {e}"))?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        let input_seq: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM work_item_inputs WHERE item_id = ?1",
+                params![item_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("next input seq of {item_id}: {e}"))?;
+        tx.execute(
+            &format!(
+                "INSERT INTO work_item_inputs ({INPUT_COLUMNS}) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'consumed', ?8, ?9)"
+            ),
+            params![
+                item_id,
+                input_seq,
+                tenant_id,
+                note.kind,
+                note.author_is_person,
+                note.body,
+                note.source_ref,
+                seq,
+                when,
+            ],
+        )
+        .map_err(|e| format!("record recovery of {item_id}#{seq}: {e}"))?;
+        tx.execute(
+            "UPDATE work_items SET updated_at = ?3 WHERE tenant_id = ?1 AND item_id = ?2",
+            params![tenant_id, item_id, when],
+        )
+        .map_err(|e| format!("touch work item {item_id}: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit claim round {item_id}#{seq}: {e}"))?;
+        Ok(Some(input_seq))
+    }
+
+    /// Ends an interrupted round without a rerun: `failed`, with outcome
+    /// and error code `interrupted`. Guarded as
+    /// [`Self::claim_work_item_round_recovery`] is, so a round claimed for a
+    /// rerun is never interrupted under it. With `release_inputs`, what the
+    /// round had consumed or been steered (never a recovery note) is
+    /// pending again, so the item's next round reads it: a round that never
+    /// reported cannot be said to have acted on it. `false` when it did not
+    /// apply.
+    pub fn interrupt_work_item_round(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+        seq: i64,
+        started_before: DateTime<Utc>,
+        release_inputs: bool,
+        at: DateTime<Utc>,
+    ) -> Result<bool, String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin interrupt work item round: {e}"))?;
+        let when = now_rfc3339(&at);
+        let changed = tx
+            .execute(
+                "UPDATE work_item_rounds SET state = 'failed', outcome = 'interrupted', \
+                    error_code = 'interrupted', finished_at = ?5 \
+                 WHERE tenant_id = ?1 AND item_id = ?2 AND seq = ?3 AND state = 'running' \
+                   AND started_at < ?4",
+                params![tenant_id, item_id, seq, now_rfc3339(&started_before), when],
+            )
+            .map_err(|e| format!("interrupt round {item_id}#{seq}: {e}"))?;
+        if changed == 0 {
+            return Ok(false);
+        }
+        if release_inputs {
+            tx.execute(
+                "UPDATE work_item_inputs SET state = 'pending', round_seq = NULL \
+                 WHERE tenant_id = ?1 AND item_id = ?2 AND round_seq = ?3 \
+                   AND state IN ('consumed', 'steered') AND kind <> 'recovery'",
+                params![tenant_id, item_id, seq],
+            )
+            .map_err(|e| format!("release inputs of {item_id}#{seq}: {e}"))?;
+        }
+        tx.execute(
+            "UPDATE work_items SET updated_at = ?3 WHERE tenant_id = ?1 AND item_id = ?2",
+            params![tenant_id, item_id, when],
+        )
+        .map_err(|e| format!("touch work item {item_id}: {e}"))?;
+        tx.commit()
+            .map_err(|e| format!("commit interrupt round {item_id}#{seq}: {e}"))?;
+        Ok(true)
+    }
 }
 
 fn outbox_from_row(row: &Row<'_>) -> Parsed<WorkItemOutboxRecord> {
@@ -2018,6 +2185,171 @@ mod tests {
         assert!(
             store
                 .list_work_item_outbox("ten_a", "wi_1")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// An item whose round 1 a previous process started at `at` and never
+    /// settled, having consumed one input and been steered another.
+    fn interrupted(store: &SQLiteStore, item_id: &str, at: DateTime<Utc>) {
+        store
+            .create_work_item(&item("ten_a", item_id, at), &round("ten_a", item_id, at))
+            .unwrap();
+        for (seq, state) in [(1, "consumed"), (2, "steered")] {
+            store
+                .insert_work_item_input(&WorkItemInputRecord {
+                    state: state.to_string(),
+                    round_seq: Some(1),
+                    ..input("ten_a", item_id, seq, true)
+                })
+                .unwrap();
+        }
+    }
+
+    fn note(item_id: &str) -> WorkItemInputRecord {
+        WorkItemInputRecord {
+            kind: "recovery".to_string(),
+            body: "The daemon restarted.".to_string(),
+            ..input("ten_a", item_id, 0, false)
+        }
+    }
+
+    #[test]
+    fn an_interrupted_round_is_claimed_once_and_never_interrupted_under_its_rerun() {
+        let store = SQLiteStore::new(&temp_dir("recovery_claim")).unwrap();
+        let before = Utc::now() - chrono::Duration::minutes(5);
+        interrupted(&store, "wi_1", before);
+        let boot = Utc::now();
+        let listed = store.list_interrupted_work_item_rounds(boot, 10).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].request_id, "wi_1_r1");
+        // Only rounds started before the cutoff are a previous process's.
+        assert!(
+            store
+                .list_interrupted_work_item_rounds(before, 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .claim_work_item_round_recovery("ten_b", "wi_1", 1, boot, &note("wi_1"), boot)
+                .unwrap()
+                .is_none(),
+            "another tenant claimed the round"
+        );
+
+        let claimed_at = Utc::now();
+        assert_eq!(
+            store
+                .claim_work_item_round_recovery("ten_a", "wi_1", 1, boot, &note("wi_1"), claimed_at)
+                .unwrap(),
+            Some(3)
+        );
+        assert!(
+            store
+                .claim_work_item_round_recovery("ten_a", "wi_1", 1, boot, &note("wi_1"), Utc::now())
+                .unwrap()
+                .is_none(),
+            "a second scan claimed the same round"
+        );
+        assert!(
+            !store
+                .interrupt_work_item_round("ten_a", "wi_1", 1, boot, true, Utc::now())
+                .unwrap(),
+            "a claimed round was interrupted under its rerun"
+        );
+        assert!(
+            store
+                .list_interrupted_work_item_rounds(boot, 10)
+                .unwrap()
+                .is_empty()
+        );
+        let rounds = store.list_work_item_rounds("ten_a", "wi_1").unwrap();
+        assert_eq!(rounds[0].state, "running");
+        assert_eq!(
+            rounds[0].started_at.timestamp_micros(),
+            claimed_at.timestamp_micros()
+        );
+        let inputs = store.list_work_item_inputs("ten_a", "wi_1").unwrap();
+        assert_eq!(inputs[2].kind, "recovery");
+        assert_eq!(inputs[2].state, "consumed");
+        assert_eq!(inputs[2].round_seq, Some(1));
+        assert_eq!(
+            store
+                .count_work_item_round_recoveries("ten_a", "wi_1", 1)
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_interrupted_round_not_rerun_fails_and_gives_back_its_inputs() {
+        let store = SQLiteStore::new(&temp_dir("recovery_interrupt")).unwrap();
+        interrupted(&store, "wi_1", Utc::now() - chrono::Duration::minutes(5));
+        let boot = Utc::now();
+        assert!(
+            store
+                .interrupt_work_item_round("ten_a", "wi_1", 1, boot, true, Utc::now())
+                .unwrap()
+        );
+        assert!(
+            !store
+                .interrupt_work_item_round("ten_a", "wi_1", 1, boot, true, Utc::now())
+                .unwrap(),
+            "interrupted twice"
+        );
+        let round = &store.list_work_item_rounds("ten_a", "wi_1").unwrap()[0];
+        assert_eq!(round.state, "failed");
+        assert_eq!(round.outcome.as_deref(), Some("interrupted"));
+        assert_eq!(round.error_code.as_deref(), Some("interrupted"));
+        assert!(round.finished_at.is_some());
+        let (_, activity) = store.get_work_item("ten_a", "wi_1").unwrap().unwrap();
+        assert_eq!(activity.last_round_state.as_deref(), Some("failed"));
+        assert_eq!(activity.pending_inputs, 2, "both inputs are pending again");
+        assert!(
+            store
+                .claim_work_item_round_recovery("ten_a", "wi_1", 1, boot, &note("wi_1"), boot)
+                .unwrap()
+                .is_none()
+        );
+
+        // Without releasing, the inputs stay the round's.
+        interrupted(&store, "wi_2", Utc::now() - chrono::Duration::minutes(5));
+        assert!(
+            store
+                .interrupt_work_item_round("ten_a", "wi_2", 1, boot, false, Utc::now())
+                .unwrap()
+        );
+        let (_, activity) = store.get_work_item("ten_a", "wi_2").unwrap().unwrap();
+        assert_eq!(activity.pending_inputs, 0);
+    }
+
+    #[test]
+    fn a_requests_checkpoints_are_found_without_the_turn_key() {
+        let store = SQLiteStore::new(&temp_dir("recovery_checkpoints")).unwrap();
+        let at = Utc::now();
+        for (key, request) in [("k1", "wi_1_r1"), ("k2", "wi_1_r2")] {
+            store
+                .put_turn_checkpoint(&crate::TurnCheckpointRecord {
+                    turn_key: key.to_string(),
+                    tenant_id: "ten_a".to_string(),
+                    thread_id: "thr_wi_1".to_string(),
+                    request_id: request.to_string(),
+                    checkpoint_json: "{}".to_string(),
+                    created_at: at,
+                    updated_at: at,
+                })
+                .unwrap();
+        }
+        let found = store
+            .turn_checkpoints_for_request("ten_a", "thr_wi_1", "wi_1_r1")
+            .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].turn_key, "k1");
+        assert!(
+            store
+                .turn_checkpoints_for_request("ten_b", "thr_wi_1", "wi_1_r1")
                 .unwrap()
                 .is_empty()
         );
