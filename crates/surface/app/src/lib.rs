@@ -543,6 +543,7 @@ impl App {
         // Construct + start the enabled channel-connector runtimes before
         // serving (Go Run: discord -> telegram -> slack -> matrix).
         let mut runtimes = self.build_connector_runtimes().await?;
+        self.register_work_item_reply_senders(&runtimes);
         self.start_connector_runtimes(&mut runtimes)?;
         *self.connector_runtimes.lock() = Some(runtimes);
 
@@ -674,6 +675,31 @@ impl App {
             message_loop.set_work_item_hook(Arc::new(kura_workitems::ImHook::new(work_items)));
         }
         message_loop
+    }
+
+    /// Gives the work-item outbox an owned reply sender per connector
+    /// runtime, so its sweeper can retry replies outside a message's
+    /// handling (work-items.md §8). Nothing when work items are off.
+    fn register_work_item_reply_senders(&self, runtimes: &ConnectorRuntimes) {
+        let Some(work_items) = &self.state.work_items else {
+            return;
+        };
+        let mut senders = Vec::new();
+        if let Some(discord) = &runtimes.discord {
+            senders.push((discord.connector_id(), discord.reply_sender()));
+        }
+        if let Some(telegram) = &runtimes.telegram {
+            senders.push((telegram.connector_id(), telegram.reply_sender()));
+        }
+        if let Some(slack) = &runtimes.slack {
+            senders.push((slack.connector_id(), slack.reply_sender()));
+        }
+        if let Some(matrix) = &runtimes.matrix {
+            senders.push((matrix.connector_id(), matrix.reply_sender()));
+        }
+        for (connector_id, sender) in senders {
+            work_items.register_reply_sender(&connector_id, sender);
+        }
     }
 
     /// Resolves a connector secret value through the secret manager (Go

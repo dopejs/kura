@@ -2886,6 +2886,27 @@ fn build_work_items(asm: &mut Assembly) -> Result<(), AppError> {
         kura_workitems::Manager::new(asm.state.store_pool.clone(), asm.event_bus.clone(), config)
             .with_chat(chat),
     ));
+    // The outbox sweeper (slice 3): its first pass is the boot sweep of
+    // replies a previous run left unsent. Connector senders register when
+    // the runtimes are built (`App::serve`).
+    asm.lifecycle.on_start(
+        "work-items",
+        Box::new(|state| {
+            if let Some(work_items) = &state.work_items {
+                if let Err(err) = work_items.start_outbox_sweeper() {
+                    eprintln!("[kura] work item: starting the outbox sweeper failed: {err}");
+                }
+            }
+        }),
+    );
+    asm.lifecycle.on_close(
+        "work-items",
+        Box::new(|state| {
+            if let Some(work_items) = &state.work_items {
+                work_items.stop_outbox_sweeper();
+            }
+        }),
+    );
     Ok(())
 }
 
