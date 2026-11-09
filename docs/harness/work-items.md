@@ -1,8 +1,8 @@
 # Work Items: Long-Lived Work, Proactive Rules and Attention
 
 > Status: design, 2026-11-02; decisions recorded 2026-11-03 (§13). Slices 1
-> and 2 implemented 2026-11-03, slices 3 and 4 2026-11-09 (§12 records where
-> each differs). Adapts docs 000–003 of
+> and 2 implemented 2026-11-03, slices 3, 4 and 5 2026-11-09 (§12 records
+> where each differs). Adapts docs 000–003 of
 > DeepSeek's dsh-superagent prototype (Ticket, Mandate, Subscription,
 > accept mode, Attention, recovery note, ordered replies) to kura. Owner:
 > daemon.
@@ -408,7 +408,8 @@ would also fix delivery's restart and tenant gaps.
   - Migration v10 `work_items` (slice 1; v9 is the devices track's) adds
     `work_items`, `work_item_rounds` and `work_item_inputs`; v11
     `work_item_subscriptions` (slice 2) adds subscriptions, with a partial
-    unique index for one live owner per source. Each later
+    unique index for one live owner per source; v12 `work_item_outbox`
+    (slice 3); v13 `work_item_approvals` (slice 5). Each later
     slice adds its own tables (`work_item_subscriptions`,
     `work_item_outbox`, `work_rules`, `work_policy`) in its own migration:
     a shipped migration is never edited. The mandate is JSON in
@@ -457,6 +458,8 @@ would also fix delivery's restart and tenant gaps.
   - `kura_work_rule_matches_total{mode=observe|auto}`.
   - `kura_work_item_outbox_total{result=sent|retry|dropped}`.
   - `kura_work_item_recovered_total{mode=resumed|fresh|skipped}` (slice 4).
+  - `kura_work_item_approvals_total{event=waiting|approved|rejected|gone|used}`
+    (slice 5).
 - **Events** (bus + schemas): `work_item.opened`, `.woken`,
   `.round_settled`, `.attention_raised`, `.attention_cleared`, `.ended`,
   `.stopped`, `.mandate_revoked`, `.rule_observed`, `.outbox_dropped`.
@@ -803,6 +806,105 @@ Each slice is shippable behind `enabled` and has its own tests.
      on resolve; the queue endpoint; the TUI/web list.
    - Tests: an MCP call needing approval → round `waiting` → resolve →
      the round reruns the call.
+   - As built (slice 5), where it differs from or adds to the above
+     (tests: `crates/domains/workitems/tests/approvals.rs`, a real
+     `kura_mcp::McpTool` behind an `approval_required` rule against a fake
+     server session, a scripted model, the policy engine and the bus; plus
+     unit tests in `attention.rs`, the store, `kura-mcp` and the API):
+     - **The daemon links the approval, not the model.** A round's MCP
+       tools are built with the round's approval memory
+       (`kura_policy::TurnApprovals`, given by `Manager::round_approvals`
+       for a `thr_wi_` thread; the tool host passes it through
+       `kura_mcp::tools_for_tenant_with_approvals`). A call that gives up
+       its 180 s wait tells the memory, which records the wait and tells
+       the model to report `waiting`. When the round settles with a report
+       that does not end the item and a wait of that round is still
+       pending, the item's attention becomes `{kind: approval, approvalId,
+       question}` (the question is the approval's reason). The approval
+       wins over the report's own question; the report keeps it. The
+       report schema cannot name an approval (its attention has no kind),
+       so a model cannot link one. Rows written before slice 5 have no
+       `kind` and read as `question`.
+     - **Store.** Migration v13 adds `work_item_approvals`, additive: one
+       row per approval an item waits on, with the round, the call's
+       fingerprint (SHA-256 of action, resource kind, resource id and the
+       arguments as canonical JSON), the question, and `pending` →
+       `approved` | `rejected` | `gone` → `used`. A row belongs to one
+       item and tenant; another cannot take it over.
+     - **The approval becomes the tenant's.** When an item starts waiting
+       on an approval, the approval and its decision are written to the
+       `approvals`/`decisions` tables and bound to the item's tenant. The
+       MCP manager kept them in memory only and tenantless (its
+       `persist_approval` is a no-op), so in tenant mode the tenant's
+       `/v1/policy/approvals` did not list them and a restart lost them;
+       now the tenant lists and resolves them as any other, and the boot
+       restore brings them back. Approvals no item waits on are unchanged.
+     - **"The round reruns the call"** means the item's next round, after
+       the resolution, calls the tool again with the same arguments: the
+       tool finds the item's approval for that fingerprint and runs under
+       it once (`used`), without raising another; the engine's record must
+       name the same action and resource. Different arguments raise a new
+       approval. A held approval still pending is waited on again instead
+       of asking twice. A running call's outcome input left pending is
+       consumed when the call runs, so no extra round is spent on it.
+     - **Waking on resolve.** One watcher thread per daemon
+       (`kura-work-item-approvals`, started on the work-items `on_start`
+       hook beside the outbox sweeper) follows `policy.approval_resolved`
+       on the bus and reads the outcome from the engine, not the event.
+       The bus drops what a full subscriber cannot take and policy events
+       carry no tenant, so it also sweeps every pending link against the
+       engine when it starts (§11: an approval resolved while the daemon
+       was down) and every 30 s. An outcome is applied once, in one write:
+       the link resolved, the item's attention cleared if it was this
+       approval, and an `approval` input recorded. The input is the
+       daemon's (`from="daemon"` in the round's question, said so in the
+       standing instructions); the resolver's comment is not passed on.
+       The item is then driven on a thread of its own. A stopped or ended
+       item only has its link settled. An approval the engine no longer
+       has is `gone`, and the round is told the call did not run.
+     - **Holds.** A resolution releases only the approval hold; a blocked
+       or failed report, or a failed round, still waits for a person. A
+       person's message while the item waits on an approval clears the
+       attention like a question (the round reads the message); the link
+       stays pending, and calling the tool again waits on it.
+     - **`POST /v1/work-items/{id}/answer {text}`** (tenant allowlist):
+       clears a question and records the text as a person's `text` input
+       in one write, then drives the item on its own thread; 200 with the
+       item. 409 `work_item_not_asking` when the item ended, asks nothing,
+       its question changed meanwhile, or it waits on an approval (resolve
+       the approval instead: no second approval system). Any member of the
+       tenant may answer, as any may stop; the answer is framed as the
+       requester's. It never steers a running round and never reopens an
+       ended item.
+     - **Replies.** Rounds an answer or a resolution drives report to the
+       conversation the item owns through the outbox, with its latest
+       reply's binding, as a recovery rerun does (`reply_to_owner`); an
+       API item's report is read through the API and events. An IM round
+       that now waits on an approval says so in its reply.
+     - **`GET /v1/work-items/attention`** (tenant allowlist): the tenant's
+       open items in a `person/*` stage, the least recently updated first,
+       each with stage, title, basis, attention (for `person/answer` and
+       `person/approval`) and the last report's summary (not for
+       `person/delivery`). It scans the oldest 1000 open items.
+     - **Web.** A "Waiting on You" panel before the Approval Inbox, shown
+       only when something waits: answers a question in place; an approval
+       is resolved in the Approval Inbox, which now lists it.
+     - **Observability.** `kura_work_item_approvals_total{event=waiting|
+       approved|rejected|gone|used}`; `attention_raised` gains `kind` and
+       `approvalId`; `attention_cleared` gains `by` (`round` | `answer` |
+       `approval`) and `approvalId`, and `roundSeq` is now optional;
+       `woken` carries `approvalId` for an approval input. One `[kura] work
+       item:` line per wait, outcome and use.
+     - **Not built / known gaps.** No TUI list (the TUI has no approval or
+       work-item view to extend; the API and SDK serve it when one is
+       built). Tool-profile tools that forward to MCP (`mcp_backed`) and
+       non-MCP approval gates (computer use) do not remember approvals. A
+       round whose report ends the item leaves its wait recorded; the
+       resolution is recorded and wakes nothing. An outcome input over the
+       hourly cap or refused admission waits for the next wake, as in
+       slices 2–4. The fingerprint canonicalises key order and spacing
+       only (`1` and `1.0` differ). A round's MCP wait is still 180 s,
+       holding its turn slot. Single process only, as §11.
 6. **Proactive rules.**
    - Builds: `work_rules` and `work_policy`; the shared condition matcher;
      `observe` records, `auto` opens; the `rule` basis in revalidation;
