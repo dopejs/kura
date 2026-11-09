@@ -402,7 +402,17 @@ Each slice is shippable and tested on its own.
      `kura-chat` by restoring the bytes per tool call after the hooks. With
      the fix the model received each screenshot, at most three at a time,
      byte for byte the saved copy. Not exercised yet: `type`, `click`,
-     take-over and the kill switch on real hardware, and the gateway path.
+     take-over and the kill switch on real hardware.
+   - Gateway path (2026-11-09, staging on sg-2; kura-gateway
+     `docs/design.md` §17.1): a shared daemon behind `kura-gateway -mode
+     shared` with a fake IdP, loopback only. A real Mac's `kura-device`
+     paired and connected through the gateway; another tenant could not
+     see or revoke it; forged and unknown-tenant tokens were refused; it
+     reconnected about 1 s after a gateway restart and stayed up idle for
+     145 s; disabling the account or revoking the device dropped it and it
+     exited. No `computer.*` session went through the gateway (that needs
+     a model and a person to allow it). The sg-1 pilot is still in cells
+     mode, where device routes answer 404.
 5. **Evaluation**: a fixed set of desktop tasks (open an app, fill a form,
    find a file) with success rate and steps, to decide whether generic
    tools are good enough or a native mapping is needed.
