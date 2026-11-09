@@ -1,4 +1,5 @@
-//! Work items, their rounds and their inputs (docs/harness/work-items.md).
+//! Work items, their rounds, inputs, subscriptions and outbox
+//! (docs/harness/work-items.md).
 //!
 //! Rows only: what a state, a report or a mandate means is `kura-workitems`'
 //! business, and it hands this module strings and JSON. Every method takes
@@ -44,6 +45,57 @@ pub struct WorkItemActivity {
     /// Pending inputs a person wrote: a person's input since the last
     /// report, because a round consumes every input pending when it starts.
     pub pending_person_inputs: i64,
+    /// An unsent outbox row of the item failed [`OUTBOX_PROBLEM_ATTEMPTS`]
+    /// times in a row (slice 3): the item shows `person/delivery`.
+    pub outbox_problem: bool,
+}
+
+/// Failures in a row after which an unsent outbox row is a problem a person
+/// sees (work-items.md §8). The row keeps being retried. `ITEM_COLUMNS`
+/// spells the same number in SQL.
+pub const OUTBOX_PROBLEM_ATTEMPTS: i64 = 3;
+
+/// One `work_item_outbox` row: a reply to a conversation (slice 3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkItemOutboxRecord {
+    pub item_id: String,
+    /// Ignored by [`SQLiteStore::enqueue_work_item_outbox`], which takes
+    /// the item's next.
+    pub seq: i64,
+    pub tenant_id: String,
+    /// The order key with `item_id`: for IM, the conversation's
+    /// `thr_src_<hash>` id.
+    pub conversation_key: String,
+    pub connector_id: String,
+    /// The conversation as the connector names it, for the receive check.
+    pub conversation_id: String,
+    pub channel_id: String,
+    pub peer_id: String,
+    /// The platform message the reply answers (Slack's thread, Telegram's
+    /// reply-to).
+    pub reply_to_external_message_id: String,
+    /// The conversation is a group or room whose connector enforces
+    /// participation: before each attempt a route policy must still
+    /// receive it.
+    pub participation_gated: bool,
+    pub round_seq: Option<i64>,
+    /// The inbound delivery the reply answers.
+    pub source_ref: String,
+    pub body: String,
+    /// `queued` | `failed` (retried at `next_attempt_at`) | `sent` | `dropped`.
+    pub state: String,
+    /// Failed attempts in a row.
+    pub attempts: i64,
+    pub next_attempt_at: DateTime<Utc>,
+    pub last_error: Option<String>,
+    /// `connector_gone` | `conversation_gone` | `forbidden` | `withdrawn`.
+    pub drop_reason: Option<String>,
+    /// The platform's id of the last part sent.
+    pub external_message_id: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub sent_at: Option<DateTime<Utc>>,
+    pub dropped_at: Option<DateTime<Utc>>,
 }
 
 /// One `work_item_rounds` row.
@@ -130,7 +182,17 @@ const ITEM_COLUMNS: &str = "i.item_id, i.tenant_id, i.title, i.state, i.end_reas
      (SELECT COUNT(*) FROM work_item_inputs n WHERE n.item_id = i.item_id \
         AND n.state = 'pending'), \
      (SELECT COUNT(*) FROM work_item_inputs n WHERE n.item_id = i.item_id \
-        AND n.state = 'pending' AND n.author_is_person = 1)";
+        AND n.state = 'pending' AND n.author_is_person = 1), \
+     EXISTS (SELECT 1 FROM work_item_outbox o WHERE o.item_id = i.item_id \
+        AND o.state = 'failed' AND o.attempts >= 3)";
+
+const OUTBOX_COLUMNS: &str = "item_id, seq, tenant_id, conversation_key, connector_id, \
+     conversation_id, channel_id, peer_id, reply_to_external_message_id, participation_gated, \
+     round_seq, source_ref, body, state, attempts, next_attempt_at, last_error, drop_reason, \
+     external_message_id, created_at, updated_at, sent_at, dropped_at";
+
+/// The states of a row not yet sent or dropped.
+const OUTBOX_UNSENT: &str = "('queued', 'failed')";
 
 const ROUND_COLUMNS: &str = "item_id, seq, tenant_id, request_id, query_text, state, outcome, \
      report_json, error_code, turn_id, started_at, finished_at";
@@ -665,6 +727,285 @@ impl SQLiteStore {
             .map_err(|e| format!("commit end work item {item_id}: {e}"))?;
         Ok(true)
     }
+
+    /// Queues replies as the item's next outbox rows, in the given order,
+    /// and returns their seqs. The seqs are taken in the same transaction,
+    /// so two writers cannot both take one; each row's `seq` is ignored.
+    /// Writes nothing if any row names an item the tenant does not hold.
+    pub fn enqueue_work_item_outbox(
+        &self,
+        rows: &[WorkItemOutboxRecord],
+    ) -> Result<Vec<i64>, String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin enqueue work item outbox: {e}"))?;
+        let mut seqs = Vec::with_capacity(rows.len());
+        for row in rows {
+            let seq: i64 = tx
+                .query_row(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 FROM work_item_outbox WHERE item_id = ?1",
+                    params![row.item_id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| format!("next outbox seq of {}: {e}", row.item_id))?;
+            let written = tx
+                .execute(
+                    &format!(
+                        "INSERT INTO work_item_outbox ({OUTBOX_COLUMNS}) \
+                         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, \
+                                ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23 \
+                         WHERE EXISTS (SELECT 1 FROM work_items \
+                            WHERE item_id = ?1 AND tenant_id = ?3)"
+                    ),
+                    params![
+                        row.item_id,
+                        seq,
+                        row.tenant_id,
+                        row.conversation_key,
+                        row.connector_id,
+                        row.conversation_id,
+                        row.channel_id,
+                        row.peer_id,
+                        row.reply_to_external_message_id,
+                        row.participation_gated,
+                        row.round_seq,
+                        row.source_ref,
+                        row.body,
+                        row.state,
+                        row.attempts,
+                        now_rfc3339(&row.next_attempt_at),
+                        row.last_error,
+                        row.drop_reason,
+                        row.external_message_id,
+                        now_rfc3339(&row.created_at),
+                        now_rfc3339(&row.updated_at),
+                        row.sent_at.as_ref().map(now_rfc3339),
+                        row.dropped_at.as_ref().map(now_rfc3339),
+                    ],
+                )
+                .map_err(|e| format!("enqueue outbox row of {}: {e}", row.item_id))?;
+            if written != 1 {
+                return Err(format!(
+                    "enqueue outbox row of {}: no such item for the tenant",
+                    row.item_id
+                ));
+            }
+            seqs.push(seq);
+        }
+        tx.commit()
+            .map_err(|e| format!("commit work item outbox: {e}"))?;
+        Ok(seqs)
+    }
+
+    /// The item's outbox, oldest first.
+    pub fn list_work_item_outbox(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+    ) -> Result<Vec<WorkItemOutboxRecord>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(&format!(
+                "SELECT {OUTBOX_COLUMNS} FROM work_item_outbox \
+                 WHERE tenant_id = ?1 AND item_id = ?2 ORDER BY seq ASC"
+            ))
+            .map_err(|e| format!("prepare list work item outbox: {e}"))?;
+        let rows = stmt
+            .query_map(params![tenant_id, item_id], outbox_from_row)
+            .map_err(|e| format!("list outbox of {item_id}: {e}"))?;
+        collect(rows, "work item outbox row")
+    }
+
+    /// The row of (item, conversation) to send next, due or not: its
+    /// earliest unsent row, so every earlier one is sent or dropped.
+    pub fn work_item_outbox_head(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+        conversation_key: &str,
+    ) -> Result<Option<WorkItemOutboxRecord>, String> {
+        self.conn
+            .query_row(
+                &format!(
+                    "SELECT {OUTBOX_COLUMNS} FROM work_item_outbox \
+                     WHERE tenant_id = ?1 AND item_id = ?2 AND conversation_key = ?3 \
+                       AND state IN {OUTBOX_UNSENT} \
+                     ORDER BY seq ASC LIMIT 1"
+                ),
+                params![tenant_id, item_id, conversation_key],
+                outbox_from_row,
+            )
+            .optional()
+            .map_err(|e| format!("outbox head of {item_id}: {e}"))?
+            .transpose()
+    }
+
+    /// Every tenant's outbox rows due at or before `due_by` that are the
+    /// earliest unsent row of their (item, conversation), so a row never
+    /// overtakes an earlier one; earliest due first. A row behind an unsent
+    /// one is never offered, however long it has been due. The one
+    /// daemon-wide read in this module: the outbox sweeper serves every
+    /// tenant, and each row carries its own.
+    pub fn due_work_item_outbox(
+        &self,
+        due_by: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<WorkItemOutboxRecord>, String> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut stmt = self
+            .conn
+            .prepare(&format!(
+                "SELECT {OUTBOX_COLUMNS} FROM work_item_outbox o \
+                 WHERE o.state IN {OUTBOX_UNSENT} AND o.next_attempt_at <= ?1 \
+                   AND NOT EXISTS (SELECT 1 FROM work_item_outbox p \
+                        WHERE p.item_id = o.item_id AND p.conversation_key = o.conversation_key \
+                          AND p.seq < o.seq AND p.state IN {OUTBOX_UNSENT}) \
+                 ORDER BY o.next_attempt_at ASC, o.item_id ASC, o.seq ASC LIMIT ?2"
+            ))
+            .map_err(|e| format!("prepare due work item outbox: {e}"))?;
+        let rows = stmt
+            .query_map(params![now_rfc3339(&due_by), limit], outbox_from_row)
+            .map_err(|e| format!("due work item outbox: {e}"))?;
+        collect(rows, "work item outbox row")
+    }
+
+    /// Records that an unsent row was delivered. `false` when it is no
+    /// longer unsent (a person withdrew it meanwhile).
+    pub fn mark_work_item_outbox_sent(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+        seq: i64,
+        external_message_id: &str,
+        at: DateTime<Utc>,
+    ) -> Result<bool, String> {
+        let changed = self
+            .conn
+            .execute(
+                &format!(
+                    "UPDATE work_item_outbox SET state = 'sent', external_message_id = ?4, \
+                        sent_at = ?5, updated_at = ?5 \
+                     WHERE tenant_id = ?1 AND item_id = ?2 AND seq = ?3 \
+                       AND state IN {OUTBOX_UNSENT}"
+                ),
+                params![
+                    tenant_id,
+                    item_id,
+                    seq,
+                    external_message_id,
+                    now_rfc3339(&at)
+                ],
+            )
+            .map_err(|e| format!("mark outbox {item_id}#{seq} sent: {e}"))?;
+        Ok(changed == 1)
+    }
+
+    /// Records a failed attempt on an unsent row: one more failure in a
+    /// row, retried at `next_attempt_at`. Returns the failures in a row,
+    /// or `None` when the row is no longer unsent.
+    pub fn mark_work_item_outbox_failed(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+        seq: i64,
+        error: &str,
+        next_attempt_at: DateTime<Utc>,
+        at: DateTime<Utc>,
+    ) -> Result<Option<i64>, String> {
+        self.conn
+            .query_row(
+                &format!(
+                    "UPDATE work_item_outbox SET state = 'failed', attempts = attempts + 1, \
+                        last_error = ?4, next_attempt_at = ?5, updated_at = ?6 \
+                     WHERE tenant_id = ?1 AND item_id = ?2 AND seq = ?3 \
+                       AND state IN {OUTBOX_UNSENT} \
+                     RETURNING attempts"
+                ),
+                params![
+                    tenant_id,
+                    item_id,
+                    seq,
+                    error,
+                    now_rfc3339(&next_attempt_at),
+                    now_rfc3339(&at)
+                ],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("mark outbox {item_id}#{seq} failed: {e}"))
+    }
+
+    /// Drops an unsent row for good with `reason`; `error`, when given,
+    /// replaces `last_error`. `false` when it is no longer unsent.
+    pub fn drop_work_item_outbox(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+        seq: i64,
+        reason: &str,
+        error: Option<&str>,
+        at: DateTime<Utc>,
+    ) -> Result<bool, String> {
+        let changed = self
+            .conn
+            .execute(
+                &format!(
+                    "UPDATE work_item_outbox SET state = 'dropped', drop_reason = ?4, \
+                        last_error = COALESCE(?5, last_error), dropped_at = ?6, updated_at = ?6 \
+                     WHERE tenant_id = ?1 AND item_id = ?2 AND seq = ?3 \
+                       AND state IN {OUTBOX_UNSENT}"
+                ),
+                params![tenant_id, item_id, seq, reason, error, now_rfc3339(&at)],
+            )
+            .map_err(|e| format!("drop outbox {item_id}#{seq}: {e}"))?;
+        Ok(changed == 1)
+    }
+}
+
+fn outbox_from_row(row: &Row<'_>) -> Parsed<WorkItemOutboxRecord> {
+    let (next_attempt_at, created_at, updated_at) =
+        match (time_at(row, 15)?, time_at(row, 19)?, time_at(row, 20)?) {
+            (Ok(next), Ok(created), Ok(updated)) => (next, created, updated),
+            (Err(err), _, _) | (_, Err(err), _) | (_, _, Err(err)) => return Ok(Err(err)),
+        };
+    let (sent_at, dropped_at) = match (optional_time_at(row, 21)?, optional_time_at(row, 22)?) {
+        (Ok(sent), Ok(dropped)) => (sent, dropped),
+        (Err(err), _) | (_, Err(err)) => return Ok(Err(err)),
+    };
+    Ok(Ok(WorkItemOutboxRecord {
+        item_id: row.get(0)?,
+        seq: row.get(1)?,
+        tenant_id: row.get(2)?,
+        conversation_key: row.get(3)?,
+        connector_id: row.get(4)?,
+        conversation_id: row.get(5)?,
+        channel_id: row.get(6)?,
+        peer_id: row.get(7)?,
+        reply_to_external_message_id: row.get(8)?,
+        participation_gated: row.get(9)?,
+        round_seq: row.get(10)?,
+        source_ref: row.get(11)?,
+        body: row.get(12)?,
+        state: row.get(13)?,
+        attempts: row.get(14)?,
+        next_attempt_at,
+        last_error: row.get(16)?,
+        drop_reason: row.get(17)?,
+        external_message_id: row.get(18)?,
+        created_at,
+        updated_at,
+        sent_at,
+        dropped_at,
+    }))
+}
+
+fn optional_time_at(row: &Row<'_>, index: usize) -> Parsed<Option<DateTime<Utc>>> {
+    Ok(row
+        .get::<_, Option<String>>(index)?
+        .as_deref()
+        .map(parse_rfc3339)
+        .transpose())
 }
 
 fn insert_item(conn: &rusqlite::Connection, item: &WorkItemRecord) -> Result<(), String> {
@@ -832,6 +1173,7 @@ fn item_from_row(row: &Row<'_>) -> Parsed<(WorkItemRecord, WorkItemActivity)> {
         last_round_state: row.get(15)?,
         pending_inputs: row.get(16)?,
         pending_person_inputs: row.get(17)?,
+        outbox_problem: row.get(18)?,
     };
     Ok(Ok((record, activity)))
 }
@@ -976,6 +1318,7 @@ mod tests {
                 last_round_state: Some("running".to_string()),
                 pending_inputs: 2,
                 pending_person_inputs: 1,
+                outbox_problem: false,
             }
         );
         let rounds = store.list_work_item_rounds("ten_a", "wi_1").unwrap();
@@ -1167,8 +1510,10 @@ mod tests {
             );
         }
         let store = SQLiteStore::new(&dir).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 11);
-        assert_eq!(crate::CURRENT_SCHEMA_VERSION, 11);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            crate::CURRENT_SCHEMA_VERSION
+        );
         let (read, _) = store.get_work_item("ten_a", "wi_1").unwrap().unwrap();
         assert_eq!(read.mandate_json, r#"{"basis":"api"}"#);
         assert!(
@@ -1426,6 +1771,255 @@ mod tests {
             store
                 .end_work_item_finally("ten_a", "wi_2", "bogus", at)
                 .is_err()
+        );
+    }
+
+    fn reply(tenant_id: &str, item_id: &str, key: &str, body: &str) -> WorkItemOutboxRecord {
+        let at = Utc::now();
+        WorkItemOutboxRecord {
+            item_id: item_id.to_string(),
+            seq: 0,
+            tenant_id: tenant_id.to_string(),
+            conversation_key: key.to_string(),
+            connector_id: "slack-main".to_string(),
+            conversation_id: "C1".to_string(),
+            channel_id: "C1".to_string(),
+            peer_id: "C1".to_string(),
+            reply_to_external_message_id: "m1".to_string(),
+            participation_gated: true,
+            round_seq: Some(1),
+            source_ref: "delivery_1".to_string(),
+            body: body.to_string(),
+            state: "queued".to_string(),
+            attempts: 0,
+            next_attempt_at: at,
+            last_error: None,
+            drop_reason: None,
+            external_message_id: String::new(),
+            created_at: at,
+            updated_at: at,
+            sent_at: None,
+            dropped_at: None,
+        }
+    }
+
+    fn heads(store: &SQLiteStore, now: DateTime<Utc>) -> Vec<(String, i64)> {
+        store
+            .due_work_item_outbox(now, 100)
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.item_id, row.seq))
+            .collect()
+    }
+
+    /// Slice 3: one conversation's rows go out in order; a failed head
+    /// holds its successors until its retry is due and it is sent or
+    /// dropped; another conversation and another item never wait.
+    #[test]
+    fn an_outbox_row_waits_for_every_earlier_row_of_its_conversation() {
+        let store = SQLiteStore::new(&temp_dir("outbox_order")).unwrap();
+        let at = Utc::now();
+        for id in ["wi_1", "wi_2"] {
+            store
+                .create_work_item(&item("ten_a", id, at), &round("ten_a", id, at))
+                .unwrap();
+        }
+        let seqs = store
+            .enqueue_work_item_outbox(&[
+                reply("ten_a", "wi_1", "thr_src_1", "first"),
+                reply("ten_a", "wi_1", "thr_src_1", "second"),
+                reply("ten_a", "wi_1", "thr_src_2", "elsewhere"),
+            ])
+            .unwrap();
+        assert_eq!(seqs, vec![1, 2, 3]);
+        store
+            .enqueue_work_item_outbox(&[reply("ten_a", "wi_2", "thr_src_1", "other item")])
+            .unwrap();
+        let now = Utc::now() + chrono::Duration::milliseconds(1);
+        assert_eq!(
+            heads(&store, now),
+            vec![
+                ("wi_1".to_string(), 1),
+                ("wi_1".to_string(), 3),
+                ("wi_2".to_string(), 1)
+            ]
+        );
+
+        // The head fails: it is retried in 5 s and its successor waits.
+        let retry_at = now + chrono::Duration::seconds(5);
+        assert_eq!(
+            store
+                .mark_work_item_outbox_failed("ten_a", "wi_1", 1, "timeout", retry_at, now)
+                .unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            heads(&store, now),
+            vec![("wi_1".to_string(), 3), ("wi_2".to_string(), 1)]
+        );
+        assert_eq!(
+            store
+                .work_item_outbox_head("ten_a", "wi_1", "thr_src_1")
+                .unwrap()
+                .map(|row| (row.seq, row.state, row.attempts)),
+            Some((1, "failed".to_string(), 1))
+        );
+        let later = heads(&store, retry_at);
+        assert!(later.contains(&("wi_1".to_string(), 1)));
+        assert!(
+            !later.contains(&("wi_1".to_string(), 2)),
+            "a row behind an unsent one is never offered"
+        );
+
+        // Three failures in a row make the item a delivery problem.
+        for _ in 0..2 {
+            store
+                .mark_work_item_outbox_failed("ten_a", "wi_1", 1, "timeout", retry_at, now)
+                .unwrap();
+        }
+        let (_, activity) = store.get_work_item("ten_a", "wi_1").unwrap().unwrap();
+        assert!(activity.outbox_problem);
+        let (_, other) = store.get_work_item("ten_a", "wi_2").unwrap().unwrap();
+        assert!(!other.outbox_problem);
+
+        // Sent at last: the successor is next, and the problem is gone.
+        assert!(
+            store
+                .mark_work_item_outbox_sent("ten_a", "wi_1", 1, "ts_1", retry_at)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .mark_work_item_outbox_sent("ten_a", "wi_1", 1, "ts_1", retry_at)
+                .unwrap(),
+            "a sent row is final"
+        );
+        assert!(heads(&store, retry_at).contains(&("wi_1".to_string(), 2)));
+        let (_, activity) = store.get_work_item("ten_a", "wi_1").unwrap().unwrap();
+        assert!(!activity.outbox_problem);
+
+        // A drop is final too, and unblocks what follows.
+        assert!(
+            store
+                .drop_work_item_outbox("ten_a", "wi_1", 2, "withdrawn", None, retry_at)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .drop_work_item_outbox("ten_a", "wi_1", 2, "withdrawn", None, retry_at)
+                .unwrap()
+        );
+        let rows = store.list_work_item_outbox("ten_a", "wi_1").unwrap();
+        assert_eq!(rows[0].state, "sent");
+        assert_eq!(rows[0].external_message_id, "ts_1");
+        assert_eq!(rows[0].last_error.as_deref(), Some("timeout"));
+        assert!(rows[0].sent_at.is_some());
+        assert_eq!(rows[1].state, "dropped");
+        assert_eq!(rows[1].drop_reason.as_deref(), Some("withdrawn"));
+        assert!(rows[1].dropped_at.is_some());
+        assert!(rows[2].participation_gated);
+        assert_eq!(rows[2].round_seq, Some(1));
+        assert!(
+            store
+                .work_item_outbox_head("ten_a", "wi_1", "thr_src_1")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn another_tenants_outbox_is_out_of_reach() {
+        let store = SQLiteStore::new(&temp_dir("outbox_tenant")).unwrap();
+        let at = Utc::now();
+        store
+            .create_work_item(&item("ten_a", "wi_1", at), &round("ten_a", "wi_1", at))
+            .unwrap();
+        assert!(
+            store
+                .enqueue_work_item_outbox(&[
+                    reply("ten_a", "wi_1", "thr_src_1", "mine"),
+                    reply("ten_b", "wi_1", "thr_src_1", "theirs"),
+                ])
+                .is_err(),
+            "a row for another tenant's item was queued"
+        );
+        assert!(
+            store
+                .list_work_item_outbox("ten_a", "wi_1")
+                .unwrap()
+                .is_empty(),
+            "a refused batch writes nothing"
+        );
+        store
+            .enqueue_work_item_outbox(&[reply("ten_a", "wi_1", "thr_src_1", "mine")])
+            .unwrap();
+        assert!(
+            store
+                .list_work_item_outbox("ten_b", "wi_1")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .work_item_outbox_head("ten_b", "wi_1", "thr_src_1")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            !store
+                .mark_work_item_outbox_sent("ten_b", "wi_1", 1, "x", at)
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .mark_work_item_outbox_failed("ten_b", "wi_1", 1, "x", at, at)
+                .unwrap(),
+            None
+        );
+        assert!(
+            !store
+                .drop_work_item_outbox("ten_b", "wi_1", 1, "withdrawn", None, at)
+                .unwrap()
+        );
+    }
+
+    /// Slice 3 upgrade: a v11 database keeps its items and subscriptions
+    /// and gains the outbox.
+    #[test]
+    fn a_v11_database_gains_the_outbox_on_upgrade() {
+        let dir = temp_dir("upgrade_v11");
+        let at = Utc::now();
+        {
+            let store = SQLiteStore::new_at_version(&dir, 11).unwrap();
+            store
+                .create_work_item_with_owner(
+                    &item("ten_a", "wi_1", at),
+                    &round("ten_a", "wi_1", at),
+                    &owner("ten_a", "wi_1", "thr_src_1", at),
+                )
+                .unwrap()
+                .unwrap();
+            assert!(
+                store.list_work_item_outbox("ten_a", "wi_1").is_err(),
+                "v11 has no outbox"
+            );
+        }
+        let store = SQLiteStore::new(&dir).unwrap();
+        assert_eq!(store.schema_version().unwrap(), 12);
+        let (_, activity) = store.get_work_item("ten_a", "wi_1").unwrap().unwrap();
+        assert!(!activity.outbox_problem);
+        assert_eq!(
+            store
+                .list_work_item_subscriptions("ten_a", "wi_1")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            store
+                .list_work_item_outbox("ten_a", "wi_1")
+                .unwrap()
+                .is_empty()
         );
     }
 }

@@ -3362,5 +3362,57 @@ pub fn schema_migrations() -> Vec<SchemaMigration> {
                 .to_string(),
         ],
     },
+    SchemaMigration {
+        version: 12,
+        name: "work_item_outbox".to_string(),
+        statements: vec![
+            // What a work item says to a conversation (docs/harness/
+            // work-items.md §8, slice 3). One row per reply, `seq` per item.
+            // For one (item, conversation_key) a row is sent only once every
+            // earlier row is `sent` or `dropped`. `queued` has not been
+            // tried; `failed` was tried and is retried at `next_attempt_at`
+            // (the backoff is persisted, so a restart resumes it). `sent`
+            // and `dropped` are final; a drop keeps when and why. The
+            // binding (connector, channel, peer, the message replied to) is
+            // copied from the message the reply answers, so a retry goes
+            // exactly where the first attempt went.
+            r#"CREATE TABLE IF NOT EXISTS work_item_outbox (
+                item_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                tenant_id TEXT NOT NULL,
+                conversation_key TEXT NOT NULL,
+                connector_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL DEFAULT '',
+                channel_id TEXT NOT NULL DEFAULT '',
+                peer_id TEXT NOT NULL DEFAULT '',
+                reply_to_external_message_id TEXT NOT NULL DEFAULT '',
+                participation_gated INTEGER NOT NULL DEFAULT 0,
+                round_seq INTEGER,
+                source_ref TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL,
+                state TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT NOT NULL,
+                last_error TEXT,
+                drop_reason TEXT,
+                external_message_id TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                sent_at TEXT,
+                dropped_at TEXT,
+                PRIMARY KEY (item_id, seq),
+                FOREIGN KEY (item_id) REFERENCES work_items(item_id) ON DELETE CASCADE
+            );"#
+            .to_string(),
+            // The sweeper's scan: unsent rows by when they are due.
+            r#"CREATE INDEX IF NOT EXISTS idx_work_item_outbox_due
+                ON work_item_outbox(state, next_attempt_at);"#
+                .to_string(),
+            // The order check: earlier unsent rows of one conversation.
+            r#"CREATE INDEX IF NOT EXISTS idx_work_item_outbox_conversation
+                ON work_item_outbox(item_id, conversation_key, seq);"#
+                .to_string(),
+        ],
+    },
 ]
 }

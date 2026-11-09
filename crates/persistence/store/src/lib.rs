@@ -95,7 +95,7 @@ pub use turn_checkpoints::TurnCheckpointRecord;
 ///
 /// Must equal the highest `version` in `schema_migrations()`, or a database
 /// written by this build is rejected on reopen as "newer than supported".
-pub const CURRENT_SCHEMA_VERSION: i64 = 11;
+pub const CURRENT_SCHEMA_VERSION: i64 = 12;
 
 /// The last development-era schema version before the baseline collapse.
 /// Databases stamped exactly at this legacy head hold a schema identical to
