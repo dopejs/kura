@@ -1,8 +1,8 @@
 # Work Items: Long-Lived Work, Proactive Rules and Attention
 
 > Status: design, 2026-11-02; decisions recorded 2026-11-03 (§13). Slices 1
-> and 2 implemented 2026-11-03, slice 3 2026-11-09 (§12 records where each
-> differs). Adapts docs 000–003 of
+> and 2 implemented 2026-11-03, slices 3 and 4 2026-11-09 (§12 records where
+> each differs). Adapts docs 000–003 of
 > DeepSeek's dsh-superagent prototype (Ticket, Mandate, Subscription,
 > accept mode, Attention, recovery note, ordered replies) to kura. Owner:
 > daemon.
@@ -456,7 +456,7 @@ would also fix delivery's restart and tenant gaps.
   - `kura_work_item_mandate_checks_total{result=pass_fast|pass|revoked}`.
   - `kura_work_rule_matches_total{mode=observe|auto}`.
   - `kura_work_item_outbox_total{result=sent|retry|dropped}`.
-  - `kura_work_item_recovered_total`.
+  - `kura_work_item_recovered_total{mode=resumed|fresh|skipped}` (slice 4).
 - **Events** (bus + schemas): `work_item.opened`, `.woken`,
   `.round_settled`, `.attention_raised`, `.attention_cleared`, `.ended`,
   `.stopped`, `.mandate_revoked`, `.rule_observed`, `.outbox_dropped`.
@@ -560,8 +560,8 @@ Each slice is shippable behind `enabled` and has its own tests.
        records nothing. Not built: the transient-failure retry with backoff
        and pause. Inputs left queued by the hourly cap
        (`maxRoundsPerItemPerHour`) or a refused admission wait for the next
-       wake; slice 4's boot scan is the first thing that will pick them up
-       on its own.
+       wake (slice 4's boot scan does not pick them up either; see its
+       known gaps).
      - **Replies until the outbox (slice 3)** go through the IM loop's own
        reply path: one reply per round an IM wake ran (the report summary,
        plus its question and options), a fixed line for a round that ended
@@ -708,6 +708,96 @@ Each slice is shippable behind `enabled` and has its own tests.
    - Tests: kill during a side-effecting call → the resumed round reads
      `INTERRUPTED_CALL_OUTPUT` and the note; a checkpoint older than 24 h
      → fresh round with the note.
+   - As built (slice 4), where it differs from or adds to the above
+     (tests: `crates/domains/workitems/tests/recovery.rs`, two "processes"
+     over one database file, the first killed by leaving its turn stuck
+     inside a side-effecting tool after the checkpoint recorded the call as
+     started; plus store and note unit tests):
+     - **No migration.** The scan reads `work_item_rounds` by `state` (its
+       index from v10). A round is "left behind" when it is `running` and
+       started before this manager came up (`Manager::boot_at`); a round
+       this process starts, or claims for a rerun, never qualifies.
+     - **Same round, not a new one.** §6 step 1 ("mark every round
+       interrupted") is not done for a rerun: the rerun is the same round
+       row, request id, stored question and thread, so the 2.7 turn key
+       matches and `TurnResume::claim` loads the checkpoint. The round
+       stays `running`; the claim moves its `started_at` to now. A round
+       that is *not* rerun is ended `failed` with outcome and error code
+       `interrupted`.
+     - **Claimed once.** The claim is a compare-and-set in one statement
+       (`running`, started before the cutoff, item open), with the
+       recovery note written as a consumed `recovery` input of the round
+       in the same transaction. Interrupting uses the same guard, so a
+       scan never ends a round another scan is rerunning. Two managers
+       over one file, or one scan run twice at once, rerun it once.
+     - **Resumed or fresh.** `resumed` when a checkpoint for the round's
+       request (`turn_checkpoints_for_request`, by tenant, thread and
+       request id, since the turn key is the chat layer's) was written in
+       the last 24 h and holds rounds or steered messages. Otherwise
+       `fresh`; an older checkpoint is deleted once the round is claimed,
+       because `TurnResume::claim` does not check age and would still
+       load an unpruned one.
+     - **The note** goes into the round's instructions, after the mandate
+       (`recovery_note`): a restart happened, whether the round resumes
+       (a started side-effecting call is marked interrupted) or starts
+       again, check before repeating anything with an outside effect, and
+       the outbound log: the latest 20 outbox rows, oldest first, each
+       body cut at 600 characters, inside `<work_item_outbound seq state>`
+       tags with those and the input tags escaped, saying what `sent`,
+       `queued`/`failed` (the outbox keeps trying; do not resend) and
+       `dropped` mean. *Tradeoff:* the system frame, not the question,
+       because the question must stay what it was for the checkpoint to be
+       found; the bodies are the item's own replies, framed as a record
+       and never an instruction. The note is not a pending input before
+       the round's others (§6 step 4): it is recorded as the round's
+       consumed `recovery` input, so the item read shows what was said.
+     - **Not rerun** (`round_settled` with outcome `interrupted` and a
+       `reason`, the round `failed`): the item is stopped or revoked
+       (`item_ended`); `recoverOnBoot: false` (`recover_off`); boots reran
+       the round twice already (`recovery_limit`, against a round that
+       takes the process down on every rerun); the item started
+       `maxRoundsPerItemPerHour` other rounds in the past hour
+       (`hourly_cap`; the rerun counts as a start, the round's own earlier
+       start does not count twice); admission refused it four times, 2 s
+       to 8 s apart (`throttled`). On an open item the round's consumed
+       and steered inputs go back to `pending` (a round that never
+       reported has not acted on them), and the failed round shows the
+       item as `person/delivery` until a person writes; that releases the
+       hold and the next round reads them.
+     - **Off the boot path.** `Manager::start_recovery`, once per manager,
+       on the work-items `on_start` hook next to the outbox sweeper, spawns
+       `kura-work-item-recovery`; it handles at most 1000 rounds per boot
+       (more is logged) with at most two at a time, each through turn
+       admission. After a rerun the item is driven on as after any round.
+     - **Replies.** The message that woke the round died with the
+       process. If the item owns a conversation and has replied there
+       before, the rerun's report (and any round driven after it) is
+       queued to it through the outbox with that reply's binding; the
+       sweeper sends it once the connector's sender registers. Otherwise
+       (an API item, or one interrupted on its first IM wake) the report is
+       read through the API and events, as for slice 2's API rounds.
+     - **Observability.** `kura_work_item_recovered_total{mode=resumed|
+       fresh|skipped}`, `kura_work_item_rounds_total{outcome=interrupted}`
+       for a round not rerun, one `[kura] work item:` line per round
+       (`round N rerun after a restart, resumed`, `round N interrupted by a
+       restart, not rerun: <reason>`) plus a count at the start of the
+       scan, and the effective `recoverOnBoot` in the boot config line. No
+       new event: the design names none; a rerun round settles with the
+       usual `round_settled`.
+     - **Config:** `recoverOnBoot` (true) is an accepted key.
+     - **Not built / known gaps.** §6's "an item that got a person's input
+       after its last report starts again" is not built: the scan only
+       looks at rounds left running, so inputs left queued by the hourly
+       cap or a refused admission still wait for the next wake. A rerun
+       may be labelled `resumed` and still run fresh if the chat layer's
+       prune removes the checkpoint between the check and the turn (a
+       checkpoint just under 24 h old). A crash between the platform's
+       accept and the checkpoint's `settled` write is reported as an
+       interrupted call, not as sent; the outbound log shows only what the
+       outbox sent. A round over the hourly cap or throttled at boot is
+       not retried later on its own. A clock that moved back across the
+       restart can hide a left-behind round from the scan (it started
+       "after" boot). Single process only, as §11.
 5. **Attention and approvals.**
    - Builds: the attention field; `/answer`; linking an approval; waking
      on resolve; the queue endpoint; the TUI/web list.
