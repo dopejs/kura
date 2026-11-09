@@ -22,6 +22,10 @@
 //!   text; the browser runs in the tenant's container behind the egress
 //!   proxy and keeps nothing between sessions.
 //!
+//! - `computer.*` (remote-computer-use.md §8): the person's own computer,
+//!   for a tenant `computer_remote` allows while one of its devices is
+//!   connected; see [`crate::computer_tools`].
+//!
 //! - `work_item.open` (work-items.md §5.1): while work items are enabled,
 //!   to every turn that is not itself a work item's round.
 //!
@@ -91,6 +95,9 @@ impl ToolSource for AppTools {
         if let Some(browsers) = state.tenant_browsers.clone() {
             tools.extend(BrowserTool::all(&browsers, &turn.tenant_id));
         }
+        // Remote computer use: only for an allowed tenant with a device
+        // online now (remote-computer-use.md §8).
+        tools.extend(crate::computer_tools::tools_for_turn(state, turn));
         // Work items (work-items.md §5.1): only while the feature is on, and
         // never to a work item's own round.
         if let Some(work_items) = state.work_items.clone() {

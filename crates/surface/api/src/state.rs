@@ -150,6 +150,10 @@ pub struct AppState {
     /// Live connections of the users' own computers (remote computer use).
     /// Absent = devices can pair but not connect.
     pub device_hub: Option<Arc<kura_devices::Hub>>,
+    /// Which tenants are offered the `computer.*` tools while one of their
+    /// devices is online (`entries.computer-use.config.remote`). Off by
+    /// default: devices can still pair and connect, but no turn can use them.
+    pub computer_remote: kura_devices::RemoteGate,
     /// Go Dependencies.Scheduler.
     ///
     pub scheduler: Option<Arc<Scheduler>>,
@@ -252,6 +256,7 @@ impl AppState {
             computer_use: None,
             tenant_browsers: None,
             device_hub: None,
+            computer_remote: kura_devices::RemoteGate::Off,
             scheduler: None,
             delivery: None,
             billing: None,

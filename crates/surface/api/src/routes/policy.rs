@@ -251,7 +251,17 @@ fn bind_persisted_row(
     pk: &str,
 ) -> Result<(), ApiError> {
     let Some(tc) = tenant else { return Ok(()) };
-    let tenant_id = tc.0.tenant_id.trim();
+    bind_row_to_tenant(state, &tc.0.tenant_id, table, pk_column, pk)
+}
+
+fn bind_row_to_tenant(
+    state: &AppState,
+    tenant_id: &str,
+    table: &str,
+    pk_column: &str,
+    pk: &str,
+) -> Result<(), ApiError> {
+    let tenant_id = tenant_id.trim();
     if tenant_id.is_empty() {
         return Ok(());
     }
@@ -304,6 +314,51 @@ fn persist_decision(
         "decision_id",
         &decision.decision_id,
     )
+}
+
+/// Raises an approval for a tool call, with the same records and events as
+/// `POST /v1/policy/approvals`, owned by `tenant_id` so only that tenant
+/// lists and resolves it. The caller waits on [`policy::Engine::get_approval`].
+pub fn raise_approval(
+    state: &AppState,
+    tenant_id: &str,
+    input: policy::RequestApprovalInput,
+) -> Result<policy::Approval, ApiError> {
+    let engine = engine(state)?;
+    let (approval, decision) = engine.request_approval(input).map_err(map_policy_error)?;
+    let store_approval = state.store.lock().upsert_approval(&approval);
+    store_approval.map_err(ApiError::from_store)?;
+    bind_row_to_tenant(
+        state,
+        tenant_id,
+        "approvals",
+        "approval_id",
+        &approval.approval_id,
+    )?;
+    let store_decision = state.store.lock().upsert_decision(&decision);
+    store_decision.map_err(ApiError::from_store)?;
+    bind_row_to_tenant(
+        state,
+        tenant_id,
+        "decisions",
+        "decision_id",
+        &decision.decision_id,
+    )?;
+    publish_policy_event(
+        state,
+        "policy.approval_requested",
+        "approval",
+        &approval.approval_id,
+        approval_payload(&approval, false),
+    )?;
+    publish_policy_event(
+        state,
+        "policy.decision_recorded",
+        "decision",
+        &decision.decision_id,
+        decision_payload(&decision),
+    )?;
+    Ok(approval)
 }
 
 fn publish_policy_event(

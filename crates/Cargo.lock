@@ -1398,6 +1398,7 @@ name = "kura-app"
 version = "0.3.0"
 dependencies = [
  "axum",
+ "base64",
  "chrono",
  "futures",
  "kura-activation",
@@ -1416,6 +1417,7 @@ dependencies = [
  "kura-contracts",
  "kura-core",
  "kura-delivery",
+ "kura-device-protocol",
  "kura-devices",
  "kura-discord",
  "kura-egress",
@@ -1438,6 +1440,7 @@ dependencies = [
  "kura-model-provider",
  "kura-plugin",
  "kura-policy",
+ "kura-protocol",
  "kura-providers",
  "kura-reminders",
  "kura-router",

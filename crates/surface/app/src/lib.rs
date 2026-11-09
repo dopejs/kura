@@ -39,6 +39,7 @@ use kura_telegram::{
 };
 
 mod adapters;
+mod computer_tools;
 mod error;
 mod external;
 mod llm_credentials;

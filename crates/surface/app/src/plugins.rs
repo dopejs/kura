@@ -2237,6 +2237,17 @@ fn build_computer_use(asm: &mut Assembly) -> Result<(), AppError> {
     // only holds connections the users' devices open; nothing reaches a
     // device until a tool asks for a session and the user allows it.
     asm.state.device_hub = Some(Arc::new(kura_devices::Hub::default()));
+    asm.state.computer_remote = remote_computer_gate(&config.remote, &asm.state.hosting)?;
+    match &asm.state.computer_remote {
+        kura_devices::RemoteGate::Off => eprintln!("[kura] computer: remote tools disabled"),
+        kura_devices::RemoteGate::AllTenants => {
+            eprintln!("[kura] computer: remote tools enabled");
+        }
+        kura_devices::RemoteGate::Tenants(tenants) => eprintln!(
+            "[kura] computer: remote tools enabled for {} tenant(s)",
+            tenants.len()
+        ),
+    }
     Ok(())
 }
 
@@ -2402,6 +2413,46 @@ struct ComputerUsePluginConfig {
     args: Vec<String>,
     env: std::collections::BTreeMap<String, String>,
     timeout_ms: u64,
+    /// Remote computer use: the `computer.*` tools on the users' own
+    /// computers (docs/harness/remote-computer-use.md §8).
+    remote: RemoteComputerConfig,
+}
+
+/// `entries.computer-use.config.remote`.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+struct RemoteComputerConfig {
+    enabled: bool,
+    /// The tenants offered the tools. Required on a shared daemon, where
+    /// every tenant at once is never the default; on a single-user daemon
+    /// empty means its one tenant.
+    tenants: Vec<String>,
+}
+
+/// The gate `computer.*` is offered through. A shared daemon enabled with
+/// no tenants named fails the boot rather than open it to everyone.
+fn remote_computer_gate(
+    config: &RemoteComputerConfig,
+    hosting: &kura_api::hosting::Hosting,
+) -> Result<kura_devices::RemoteGate, AppError> {
+    if !config.enabled {
+        return Ok(kura_devices::RemoteGate::Off);
+    }
+    let tenants: std::collections::BTreeSet<String> = config
+        .tenants
+        .iter()
+        .map(|tenant| tenant.trim().to_string())
+        .filter(|tenant| !tenant.is_empty())
+        .collect();
+    if !tenants.is_empty() {
+        return Ok(kura_devices::RemoteGate::Tenants(tenants));
+    }
+    if hosting.is_shared() {
+        return Err(AppError::PluginProfile(
+            "computer-use config: remote.enabled on a shared daemon needs remote.tenants".into(),
+        ));
+    }
+    Ok(kura_devices::RemoteGate::AllTenants)
 }
 
 fn build_delivery(asm: &mut Assembly) -> Result<(), AppError> {
@@ -2836,6 +2887,56 @@ fn build_work_items(asm: &mut Assembly) -> Result<(), AppError> {
             .with_chat(chat),
     ));
     Ok(())
+}
+
+#[cfg(test)]
+mod remote_computer_gate_tests {
+    use super::{RemoteComputerConfig, remote_computer_gate};
+    use kura_api::hosting::Hosting;
+    use kura_devices::RemoteGate;
+
+    fn config(value: serde_json::Value) -> RemoteComputerConfig {
+        serde_json::from_value(value).expect("config")
+    }
+
+    #[test]
+    fn off_unless_enabled_and_never_open_to_every_shared_tenant() {
+        let shared = Hosting::Shared {
+            operator_tenant_id: "ten_op".into(),
+        };
+        assert_eq!(
+            remote_computer_gate(&config(serde_json::json!({})), &Hosting::Single).unwrap(),
+            RemoteGate::Off
+        );
+        assert_eq!(
+            remote_computer_gate(&config(serde_json::json!({"tenants": ["a"]})), &shared).unwrap(),
+            RemoteGate::Off
+        );
+        assert_eq!(
+            remote_computer_gate(
+                &config(serde_json::json!({"enabled": true})),
+                &Hosting::Single
+            )
+            .unwrap(),
+            RemoteGate::AllTenants
+        );
+        assert!(
+            remote_computer_gate(&config(serde_json::json!({"enabled": true})), &shared).is_err()
+        );
+        assert_eq!(
+            remote_computer_gate(
+                &config(serde_json::json!({"enabled": true, "tenants": [" a ", ""]})),
+                &shared
+            )
+            .unwrap(),
+            RemoteGate::Tenants(["a".to_string()].into())
+        );
+        assert!(
+            serde_json::from_value::<RemoteComputerConfig>(serde_json::json!({"enable": true}))
+                .is_err(),
+            "a misspelt key fails the boot"
+        );
+    }
 }
 
 /// The work-items config, or `None` when the feature is off. A misspelt

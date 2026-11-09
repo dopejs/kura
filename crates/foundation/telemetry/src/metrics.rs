@@ -43,6 +43,8 @@ pub const DEVICE_CONNECTIONS_TOTAL: &str = "kura_device_connections_total";
 pub const DEVICE_SESSIONS_TOTAL: &str = "kura_device_sessions_total";
 pub const DEVICE_ACTIONS_TOTAL: &str = "kura_device_actions_total";
 pub const DEVICE_ACTION_DURATION_SECONDS: &str = "kura_device_action_duration_seconds";
+pub const DEVICE_SCREENSHOT_BYTES_TOTAL: &str = "kura_device_screenshot_bytes_total";
+pub const COMPUTER_APPROVALS_TOTAL: &str = "kura_computer_approvals_total";
 pub const WORK_ITEM_ROUNDS_TOTAL: &str = "kura_work_item_rounds_total";
 pub const WORK_ITEMS_OPENED_TOTAL: &str = "kura_work_items_opened_total";
 pub const WORK_ITEM_INPUTS_TOTAL: &str = "kura_work_item_inputs_total";
@@ -161,6 +163,14 @@ const HELP: &[(&str, &str)] = &[
     (
         DEVICE_ACTION_DURATION_SECONDS,
         "Remote computer-use action round trip by op.",
+    ),
+    (
+        DEVICE_SCREENSHOT_BYTES_TOTAL,
+        "Bytes of remote computer-use screenshots received; divide by ok actions for the mean size.",
+    ),
+    (
+        COMPUTER_APPROVALS_TOTAL,
+        "Remote computer-use actions that waited for a person's approval, by outcome (approved|rejected|timeout|error).",
     ),
     (
         WORK_ITEM_ROUNDS_TOTAL,

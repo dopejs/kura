@@ -62,6 +62,8 @@ kura-matrix = { workspace = true }
 kura-telemetry = { workspace = true }
 kura-computeruse = { workspace = true }
 kura-devices = { workspace = true }
+kura-device-protocol = { workspace = true }
+kura-protocol = { workspace = true }
 kura-scheduler = { workspace = true }
 kura-delivery = { workspace = true }
 kura-billing = { workspace = true }
@@ -80,6 +82,7 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+base64 = "0.22"
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
 
