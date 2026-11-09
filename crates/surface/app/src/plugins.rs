@@ -2885,10 +2885,15 @@ fn build_work_items(asm: &mut Assembly) -> Result<(), AppError> {
         .chat
         .clone()
         .expect("chat plugin built (required)");
-    asm.state.work_items = Some(Arc::new(
+    let mut manager =
         kura_workitems::Manager::new(asm.state.store_pool.clone(), asm.event_bus.clone(), config)
-            .with_chat(chat),
-    ));
+            .with_chat(chat);
+    // Slice 5: rounds wait on the approvals the policy engine holds, and
+    // wake when they are resolved.
+    if let Some(policy) = asm.state.policy.clone() {
+        manager = manager.with_policy(policy);
+    }
+    asm.state.work_items = Some(Arc::new(manager));
     // The outbox sweeper (slice 3): its first pass is the boot sweep of
     // replies a previous run left unsent. Connector senders register when
     // the runtimes are built (`App::serve`).
@@ -2905,6 +2910,12 @@ fn build_work_items(asm: &mut Assembly) -> Result<(), AppError> {
                 if let Err(err) = work_items.start_recovery() {
                     eprintln!("[kura] work item: starting the boot recovery failed: {err}");
                 }
+                // The approval watcher (slice 5): its first pass sweeps
+                // the approvals items wait on, which catches what was
+                // resolved while the daemon was down.
+                if let Err(err) = work_items.start_approval_watcher() {
+                    eprintln!("[kura] work item: starting the approval watcher failed: {err}");
+                }
             }
         }),
     );
@@ -2913,6 +2924,7 @@ fn build_work_items(asm: &mut Assembly) -> Result<(), AppError> {
         Box::new(|state| {
             if let Some(work_items) = &state.work_items {
                 work_items.stop_outbox_sweeper();
+                work_items.stop_approval_watcher();
             }
         }),
     );

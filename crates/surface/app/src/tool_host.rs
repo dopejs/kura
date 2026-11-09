@@ -78,11 +78,20 @@ impl ToolSource for AppTools {
             // rules are not this tenant's to use. Unowned servers predate
             // servers recording their tenant; a shared daemon offers them to
             // nobody, since they would run for every tenant.
-            tools.extend(kura_mcp::tools_for_tenant(
+            //
+            // A work item's round remembers the approvals its calls wait on
+            // (work-items.md §7): a call that gives up leaves the item
+            // waiting on the approval, and the round after its resolution
+            // runs that call under it.
+            let round_approvals = state.work_items.as_ref().and_then(|work_items| {
+                work_items.round_approvals(&turn.tenant_id, &turn.thread_id)
+            });
+            tools.extend(kura_mcp::tools_for_tenant_with_approvals(
                 &mcp,
                 &turn.tenant_id,
                 CHAT_RUNTIME_SURFACE,
                 !state.hosting.is_shared(),
+                round_approvals,
             ));
         }
         if state.memory.is_some() {
