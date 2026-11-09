@@ -338,7 +338,7 @@ macOS lives behind the `Platform` and `Consent` traits
 Known limits: main display only; base64 overhead; device tokens are bearer
 tokens (no proof of possession yet); click accuracy of generic tools is
 lower than a provider-native computer-use tool and is not measured yet
-(slice 5).
+(slice 5 built the measurement; no real run yet).
 
 ## 12. Slices
 
@@ -406,6 +406,135 @@ Each slice is shippable and tested on its own.
 5. **Evaluation**: a fixed set of desktop tasks (open an app, fill a form,
    find a file) with success rate and steps, to decide whether generic
    tools are good enough or a native mapping is needed.
+
+   As built (2026-11-09; the harness, not yet a result):
+   - `crates/surface/cua-eval` (package and binary `kura-cua-eval`). Rust in
+     the workspace rather than a script: the CI self-test then runs the
+     daemon's real assembly, the real device agent and link and the runner
+     together under `cargo test`, with no Python or Node in CI; and the
+     runner is only an HTTP client of the daemon (`/v1/chat/query`,
+     `/v1/events`, `/v1/policy/approvals`, `/v1/devices`, `/metrics`), so it
+     needs no access to the data directory and works against a gateway too.
+     `domains/evaluation` was not reused: it is the replay/campaign ledger
+     for recorded turns, with no notion of a live desktop or a state check.
+   - Suite: `suites/macos-desktop.v1.json`, 9 tasks: open Calculator, open
+     Dictionary (open-app); type and save, replace a word (edit); fill a
+     three-field form (form); read a value 87 lines down and append it
+     (scroll-read); new folder (navigate); find a nested file among decoys
+     and rename it (find-file); drag a file into a folder (drag). Each task
+     has its own work directory under `<tmp>/kura-cua-eval/<run-id>/`, a
+     setup (write files, open them in TextEdit or the folder in Finder, so
+     a terminal on the device's deny list is never in front), checks of
+     the result (file text, form fields, last line, a path exists or not,
+     the app in front via `lsappinfo`), a step budget and a teardown. The
+     suite validator refuses paths outside the work directory, quitting an
+     app the task did not first find closed (`requires.appsNotRunning`;
+     such a task is skipped when the app is open), and app names that are
+     not plain words. Teardown closes only TextEdit documents and Finder
+     windows whose path contains the run's root, without saving; nothing is
+     deleted. No task needs the network or a risky chord.
+   - Runner, per attempt: setup; the instruction plus the suite's preamble
+     as one chat turn (`x-request-id` names it); while it runs, every
+     500 ms, the turn's `chat.tool.called` events and the tenant's pending
+     `computer.action.execute` approvals (rejected at once by default,
+     `--approvals manual` leaves them to a person); more `computer.act`
+     calls than the budget, or the time limit, cancels the turn through
+     `/v1/chat/turns/{id}/cancel`. After the turn it waits for the device's
+     session to end (and stops the run if it does not, so two attempts never
+     share a session), runs the checks, then the teardown.
+   - Metrics (`report.json` with every attempt, `summary.md`):
+     - **outcome**: `passed` (all checks hold, steps within budget),
+       `check_failed`, `over_budget` (overrides a passing check: a task done
+       in 4× the steps is not a success for this question), `timed_out`,
+       `turn_failed` (provider error, round limit, HTTP failure),
+       `no_control` (start refused with `session_denied`/`device_offline`),
+       `setup_failed`, `skipped`. The last three are not **counted**: they
+       say nothing about the tools.
+     - **success rate** = passed / counted; per task and overall.
+     - **steps** = `computer.act` calls, failed ones included
+       (`computer.start` is the session request, not a step); by `op`.
+     - **step ratio** = steps / the task's hand-counted `referenceSteps`,
+       median over passed attempts: detours, misclicks, retries.
+     - failed `computer.*` calls by **error code** (the stable prefix of the
+       tool output), **approvals** raised, **screenshot bytes** (difference
+       of `kura_device_screenshot_bytes_total`; absent when `/metrics` is not
+       readable with the token), tokens, wall time, and the turn id for
+       `GET /v1/turn-traces/{turnId}`. The screenshots themselves are under
+       the daemon's `artifacts/remote-computer/` (§6).
+   - Verdict (the suite's `verdict` block, versioned with the tasks):
+     **good enough** at success ≥ 80 % with median step ratio ≤ 2.0;
+     **native mapping worth measuring** at success < 60 % or ratio > 3.0;
+     **inconclusive** between; **insufficient data** if the run stopped
+     early or any task has fewer than 3 counted attempts. Why these: the
+     tasks are the simplest single-app requests a person makes, done in 1–7
+     actions; an agent that fails more than one in five of them is not worth
+     offering, and below three in five the failures, not the details, are
+     the story, so the next experiment is the native mapping. Ratio 2.0
+     allows one look or correction per real action; past 3.0 each task
+     costs three times the round trips and screenshots even when it
+     succeeds. "Worth measuring" is deliberate: the decision to build is
+     made by running the same suite with the native mapping and comparing,
+     which needs that mapping to record its actions as `computer.act` (or
+     the runner's name map to learn its name). Read the failure breakdown
+     before the verdict: `outcome_unknown_*`, `denied_app`, `turn_failed`
+     or approvals point at the harness or the setup, not at the tools.
+   - Found by the self-test and fixed (`surface/app/src/tool_host.rs`):
+     `chat.tool.called` was stored with an empty environment scope and no
+     tenant, so `GET /v1/events` never returned a tool call to anyone. It now
+     carries the daemon's scope and the turn's tenant. `chat.hook.vetoed`
+     (`kura-chat`) has the same empty scope and is still unfixed.
+   - Tests: suite validation (the shipped suite, path escapes, quitting an
+     open app, unknown keys), every check kind, counting and classification,
+     the verdict thresholds, report math; and the self-test
+     (`tests/selftest.rs`): the daemon assembly serving on loopback, local
+     pairing, a device paired with a code and connected over the WebSocket
+     with a fake computer (typed text is written to the open file on
+     `cmd+s`), a scripted model on an OpenAI-compatible endpoint, six
+     tasks: a pass in 2 steps; a model that claims success and fails the
+     check; a runaway over its budget of 3, cancelled after 4 of its 12
+     steps although its check would pass; a rejected `cmd+q` and an invalid
+     `wait`, each counted by code, then a pass; a denied session
+     (`no_control`); a skipped precondition. It asserts each attempt, the
+     teardown calls, the summary (2 of 4 counted, median 3 steps, ratio
+     1.5), the verdicts and the markdown.
+   - How to run it (on the Mac, test environment only, never `~/.kura`):
+     ```bash
+     cd crates && cargo build --release -p kura-cli -p kura-device -p kura-cua-eval
+     export EVAL=~/.kura-cua-eval NO_PROXY=127.0.0.1,localhost
+     mkdir -p $EVAL/device
+     echo '{"entries":{"computer-use":{"config":{"remote":{"enabled":true}}},
+            "chat":{"config":{"toolMaxRounds":40}}}}' > $EVAL/plugins.json
+     # A vision-capable provider, configured as for any daemon.
+     KURA_ENV=embedded KURA_DATA_DIR=$EVAL KURA_BIND_ADDR=127.0.0.1:19194 \
+       target/release/kura daemon run
+     # Another terminal:
+     target/release/kura-cua-eval login --server http://127.0.0.1:19194 --token-file $EVAL/token
+     target/release/kura-cua-eval device-code --server http://127.0.0.1:19194 --token-file $EVAL/token
+     export KURA_DEVICE_HOME=$EVAL/device   # keeps your own pairing untouched
+     target/release/kura-device pair <code> --server http://127.0.0.1:19194
+     target/release/kura-device run --trust-for 2h   # one consent alert, not one per task
+     # A third terminal; quit Calculator and Dictionary, then hands off:
+     target/release/kura-cua-eval run surface/cua-eval/suites/macos-desktop.v1.json \
+       --server http://127.0.0.1:19194 --token-file $EVAL/token \
+       --out ~/cua-eval/<model> --repeats 3 [--provider <id> --model <model>]
+     ```
+     `kura-cua-eval plan <suite>` prints every query, setup, check and
+     teardown and touches nothing. `toolMaxRounds` must exceed the largest
+     step budget (25) or long tasks end as `turn_failed`. On the first run
+     macOS asks to let the terminal control TextEdit, Finder, Calculator and
+     Dictionary (the teardown); without it the teardown is recorded as
+     failed and windows stay open. Touching the mouse or keyboard during an
+     attempt ends the session (`user_active`). Run it on a dedicated daemon
+     and do not chat with it meanwhile: an attempt's steps are the tenant's
+     tool calls in its window, and the screenshot counter is daemon-wide.
+   - Not run yet: any live model, the suite on a real desktop (only
+     `lsappinfo` was checked, read-only, on this Mac), the AppleScript
+     teardown, and the gateway path. The reference step counts are hand
+     estimates; TextEdit's autocorrect could alter typed text (the tasks use
+     dictionary words and digits to keep that out of the result). Not built:
+     labelling failures as misclicks (read the screenshots), a per-turn
+     action budget in the daemon itself (the runner's cancel stands in), and
+     a native mapping to compare against.
 
 Rollback: every slice is behind `computer.remote` (off by default) except
 slice 1, which is additive on the wire and reverts as one commit.
