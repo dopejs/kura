@@ -381,6 +381,19 @@ Each slice is shippable and tested on its own.
      rejected one).
    - Not built: vision gating (§7), session events (§10), screenshot
      retention, a per-turn action budget.
+   - End to end on macOS, directly against an embedded daemon (2026-11-09,
+     no gateway): a scripted model drove `computer.start`, `screenshot`,
+     `move`, `wait`, `key cmd+q` and `computer.stop` through the real chat
+     path, WebSocket and `kura-device`. The person allowed the session in
+     the alert; `cmd+q` waited for approval, was rejected and never reached
+     the device; an unanswered alert denied the session after 60 s. The run
+     found that every pre-dispatch hook (the builtin `context` and
+     `session-strategy` hooks always run) dropped the screenshot bytes in
+     its JSON round trip, so the model read `[image omitted]`; fixed in
+     `kura-chat` by restoring the bytes per tool call after the hooks. With
+     the fix the model received each screenshot, at most three at a time,
+     byte for byte the saved copy. Not exercised yet: `type`, `click`,
+     take-over and the kill switch on real hardware, and the gateway path.
 5. **Evaluation**: a fixed set of desktop tasks (open an app, fill a form,
    find a file) with success rate and steps, to decide whether generic
    tools are good enough or a native mapping is needed.
