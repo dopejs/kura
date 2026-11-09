@@ -13,6 +13,10 @@
 //! - `POST /v1/work-items/{itemId}/stop` — stops the item for good (slice
 //!   2): its subscriptions are dropped, a running round is cancelled, and
 //!   nothing wakes or reopens it again. Stopping a stopped item is a no-op.
+//! - `POST /v1/work-items/{itemId}/outbox/{seq}/withdraw` — a person drops
+//!   a reply not yet sent (slice 3): it is dropped as `withdrawn` and the
+//!   replies after it go on. 409 once it is sent or dropped, or while it is
+//!   being sent; 404 for no such row.
 //!
 //! Rounds run in `kura-workitems` (its driver), on the chat service the
 //! manager was built with.
@@ -46,6 +50,10 @@ pub fn router() -> Router<AppState> {
         .route("/v1/work-items", get(list_items).post(create_item))
         .route("/v1/work-items/{item_id}", get(get_item))
         .route("/v1/work-items/{item_id}/stop", post(stop_item))
+        .route(
+            "/v1/work-items/{item_id}/outbox/{seq}/withdraw",
+            post(withdraw_reply),
+        )
 }
 
 /// Body of `POST /v1/work-items` (`create-work-item.request.schema.json`).
@@ -97,9 +105,12 @@ fn api_error(err: WorkItemError) -> ApiError {
     match err {
         WorkItemError::Invalid(message) => ApiError::BadRequest(message),
         WorkItemError::NotFound => ApiError::NotFound("work item not found".to_string()),
+        err @ WorkItemError::OutboxRowNotFound(_) => ApiError::NotFound(err.to_string()),
         err @ (WorkItemError::OpenLimit { .. }
         | WorkItemError::RoundNotRunning(_)
-        | WorkItemError::ConversationOwned(_)) => ApiError::Conflict(err.to_string()),
+        | WorkItemError::ConversationOwned(_)
+        | WorkItemError::OutboxRowSettled { .. }
+        | WorkItemError::OutboxRowSending(_)) => ApiError::Conflict(err.to_string()),
         WorkItemError::Store(message) => ApiError::Internal(message),
     }
 }
@@ -217,6 +228,21 @@ async fn stop_item(
         .await
         .map_err(|err| ApiError::Internal(format!("work item stop task failed: {err}")))?
         .map_err(api_error)?;
+    Ok(Json(item))
+}
+
+async fn withdraw_reply(
+    State(state): State<AppState>,
+    tenant: ActingTenant,
+    Path((item_id, seq)): Path<(String, i64)>,
+) -> Result<Json<WorkItem>, ApiError> {
+    let manager = manager(&state)?;
+    let tenant_id = tenant_id(&state, &tenant)?;
+    let item =
+        tokio::task::spawn_blocking(move || manager.withdraw_outbox(&tenant_id, &item_id, seq))
+            .await
+            .map_err(|err| ApiError::Internal(format!("work item withdraw task failed: {err}")))?
+            .map_err(api_error)?;
     Ok(Json(item))
 }
 
@@ -385,6 +411,7 @@ mod tests {
             ("GET", "/v1/work-items", None),
             ("GET", "/v1/work-items/wi_1", None),
             ("POST", "/v1/work-items/wi_1/stop", None),
+            ("POST", "/v1/work-items/wi_1/outbox/1/withdraw", None),
         ] {
             let (status, json) = send(&state, "ten_a", method, uri, body).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
@@ -546,5 +573,59 @@ mod tests {
         .await;
         assert_eq!(read["endReason"], "stopped");
         assert_eq!(read["subscriptions"], serde_json::json!([]));
+    }
+
+    /// Slice 3: the item read shows its outbox; a person withdraws a reply
+    /// not yet sent, once, and only on their own tenant's item.
+    #[tokio::test]
+    async fn a_queued_reply_is_shown_and_can_be_withdrawn_once() {
+        let state = state(r#"{"status":"waiting","summary":"Waiting for CI."}"#, None);
+        let (_, item) = send(&state, "ten_a", "POST", "/v1/work-items", Some(open_body())).await;
+        let item_id = item["itemId"].as_str().unwrap().to_string();
+        settled(&state, "ten_a", &item_id).await;
+        let manager = state.work_items.clone().expect("manager");
+        let binding = kura_workitems::ReplyBinding {
+            conversation_key: "thr_src_1".to_string(),
+            connector_id: "slack-main".to_string(),
+            conversation_id: "C1".to_string(),
+            channel_id: "C1".to_string(),
+            ..Default::default()
+        };
+        manager
+            .enqueue_replies(
+                "ten_a",
+                &item_id,
+                &binding,
+                &[(Some(1), "first".to_string()), (None, "second".to_string())],
+            )
+            .expect("enqueue");
+
+        let (_, read) = send(
+            &state,
+            "ten_a",
+            "GET",
+            &format!("/v1/work-items/{item_id}"),
+            None,
+        )
+        .await;
+        let outbox = read["outbox"].as_array().expect("outbox");
+        assert_eq!(outbox.len(), 2);
+        assert_eq!(outbox[0]["state"], "queued");
+        assert_eq!(outbox[0]["body"], "first");
+        assert_eq!(outbox[0]["roundSeq"], 1);
+
+        let uri = format!("/v1/work-items/{item_id}/outbox/1/withdraw");
+        let (status, _) = send(&state, "ten_b", "POST", &uri, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, after) = send(&state, "ten_a", "POST", &uri, None).await;
+        assert_eq!(status, StatusCode::OK, "{after}");
+        assert_eq!(after["outbox"][0]["state"], "dropped");
+        assert_eq!(after["outbox"][0]["dropReason"], "withdrawn");
+        assert_eq!(after["outbox"][1]["state"], "queued");
+        let (status, _) = send(&state, "ten_a", "POST", &uri, None).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let missing = format!("/v1/work-items/{item_id}/outbox/9/withdraw");
+        let (status, _) = send(&state, "ten_a", "POST", &missing, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }
