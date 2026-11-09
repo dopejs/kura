@@ -90,6 +90,10 @@ pub struct WorkItemInbound<'a> {
     pub shape: ConversationShape,
     /// The persisted inbound's delivery id.
     pub delivery_id: String,
+    /// The loop's own reply sender for this message's connector, lent for
+    /// the call: the work item's outbox sends through it what it queued for
+    /// this conversation (work-items.md §8).
+    pub replies: &'a dyn ReplySender,
 }
 
 /// What the hook did with an inbound message.
@@ -99,11 +103,25 @@ pub enum WorkItemRoute {
     /// the hook.
     FallThrough,
     /// A work item took it. The ordinary turn does not run; `replies` are
-    /// sent in order through the loop's own reply path.
+    /// sent in order through the loop's own reply path, and `delivered`
+    /// says what the hook sent itself (through its outbox).
     Claimed {
         replies: Vec<String>,
         reason_code: String,
+        delivered: WorkItemDelivery,
     },
+}
+
+/// What a work item's outbox did with the replies it queued for the
+/// claimed message.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkItemDelivery {
+    /// The replies queued, in order.
+    pub texts: Vec<String>,
+    /// The platform ids of the messages sent now.
+    pub sent_message_ids: Vec<String>,
+    /// Replies not sent now; the outbox retries them.
+    pub waiting: usize,
 }
 
 /// Where an ordinary IM turn came from, so a tool the turn calls can act on
@@ -1171,9 +1189,11 @@ impl MessageLoop {
     /// Offers the message to the work-item hook (work-items.md §5.2). `None`
     /// when no hook is installed, the message has no valid source key, or
     /// no item takes it: the ordinary path runs. When an item takes it, the
-    /// ordinary turn does not run; the hook's replies go out through this
-    /// loop's reply path (until the work-item outbox, slice 3) and the
-    /// route outcome `work_item` is recorded.
+    /// ordinary turn does not run and the route outcome `work_item` is
+    /// recorded. The work item's own replies go through its outbox, which
+    /// sends through this loop's sender (`WorkItemInbound::replies`) and
+    /// retries what it could not send; whatever `replies` the hook still
+    /// returns go out inline through this loop's reply path, as before.
     fn route_to_work_item(
         &self,
         connector: &Connector,
@@ -1198,10 +1218,12 @@ impl MessageLoop {
                 inbound,
             ),
             delivery_id: persisted_inbound.delivery_id.clone(),
+            replies,
         });
         let WorkItemRoute::Claimed {
             replies: texts,
             reason_code,
+            delivered,
         } = route
         else {
             return Ok(None);
@@ -1251,12 +1273,18 @@ impl MessageLoop {
                 }
             }
         }
-        persisted_inbound.status = match (&send_err, sent_ids.is_empty()) {
-            (Some(_), _) => DeliveryStatus::Failed,
-            (None, false) => DeliveryStatus::Replied,
-            (None, true) => persisted_inbound.status,
+        sent_ids.extend(delivered.sent_message_ids.iter().cloned());
+        // A reply the outbox holds for a retry is not an error of this
+        // message's processing: the inbound records that its reply did not
+        // (all) go out now; the outbox row is the reply's own record.
+        let held = delivered.waiting > 0;
+        persisted_inbound.status = match (&send_err, held, sent_ids.is_empty()) {
+            (Some(_), _, _) | (None, true, true) => DeliveryStatus::Failed,
+            (None, true, false) => DeliveryStatus::Partial,
+            (None, false, false) => DeliveryStatus::Replied,
+            (None, false, true) => persisted_inbound.status,
         };
-        if send_err.is_some() {
+        if send_err.is_some() || (held && sent_ids.is_empty()) {
             persisted_inbound.error = safe_reply_failure_reason(None);
         }
         persisted_inbound.updated_at = Utc::now();
@@ -1281,11 +1309,17 @@ impl MessageLoop {
         if let Some(err) = send_err {
             return Err(err);
         }
+        let reply = texts
+            .iter()
+            .chain(delivered.texts.iter())
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("\n\n");
         Ok(Some(ProcessResult {
             session,
             run,
             step: Step::default(),
-            reply: texts.join("\n\n"),
+            reply,
             outcome: "work_item".to_string(),
             reason_code,
             duplicate: false,
