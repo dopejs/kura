@@ -184,7 +184,7 @@ impl Manager {
             self.publish(
                 &planned.item,
                 "attention_cleared",
-                json!({"roundSeq": turn.seq}),
+                json!({"roundSeq": turn.seq, "by": "round"}),
             );
         }
         log_change(

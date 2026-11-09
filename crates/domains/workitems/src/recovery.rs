@@ -211,7 +211,7 @@ impl Manager {
             Ok(None) => None,
             Err(err) => {
                 eprintln!(
-                    "[kura] work item: tenant={} item={} round {} boot recovery failed: {err}",
+                    "[kura] work item: tenant={} item={} round {} boot replying failed: {err}",
                     round.tenant_id, round.item_id, round.seq
                 );
                 None
@@ -337,7 +337,7 @@ impl Manager {
                 .iter()
                 .map(|round| (Some(round.seq), crate::im::round_reply(round))),
         );
-        self.reply_after_recovery(&item, replies);
+        self.reply_to_owner(&item, replies);
         Ok(Some(Recovery::Rerun { mode, round: rerun }))
     }
 
@@ -462,20 +462,20 @@ impl Manager {
         Ok(Some(Recovery::Interrupted { reason }))
     }
 
-    /// Queues what the recovered rounds report for the conversation the
-    /// item owns, through its outbox. The message that woke the round is
-    /// gone with the process, so the reply goes where the item's latest
+    /// Queues what rounds no IM message woke report (a rerun after a
+    /// restart; slice 5: a round after an answer or an approval) for the
+    /// conversation the item owns, through its outbox. No message is there
+    /// to answer, so the reply goes where the item's latest
     /// reply to that conversation went. An item that never replied there
     /// (opened through the API, or interrupted on its first IM wake) has no
     /// address to reply to; its report is read through the API and events.
-    fn reply_after_recovery(&self, item: &WorkItem, replies: Vec<(Option<i64>, String)>) {
+    pub(crate) fn reply_to_owner(&self, item: &WorkItem, replies: Vec<(Option<i64>, String)>) {
         let binding = match self.last_reply_binding(item) {
             Ok(Some(binding)) => binding,
             Ok(None) => return,
             Err(err) => {
                 eprintln!(
-                    "[kura] work item: tenant={} item={} finding where to reply after recovery \
-                     failed: {err}",
+                    "[kura] work item: tenant={} item={} finding where to reply failed: {err}",
                     item.tenant_id, item.item_id
                 );
                 return;
@@ -485,8 +485,8 @@ impl Manager {
             Ok(seqs) if !seqs.is_empty() => self.outbox.poke(),
             Ok(_) => {}
             Err(err) => eprintln!(
-                "[kura] work item: tenant={} item={} queueing replies after recovery failed: \
-                 {err}",
+                "[kura] work item: tenant={} item={} queueing replies to its conversation \
+                 failed: {err}",
                 item.tenant_id, item.item_id
             ),
         }

@@ -51,6 +51,7 @@ pub const WORK_ITEM_INPUTS_TOTAL: &str = "kura_work_item_inputs_total";
 pub const WORK_ITEM_MANDATE_CHECKS_TOTAL: &str = "kura_work_item_mandate_checks_total";
 pub const WORK_ITEM_OUTBOX_TOTAL: &str = "kura_work_item_outbox_total";
 pub const WORK_ITEM_RECOVERED_TOTAL: &str = "kura_work_item_recovered_total";
+pub const WORK_ITEM_APPROVALS_TOTAL: &str = "kura_work_item_approvals_total";
 
 /// Help text per series, rendered as `# HELP`.
 const HELP: &[(&str, &str)] = &[
@@ -197,6 +198,10 @@ const HELP: &[(&str, &str)] = &[
     (
         WORK_ITEM_RECOVERED_TOTAL,
         "Work item rounds a restart left running, by what the boot did (mode=resumed|fresh|skipped). resumed: rerun from its checkpoint; fresh: rerun from its question (no checkpoint, or one older than 24 h); skipped: ended as interrupted without a rerun.",
+    ),
+    (
+        WORK_ITEM_APPROVALS_TOTAL,
+        "Approvals work items waited on, by event (waiting|approved|rejected|gone|used). waiting: a round gave up waiting on the approval and the item now waits for it; used: a later round ran the approved call under it.",
     ),
 ];
 

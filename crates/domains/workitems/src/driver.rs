@@ -31,6 +31,9 @@ pub struct DrivenRound {
     pub report: Option<Report>,
     /// The chat error code of a turn that ended without a report.
     pub error_code: Option<String>,
+    /// The approval the item now waits on, when a tool call of this round
+    /// gave up waiting on it (slice 5).
+    pub waits_on: Option<crate::types::Attention>,
 }
 
 /// Why a drive stopped before running a round it might have.
@@ -184,6 +187,9 @@ impl Manager {
                 } else {
                     item.last_report
                 },
+                waits_on: item
+                    .attention
+                    .filter(|attention| attention.kind == crate::types::AttentionKind::Approval),
                 error_code: failed,
             },
             Err(err) => {
@@ -195,6 +201,7 @@ impl Manager {
                 DrivenRound {
                     seq: turn.seq,
                     report: None,
+                    waits_on: None,
                     error_code: Some(failed.unwrap_or_else(|| err.code().to_string())),
                 }
             }

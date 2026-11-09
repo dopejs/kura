@@ -78,7 +78,16 @@ pub fn round_reply(round: &DrivenRound) -> String {
     match (&round.report, &round.error_code) {
         (Some(report), _) => {
             let mut reply = report.summary.trim().to_string();
-            if let Some(attention) = &report.attention {
+            // The approval wins over the report's own question, as it does
+            // for the item's attention (slice 5).
+            if let Some(approval) = &round.waits_on {
+                reply.push_str(&format!(
+                    "\n\nThis needs a person's approval first: {}. Approve or reject approval {} \
+                     and the work goes on.",
+                    approval.question.trim(),
+                    approval.approval_id
+                ));
+            } else if let Some(attention) = &report.attention {
                 reply.push_str("\n\n");
                 reply.push_str(attention.question.trim());
                 if !attention.options.is_empty() {

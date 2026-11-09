@@ -20,6 +20,9 @@ kura-im.workspace = true
 kura-imtypes.workspace = true
 kura-connectors.workspace = true
 kura-identity.workspace = true
+# Slice 5: a round waits on, and runs under, the policy engine's approvals.
+kura-policy.workspace = true
+sha2.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -33,3 +36,7 @@ kura-runtime.workspace = true
 futures.workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["time"] }
+# The approval e2e drives a real MCP tool against a fake server session.
+kura-mcp.workspace = true
+kura-config.workspace = true
+kura-sandbox.workspace = true
