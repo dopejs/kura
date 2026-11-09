@@ -16,17 +16,24 @@
 //!
 //! Any failure of the hook's own falls through, so the person still gets
 //! the ordinary answer (§11).
+//!
+//! What the item says back (the round's report, the steered notice) goes
+//! through its outbox (`outbox.rs`, slice 3): queued in order for the
+//! conversation, then sent at once through the loop's own sender; what
+//! fails is retried by the sweeper.
 
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
-use kura_im::{ImTurnOrigin, WorkItemHook, WorkItemInbound, WorkItemRoute};
+use kura_im::{ImTurnOrigin, WorkItemDelivery, WorkItemHook, WorkItemInbound, WorkItemRoute};
+use kura_threads::ConversationShape;
 use serde_json::json;
 
 use crate::driver::{DriveStop, DrivenRound};
 use crate::manager::{Manager, WorkItemError, log_change};
 use crate::mandate::{ImContext, im_authority};
-use crate::types::{EndReason, InputKind, ItemState, SubscriptionRole};
+use crate::outbox::ReplyBinding;
+use crate::types::{EndReason, InputKind, ItemState, SubscriptionRole, WorkItem};
 use crate::wake::InputPath;
 
 /// The work-items feature as the IM loop sees it.
@@ -200,45 +207,109 @@ impl Manager {
             payload["roundSeq"] = json!(round_seq);
         }
         self.publish(&woken, "woken", payload);
+        let binding = ReplyBinding {
+            conversation_key: inbound.source_key.clone(),
+            connector_id: inbound.connector.connector_id.clone(),
+            conversation_id: conversation_id.clone(),
+            channel_id: inbound.inbound.channel_id.clone(),
+            peer_id: inbound.inbound.peer_id.clone(),
+            reply_to_external_message_id: kura_im::reply_to_external_message_id(inbound.inbound),
+            participation_gated: matches!(
+                inbound.shape,
+                ConversationShape::Group | ConversationShape::Room
+            ) && kura_im::connector_enforces_group_room_participation_policy(
+                inbound.connector,
+            ),
+            source_ref: inbound.delivery_id.clone(),
+        };
         if let InputPath::Steered { .. } = path {
-            return Ok(WorkItemRoute::Claimed {
-                replies: vec!["Added to the work item's running round.".to_string()],
-                reason_code: "work_item_steered".to_string(),
-            });
+            let replies = vec![(None, "Added to the work item's running round.".to_string())];
+            return Ok(self.reply(&item, &binding, replies, "work_item_steered", inbound));
         }
 
         let drive = self.drive(&item.tenant_id, &item.item_id, None);
-        let mut replies: Vec<String> = drive
+        let mut replies: Vec<(Option<i64>, String)> = drive
             .rounds
             .iter()
-            .map(round_reply)
-            .filter(|reply| !reply.is_empty())
+            .map(|round| (Some(round.seq), round_reply(round)))
+            .filter(|(_, reply)| !reply.is_empty())
             .collect();
         if drive.rounds.is_empty() {
             match &drive.stopped {
-                Some(DriveStop::Throttled { code }) => replies.push(format!(
-                    "Your message reached the work item \"{}\", but its next round could not \
-                     start now ({code}). It runs when the item is woken again.",
-                    item.title
+                Some(DriveStop::Throttled { code }) => replies.push((
+                    None,
+                    format!(
+                        "Your message reached the work item \"{}\", but its next round could \
+                         not start now ({code}). It runs when the item is woken again.",
+                        item.title
+                    ),
                 )),
-                Some(DriveStop::HourlyCap { limit }) => replies.push(format!(
-                    "Your message reached the work item \"{}\". It has run its {limit} rounds \
-                     for this hour; your message waits until the item is woken again.",
-                    item.title
+                Some(DriveStop::HourlyCap { limit }) => replies.push((
+                    None,
+                    format!(
+                        "Your message reached the work item \"{}\". It has run its {limit} \
+                         rounds for this hour; your message waits until the item is woken \
+                         again.",
+                        item.title
+                    ),
                 )),
                 // A round of the item is running elsewhere and will read
                 // the message when it settles.
                 None => {}
             }
         }
-        Ok(WorkItemRoute::Claimed {
-            replies,
-            reason_code: if drive.rounds.is_empty() {
-                "work_item_queued"
-            } else {
-                "work_item_round"
+        let reason_code = if drive.rounds.is_empty() {
+            "work_item_queued"
+        } else {
+            "work_item_round"
+        };
+        Ok(self.reply(&item, &binding, replies, reason_code, inbound))
+    }
+
+    /// Queues the replies to the message the item took in its outbox and
+    /// sends them now through the loop's own sender (§8). If they cannot
+    /// even be queued, they go back to the loop to send inline, as slice 2
+    /// did, so the person still reads them.
+    fn reply(
+        &self,
+        item: &WorkItem,
+        binding: &ReplyBinding,
+        replies: Vec<(Option<i64>, String)>,
+        reason_code: &str,
+        inbound: &WorkItemInbound<'_>,
+    ) -> WorkItemRoute {
+        let texts: Vec<String> = replies.iter().map(|(_, text)| text.clone()).collect();
+        match self.enqueue_replies(&item.tenant_id, &item.item_id, binding, &replies) {
+            Ok(_) => {
+                let flushed = self.flush_conversation(
+                    &item.tenant_id,
+                    &item.item_id,
+                    &binding.conversation_key,
+                    &binding.connector_id,
+                    inbound.replies,
+                );
+                WorkItemRoute::Claimed {
+                    replies: Vec::new(),
+                    reason_code: reason_code.to_string(),
+                    delivered: WorkItemDelivery {
+                        texts,
+                        sent_message_ids: flushed.sent_message_ids,
+                        waiting: flushed.waiting,
+                    },
+                }
             }
-            .to_string(),
-        })
+            Err(err) => {
+                eprintln!(
+                    "[kura] work item: tenant={} item={} queueing replies failed, sent inline \
+                     without retry: {err}",
+                    item.tenant_id, item.item_id
+                );
+                WorkItemRoute::Claimed {
+                    replies: texts,
+                    reason_code: reason_code.to_string(),
+                    delivered: WorkItemDelivery::default(),
+                }
+            }
+        }
     }
 }

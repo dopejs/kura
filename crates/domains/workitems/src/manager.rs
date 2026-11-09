@@ -48,6 +48,15 @@ pub enum WorkItemError {
     /// D2: the conversation already has an open owning item.
     #[error("this conversation already has an open work item, {0}; it receives messages here")]
     ConversationOwned(String),
+    /// No such outbox row on the item.
+    #[error("work item outbox row {0} not found")]
+    OutboxRowNotFound(i64),
+    /// The row was sent or dropped already; it can no longer be withdrawn.
+    #[error("work item outbox row {seq} is {state} already")]
+    OutboxRowSettled { seq: i64, state: &'static str },
+    /// The row's conversation is being sent to right now.
+    #[error("work item outbox row {0} is being sent; try again")]
+    OutboxRowSending(i64),
     #[error("work item store: {0}")]
     Store(String),
 }
@@ -62,6 +71,9 @@ impl WorkItemError {
             Self::OpenLimit { .. } => "work_item_open_limit",
             Self::RoundNotRunning(_) => "work_item_round_not_running",
             Self::ConversationOwned(_) => "work_item_conversation_owned",
+            Self::OutboxRowNotFound(_) => "work_item_outbox_row_not_found",
+            Self::OutboxRowSettled { .. } => "work_item_outbox_row_settled",
+            Self::OutboxRowSending(_) => "work_item_outbox_row_sending",
             Self::Store(_) => "store",
         }
     }
@@ -135,6 +147,9 @@ pub struct Manager {
     /// Where each ordinary IM turn running now came from, by (tenant,
     /// run id), for `work_item.open` (registered by the IM hook).
     origins: parking_lot::Mutex<HashMap<(String, String), ImTurnOrigin>>,
+    /// Reply senders, the conversations being sent to now, and the
+    /// sweeper's signal (`outbox.rs`).
+    pub(crate) outbox: crate::outbox::Outbox,
 }
 
 impl Manager {
@@ -146,6 +161,7 @@ impl Manager {
             config,
             chat: None,
             origins: parking_lot::Mutex::default(),
+            outbox: crate::outbox::Outbox::default(),
         }
     }
 
@@ -507,6 +523,9 @@ impl Manager {
         let subscriptions = store
             .list_work_item_subscriptions(&record.tenant_id, &record.item_id)
             .map_err(WorkItemError::Store)?;
+        let outbox = store
+            .list_work_item_outbox(&record.tenant_id, &record.item_id)
+            .map_err(WorkItemError::Store)?;
         drop(store);
         let mut item = to_view(record, &activity)?;
         item.rounds = Some(
@@ -525,6 +544,12 @@ impl Manager {
             subscriptions
                 .into_iter()
                 .map(subscription_view)
+                .collect::<Result<_, _>>()?,
+        );
+        item.outbox = Some(
+            outbox
+                .into_iter()
+                .map(crate::outbox::row_view)
                 .collect::<Result<_, _>>()?,
         );
         Ok(item)
@@ -727,7 +752,9 @@ pub(crate) fn to_view(
         .map_err(WorkItemError::Store)?;
     let stage = derive_stage(&StageFacts {
         ended: state == ItemState::Ended,
-        delivery_problem: last_round == Some(RoundState::Failed),
+        // A reply that failed 3 times in a row holds the item here too,
+        // though the outbox keeps retrying it (§8).
+        delivery_problem: last_round == Some(RoundState::Failed) || activity.outbox_problem,
         // Linking approvals arrives with slice 5.
         approval_pending: false,
         attention: attention.is_some(),
@@ -759,6 +786,7 @@ pub(crate) fn to_view(
         rounds: None,
         inputs: None,
         subscriptions: None,
+        outbox: None,
     })
 }
 

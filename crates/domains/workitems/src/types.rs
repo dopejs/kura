@@ -430,6 +430,9 @@ pub struct WorkItem {
     /// On a single-item read only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subscriptions: Option<Vec<Subscription>>,
+    /// On a single-item read only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outbox: Option<Vec<OutboxRow>>,
 }
 
 /// What a subscription grants (§4, §5.2).
@@ -481,6 +484,115 @@ pub struct Subscription {
     pub dropped_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drop_reason: Option<String>,
+}
+
+/// Where an outbox row stands (§8, slice 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutboxState {
+    /// Not tried yet.
+    Queued,
+    /// Tried and failed; tried again at `nextAttemptAt`.
+    Failed,
+    Sent,
+    /// Never sent and never queued again; `dropReason` says why.
+    Dropped,
+}
+
+impl OutboxState {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Failed => "failed",
+            Self::Sent => "sent",
+            Self::Dropped => "dropped",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "queued" => Ok(Self::Queued),
+            "failed" => Ok(Self::Failed),
+            "sent" => Ok(Self::Sent),
+            "dropped" => Ok(Self::Dropped),
+            other => Err(format!("unknown work item outbox state {other:?}")),
+        }
+    }
+}
+
+/// Why an outbox row was dropped (§8): the only ways a reply is given up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutboxDropReason {
+    /// The connector no longer receives the conversation (its route policy
+    /// stopped receiving it).
+    ConnectorGone,
+    /// The platform says the conversation no longer exists.
+    ConversationGone,
+    /// The platform says the agent may never post there.
+    Forbidden,
+    /// A person withdrew the reply before it was sent.
+    Withdrawn,
+}
+
+impl OutboxDropReason {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ConnectorGone => "connector_gone",
+            Self::ConversationGone => "conversation_gone",
+            Self::Forbidden => "forbidden",
+            Self::Withdrawn => "withdrawn",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "connector_gone" => Ok(Self::ConnectorGone),
+            "conversation_gone" => Ok(Self::ConversationGone),
+            "forbidden" => Ok(Self::Forbidden),
+            "withdrawn" => Ok(Self::Withdrawn),
+            other => Err(format!("unknown work item outbox drop reason {other:?}")),
+        }
+    }
+}
+
+/// A reply the item sends to a conversation, in order (§8). The body is
+/// shown here, as an input's is: the item read is tenant-scoped. Events
+/// and logs never carry it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutboxRow {
+    pub seq: i64,
+    /// With the item, the order key: rows of one conversation go out in
+    /// `seq` order. For IM, the conversation's `thr_src_` id.
+    pub conversation_key: String,
+    pub connector_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub conversation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round_seq: Option<i64>,
+    pub body: String,
+    pub state: OutboxState,
+    /// Failed attempts in a row.
+    pub attempts: i64,
+    /// When an unsent row is tried next (once every earlier row of its
+    /// conversation is sent or dropped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_attempt_at: Option<DateTime<Utc>>,
+    /// A stable code for the last failure; never the transport's own text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_reason: Option<OutboxDropReason>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub external_message_id: String,
+    pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dropped_at: Option<DateTime<Utc>>,
 }
 
 /// Why a mandate no longer holds (§5.4).

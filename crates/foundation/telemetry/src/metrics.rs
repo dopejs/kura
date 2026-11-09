@@ -49,6 +49,7 @@ pub const WORK_ITEM_ROUNDS_TOTAL: &str = "kura_work_item_rounds_total";
 pub const WORK_ITEMS_OPENED_TOTAL: &str = "kura_work_items_opened_total";
 pub const WORK_ITEM_INPUTS_TOTAL: &str = "kura_work_item_inputs_total";
 pub const WORK_ITEM_MANDATE_CHECKS_TOTAL: &str = "kura_work_item_mandate_checks_total";
+pub const WORK_ITEM_OUTBOX_TOTAL: &str = "kura_work_item_outbox_total";
 
 /// Help text per series, rendered as `# HELP`.
 const HELP: &[(&str, &str)] = &[
@@ -187,6 +188,10 @@ const HELP: &[(&str, &str)] = &[
     (
         WORK_ITEM_MANDATE_CHECKS_TOTAL,
         "Mandate revalidations before an ended work item resumes, by result (pass_fast|pass|revoked).",
+    ),
+    (
+        WORK_ITEM_OUTBOX_TOTAL,
+        "Work item outbox attempts and drops, by result (sent|retry|dropped). retry: a failed attempt that will be tried again.",
     ),
 ];
 
