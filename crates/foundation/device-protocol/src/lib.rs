@@ -8,8 +8,14 @@
 //! The cell asks for a control session, the user grants or denies it on the
 //! device, and while it lasts the cell sends one action at a time; each
 //! answer carries a fresh screenshot. Either side may end a session.
+//!
+//! [`keys`] is the chord syntax of `key` actions. It lives here so the cell,
+//! which asks a person before risky chords, reads a chord exactly as the
+//! device will press it.
 
 use serde::{Deserialize, Serialize};
+
+pub mod keys;
 
 /// Bumped on any change a peer on the previous version could misread. The
 /// cell refuses a `hello` with another version rather than guess.

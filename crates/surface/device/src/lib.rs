@@ -8,7 +8,7 @@
 
 pub mod agent;
 pub mod config;
-pub mod keys;
+pub use kura_device_protocol::keys;
 pub mod link;
 pub mod log;
 pub mod pair;
