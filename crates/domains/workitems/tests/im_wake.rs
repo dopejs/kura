@@ -241,7 +241,6 @@ impl ReplySender for Replies {
 
 struct Harness {
     store: Arc<SQLiteStore>,
-    chat: Arc<Service>,
     manager: Arc<Manager>,
     message_loop: MessageLoop,
     script: Arc<Script>,
@@ -306,7 +305,6 @@ fn harness_with(hook: bool) -> Harness {
     }
     Harness {
         store,
-        chat,
         manager,
         message_loop,
         script,
