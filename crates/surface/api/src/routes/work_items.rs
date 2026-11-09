@@ -17,6 +17,15 @@
 //!   a reply not yet sent (slice 3): it is dropped as `withdrawn` and the
 //!   replies after it go on. 409 once it is sent or dropped, or while it is
 //!   being sent; 404 for no such row.
+//! - `POST /v1/work-items/{itemId}/answer {text}` — a person answers the
+//!   item's question (slice 5): the question is cleared, the answer is the
+//!   next round's input, and the item is driven on. 409
+//!   (`work_item_not_asking`) when it asks nothing now: ended, already
+//!   answered, or waiting on an approval (resolved through
+//!   `/v1/policy/approvals/{id}/resolve`, not answered).
+//! - `GET /v1/work-items/attention` — the queue (slice 5): the tenant's open
+//!   items in a `person/*` stage, the longest waiting first, each with its
+//!   stage, title, and question or approval.
 //!
 //! Rounds run in `kura-workitems` (its driver), on the chat service the
 //! manager was built with.
@@ -48,7 +57,9 @@ const DEFAULT_LIST_LIMIT: usize = 50;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/work-items", get(list_items).post(create_item))
+        .route("/v1/work-items/attention", get(attention_queue))
         .route("/v1/work-items/{item_id}", get(get_item))
+        .route("/v1/work-items/{item_id}/answer", post(answer_item))
         .route("/v1/work-items/{item_id}/stop", post(stop_item))
         .route(
             "/v1/work-items/{item_id}/outbox/{seq}/withdraw",
@@ -110,7 +121,8 @@ fn api_error(err: WorkItemError) -> ApiError {
         | WorkItemError::RoundNotRunning(_)
         | WorkItemError::ConversationOwned(_)
         | WorkItemError::OutboxRowSettled { .. }
-        | WorkItemError::OutboxRowSending(_)) => ApiError::Conflict(err.to_string()),
+        | WorkItemError::OutboxRowSending(_)
+        | WorkItemError::NotAsking(_)) => ApiError::Conflict(err.to_string()),
         WorkItemError::Store(message) => ApiError::Internal(message),
     }
 }
@@ -229,6 +241,54 @@ async fn stop_item(
         .map_err(|err| ApiError::Internal(format!("work item stop task failed: {err}")))?
         .map_err(api_error)?;
     Ok(Json(item))
+}
+
+/// Body of `POST /v1/work-items/{itemId}/answer`
+/// (`work-item-answer.request.schema.json`).
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AnswerRequest {
+    text: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct AttentionQueueResponse {
+    items: Vec<kura_workitems::AttentionEntry>,
+}
+
+async fn answer_item(
+    State(state): State<AppState>,
+    tenant: ActingTenant,
+    correlation: Option<Extension<RequestContext>>,
+    Path(item_id): Path<String>,
+    body: Bytes,
+) -> Result<Json<WorkItem>, ApiError> {
+    let manager = manager(&state)?;
+    let tenant_id = tenant_id(&state, &tenant)?;
+    let request: AnswerRequest = super::decode_json_required(&body)?;
+    let source_ref = correlation
+        .map(|extension| extension.0.0.lock().request_id.clone())
+        .unwrap_or_default();
+    let item = tokio::task::spawn_blocking(move || {
+        manager.answer(&tenant_id, &item_id, &request.text, &source_ref)
+    })
+    .await
+    .map_err(|err| ApiError::Internal(format!("work item answer task failed: {err}")))?
+    .map_err(api_error)?;
+    Ok(Json(item))
+}
+
+async fn attention_queue(
+    State(state): State<AppState>,
+    tenant: ActingTenant,
+) -> Result<Json<AttentionQueueResponse>, ApiError> {
+    let manager = manager(&state)?;
+    let tenant_id = tenant_id(&state, &tenant)?;
+    let items = tokio::task::spawn_blocking(move || manager.attention_queue(&tenant_id))
+        .await
+        .map_err(|err| ApiError::Internal(format!("work item attention task failed: {err}")))?
+        .map_err(api_error)?;
+    Ok(Json(AttentionQueueResponse { items }))
 }
 
 async fn withdraw_reply(
@@ -412,6 +472,12 @@ mod tests {
             ("GET", "/v1/work-items/wi_1", None),
             ("POST", "/v1/work-items/wi_1/stop", None),
             ("POST", "/v1/work-items/wi_1/outbox/1/withdraw", None),
+            (
+                "POST",
+                "/v1/work-items/wi_1/answer",
+                Some(serde_json::json!({"text": "x"})),
+            ),
+            ("GET", "/v1/work-items/attention", None),
         ] {
             let (status, json) = send(&state, "ten_a", method, uri, body).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
@@ -627,5 +693,96 @@ mod tests {
         let missing = format!("/v1/work-items/{item_id}/outbox/9/withdraw");
         let (status, _) = send(&state, "ten_a", "POST", &missing, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// Slice 5: the queue lists an item asking a question; the owning
+    /// tenant answers it, which runs the next round with the answer.
+    #[tokio::test]
+    async fn a_question_is_queued_answered_once_and_the_next_round_reads_the_answer() {
+        let state = state(
+            r#"{"status":"waiting","summary":"Need a choice.","attention":{"question":"Pin or patch?","options":["pin","patch"]}}"#,
+            None,
+        );
+        let (_, item) = send(&state, "ten_a", "POST", "/v1/work-items", Some(open_body())).await;
+        let item_id = item["itemId"].as_str().unwrap().to_string();
+        settled(&state, "ten_a", &item_id).await;
+
+        let (status, queue) = send(&state, "ten_a", "GET", "/v1/work-items/attention", None).await;
+        assert_eq!(status, StatusCode::OK, "{queue}");
+        assert_eq!(queue["items"][0]["itemId"], item_id.as_str());
+        assert_eq!(queue["items"][0]["stage"], "person/answer");
+        assert_eq!(queue["items"][0]["title"], "Fix CI");
+        assert_eq!(queue["items"][0]["attention"]["kind"], "question");
+        assert_eq!(queue["items"][0]["attention"]["question"], "Pin or patch?");
+        let (_, theirs) = send(&state, "ten_b", "GET", "/v1/work-items/attention", None).await;
+        assert_eq!(theirs["items"], serde_json::json!([]));
+
+        let uri = format!("/v1/work-items/{item_id}/answer");
+        let pin = serde_json::json!({"text": "pin"});
+        let (status, _) = send(&state, "ten_b", "POST", &uri, Some(pin.clone())).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        for bad in [
+            serde_json::json!({}),
+            serde_json::json!({"text": " "}),
+            serde_json::json!({"text": "pin", "option": "pin"}),
+        ] {
+            let (status, json) = send(&state, "ten_a", "POST", &uri, Some(bad.clone())).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{bad} -> {json}");
+        }
+        let (status, answered) = send(&state, "ten_a", "POST", &uri, Some(pin.clone())).await;
+        assert_eq!(status, StatusCode::OK, "{answered}");
+        assert!(answered.get("attention").is_none(), "{answered}");
+
+        // The next round runs with the answer, and (this model asks again)
+        // raises the question again.
+        let mut read = serde_json::Value::Null;
+        for _ in 0..200 {
+            let (_, item) = send(
+                &state,
+                "ten_a",
+                "GET",
+                &format!("/v1/work-items/{item_id}"),
+                None,
+            )
+            .await;
+            read = item;
+            let rounds = read["rounds"].as_array().cloned().unwrap_or_default();
+            if rounds.len() == 2 && rounds[1]["state"] != "running" {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        let rounds = read["rounds"].as_array().expect("rounds");
+        assert_eq!(rounds.len(), 2, "{read}");
+        assert!(
+            rounds[1]["queryText"]
+                .as_str()
+                .unwrap()
+                .contains("kind=\"text\" from=\"requester\">\npin"),
+            "{read}"
+        );
+        let answer = read["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|input| input["kind"] == "text")
+            .expect("the answer is an input");
+        assert_eq!(answer["authorIsPerson"], true);
+        assert_eq!(answer["state"], "consumed");
+        assert_eq!(read["stage"], "person/answer");
+
+        // A stopped item asks nothing.
+        send(
+            &state,
+            "ten_a",
+            "POST",
+            &format!("/v1/work-items/{item_id}/stop"),
+            None,
+        )
+        .await;
+        let (status, json) = send(&state, "ten_a", "POST", &uri, Some(pin)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{json}");
+        let (_, queue) = send(&state, "ten_a", "GET", "/v1/work-items/attention", None).await;
+        assert_eq!(queue["items"], serde_json::json!([]));
     }
 }
