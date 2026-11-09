@@ -223,3 +223,78 @@ fn test_work_item_slice4_schemas_accept_canonical_fixtures() {
         "accepted an unknown reason"
     );
 }
+
+/// Slice 5: an item waiting on the approval its round's tool call gave up
+/// on, with the link and the approval input of an earlier, used approval;
+/// the attention queue; the answer request; and the attention and woken
+/// events for an approval.
+const APPROVAL_ITEM: &str = r##"{"itemId":"wi_0193a1b2c3d4e5f6a7b8c9d6","tenantId":"ten_a","title":"Deploy","state":"open","stage":"person/approval","threadId":"thr_wi_0193a1b2c3d4e5f6a7b8c9d6","seq":2,"mandate":{"basis":"api","strength":"explicit","policyHash":"","matchedRules":[],"sender":{"principalId":"prn_1"},"source":{"kind":"api"},"scopeText":"Deploy main to prod.","createdAt":"2026-11-09T10:00:00Z"},"lastReport":{"status":"waiting","summary":"Waiting for a person to approve the deploy.","attention":{"question":"Deploy now?"}},"attention":{"kind":"approval","question":"run advance with {\"target\":\"prod\"}","approvalId":"approval_0a1b2c3d4e5f6a7b"},"createdAt":"2026-11-09T10:00:00Z","updatedAt":"2026-11-09T10:05:00Z","inputs":[{"seq":1,"kind":"approval","authorIsPerson":false,"body":"A person approved the tool call you asked about.","sourceRef":"approval_ffff","state":"consumed","roundSeq":2,"createdAt":"2026-11-09T10:04:00Z"}],"approvals":[{"approvalId":"approval_ffff","roundSeq":1,"state":"used","question":"run advance with {\"target\":\"staging\"}","createdAt":"2026-11-09T10:01:00Z","resolvedAt":"2026-11-09T10:03:00Z","usedAt":"2026-11-09T10:04:30Z"},{"approvalId":"approval_0a1b2c3d4e5f6a7b","roundSeq":2,"state":"pending","question":"run advance with {\"target\":\"prod\"}","createdAt":"2026-11-09T10:05:00Z"}]}"##;
+
+#[test]
+fn test_work_item_slice5_schemas_accept_canonical_fixtures() {
+    let validator = Validator::new(schema_root_dir());
+    let queue = r##"{"items":[{"itemId":"wi_0193a1b2c3d4e5f6a7b8c9d6","title":"Deploy","stage":"person/approval","basis":"api","attention":{"kind":"approval","question":"run advance","approvalId":"approval_0a1b2c3d4e5f6a7b"},"summary":"Waiting for a person to approve the deploy.","updatedAt":"2026-11-09T10:05:00Z"},{"itemId":"wi_0193a1b2c3d4e5f6a7b8c9d7","title":"Fix CI","stage":"person/answer","basis":"im_mention","attention":{"kind":"question","question":"Pin or patch?","options":["pin","patch"]},"summary":"Two fixes.","updatedAt":"2026-11-09T10:06:00Z"},{"itemId":"wi_0193a1b2c3d4e5f6a7b8c9d8","title":"Mail","stage":"person/delivery","basis":"im_direct","updatedAt":"2026-11-09T10:07:00Z"}]}"##;
+    let fixtures: &[Fixture] = &[
+        (
+            r##"schemas/api/work-item-resource.schema.json"##,
+            APPROVAL_ITEM,
+        ),
+        (
+            r##"schemas/api/work-item-attention-list.response.schema.json"##,
+            queue,
+        ),
+        (
+            r##"schemas/api/work-item-answer.request.schema.json"##,
+            r##"{"text":"pin"}"##,
+        ),
+        (
+            r##"schemas/events/work-item-attention-raised.event.schema.json"##,
+            r##"{"eventId":"evt_14","sequence":14,"tenantId":"ten_a","category":"work_item","name":"work_item.attention_raised","occurredAt":"2026-11-09T10:05:00Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"api","roundSeq":2,"kind":"approval","optionCount":0,"approvalId":"approval_0a1b2c3d4e5f6a7b"}}"##,
+        ),
+        (
+            r##"schemas/events/work-item-attention-cleared.event.schema.json"##,
+            r##"{"eventId":"evt_15","sequence":15,"tenantId":"ten_a","category":"work_item","name":"work_item.attention_cleared","occurredAt":"2026-11-09T10:06:00Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"api","by":"approval","approvalId":"approval_0a1b2c3d4e5f6a7b"}}"##,
+        ),
+        (
+            r##"schemas/events/work-item-attention-cleared.event.schema.json"##,
+            r##"{"eventId":"evt_16","sequence":16,"tenantId":"ten_a","category":"work_item","name":"work_item.attention_cleared","occurredAt":"2026-11-09T10:06:00Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"api","by":"answer"}}"##,
+        ),
+        (
+            r##"schemas/events/work-item-woken.event.schema.json"##,
+            r##"{"eventId":"evt_17","sequence":17,"tenantId":"ten_a","category":"work_item","name":"work_item.woken","occurredAt":"2026-11-09T10:06:00Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"api","inputSeq":2,"kind":"approval","path":"queued","resumed":false,"approvalId":"approval_0a1b2c3d4e5f6a7b"}}"##,
+        ),
+    ];
+    validate_fixtures(&validator, fixtures);
+
+    for (schema, bad) in [
+        // The model's report cannot claim an approval: its question has no
+        // kind and no approval id.
+        (
+            "schemas/api/work-item-report.schema.json",
+            r##"{"status":"waiting","summary":"x","attention":{"question":"q","kind":"approval","approvalId":"approval_1"}}"##,
+        ),
+        (
+            "schemas/api/work-item-answer.request.schema.json",
+            r##"{"text":""}"##,
+        ),
+        (
+            "schemas/api/work-item-answer.request.schema.json",
+            r##"{"text":"pin","option":"pin"}"##,
+        ),
+        // A healthy item is never queued.
+        (
+            "schemas/api/work-item-attention-list.response.schema.json",
+            r##"{"items":[{"itemId":"wi_1","title":"t","stage":"idle","basis":"api","updatedAt":"2026-11-09T10:00:00Z"}]}"##,
+        ),
+        // Events never carry what was said.
+        (
+            "schemas/events/work-item-attention-cleared.event.schema.json",
+            r##"{"eventId":"evt_18","sequence":18,"tenantId":"ten_a","category":"work_item","name":"work_item.attention_cleared","occurredAt":"2026-11-09T10:06:00Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"api","by":"answer","text":"pin"}}"##,
+        ),
+    ] {
+        assert!(
+            validator.validate_relative(schema, bad.as_bytes()).is_err(),
+            "{schema} accepted {bad}"
+        );
+    }
+}

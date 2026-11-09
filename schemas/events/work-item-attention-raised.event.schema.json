@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kura.local/schemas/events/work-item-attention-raised.event.schema.json",
   "title": "WorkItemAttentionRaisedEvent",
-  "description": "A round's report asked a person a question. The question itself is not carried. Carries no message bodies (work-items.md \u00a710).",
+  "description": "A round left its item waiting on a person (work-items.md \u00a77): its report asked a question (kind question), or one of its tool calls gave up waiting on an approval that is still pending (kind approval, with the approval's id). The question itself is not carried. Carries no message bodies (work-items.md \u00a710).",
   "type": "object",
   "allOf": [
     {
@@ -68,6 +68,17 @@
             "optionCount": {
               "type": "integer",
               "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "question",
+                "approval"
+              ]
+            },
+            "approvalId": {
+              "type": "string",
+              "minLength": 1
             }
           }
         }

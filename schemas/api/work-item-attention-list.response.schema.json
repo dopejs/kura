@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/work-item-attention-list.response.schema.json",
+  "title": "WorkItemAttentionListResponse",
+  "description": "GET /v1/work-items/attention: the caller's tenant's open work items in a person/* stage (work-items.md §7), the least recently updated (the longest waiting) first. A healthy item is not listed. Pending approvals no item waits on stay in /v1/policy/approvals only.",
+  "type": "object",
+  "required": ["items"],
+  "additionalProperties": false,
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["itemId", "title", "stage", "basis", "updatedAt"],
+      "properties": {
+        "itemId": { "type": "string", "pattern": "^wi_[0-9a-f]+$" },
+        "title": { "type": "string" },
+        "stage": {
+          "type": "string",
+          "enum": ["person/delivery", "person/approval", "person/answer", "person/blocked", "person/failed"]
+        },
+        "basis": { "type": "string", "enum": ["api", "im_mention", "im_direct", "rule"] },
+        "attention": {
+          "$ref": "./work-item-resource.schema.json#/$defs/attention",
+          "description": "The question (person/answer) or the approval (person/approval)."
+        },
+        "summary": { "type": "string", "description": "The last report's summary; absent for person/delivery." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "When the item last changed: roughly how long it has waited." }
+      }
+    }
+  }
+}

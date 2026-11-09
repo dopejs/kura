@@ -149,6 +149,37 @@ describe("tool provider SDK methods (Stage 9.1b)", () => {
     expect(got.outbox?.[0].dropReason).toBe("withdrawn");
   });
 
+  it("lists the attention queue and answers a question (work items slice 5)", async () => {
+    const queue = {
+      items: [
+        { itemId: "wi_1", title: "Deploy", stage: "person/approval", basis: "api", attention: { kind: "approval", question: "run advance", approvalId: "approval_1" }, updatedAt: "t" },
+        { itemId: "wi_2", title: "Fix CI", stage: "person/answer", basis: "im_mention", attention: { kind: "question", question: "Pin or patch?", options: ["pin", "patch"] }, updatedAt: "t" },
+      ],
+    };
+    const answered = {
+      itemId: "wi_2",
+      tenantId: "ten_a",
+      title: "Fix CI",
+      state: "open",
+      stage: "queued",
+      threadId: "thr_wi_2",
+      seq: 1,
+      mandate: { basis: "api", strength: "explicit", policyHash: "", matchedRules: [], sender: {}, source: { kind: "api" }, scopeText: "s", createdAt: "t" },
+      createdAt: "t",
+      updatedAt: "t",
+    };
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(queue)).mockResolvedValueOnce(jsonResponse(answered));
+    const client = createKuraClient({ baseURL: "https://daemon.test", fetchImpl });
+    const listed = await client.listWorkItemAttention();
+    expect(String(fetchImpl.mock.calls[0][0])).toContain("/v1/work-items/attention");
+    expect(listed.items[0].attention?.approvalId).toBe("approval_1");
+    const got = await client.answerWorkItem("wi_2", "pin");
+    expect(String(fetchImpl.mock.calls[1][0])).toContain("/v1/work-items/wi_2/answer");
+    expect(fetchImpl.mock.calls[1][1].method).toBe("POST");
+    expect(JSON.parse(String(fetchImpl.mock.calls[1][1].body))).toEqual({ text: "pin" });
+    expect(got.stage).toBe("queued");
+  });
+
   it("searches skills and records feedback (Stage 3)", async () => {
     const usage = { skillId: "deploy-check", invocations: 2, helpful: 1, corrected: 0 };
     const fetchImpl = vi.fn()
