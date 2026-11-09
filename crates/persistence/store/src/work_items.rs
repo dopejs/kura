@@ -269,6 +269,70 @@ impl SQLiteStore {
         Ok(items)
     }
 
+    /// The tenant's open items, the least recently updated first: the
+    /// attention queue (slice 5) reads them oldest first.
+    pub fn list_open_work_items_oldest_first(
+        &self,
+        tenant_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(WorkItemRecord, WorkItemActivity)>, String> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut stmt = self
+            .conn
+            .prepare(&format!(
+                "SELECT {ITEM_COLUMNS} FROM work_items i \
+                 WHERE i.tenant_id = ?1 AND i.state = 'open' \
+                 ORDER BY i.updated_at ASC, i.item_id ASC LIMIT ?2"
+            ))
+            .map_err(|e| format!("prepare list open work items: {e}"))?;
+        let rows = stmt
+            .query_map(params![tenant_id, limit], item_from_row)
+            .map_err(|e| format!("list open work items: {e}"))?;
+        collect(rows, "work item")
+    }
+
+    /// A person answers the item's question (slice 5): when the item is
+    /// open and its attention is exactly `attention_json`, the attention is
+    /// cleared and `answer` recorded as its next input, pending, in one
+    /// transaction (`answer.seq`, `state` and `round_seq` are ignored).
+    /// `None` when the item moved on (ended, or its attention changed);
+    /// then nothing was written.
+    pub fn answer_work_item(
+        &self,
+        tenant_id: &str,
+        item_id: &str,
+        attention_json: &str,
+        answer: &WorkItemInputRecord,
+    ) -> Result<Option<i64>, String> {
+        if answer.tenant_id != tenant_id || answer.item_id != item_id {
+            return Err(format!("the answer for {item_id} names another item"));
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("begin answer work item: {e}"))?;
+        let changed = tx
+            .execute(
+                "UPDATE work_items SET attention_json = NULL, updated_at = ?4 \
+                 WHERE tenant_id = ?1 AND item_id = ?2 AND state = 'open' \
+                   AND attention_json = ?3",
+                params![
+                    tenant_id,
+                    item_id,
+                    attention_json,
+                    now_rfc3339(&answer.created_at)
+                ],
+            )
+            .map_err(|e| format!("answer work item {item_id}: {e}"))?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        let seq = crate::work_item_approvals::append_input(&tx, answer, "pending", None)?;
+        tx.commit()
+            .map_err(|e| format!("commit answer work item {item_id}: {e}"))?;
+        Ok(Some(seq))
+    }
+
     /// Open items the tenant holds, for the per-tenant cap.
     pub fn count_open_work_items(&self, tenant_id: &str) -> Result<i64, String> {
         self.conn
@@ -2172,7 +2236,10 @@ mod tests {
             );
         }
         let store = SQLiteStore::new(&dir).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 12);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            crate::CURRENT_SCHEMA_VERSION
+        );
         let (_, activity) = store.get_work_item("ten_a", "wi_1").unwrap().unwrap();
         assert!(!activity.outbox_problem);
         assert_eq!(

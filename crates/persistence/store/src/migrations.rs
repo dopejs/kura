@@ -3414,5 +3414,45 @@ pub fn schema_migrations() -> Vec<SchemaMigration> {
                 .to_string(),
         ],
     },
+    SchemaMigration {
+        version: 13,
+        name: "work_item_approvals".to_string(),
+        statements: vec![
+            // The approvals a work item waits on (docs/harness/work-items.md
+            // §7, slice 5). A round's tool call that gave up waiting for a
+            // person leaves its approval pending; this row remembers that
+            // the item waits on it and which call it is for
+            // (`call_fingerprint`: a hash of the action, resource and
+            // arguments), so the round after it is resolved runs that very
+            // call under it once. `pending` until the approval is resolved
+            // (`approved` | `rejected`) or found gone (`gone`); `used` once a
+            // call ran under it. The approval itself stays in the policy
+            // engine and its own tables: the engine is the only place a
+            // person grants a call.
+            r#"CREATE TABLE IF NOT EXISTS work_item_approvals (
+                approval_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                round_seq INTEGER NOT NULL,
+                call_fingerprint TEXT NOT NULL,
+                question TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                resolved_at TEXT,
+                used_at TEXT,
+                FOREIGN KEY (item_id) REFERENCES work_items(item_id) ON DELETE CASCADE
+            );"#
+            .to_string(),
+            // A round's lookups: the item's approvals by state.
+            r#"CREATE INDEX IF NOT EXISTS idx_work_item_approvals_item
+                ON work_item_approvals(item_id, state);"#
+                .to_string(),
+            // The resolution sweep: every tenant's pending approvals.
+            r#"CREATE INDEX IF NOT EXISTS idx_work_item_approvals_state
+                ON work_item_approvals(state);"#
+                .to_string(),
+        ],
+    },
 ]
 }
