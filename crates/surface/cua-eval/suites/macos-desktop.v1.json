@@ -1,0 +1,167 @@
+{
+  "format": 1,
+  "suite": "macos-desktop",
+  "version": 1,
+  "platform": "macos",
+  "preamble": "Use my Mac for this. Do only what I asked: do not quit apps, close windows, or open anything else. When you are done, hand control back.",
+  "defaults": { "stepBudget": 25, "timeLimitS": 300 },
+  "verdict": {
+    "minRunsPerTask": 3,
+    "goodSuccessRate": 0.8,
+    "goodMaxStepRatio": 2.0,
+    "nativeSuccessRate": 0.6,
+    "nativeStepRatio": 3.0
+  },
+  "tasks": [
+    {
+      "id": "open-calculator",
+      "category": "open-app",
+      "instruction": "Open the Calculator app.",
+      "referenceSteps": 3,
+      "stepBudget": 12,
+      "timeLimitS": 180,
+      "requires": { "appsNotRunning": ["Calculator"] },
+      "setup": [{ "open": { "path": "." } }, { "wait": { "ms": 1500 } }],
+      "check": [{ "frontmostApp": "Calculator" }],
+      "teardown": [{ "quitApp": "Calculator" }, "closeFinderWindows"]
+    },
+    {
+      "id": "open-dictionary",
+      "category": "open-app",
+      "instruction": "Open the Dictionary app.",
+      "referenceSteps": 3,
+      "stepBudget": 12,
+      "timeLimitS": 180,
+      "requires": { "appsNotRunning": ["Dictionary"] },
+      "setup": [{ "open": { "path": "." } }, { "wait": { "ms": 1500 } }],
+      "check": [{ "frontmostApp": "Dictionary" }],
+      "teardown": [{ "quitApp": "Dictionary" }, "closeFinderWindows"]
+    },
+    {
+      "id": "textedit-type-save",
+      "category": "edit",
+      "instruction": "TextEdit has the empty file note.txt open. Type this sentence into it, without the quotes: \"The meeting moves to room 42\". Then save the file.",
+      "referenceSteps": 2,
+      "stepBudget": 10,
+      "setup": [
+        { "write": { "path": "note.txt", "content": "" } },
+        { "open": { "path": "note.txt", "app": "TextEdit" } },
+        { "wait": { "ms": 2000 } }
+      ],
+      "check": [{ "fileEquals": { "path": "note.txt", "text": "The meeting moves to room 42" } }],
+      "teardown": [{ "closeDocuments": "TextEdit" }]
+    },
+    {
+      "id": "textedit-fill-form",
+      "category": "form",
+      "instruction": "TextEdit has the file form.txt open. It is a form with three fields, one per line. Fill it in: after \"Name:\" write Ada Lovelace, after \"City:\" write London, after \"Phone:\" write 5550142. Keep each value on its field's line, then save the file.",
+      "referenceSteps": 7,
+      "stepBudget": 20,
+      "setup": [
+        { "write": { "path": "form.txt", "content": "Name:\nCity:\nPhone:\n" } },
+        { "open": { "path": "form.txt", "app": "TextEdit" } },
+        { "wait": { "ms": 2000 } }
+      ],
+      "check": [
+        {
+          "formFields": {
+            "path": "form.txt",
+            "fields": { "Name": "Ada Lovelace", "City": "London", "Phone": "5550142" }
+          }
+        }
+      ],
+      "teardown": [{ "closeDocuments": "TextEdit" }]
+    },
+    {
+      "id": "textedit-replace-word",
+      "category": "edit",
+      "instruction": "TextEdit has the file fox.txt open. Replace the word brown with red, leaving the rest of the sentence as it is, then save the file.",
+      "referenceSteps": 3,
+      "stepBudget": 12,
+      "setup": [
+        { "write": { "path": "fox.txt", "content": "The quick brown fox jumps over the lazy dog" } },
+        { "open": { "path": "fox.txt", "app": "TextEdit" } },
+        { "wait": { "ms": 2000 } }
+      ],
+      "check": [
+        { "fileEquals": { "path": "fox.txt", "text": "The quick red fox jumps over the lazy dog" } }
+      ],
+      "teardown": [{ "closeDocuments": "TextEdit" }]
+    },
+    {
+      "id": "textedit-scroll-find",
+      "category": "scroll-read",
+      "instruction": "TextEdit has the file log.txt open. It is long; somewhere far down is a line that starts with CODE:. Add a new line at the very end of the file that contains only the number written after CODE:, then save the file.",
+      "referenceSteps": 4,
+      "stepBudget": 20,
+      "setup": [
+        {
+          "write": {
+            "path": "log.txt",
+            "content": "Entry 001 nothing to see here\nEntry 002 nothing to see here\nEntry 003 nothing to see here\nEntry 004 nothing to see here\nEntry 005 nothing to see here\nEntry 006 nothing to see here\nEntry 007 nothing to see here\nEntry 008 nothing to see here\nEntry 009 nothing to see here\nEntry 010 nothing to see here\nEntry 011 nothing to see here\nEntry 012 nothing to see here\nEntry 013 nothing to see here\nEntry 014 nothing to see here\nEntry 015 nothing to see here\nEntry 016 nothing to see here\nEntry 017 nothing to see here\nEntry 018 nothing to see here\nEntry 019 nothing to see here\nEntry 020 nothing to see here\nEntry 021 nothing to see here\nEntry 022 nothing to see here\nEntry 023 nothing to see here\nEntry 024 nothing to see here\nEntry 025 nothing to see here\nEntry 026 nothing to see here\nEntry 027 nothing to see here\nEntry 028 nothing to see here\nEntry 029 nothing to see here\nEntry 030 nothing to see here\nEntry 031 nothing to see here\nEntry 032 nothing to see here\nEntry 033 nothing to see here\nEntry 034 nothing to see here\nEntry 035 nothing to see here\nEntry 036 nothing to see here\nEntry 037 nothing to see here\nEntry 038 nothing to see here\nEntry 039 nothing to see here\nEntry 040 nothing to see here\nEntry 041 nothing to see here\nEntry 042 nothing to see here\nEntry 043 nothing to see here\nEntry 044 nothing to see here\nEntry 045 nothing to see here\nEntry 046 nothing to see here\nEntry 047 nothing to see here\nEntry 048 nothing to see here\nEntry 049 nothing to see here\nEntry 050 nothing to see here\nEntry 051 nothing to see here\nEntry 052 nothing to see here\nEntry 053 nothing to see here\nEntry 054 nothing to see here\nEntry 055 nothing to see here\nEntry 056 nothing to see here\nEntry 057 nothing to see here\nEntry 058 nothing to see here\nEntry 059 nothing to see here\nEntry 060 nothing to see here\nEntry 061 nothing to see here\nEntry 062 nothing to see here\nEntry 063 nothing to see here\nEntry 064 nothing to see here\nEntry 065 nothing to see here\nEntry 066 nothing to see here\nEntry 067 nothing to see here\nEntry 068 nothing to see here\nEntry 069 nothing to see here\nEntry 070 nothing to see here\nEntry 071 nothing to see here\nEntry 072 nothing to see here\nEntry 073 nothing to see here\nEntry 074 nothing to see here\nEntry 075 nothing to see here\nEntry 076 nothing to see here\nEntry 077 nothing to see here\nEntry 078 nothing to see here\nEntry 079 nothing to see here\nEntry 080 nothing to see here\nEntry 081 nothing to see here\nEntry 082 nothing to see here\nEntry 083 nothing to see here\nEntry 084 nothing to see here\nEntry 085 nothing to see here\nEntry 086 nothing to see here\nCODE: 4817\nEntry 088 nothing to see here\nEntry 089 nothing to see here\nEntry 090 nothing to see here\nEntry 091 nothing to see here\nEntry 092 nothing to see here\nEntry 093 nothing to see here\nEntry 094 nothing to see here\nEntry 095 nothing to see here\nEntry 096 nothing to see here\nEntry 097 nothing to see here\nEntry 098 nothing to see here\nEntry 099 nothing to see here\nEntry 100 nothing to see here\nEntry 101 nothing to see here\nEntry 102 nothing to see here\nEntry 103 nothing to see here\nEntry 104 nothing to see here\nEntry 105 nothing to see here\nEntry 106 nothing to see here\nEntry 107 nothing to see here\nEntry 108 nothing to see here\nEntry 109 nothing to see here\nEntry 110 nothing to see here\nEntry 111 nothing to see here\nEntry 112 nothing to see here\nEntry 113 nothing to see here\nEntry 114 nothing to see here\nEntry 115 nothing to see here\nEntry 116 nothing to see here\nEntry 117 nothing to see here\nEntry 118 nothing to see here\nEntry 119 nothing to see here\nEntry 120 nothing to see here\n"
+          }
+        },
+        { "open": { "path": "log.txt", "app": "TextEdit" } },
+        { "wait": { "ms": 2000 } }
+      ],
+      "check": [{ "fileLastLine": { "path": "log.txt", "text": "4817" } }],
+      "teardown": [{ "closeDocuments": "TextEdit" }]
+    },
+    {
+      "id": "finder-new-folder",
+      "category": "navigate",
+      "instruction": "A Finder window shows the folder {workName}. Create a new folder named Reports inside it.",
+      "referenceSteps": 3,
+      "stepBudget": 12,
+      "setup": [
+        { "write": { "path": "readme.txt", "content": "Make a folder next to me." } },
+        { "open": { "path": "." } },
+        { "wait": { "ms": 1500 } }
+      ],
+      "check": [{ "exists": { "path": "Reports", "kind": "dir" } }],
+      "teardown": ["closeFinderWindows"]
+    },
+    {
+      "id": "finder-find-rename",
+      "category": "find-file",
+      "instruction": "A Finder window shows the folder {workName}. Somewhere in its subfolders is a file named budget-draft.txt. Find it and rename it to budget-final.txt, in the folder where it is. Do not change any other file.",
+      "referenceSteps": 7,
+      "stepBudget": 25,
+      "setup": [
+        { "write": { "path": "archive/2023/q1/notes.txt", "content": "old notes" } },
+        { "write": { "path": "archive/2023/q4/budget.txt", "content": "Total: 80" } },
+        { "write": { "path": "archive/2024/q2/budget-old.txt", "content": "Total: 90" } },
+        { "write": { "path": "archive/2024/q3/budget-draft.txt", "content": "Total: 100" } },
+        { "write": { "path": "archive/2024/q3/minutes.txt", "content": "minutes" } },
+        { "open": { "path": "." } },
+        { "wait": { "ms": 1500 } }
+      ],
+      "check": [
+        { "exists": { "path": "archive/2024/q3/budget-final.txt", "kind": "file" } },
+        { "absent": "archive/2024/q3/budget-draft.txt" },
+        { "fileEquals": { "path": "archive/2024/q3/budget-final.txt", "text": "Total: 100" } },
+        { "exists": { "path": "archive/2024/q2/budget-old.txt", "kind": "file" } },
+        { "exists": { "path": "archive/2023/q4/budget.txt", "kind": "file" } }
+      ],
+      "teardown": ["closeFinderWindows"]
+    },
+    {
+      "id": "finder-drag-move",
+      "category": "drag",
+      "instruction": "A Finder window shows the folder {workName}. Move the file report.txt into the folder named Done by dragging it there.",
+      "referenceSteps": 1,
+      "stepBudget": 10,
+      "setup": [
+        { "write": { "path": "report.txt", "content": "quarterly report" } },
+        { "mkdir": "Done" },
+        { "open": { "path": "." } },
+        { "wait": { "ms": 1500 } }
+      ],
+      "check": [
+        { "exists": { "path": "Done/report.txt", "kind": "file" } },
+        { "absent": "report.txt" }
+      ],
+      "teardown": ["closeFinderWindows"]
+    }
+  ]
+}

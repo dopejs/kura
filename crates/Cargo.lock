@@ -1691,6 +1691,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "kura-cua-eval"
+version = "0.3.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "clap",
+ "image",
+ "kura-app",
+ "kura-config",
+ "kura-device",
+ "kura-device-protocol",
+ "parking_lot",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "kura-delivery"
 version = "0.3.0"
 dependencies = [

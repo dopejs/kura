@@ -483,9 +483,15 @@ impl Observed {
         payload.insert("output".into(), Value::String(output.to_string()));
         payload.insert("isError".into(), Value::Bool(is_error));
         payload.insert("durationMs".into(), Value::from(duration_ms));
+        // The environment scope and the turn's tenant make the record
+        // readable where the API looks for it (`GET /v1/events` filters on
+        // both). Without them the store bound it to the default tenant with
+        // an empty scope, so no client ever saw it.
         let event = kura_events::Event {
             event_id: kura_chat::new_event_id(),
             occurred_at: chrono::Utc::now(),
+            environment_scope: crate::environment_scope(self.state.config.environment).to_string(),
+            tenant_id: self.turn.tenant_id.trim().to_string(),
             category: "chat".to_string(),
             name: "chat.tool.called".to_string(),
             scope: self.turn.scope.clone(),
