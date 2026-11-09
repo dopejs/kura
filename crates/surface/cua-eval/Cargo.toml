@@ -1,0 +1,33 @@
+[package]
+license.workspace = true
+name = "kura-cua-eval"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+description = "Runs a fixed suite of desktop tasks through a Kura daemon and a paired kura-device, and measures success and steps (docs/harness/remote-computer-use.md §12 slice 5)."
+
+[[bin]]
+name = "kura-cua-eval"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+clap = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tempfile = "3"
+axum = { workspace = true }
+parking_lot = { workspace = true }
+# The self-test runs the real daemon assembly in process and the real
+# device agent and link over a WebSocket, with a fake computer behind it.
+kura-app = { workspace = true }
+kura-config = { workspace = true }
+kura-device = { path = "../device" }
+kura-device-protocol = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

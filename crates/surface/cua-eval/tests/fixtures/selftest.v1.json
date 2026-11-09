@@ -1,0 +1,83 @@
+{
+  "format": 1,
+  "suite": "selftest",
+  "version": 1,
+  "platform": "fake",
+  "preamble": "Use my computer for this.",
+  "defaults": { "stepBudget": 8, "timeLimitS": 60 },
+  "verdict": {
+    "minRunsPerTask": 1,
+    "goodSuccessRate": 0.8,
+    "goodMaxStepRatio": 2.0,
+    "nativeSuccessRate": 0.6,
+    "nativeStepRatio": 3.0
+  },
+  "tasks": [
+    {
+      "id": "pass-save",
+      "category": "edit",
+      "instruction": "selftest:pass-save Type hello world into note.txt in {workName} and save it.",
+      "referenceSteps": 2,
+      "stepBudget": 5,
+      "setup": [
+        { "write": { "path": "note.txt", "content": "" } },
+        { "open": { "path": "note.txt", "app": "Editor" } }
+      ],
+      "check": [{ "fileEquals": { "path": "note.txt", "text": "hello world" } }],
+      "teardown": [{ "closeDocuments": "Editor" }]
+    },
+    {
+      "id": "claims-but-fails",
+      "category": "edit",
+      "instruction": "selftest:claims-but-fails Type hello world into note.txt and save it.",
+      "referenceSteps": 2,
+      "stepBudget": 5,
+      "setup": [
+        { "write": { "path": "note.txt", "content": "" } },
+        { "open": { "path": "note.txt", "app": "Editor" } }
+      ],
+      "check": [{ "fileEquals": { "path": "note.txt", "text": "hello world" } }],
+      "teardown": [{ "closeDocuments": "Editor" }]
+    },
+    {
+      "id": "runaway",
+      "category": "edit",
+      "instruction": "selftest:runaway The file is already right; the model wanders anyway.",
+      "referenceSteps": 1,
+      "stepBudget": 3,
+      "setup": [{ "write": { "path": "note.txt", "content": "hello world" } }],
+      "check": [{ "fileEquals": { "path": "note.txt", "text": "hello world" } }]
+    },
+    {
+      "id": "risky-and-errors",
+      "category": "edit",
+      "instruction": "selftest:risky-and-errors Type hello world into note.txt and save it.",
+      "referenceSteps": 2,
+      "setup": [
+        { "write": { "path": "note.txt", "content": "" } },
+        { "open": { "path": "note.txt", "app": "Editor" } }
+      ],
+      "check": [
+        { "fileEquals": { "path": "note.txt", "text": "hello world" } },
+        { "frontmostApp": "Editor" }
+      ],
+      "teardown": [{ "closeDocuments": "Editor" }]
+    },
+    {
+      "id": "denied",
+      "category": "open-app",
+      "instruction": "selftest:denied The person at the computer says no.",
+      "referenceSteps": 1,
+      "check": [{ "frontmostApp": "Calculator" }]
+    },
+    {
+      "id": "already-open",
+      "category": "open-app",
+      "instruction": "selftest:already-open Open Busy.",
+      "referenceSteps": 1,
+      "requires": { "appsNotRunning": ["Busy"] },
+      "check": [{ "frontmostApp": "Busy" }],
+      "teardown": [{ "quitApp": "Busy" }]
+    }
+  ]
+}
