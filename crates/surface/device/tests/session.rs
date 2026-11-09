@@ -3,7 +3,7 @@
 //! side writes, the other must read.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -13,7 +13,7 @@ use kura_device::agent::{Activity, Agent, Clock, Policy};
 use kura_device::keys::{Key, Modifiers};
 use kura_device::link::{self, Ended, LinkConfig};
 use kura_device::platform::{
-    Answer, Consent, Display, Input, MouseButton, Platform, PlatformError, Window,
+    Answer, Consent, Display, Input, MouseButton, Performed, Platform, PlatformError, Stop, Window,
 };
 use kura_device::shot::Rect;
 use kura_device_protocol::{Action, ActionResult, Button, DeviceFrame, Point};
@@ -24,12 +24,19 @@ use tokio::sync::mpsc;
 
 const T0: u64 = 1_800_000_000_000;
 
+type StepHook = Arc<dyn Fn(usize) + Send + Sync>;
+
 #[derive(Default)]
 struct Fake {
     windows: Mutex<Vec<Window>>,
     frontmost: Mutex<Option<String>>,
     secure: Mutex<bool>,
     performed: Mutex<Vec<Input>>,
+    /// Characters a `type` posted, one step each, so a test can stop it
+    /// part way.
+    typed: Mutex<String>,
+    /// Called before each typed character with its index.
+    on_step: Mutex<Option<StepHook>>,
 }
 
 impl Platform for Fake {
@@ -66,20 +73,46 @@ impl Platform for Fake {
         *self.secure.lock()
     }
 
-    fn perform(&self, input: &Input) -> Result<(), PlatformError> {
+    fn perform(&self, input: &Input, stop: Stop<'_>) -> Result<Performed, PlatformError> {
         self.performed.lock().push(input.clone());
-        Ok(())
+        if let Input::Type { text } = input {
+            let on_step = self.on_step.lock().clone();
+            for (index, c) in text.chars().enumerate() {
+                if let Some(on_step) = &on_step {
+                    on_step(index);
+                }
+                if stop() {
+                    return Ok(Performed::Stopped);
+                }
+                self.typed.lock().push(c);
+            }
+        }
+        Ok(Performed::Done)
     }
 }
 
 struct Person {
     answer: Mutex<Answer>,
     asked: AtomicU64,
+    /// Never answers: the prompt stays up until it is withdrawn.
+    away: AtomicBool,
+    withdrawn: AtomicU64,
 }
 
 impl Consent for Person {
-    fn ask(&self, _reason: &str, _ttl_s: u64, _timeout: Duration) -> Answer {
+    fn ask(&self, _reason: &str, _ttl_s: u64, _timeout: Duration, cancel: Stop<'_>) -> Answer {
         self.asked.fetch_add(1, Ordering::Relaxed);
+        if self.away.load(Ordering::Relaxed) {
+            let give_up = std::time::Instant::now() + Duration::from_secs(5);
+            while std::time::Instant::now() < give_up {
+                if cancel() {
+                    self.withdrawn.fetch_add(1, Ordering::Relaxed);
+                    return Answer::Deny;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            return Answer::Timeout;
+        }
         *self.answer.lock()
     }
 }
@@ -97,6 +130,8 @@ fn rig() -> Rig {
     let person = Arc::new(Person {
         answer: Mutex::new(Answer::Allow),
         asked: AtomicU64::new(0),
+        away: AtomicBool::new(false),
+        withdrawn: AtomicU64::new(0),
     });
     let activity = Arc::new(Activity::default());
     let now = Arc::new(AtomicU64::new(T0));
@@ -404,6 +439,151 @@ async fn secure_input_blocks_typing_but_not_keys_and_bad_actions_are_invalid() {
 
 /// The device's [`link::session`] against the cell's `serve` and `Hub`,
 /// joined by in-memory channels.
+fn typing(text: &str) -> Action {
+    Action::Type { text: text.into() }
+}
+
+#[tokio::test]
+async fn the_kill_switch_stops_an_action_part_way() {
+    let rig = rig();
+    let session = granted(&rig).await;
+    let agent = Arc::downgrade(&rig.agent);
+    let killed = Arc::new(Mutex::new(None));
+    *rig.fake.on_step.lock() = Some({
+        let killed = killed.clone();
+        Arc::new(move |index| {
+            if index == 3 {
+                *killed.lock() = agent.upgrade().and_then(|agent| agent.kill());
+            }
+        })
+    });
+    let frames = rig
+        .agent
+        .act("a1".into(), session.clone(), typing("abcdefgh"))
+        .await;
+    assert_eq!(result(&frames).error.as_deref(), Some("user_stopped"));
+    assert_eq!(
+        *rig.fake.typed.lock(),
+        "abc",
+        "nothing after the kill switch"
+    );
+    assert_eq!(
+        *killed.lock(),
+        Some(DeviceFrame::SessionEnd {
+            session,
+            reason: "user_stopped".into()
+        })
+    );
+}
+
+#[tokio::test]
+async fn taking_over_stops_an_action_part_way_and_ends_the_session() {
+    let rig = rig();
+    let session = granted(&rig).await;
+    rig.now.store(T0 + 10_000, Ordering::Relaxed);
+    *rig.fake.on_step.lock() = Some({
+        let activity = rig.activity.clone();
+        Arc::new(move |index| {
+            if index == 2 {
+                activity.touched(T0 + 10_000);
+            }
+        })
+    });
+    let frames = rig
+        .agent
+        .act("a1".into(), session.clone(), typing("hello"))
+        .await;
+    assert_eq!(result(&frames).error.as_deref(), Some("user_active"));
+    assert_eq!(
+        frames.first(),
+        Some(&DeviceFrame::SessionEnd {
+            session: session.clone(),
+            reason: "user_active".into()
+        }),
+        "the end is announced before the result"
+    );
+    assert_eq!(*rig.fake.typed.lock(), "he");
+    let frames = rig.agent.act("a2".into(), session, click(1, 1)).await;
+    assert_eq!(result(&frames).error.as_deref(), Some("no_session"));
+}
+
+#[tokio::test]
+async fn a_wait_ends_as_soon_as_the_person_takes_over() {
+    let rig = rig();
+    let session = granted(&rig).await;
+    rig.now.store(T0 + 10_000, Ordering::Relaxed);
+    let activity = rig.activity.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        activity.touched(T0 + 10_000);
+    });
+    let started = std::time::Instant::now();
+    let frames = rig
+        .agent
+        .act("a1".into(), session, Action::Wait { ms: 5000 })
+        .await;
+    assert_eq!(result(&frames).error.as_deref(), Some("user_active"));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn a_prompt_nobody_can_answer_is_withdrawn() {
+    let rig = rig();
+    rig.agent.hello().await.unwrap();
+    rig.person.away.store(true, Ordering::Relaxed);
+
+    // The connection drops while the prompt is up.
+    let asking = {
+        let agent = rig.agent.clone();
+        tokio::spawn(async move { agent.request("ses_1".into(), "r".into(), 600).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    rig.agent.disconnected();
+    let frame = asking.await.unwrap();
+    assert!(
+        matches!(&frame, DeviceFrame::SessionDenied { reason, .. } if reason == "cancelled"),
+        "{frame:?}"
+    );
+    assert_eq!(rig.person.withdrawn.load(Ordering::Relaxed), 1);
+
+    // A newer request replaces the open one.
+    let first = {
+        let agent = rig.agent.clone();
+        tokio::spawn(async move { agent.request("ses_2".into(), "r".into(), 600).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    rig.person.away.store(false, Ordering::Relaxed);
+    let second = rig.agent.request("ses_3".into(), "r".into(), 600).await;
+    assert!(
+        matches!(second, DeviceFrame::SessionGranted { .. }),
+        "{second:?}"
+    );
+    let first = first.await.unwrap();
+    assert!(
+        matches!(&first, DeviceFrame::SessionDenied { reason, .. } if reason == "cancelled"),
+        "{first:?}"
+    );
+
+    // The kill switch takes the prompt down and says why.
+    rig.person.away.store(true, Ordering::Relaxed);
+    let asking = {
+        let agent = rig.agent.clone();
+        tokio::spawn(async move { agent.request("ses_4".into(), "r".into(), 600).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    rig.agent.kill();
+    let frame = asking.await.unwrap();
+    assert!(
+        matches!(&frame, DeviceFrame::SessionDenied { reason, .. } if reason == "kill_switch"),
+        "{frame:?}"
+    );
+    assert_eq!(rig.person.withdrawn.load(Ordering::Relaxed), 3);
+}
+
 #[tokio::test]
 async fn the_device_speaks_the_cells_protocol() {
     let rig = rig();

@@ -92,7 +92,24 @@ pub trait Platform: Send + Sync + 'static {
     /// Whether a password field (or anything else) has turned on secure
     /// keyboard entry.
     fn secure_input(&self) -> bool;
-    fn perform(&self, input: &Input) -> Result<(), PlatformError>;
+    /// Posts `input`, asking `stop` between its steps (each typed chunk,
+    /// each click, each step of a drag). When `stop` says yes the rest is
+    /// not posted, a held button is released, and the answer is
+    /// [`Performed::Stopped`]: the kill switch and the person taking over
+    /// act within one step, not after the whole action.
+    fn perform(&self, input: &Input, stop: Stop<'_>) -> Result<Performed, PlatformError>;
+}
+
+/// Asked between the steps of an input or while a prompt is open; `true`
+/// means stop now.
+pub type Stop<'a> = &'a (dyn Fn() -> bool + Sync);
+
+/// Whether an input was posted whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Performed {
+    Done,
+    /// Cut short by `stop`; part of it may have been posted.
+    Stopped,
 }
 
 /// The person's answer to a request for control.
@@ -106,7 +123,14 @@ pub enum Answer {
 
 /// Asks the person at the computer whether the agent may take control.
 pub trait Consent: Send + Sync + 'static {
-    /// Blocks until the person answers or `timeout` passes. Only an explicit
-    /// allow is [`Answer::Allow`].
-    fn ask(&self, reason: &str, ttl_s: u64, timeout: std::time::Duration) -> Answer;
+    /// Blocks until the person answers, `timeout` passes, or `cancel` says
+    /// yes; a cancelled prompt is taken off the screen and answers
+    /// [`Answer::Deny`]. Only an explicit allow is [`Answer::Allow`].
+    fn ask(
+        &self,
+        reason: &str,
+        ttl_s: u64,
+        timeout: std::time::Duration,
+        cancel: Stop<'_>,
+    ) -> Answer;
 }

@@ -37,9 +37,12 @@ use objc2_core_graphics::{
 };
 use tokio::sync::mpsc;
 
-use super::{Answer, Consent, Display, Input, MouseButton, Platform, PlatformError, Window};
+use super::{
+    Answer, Consent, Display, Input, MouseButton, Performed, Platform, PlatformError, Stop, Window,
+};
 use crate::agent::Activity;
 use crate::keys::{Chord, Key};
+use crate::log;
 use crate::shot::Rect;
 
 /// Marks events the device posts ("KURA").
@@ -158,11 +161,19 @@ impl Mac {
         Self::key(source, code, flags, false)
     }
 
-    fn type_text(source: &CGEventSource, text: &str) -> Result<(), PlatformError> {
+    /// Types `text` chunk by chunk, asking `stop` before each one.
+    fn type_text(
+        source: &CGEventSource,
+        text: &str,
+        stop: Stop<'_>,
+    ) -> Result<Performed, PlatformError> {
         let mut chunk: Vec<u16> = Vec::with_capacity(TYPE_CHUNK);
-        let flush = |chunk: &mut Vec<u16>| -> Result<(), PlatformError> {
+        let flush = |chunk: &mut Vec<u16>| -> Result<bool, PlatformError> {
             if chunk.is_empty() {
-                return Ok(());
+                return Ok(true);
+            }
+            if stop() {
+                return Ok(false);
             }
             for down in [true, false] {
                 let event = CGEvent::new_keyboard_event(Some(source), 0, down);
@@ -182,7 +193,7 @@ impl Mac {
             }
             chunk.clear();
             std::thread::sleep(Duration::from_millis(5));
-            Ok(())
+            Ok(true)
         };
         for c in text.chars() {
             // Return and Tab are keys, not characters, to the apps that
@@ -194,18 +205,24 @@ impl Mac {
                 _ => None,
             };
             if let Some(code) = special {
-                flush(&mut chunk)?;
+                if !flush(&mut chunk)? || stop() {
+                    return Ok(Performed::Stopped);
+                }
                 Self::press(source, code, CGEventFlags::empty())?;
                 continue;
             }
             let mut units = [0u16; 2];
             let units = c.encode_utf16(&mut units);
-            if chunk.len() + units.len() > TYPE_CHUNK {
-                flush(&mut chunk)?;
+            if chunk.len() + units.len() > TYPE_CHUNK && !flush(&mut chunk)? {
+                return Ok(Performed::Stopped);
             }
             chunk.extend_from_slice(units);
         }
-        flush(&mut chunk)
+        Ok(if flush(&mut chunk)? {
+            Performed::Done
+        } else {
+            Performed::Stopped
+        })
     }
 }
 
@@ -285,19 +302,20 @@ impl Platform for Mac {
         unsafe { IsSecureEventInputEnabled() != 0 }
     }
 
-    fn perform(&self, input: &Input) -> Result<(), PlatformError> {
+    fn perform(&self, input: &Input, stop: Stop<'_>) -> Result<Performed, PlatformError> {
         if !input_allowed() {
             return Err(PlatformError("accessibility permission missing".into()));
         }
         let source = Self::source()?;
+        let done = |posted: Result<(), PlatformError>| posted.map(|()| Performed::Done);
         match input {
-            Input::Move { to } => Self::mouse(
+            Input::Move { to } => done(Self::mouse(
                 &source,
                 CGEventType::MouseMoved,
                 *to,
                 CGMouseButton::Left,
                 0,
-            ),
+            )),
             Input::Click { at, button, count } => {
                 let (down, up, button) = match button {
                     MouseButton::Left => (
@@ -319,10 +337,15 @@ impl Platform for Mac {
                 Self::mouse(&source, CGEventType::MouseMoved, *at, button, 0)?;
                 std::thread::sleep(Duration::from_millis(30));
                 for n in 1..=i64::from(*count) {
+                    // Each click is a down and its up: stopping between
+                    // clicks never leaves the button held.
+                    if stop() {
+                        return Ok(Performed::Stopped);
+                    }
                     Self::mouse(&source, down, *at, button, n)?;
                     Self::mouse(&source, up, *at, button, n)?;
                 }
-                Ok(())
+                Ok(Performed::Done)
             }
             Input::Drag { from, to } => {
                 let left = CGMouseButton::Left;
@@ -331,13 +354,20 @@ impl Platform for Mac {
                 // Intermediate points: many apps only start a drag after
                 // seeing movement with the button held.
                 const STEPS: u32 = 12;
+                let mut at = *from;
                 for step in 1..=STEPS {
+                    if stop() {
+                        // Let go where the pointer is: a button left down
+                        // would drag whatever the person touches next.
+                        Self::mouse(&source, CGEventType::LeftMouseUp, at, left, 1)?;
+                        return Ok(Performed::Stopped);
+                    }
                     let t = f64::from(step) / f64::from(STEPS);
-                    let at = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+                    at = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
                     std::thread::sleep(Duration::from_millis(15));
                     Self::mouse(&source, CGEventType::LeftMouseDragged, at, left, 1)?;
                 }
-                Self::mouse(&source, CGEventType::LeftMouseUp, *to, left, 1)
+                done(Self::mouse(&source, CGEventType::LeftMouseUp, *to, left, 1))
             }
             Input::Scroll { at, dx, dy } => {
                 Self::mouse(
@@ -348,19 +378,19 @@ impl Platform for Mac {
                     0,
                 )?;
                 let lines = |v: i32| -v.clamp(-MAX_SCROLL_LINES, MAX_SCROLL_LINES);
-                Self::post(CGEvent::new_scroll_wheel_event2(
+                done(Self::post(CGEvent::new_scroll_wheel_event2(
                     Some(&source),
                     CGScrollEventUnit::Line,
                     2,
                     lines(*dy),
                     lines(*dx),
                     0,
-                ))
+                )))
             }
-            Input::Type { text } => Self::type_text(&source, text),
+            Input::Type { text } => Self::type_text(&source, text, stop),
             Input::Key { chord } => {
                 let (code, flags) = keycode(chord);
-                Self::press(&source, code, flags)
+                done(Self::press(&source, code, flags))
             }
         }
     }
@@ -533,11 +563,22 @@ fn char_code(c: char) -> u16 {
 
 /// The consent prompt: a system alert that needs no app bundle. "Deny" is
 /// the default button, so Return or Escape never grants control.
+///
+/// The alert is created and waited on from one thread (Core Foundation does
+/// not promise `CFUserNotification` is safe to share), a quarter second at a
+/// time, so that `cancel` can take it off the screen from that same thread.
 pub struct Alert;
 
+/// How long one wait for the person's answer lasts before `cancel` is asked.
+const ALERT_POLL: Duration = Duration::from_millis(250);
+
 impl Consent for Alert {
-    fn ask(&self, reason: &str, ttl_s: u64, timeout: Duration) -> Answer {
-        use objc2_core_foundation::CFUserNotification;
+    fn ask(&self, reason: &str, ttl_s: u64, timeout: Duration, cancel: Stop<'_>) -> Answer {
+        use objc2_core_foundation::{
+            CFUserNotification, kCFUserNotificationAlertHeaderKey,
+            kCFUserNotificationAlertMessageKey, kCFUserNotificationAlternateButtonTitleKey,
+            kCFUserNotificationDefaultButtonTitleKey,
+        };
         let header = CFString::from_str("Kura wants to control this Mac");
         let message = CFString::from_str(&format!(
             "Reason: {reason}\n\nFor up to {} minutes. Touching the mouse or keyboard, or \
@@ -546,32 +587,68 @@ impl Consent for Alert {
         ));
         let deny = CFString::from_str("Deny");
         let allow = CFString::from_str("Allow");
-        let mut response: usize = 0;
+        // SAFETY: the keys are Core Foundation's own constant strings.
+        let keys = unsafe {
+            [
+                kCFUserNotificationAlertHeaderKey,
+                kCFUserNotificationAlertMessageKey,
+                kCFUserNotificationDefaultButtonTitleKey,
+                kCFUserNotificationAlternateButtonTitleKey,
+            ]
+        };
+        let Some(keys) = keys.into_iter().collect::<Option<Vec<&CFString>>>() else {
+            log::warn("consent: alert keys unavailable");
+            return Answer::Deny;
+        };
+        let values: [&CFString; 4] = [&header, &message, &deny, &allow];
+        let dictionary = CFDictionary::<CFString, CFString>::from_slices(&keys, &values);
         // kCFUserNotificationCautionAlertLevel
         const CAUTION: usize = 2;
-        // SAFETY: all strings outlive the call and `response` is a valid out
-        // pointer.
-        let status = unsafe {
-            CFUserNotification::display_alert(
+        let mut error: i32 = 0;
+        // SAFETY: `error` is a valid out pointer; the dictionary outlives
+        // the call.
+        let alert = unsafe {
+            CFUserNotification::new(
+                None,
                 timeout.as_secs_f64(),
                 CAUTION as _,
-                None,
-                None,
-                None,
-                Some(&header),
-                Some(&message),
-                Some(&deny),
-                Some(&allow),
-                None,
-                &mut response as *mut usize as *mut _,
+                &mut error,
+                Some(dictionary.as_opaque()),
             )
         };
-        // kCFUserNotification{Default,Alternate,Other,Cancel}Response; a
-        // timeout answers Cancel.
-        match (status, response & 0x3) {
-            (0, 1) => Answer::Allow,
-            (0, 3) => Answer::Timeout,
-            _ => Answer::Deny,
+        let Some(alert) = alert.filter(|_| error == 0) else {
+            log::warn(&format!("consent: the alert could not be shown ({error})"));
+            return Answer::Deny;
+        };
+        // The alert dismisses itself at `timeout`; this bound only guards
+        // against a reply that never comes.
+        let give_up = std::time::Instant::now() + timeout + Duration::from_secs(5);
+        loop {
+            let mut response: usize = 0;
+            // SAFETY: `response` is a valid out pointer.
+            let status = unsafe {
+                alert.receive_response(
+                    ALERT_POLL.as_secs_f64(),
+                    &mut response as *mut usize as *mut _,
+                )
+            };
+            if status == 0 {
+                // kCFUserNotification{Default,Alternate,Other,Cancel}Response;
+                // a timeout answers Cancel.
+                return match response & 0x3 {
+                    1 => Answer::Allow,
+                    3 => Answer::Timeout,
+                    _ => Answer::Deny,
+                };
+            }
+            if cancel() {
+                alert.cancel();
+                return Answer::Deny;
+            }
+            if std::time::Instant::now() >= give_up {
+                alert.cancel();
+                return Answer::Timeout;
+            }
         }
     }
 }
@@ -714,6 +791,27 @@ mod tests {
     /// Reads the real display, windows and screen; posts no input. Needs
     /// the Screen Recording and Accessibility permissions, so it is run by
     /// hand: `cargo test -p kura-device -- --ignored macos_reads`.
+    #[test]
+    #[ignore = "shows an alert for about a second in a logged-in macOS session"]
+    fn the_consent_alert_waits_in_short_polls_and_can_be_withdrawn() {
+        // Each 250 ms wait that times out must leave the alert up: were it
+        // dismissed, the next wait would answer at once (as Cancel, read as
+        // Timeout) instead of the withdrawal answering Deny after a second.
+        let started = std::time::Instant::now();
+        let withdraw = || started.elapsed() >= Duration::from_secs(1);
+        let answer = Alert.ask(
+            "kura-device self-test: this alert closes by itself",
+            60,
+            Duration::from_secs(30),
+            &withdraw,
+        );
+        let waited = started.elapsed();
+        eprintln!("answer {answer:?} after {waited:?}");
+        assert_eq!(answer, Answer::Deny);
+        assert!(waited >= Duration::from_millis(900), "{waited:?}");
+        assert!(waited < Duration::from_secs(5), "{waited:?}");
+    }
+
     #[test]
     #[ignore = "needs a logged-in macOS session with permissions"]
     fn macos_reads_the_real_computer() {

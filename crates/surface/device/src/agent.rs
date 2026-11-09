@@ -5,7 +5,11 @@
 //! switched off by the cell:
 //! - no action outside a session the person granted on this computer;
 //! - a session ends when the person touches the mouse or keyboard
-//!   (`user_active`), presses the kill switch, or its time runs out;
+//!   (`user_active`), presses the kill switch, or its time runs out; an
+//!   action in flight then stops at its next step (one typed chunk, one
+//!   click, one step of a drag or a wait), not when it would have finished;
+//! - a prompt for control nobody can answer any more (the connection
+//!   dropped, the kill switch, a newer request) is taken off the screen;
 //! - after the kill switch no session is granted for [`Policy::kill_block`];
 //! - nothing is clicked or typed into a never-touch app, and its windows
 //!   are black in every screenshot;
@@ -13,7 +17,7 @@
 //! - the action limits are checked again, whatever the cell checked.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use kura_device_protocol::{
@@ -23,7 +27,9 @@ use parking_lot::Mutex;
 
 use crate::keys;
 use crate::log;
-use crate::platform::{Answer, Consent, Display, Input, MouseButton, Platform, PlatformError};
+use crate::platform::{
+    Answer, Consent, Display, Input, MouseButton, Performed, Platform, PlatformError, Stop,
+};
 use crate::shot::{self, Rect};
 
 /// Bundle ids the agent may never click or type into, and never see.
@@ -111,6 +117,15 @@ struct Session {
     /// [`Policy::takeover_grace`]. The device's own input never counts (the
     /// watcher tells them apart), so it does not move.
     quiet_since_ms: u64,
+    /// Set when the session ends, so an action in flight stops.
+    stop: Arc<AtomicBool>,
+}
+
+impl Session {
+    fn end(self) -> String {
+        self.stop.store(true, Ordering::Relaxed);
+        self.id
+    }
 }
 
 #[derive(Default)]
@@ -119,6 +134,20 @@ struct State {
     blocked_until_ms: u64,
     /// The screen the cell last heard about; a change re-sends `hello`.
     announced: Option<Screen>,
+    /// Set to take the open prompt for control off the screen.
+    asking: Option<Arc<AtomicBool>>,
+}
+
+impl State {
+    fn end_session(&mut self) -> Option<String> {
+        self.session.take().map(Session::end)
+    }
+
+    fn cancel_prompt(&mut self) {
+        if let Some(cancel) = self.asking.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 pub struct Agent {
@@ -159,7 +188,7 @@ impl Agent {
         let display = blocking(move || platform.display()).await?;
         let screen = screen_of(&display);
         let mut state = self.state.lock();
-        state.session = None;
+        state.end_session();
         state.announced = Some(screen);
         Ok(DeviceFrame::Hello(hello(screen)))
     }
@@ -167,11 +196,18 @@ impl Agent {
     /// Asks the person, unless the kill switch or `--trust-for` already
     /// decides. A new request replaces any current session.
     pub async fn request(&self, session: String, reason: String, ttl_s: u64) -> DeviceFrame {
-        self.state.lock().session = None;
+        let cancel = Arc::new(AtomicBool::new(false));
         let now = self.now();
-        if self.state.lock().blocked_until_ms > now {
-            log::info(&format!("session {session} refused: kill switch"));
-            return denied(session, "kill_switch");
+        {
+            let mut state = self.state.lock();
+            state.end_session();
+            if state.blocked_until_ms > now {
+                log::info(&format!("session {session} refused: kill switch"));
+                return denied(session, "kill_switch");
+            }
+            // A newer request replaces a prompt still open.
+            state.cancel_prompt();
+            state.asking = Some(cancel.clone());
         }
         let answer = if now < self.policy.trust_until_ms {
             Answer::Allow
@@ -179,15 +215,30 @@ impl Agent {
             let consent = self.consent.clone();
             let timeout = self.policy.consent_timeout;
             let reason = clip(&reason, 300);
-            blocking(move || Ok(consent.ask(&reason, ttl_s, timeout)))
-                .await
-                .unwrap_or(Answer::Deny)
+            let cancel = cancel.clone();
+            blocking(move || {
+                let cancelled = move || cancel.load(Ordering::Relaxed);
+                Ok(consent.ask(&reason, ttl_s, timeout, &cancelled))
+            })
+            .await
+            .unwrap_or(Answer::Deny)
         };
         let now = self.now();
         let mut state = self.state.lock();
+        if state
+            .asking
+            .as_ref()
+            .is_some_and(|c| Arc::ptr_eq(c, &cancel))
+        {
+            state.asking = None;
+        }
         // The kill switch may have been pressed while the dialog was up.
         if state.blocked_until_ms > now {
             return denied(session, "kill_switch");
+        }
+        if cancel.load(Ordering::Relaxed) {
+            log::info(&format!("session {session} prompt withdrawn"));
+            return denied(session, "cancelled");
         }
         match answer {
             Answer::Allow => {
@@ -198,6 +249,7 @@ impl Agent {
                     id: session.clone(),
                     until_ms,
                     quiet_since_ms: now + self.policy.takeover_grace.as_millis() as u64,
+                    stop: Arc::new(AtomicBool::new(false)),
                 });
                 DeviceFrame::SessionGranted { session, until_ms }
             }
@@ -216,15 +268,18 @@ impl Agent {
     pub fn end(&self, session: &str) {
         let mut state = self.state.lock();
         if state.session.as_ref().is_some_and(|s| s.id == session) {
-            state.session = None;
+            state.end_session();
             log::info(&format!("session {session} ended by the cell"));
         }
     }
 
-    /// The connection is gone, and with it any session (§11).
+    /// The connection is gone, and with it any session and any prompt
+    /// (§11): nobody could hear the answer.
     pub fn disconnected(&self) {
-        if let Some(session) = self.state.lock().session.take() {
-            log::info(&format!("session {} ended: disconnected", session.id));
+        let mut state = self.state.lock();
+        state.cancel_prompt();
+        if let Some(session) = state.end_session() {
+            log::info(&format!("session {session} ended: disconnected"));
         }
     }
 
@@ -237,8 +292,9 @@ impl Agent {
             "kill switch: control refused for {}s",
             self.policy.kill_block.as_secs()
         ));
-        state.session.take().map(|s| DeviceFrame::SessionEnd {
-            session: s.id,
+        state.cancel_prompt();
+        state.end_session().map(|session| DeviceFrame::SessionEnd {
+            session,
             reason: "user_stopped".into(),
         })
     }
@@ -267,25 +323,21 @@ impl Agent {
     // so the agent cannot race a next action into a session that is gone.
     async fn act_inner(&self, id: &str, session: &str, action: Action) -> Vec<DeviceFrame> {
         let refuse = |code: &str| vec![failure(id, code)];
-        {
+        let (stop, quiet_since_ms) = {
             let now = self.now();
             let mut state = self.state.lock();
             let Some(current) = state.session.as_ref().filter(|s| s.id == session) else {
                 return refuse("no_session");
             };
             if current.until_ms <= now {
-                let ended = state.session.take().map(|s| s.id).unwrap_or_default();
+                let ended = state.end_session().unwrap_or_default();
                 return vec![session_end(ended, "expired"), failure(id, "no_session")];
             }
             if self.activity.last() > current.quiet_since_ms {
-                let ended = state.session.take().map(|s| s.id).unwrap_or_default();
-                log::info(&format!("session {ended} ended: the user took over"));
-                return vec![
-                    session_end(ended, "user_active"),
-                    failure(id, "user_active"),
-                ];
+                return self.took_over(&mut state, id);
             }
-        }
+            (current.stop.clone(), current.quiet_since_ms)
+        };
         if action.validate().is_err() {
             return refuse("invalid");
         }
@@ -293,9 +345,13 @@ impl Agent {
         let platform = self.platform.clone();
         let deny = self.policy.deny_apps.clone();
         let settle = self.policy.settle;
-        let outcome = blocking(move || Ok(run(&*platform, &deny, settle, action)))
-            .await
-            .unwrap_or_else(|err| Err(err.into()));
+        let activity = self.activity.clone();
+        let outcome = blocking(move || {
+            let stopped = move || stop.load(Ordering::Relaxed) || activity.last() > quiet_since_ms;
+            Ok(run(&*platform, &deny, settle, action, &stopped))
+        })
+        .await
+        .unwrap_or_else(|err| Err(err.into()));
 
         let mut frames = Vec::new();
         let mut state = self.state.lock();
@@ -313,11 +369,41 @@ impl Agent {
                     screenshot: Some(screenshot),
                 }));
             }
+            Err(Refusal(STOPPED)) => {
+                // Still this session: the person took over mid-action. Gone:
+                // the kill switch or the cell ended it, and already said so.
+                let current = state.session.as_ref().filter(|s| s.id == session);
+                if current.is_some_and(|s| self.activity.last() > s.quiet_since_ms) {
+                    return self.took_over(&mut state, id);
+                }
+                let code = if state.blocked_until_ms > self.now() {
+                    "user_stopped"
+                } else {
+                    "no_session"
+                };
+                log::info(&format!("action {id} stopped mid-way: {code}"));
+                frames.push(failure(id, code));
+            }
             Err(Refusal(code)) => frames.push(failure(id, code)),
         }
         frames
     }
+
+    /// The person used the mouse or keyboard: the session ends, announced
+    /// before the action's result.
+    fn took_over(&self, state: &mut State, id: &str) -> Vec<DeviceFrame> {
+        let ended = state.end_session().unwrap_or_default();
+        log::info(&format!("session {ended} ended: the user took over"));
+        vec![
+            session_end(ended, "user_active"),
+            failure(id, "user_active"),
+        ]
+    }
 }
+
+/// The refusal an action cut short by [`Stop`] answers with internally;
+/// [`Agent::act_inner`] turns it into the code the cell reads.
+const STOPPED: &str = "stopped";
 
 struct Refusal(&'static str);
 
@@ -334,6 +420,7 @@ fn run(
     deny: &[String],
     settle: Duration,
     action: Action,
+    stop: Stop<'_>,
 ) -> Result<(Display, Screenshot), Refusal> {
     let display = platform.display()?;
     let shot_size = shot::fit(display.pixels.0, display.pixels.1);
@@ -351,7 +438,13 @@ fn run(
     let input = match action {
         Action::Screenshot => None,
         Action::Wait { ms } => {
-            std::thread::sleep(Duration::from_millis(ms));
+            let until = std::time::Instant::now() + Duration::from_millis(ms);
+            while let Some(left) = until.checked_duration_since(std::time::Instant::now()) {
+                if stop() {
+                    return Err(Refusal(STOPPED));
+                }
+                std::thread::sleep(left.min(STOP_POLL));
+            }
             None
         }
         Action::Move { x, y } => Some(Input::Move { to: at(x, y) }),
@@ -400,7 +493,9 @@ fn run(
         if matches!(input, Input::Type { .. }) && platform.secure_input() {
             return Err(Refusal("secure_input"));
         }
-        platform.perform(input)?;
+        if stop() || platform.perform(input, stop)? == Performed::Stopped {
+            return Err(Refusal(STOPPED));
+        }
         std::thread::sleep(settle);
     }
 
@@ -422,6 +517,9 @@ fn run(
     let screenshot = shot::encode(native, &hidden, shot_size).map_err(PlatformError)?;
     Ok((display, screenshot))
 }
+
+/// How often a wait looks at [`Stop`].
+const STOP_POLL: Duration = Duration::from_millis(50);
 
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, PlatformError> + Send + 'static,
