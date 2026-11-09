@@ -764,13 +764,15 @@ impl Service {
                 dispatch_input.model = model.to_string();
             }
             if let Some(messages) = payload.get("messages") {
-                dispatch_input.messages =
+                let mut rebuilt: Vec<Message> =
                     serde_json::from_value(messages.clone()).map_err(|err| {
                         ChatError::HookPayload {
                             point: kura_plugin::points::CHAT_PRE_DISPATCH.to_string(),
                             reason: format!("messages: {err}"),
                         }
                     })?;
+                restore_image_bytes(&dispatch_input.messages, &mut rebuilt);
+                dispatch_input.messages = rebuilt;
             }
         }
         Ok(())
@@ -2153,5 +2155,78 @@ mod bridge_runtime_tests {
                 .await
                 .expect("the bridge runtime must have an IO driver");
         });
+    }
+}
+
+/// Puts back the image bytes the hook payload's JSON could not carry.
+///
+/// `ImagePart.data` is never serialized (persisted copies keep only the
+/// artifact), so messages rebuilt from a pre-dispatch hook's payload come
+/// back with every image empty, and the model would read `[image omitted]`
+/// for a screenshot it was just given. A hook cannot add or change image
+/// bytes either way; this only restores, by the call a tool message answers
+/// and the image's position in it, what the message had before the hook ran.
+fn restore_image_bytes(before: &[Message], after: &mut [Message]) {
+    let originals: std::collections::HashMap<&str, &[kura_protocol::ImagePart]> = before
+        .iter()
+        .filter(|message| !message.tool_call_id.is_empty() && !message.images.is_empty())
+        .map(|message| (message.tool_call_id.as_str(), message.images.as_slice()))
+        .collect();
+    if originals.is_empty() {
+        return;
+    }
+    for message in after.iter_mut() {
+        let Some(images) = originals.get(message.tool_call_id.as_str()) else {
+            continue;
+        };
+        for (index, image) in message.images.iter_mut().enumerate() {
+            if let Some(original) = images.get(index) {
+                if !image.is_present() && original.media_type == image.media_type {
+                    image.data.clone_from(&original.data);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod restore_image_tests {
+    use super::*;
+
+    fn tool(call: &str, data: &str) -> Message {
+        Message {
+            role: MessageRole::Tool,
+            content: "shot".into(),
+            tool_call_id: call.into(),
+            images: vec![kura_protocol::ImagePart {
+                media_type: "image/jpeg".into(),
+                data: data.into(),
+                artifact: Some(format!("a/{call}")),
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_hook_round_trip_keeps_the_screenshot_bytes() {
+        let before = vec![tool("c1", ""), tool("c2", "BYTES")];
+        // What a hook's JSON round trip hands back: the bytes are gone.
+        let json = serde_json::to_value(&before).unwrap();
+        let mut after: Vec<Message> = serde_json::from_value(json).unwrap();
+        assert!(after.iter().all(|m| !m.images[0].is_present()));
+        restore_image_bytes(&before, &mut after);
+        // An image already dropped by the window stays dropped.
+        assert!(!after[0].images[0].is_present());
+        assert_eq!(after[1].images[0].data, "BYTES");
+        assert_eq!(after[1].images[0].artifact.as_deref(), Some("a/c2"));
+    }
+
+    #[test]
+    fn a_hook_that_drops_or_reorders_messages_restores_by_call() {
+        let before = vec![tool("c1", "ONE"), tool("c2", "TWO")];
+        let mut after: Vec<Message> =
+            serde_json::from_value(serde_json::to_value(vec![&before[1]]).unwrap()).unwrap();
+        restore_image_bytes(&before, &mut after);
+        assert_eq!(after[0].images[0].data, "TWO");
     }
 }
