@@ -127,6 +127,28 @@ describe("tool provider SDK methods (Stage 9.1b)", () => {
     expect(got.subscriptions?.[0].dropReason).toBe("stopped");
   });
 
+  it("withdraws a queued reply from a work item's outbox (work items slice 3)", async () => {
+    const item = {
+      itemId: "wi_1",
+      tenantId: "ten_a",
+      title: "Fix CI",
+      state: "open",
+      stage: "idle",
+      threadId: "thr_wi_1",
+      seq: 1,
+      mandate: { basis: "api", strength: "explicit", policyHash: "", matchedRules: [], sender: {}, source: { kind: "api" }, scopeText: "s", createdAt: "t" },
+      createdAt: "t",
+      updatedAt: "t",
+      outbox: [{ seq: 2, conversationKey: "thr_src_1", connectorId: "slack-main", body: "b", state: "dropped", attempts: 0, dropReason: "withdrawn", createdAt: "t", droppedAt: "t" }],
+    };
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(item));
+    const client = createKuraClient({ baseURL: "https://daemon.test", fetchImpl });
+    const got = await client.withdrawWorkItemReply("wi_1", 2);
+    expect(String(fetchImpl.mock.calls[0][0])).toContain("/v1/work-items/wi_1/outbox/2/withdraw");
+    expect(fetchImpl.mock.calls[0][1].method).toBe("POST");
+    expect(got.outbox?.[0].dropReason).toBe("withdrawn");
+  });
+
   it("searches skills and records feedback (Stage 3)", async () => {
     const usage = { skillId: "deploy-check", invocations: 2, helpful: 1, corrected: 0 };
     const fetchImpl = vi.fn()

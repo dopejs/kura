@@ -3700,6 +3700,31 @@ export interface WorkItemSubscription {
   dropReason?: "stopped" | "revoked" | "superseded" | "idle";
 }
 
+export type WorkItemOutboxState = "queued" | "failed" | "sent" | "dropped";
+export type WorkItemOutboxDropReason = "connector_gone" | "conversation_gone" | "forbidden" | "withdrawn";
+
+/** A reply the item sends to a conversation (slice 3). Rows of one (item, conversationKey) go out in seq order; `failed` is still unsent and retried at `nextAttemptAt`. */
+export interface WorkItemOutboxRow {
+  seq: number;
+  /** With the item, the order key; for IM, the conversation's `thr_src_` thread id. */
+  conversationKey: string;
+  connectorId: string;
+  conversationId?: string;
+  roundSeq?: number;
+  body: string;
+  state: WorkItemOutboxState;
+  /** Failed attempts in a row; 3 put the item in person/delivery. */
+  attempts: number;
+  nextAttemptAt?: string;
+  /** A stable code (send_failed, receive_check_failed, or the drop reason), never the transport's text. */
+  lastError?: string;
+  dropReason?: WorkItemOutboxDropReason;
+  externalMessageId?: string;
+  createdAt: string;
+  sentAt?: string;
+  droppedAt?: string;
+}
+
 /** Long-lived work whose rounds are chat turns (docs/harness/work-items.md). */
 export interface WorkItem {
   itemId: string;
@@ -3723,6 +3748,8 @@ export interface WorkItem {
   inputs?: WorkItemInput[];
   /** Present on getWorkItem only. */
   subscriptions?: WorkItemSubscription[];
+  /** Present on getWorkItem only. */
+  outbox?: WorkItemOutboxRow[];
 }
 
 export interface WorkItemCreateInput {
@@ -4960,6 +4987,14 @@ export class KuraClient {
   /** Stops a work item for good: its subscriptions are dropped and a running round is cancelled. Idempotent. */
   async stopWorkItem(itemId: string, tenantOptions?: TenantRequestOptions): Promise<WorkItem> {
     return this.requestJSON<WorkItem>(`/v1/work-items/${encodeURIComponent(itemId)}/stop`, { method: "POST", tenant: tenantOptions });
+  }
+
+  /** Withdraws a reply not yet sent from the item's outbox; the replies after it go on. 409 once it is sent or dropped, or while it is being sent. */
+  async withdrawWorkItemReply(itemId: string, seq: number, tenantOptions?: TenantRequestOptions): Promise<WorkItem> {
+    return this.requestJSON<WorkItem>(
+      `/v1/work-items/${encodeURIComponent(itemId)}/outbox/${encodeURIComponent(String(seq))}/withdraw`,
+      { method: "POST", tenant: tenantOptions },
+    );
   }
 
   async getSessionFrame(threadId: string, tenantOptions?: TenantRequestOptions): Promise<SessionFrame> {
