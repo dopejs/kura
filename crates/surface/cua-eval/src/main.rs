@@ -204,8 +204,20 @@ async fn run(args: RunArgs) -> Result<(), String> {
     }
     let client = Client::new(&args.server, &read_token(&args.token_file)?)?;
     let devices = client.devices().await?;
-    if !devices.iter().any(|device| device.online) {
-        return Err("no device is online for this token's tenant; start `kura-device run`".into());
+    // With two computers online the agent must pick one by id, which no
+    // task asks it to do; that would measure the wrong thing.
+    match devices.iter().filter(|device| device.online).count() {
+        0 => {
+            return Err(
+                "no device is online for this token's tenant; start `kura-device run`".into(),
+            );
+        }
+        1 => {}
+        n => {
+            return Err(format!(
+                "{n} devices are online; leave exactly one connected"
+            ));
+        }
     }
 
     let run_id = format!(

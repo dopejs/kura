@@ -388,9 +388,18 @@ impl Runner {
 
         // The session belongs to the turn and ends with it; the next
         // attempt must not start while something still holds the device.
-        if let Err(reason) = self.wait_for_idle_device(abandoned).await {
+        // A turn that would not stop may still call tools after its session
+        // ended, and those calls would land in the next attempt's window:
+        // the run stops either way.
+        let idle = self.wait_for_idle_device(abandoned).await;
+        if idle.is_err() || abandoned {
             attempt.teardown_errors = self.teardown(task).await;
             attempt.outcome = classify(&attempt, timed_out);
+            let reason = idle.err().unwrap_or_else(|| {
+                "a cancelled turn did not stop; its later tool calls would be counted \
+                 against the next task"
+                    .into()
+            });
             return Err((Some(Box::new(attempt)), reason));
         }
 
