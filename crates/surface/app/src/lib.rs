@@ -4040,6 +4040,50 @@ mod tool_host_tests {
         );
     }
 
+    /// `chat.tool.called` is readable where `GET /v1/events` reads: in the
+    /// daemon's environment scope and bound to the turn's tenant, not to
+    /// the default one. (Found by the CUA evaluation, slice 5: with an
+    /// empty scope no client could see a single tool call.)
+    #[test]
+    fn a_tool_call_is_recorded_for_the_turns_tenant_where_the_events_route_reads() {
+        let (_temp_dir, config) = test_config();
+        let app = App::new(config).expect("build app");
+        let registry = source_for(&app).registry(&ToolTurn {
+            tenant_id: "ten_audit".into(),
+            thread_id: "thr_audit".into(),
+            ..ToolTurn::default()
+        });
+        let tool = registry
+            .get("memory.lookup")
+            .expect("memory.lookup offered");
+        futures::executor::block_on(tool.call(&ToolInvocation {
+            call_id: "call_audit".into(),
+            name: "memory.lookup".into(),
+            arguments: "{\"query\":\"anything\"}".into(),
+        }))
+        .expect("tool call returns an output");
+        // The filter the events route builds.
+        let filter = kura_events::Filter {
+            environment_scope: crate::environment_scope(app.config.environment).to_string(),
+            category: "chat".to_string(),
+            resource_kind: "tool_call".to_string(),
+            ..kura_events::Filter::default()
+        };
+        let store = app.state.store.lock();
+        let mine = store
+            .list_events_for_tenant_raw("ten_audit", &filter)
+            .expect("read events");
+        assert!(
+            mine.iter()
+                .any(|e| e.name == "chat.tool.called" && e.resource.id == "call_audit"),
+            "{mine:?}"
+        );
+        let other = store
+            .list_events_for_tenant_raw(crate::LOCAL_TENANT_ID, &filter)
+            .expect("read events");
+        assert!(other.is_empty(), "another tenant sees no call: {other:?}");
+    }
+
     /// 9.2 mechanism through the real source: a Ready `web.search` profile is
     /// offered by capability name and runs through `ToolRuntime`; the stub
     /// family proves the path with no vendor account.
