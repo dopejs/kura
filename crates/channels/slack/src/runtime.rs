@@ -137,6 +137,20 @@ impl Runtime {
         self.transport.close()
     }
 
+    /// The connector id this runtime receives and replies as.
+    #[must_use]
+    pub fn connector_id(&self) -> String {
+        self.cfg.connector_id.clone()
+    }
+
+    /// An owned sender over this runtime's transport, for replies sent
+    /// outside an inbound message's handling (the work-item outbox's
+    /// retries, work-items.md §8).
+    #[must_use]
+    pub fn reply_sender(&self) -> Arc<dyn ReplySender> {
+        Arc::new(OwnedReplySender(self.transport.clone()))
+    }
+
     /// Go NormalizeInboundEvent: fills identity defaults, requires the hosted
     /// setup, applies route policy + duplicate suppression, and normalizes an
     /// accepted event into an inbound message. Returns None for every
@@ -499,6 +513,15 @@ struct TransportReplySender<'a> {
 impl ReplySender for TransportReplySender<'_> {
     fn send_reply(&self, reply: OutboundReply) -> Result<SentReply, String> {
         self.transport.send_reply(&reply).map_err(|e| e.to_string())
+    }
+}
+
+/// [`Runtime::reply_sender`]: the transport, owned.
+struct OwnedReplySender(Arc<dyn Transport>);
+
+impl ReplySender for OwnedReplySender {
+    fn send_reply(&self, reply: OutboundReply) -> Result<SentReply, String> {
+        self.0.send_reply(&reply).map_err(|e| e.to_string())
     }
 }
 

@@ -40,7 +40,8 @@ pub struct Runtime {
     message_loop: MessageLoop,
     store: Option<Arc<SQLiteStore>>,
     event_bus: Option<Bus>,
-    transport: Box<dyn Transport>,
+    /// Shared with [`Runtime::reply_sender`].
+    transport: Arc<dyn Transport>,
     policy: RoutePolicy,
     seen: Mutex<HashSet<String>>,
     started: Mutex<bool>,
@@ -72,7 +73,7 @@ pub fn new_runtime(
         message_loop,
         store: sqlite_store,
         event_bus,
-        transport,
+        transport: Arc::from(transport),
         tenant_id: Mutex::new(String::new()),
         seen: Mutex::new(HashSet::new()),
         started: Mutex::new(false),
@@ -112,6 +113,20 @@ impl Runtime {
     pub fn close(&self) -> Result<(), String> {
         *self.started.lock() = false;
         self.transport.close()
+    }
+
+    /// The connector id this runtime receives and replies as.
+    #[must_use]
+    pub fn connector_id(&self) -> String {
+        self.cfg.connector_id.clone()
+    }
+
+    /// An owned sender over this runtime's transport, for replies sent
+    /// outside an inbound message's handling (the work-item outbox's
+    /// retries, work-items.md §8).
+    #[must_use]
+    pub fn reply_sender(&self) -> Arc<dyn kura_im::ReplySender> {
+        Arc::new(crate::transport::OwnedReplySender(self.transport.clone()))
     }
 
     /// Method form of the inbound normalization (Go `Runtime.NormalizeInboundEvent`):

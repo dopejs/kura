@@ -53,6 +53,19 @@ impl ReplySender for TransportReplySender<'_> {
     }
 }
 
+/// The owned form of [TransportReplySender], for `Runtime::reply_sender`.
+pub(crate) struct OwnedReplySender(pub std::sync::Arc<dyn Transport>);
+
+impl ReplySender for OwnedReplySender {
+    fn send_reply(&self, reply: OutboundReply) -> Result<SentReply, String> {
+        self.0.send_reply(reply)
+    }
+
+    fn reply_progressor(&self) -> Option<&dyn ReplyProgressor> {
+        None
+    }
+}
+
 /// Go `FakeTransport`: replays a fixed set of inbound events on start and
 /// records every sent reply. Cloneable so tests can retain a handle to inspect
 /// sent replies after the transport is moved into a runtime.

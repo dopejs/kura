@@ -47,7 +47,8 @@ struct RuntimeInner {
     message_loop: Arc<MessageLoop>,
     store: Option<Arc<SQLiteStore>>,
     event_bus: Option<Bus>,
-    transport: Box<dyn Transport>,
+    /// Shared with [`Runtime::reply_sender`].
+    transport: Arc<dyn Transport>,
     started: Mutex<bool>,
     inbound_rx: Mutex<Option<Receiver<RuntimeEvent>>>,
 }
@@ -102,7 +103,7 @@ pub fn new_runtime(
             message_loop,
             store: sqlite_store,
             event_bus,
-            transport,
+            transport: Arc::from(transport),
             started: Mutex::new(false),
             inbound_rx: Mutex::new(None),
         }),
@@ -212,6 +213,21 @@ impl Runtime {
         );
         let _ = self.publish_event("connector.healthy", payload);
         Ok(())
+    }
+
+    /// The connector id this runtime receives and replies as.
+    #[must_use]
+    pub fn connector_id(&self) -> String {
+        self.inner.cfg.connector_id.clone()
+    }
+
+    /// An owned sender over this runtime's transport, for replies sent
+    /// outside an inbound message's handling (the work-item outbox's
+    /// retries, work-items.md §8). Holds the transport only, never the
+    /// runtime's (single-threaded) message loop.
+    #[must_use]
+    pub fn reply_sender(&self) -> Arc<dyn kura_im::ReplySender> {
+        Arc::new(OwnedReplySender(self.inner.transport.clone()))
     }
 
     /// Go `Close(ctx)`.
@@ -839,4 +855,20 @@ fn first_non_empty(values: &[&str]) -> String {
 #[must_use]
 fn contains(items: &[String], target: &str) -> bool {
     items.iter().any(|item| item.trim() == target.trim())
+}
+
+/// [`Runtime::reply_sender`]: the transport, owned.
+struct OwnedReplySender(Arc<dyn Transport>);
+
+impl kura_im::ReplySender for OwnedReplySender {
+    fn send_reply(
+        &self,
+        reply: kura_imtypes::OutboundReply,
+    ) -> Result<kura_imtypes::SentReply, String> {
+        self.0.send_reply(reply)
+    }
+
+    fn reply_progressor(&self) -> Option<&dyn kura_im::ReplyProgressor> {
+        self.0.reply_progressor()
+    }
 }

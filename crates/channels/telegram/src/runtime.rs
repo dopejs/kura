@@ -157,6 +157,20 @@ impl Runtime {
         self.inner.lock().transport.close()
     }
 
+    /// The connector id this runtime receives and replies as.
+    #[must_use]
+    pub fn connector_id(&self) -> String {
+        self.inner.lock().cfg.connector_id.clone()
+    }
+
+    /// An owned sender over this runtime's transport, for replies sent
+    /// outside an inbound message's handling (the work-item outbox's
+    /// retries, work-items.md §8).
+    #[must_use]
+    pub fn reply_sender(&self) -> Arc<dyn kura_im::ReplySender> {
+        Arc::new(OwnedReplySender(self.inner.lock().transport.clone()))
+    }
+
     /// Go `RecordHostedSetupValidation`: evaluates the setup, persists the
     /// hosted-setup projection (setup + allowments) when a store is present,
     /// and publishes the `connector.telegram_setup_validated` event.
@@ -494,6 +508,23 @@ impl RuntimeInner {
         String::new()
     }
 }
+
+/// [`Runtime::reply_sender`]: the transport, owned.
+struct OwnedReplySender(Arc<dyn Transport>);
+
+impl kura_im::ReplySender for OwnedReplySender {
+    fn send_reply(
+        &self,
+        reply: kura_imtypes::OutboundReply,
+    ) -> Result<kura_imtypes::SentReply, String> {
+        self.0.send_reply(reply)
+    }
+
+    fn reply_progressor(&self) -> Option<&dyn kura_im::ReplyProgressor> {
+        self.0.reply_progressor()
+    }
+}
+
 /// Go `ConformanceProfile`: the Telegram capability profile with exact
 /// surface declarations and the equivalent durable identity rule.
 #[must_use]
