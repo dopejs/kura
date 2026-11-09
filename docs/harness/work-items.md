@@ -1,7 +1,8 @@
 # Work Items: Long-Lived Work, Proactive Rules and Attention
 
 > Status: design, 2026-11-02; decisions recorded 2026-11-03 (§13). Slices 1
-> and 2 implemented 2026-11-03 (§12 records where each differs). Adapts docs 000–003 of
+> and 2 implemented 2026-11-03, slice 3 2026-11-09 (§12 records where each
+> differs). Adapts docs 000–003 of
 > DeepSeek's dsh-superagent prototype (Ticket, Mandate, Subscription,
 > accept mode, Attention, recovery note, ordered replies) to kura. Owner:
 > daemon.
@@ -426,6 +427,7 @@ would also fix delivery's restart and tenant gaps.
   - `GET/POST /v1/work-items`
   - `GET /v1/work-items/{id}`, with inputs, rounds, outbox and stage
   - `POST /v1/work-items/{id}/answer`, `/stop`, `/retry`
+  - `POST /v1/work-items/{id}/outbox/{seq}/withdraw` (slice 3)
   - `DELETE /v1/work-items/{id}/subscriptions/{sub}`
   - `GET /v1/work-items/attention`
   - `GET/PUT /v1/work-rules`, `GET/PUT /v1/work-policy`
@@ -620,6 +622,86 @@ Each slice is shippable behind `enabled` and has its own tests.
      reply through it.
    - Tests: an order test with a failing first send; a drop on a gone
      conversation; restart mid-retry.
+   - As built (slice 3), where it differs from or adds to the above
+     (tests: `crates/domains/workitems/tests/outbox.rs` over the manager
+     and a real store, two more in `im_wake.rs` over the real
+     `MessageLoop`, plus store and API unit tests):
+     - **Store.** Migration v12 adds `work_item_outbox`, additive, indexed
+       on `(state, next_attempt_at)` and `(item_id, conversation_key,
+       seq)`. A row carries the binding copied from the message it answers
+       (connector, conversation, channel, peer, the platform message
+       replied to) so a retry goes exactly where the first attempt went.
+       States: `queued` (not tried), `failed` (tried, still unsent, retried
+       at `next_attempt_at`), `sent`, `dropped`; the last two are final. The
+       stage reads "an unsent row failed 3 times in a row" from the item's
+       activity, so `person/delivery` survives a restart; an ended item has
+       no stage, so its stuck reply shows only on its outbox rows.
+     - **What goes through it.** Exactly the replies slice 2 sent inline:
+       the reply per round an IM wake ran, the steered notice, the
+       cap/admission notices. The first round after `work_item.open` and
+       API-driven rounds still have no reply channel. The IM hook queues
+       the replies, then sends them at once through the loop's own sender,
+       lent for the message (`WorkItemInbound::replies`), so a person reads
+       them when they did before. If queueing itself fails, the replies go
+       back to the loop to send inline as in slice 2 (no retry). A held
+       reply no longer makes the IM loop return an error: the inbound is
+       `failed` (nothing sent) or `partial`, and the row is the reply's
+       record. The connector transcript still gets one outbound
+       `connector_messages` row per part sent, whoever sends it.
+     - **Order and concurrency.** A row is offered only when it is the
+       earliest unsent row of its (item, conversation); the store's due
+       query enforces that. One sender per (item, conversation) at a time
+       in process (a claim set); single-process only, as §11.
+     - **Retries.** 5 s doubling to 300 s, persisted. One sweeper thread per
+       daemon (`kura-work-item-outbox`), started with the daemon when the
+       feature is on; its first pass is the boot sweep. It sleeps until the
+       next head is due (at most 30 s, at least 250 ms) or until poked (a
+       sender registered, a flush left rows, a withdrawal). A person's next
+       message on the conversation retries the head at once, before the new
+       replies, ignoring the backoff.
+     - **Senders: decision for D4.** Delivery's `ConnectorReplySender`
+       registry is never filled in production (nothing calls
+       `ConnectorAdapter::register`; grep), and its trait is the same shape
+       as `kura_im::ReplySender`, which every transport already implements.
+       So the outbox keeps its own registry of `kura_im::ReplySender`s,
+       filled at serve from each connector runtime's new owned
+       `reply_sender()` (discord, telegram, slack, matrix; the discord and
+       matrix runtimes now hold their transport in an `Arc`). Delivery is
+       untouched. A row whose connector has no sender (the runtime is not
+       running here) waits untried; that is logged once per connector.
+     - **Drops.** `connector_gone`: the row's conversation is a group or
+       room whose connector enforces participation, and no valid route
+       policy still receives it (checked before every attempt, as the IM
+       gate reads it). `conversation_gone` / `forbidden`: the senders
+       return plain strings, so these come from documented platform codes
+       in the error text (Slack `channel_not_found`, `is_archived`,
+       `not_in_channel`, `restricted_action`, `access_denied`; Telegram
+       `chat not found`, `bot was blocked by the user`, `bot was kicked`;
+       Discord `Unknown Channel`, `Missing Access`/`Permissions`; Matrix
+       `M_FORBIDDEN`). Anything else is retried. `withdrawn`: `POST
+       /v1/work-items/{id}/outbox/{seq}/withdraw` (tenant allowlist; 409
+       once sent or dropped or while being sent). A stopped or ended item's
+       queued replies are still sent.
+     - **No transport text is kept.** `lastError` is a code
+       (`send_failed`, `receive_check_failed`, or the drop reason); logs
+       carry codes too. A Telegram request error can carry the bot token in
+       its URL.
+     - **Observability.** `kura_work_item_outbox_total{result=sent|retry|
+       dropped}`, `work_item.outbox_dropped {outboxSeq, reason, attempts,
+       connectorId, roundSeq?}` with no body, one `[kura] work item:` line
+       per row transition (`-> queued`, `-> failed`, `-> sent`,
+       `-> dropped`) and one when a row reaches 3 failures.
+     - **Known gaps.** Discord's error text is *unverified* to carry the
+       platform message, so its drops may never classify (rows retry until
+       withdrawn). A connector removed from config leaves its rows waiting
+       forever (no sender); a person can withdraw them. A body over the
+       platform limit is split only when the sender reports a length (only
+       Discord's does, lent or owned, as for the slice 2 inline path), and a
+       failure after some parts resends them all. Matrix
+       derives its transaction id from the replied-to message, so several
+       replies to one inbound can collapse into one event (pre-existing,
+       not changed here). At least once: a crash between the platform's
+       accept and `sent` sends again.
 4. **Restart recovery.**
    - Builds: the boot scan, same-request-id rerun, the recovery note with
      the outbound log, and `recoverOnBoot`.
