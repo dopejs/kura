@@ -126,12 +126,12 @@
         "queryText": { "type": "string" },
         "outcome": {
           "type": "string",
-          "description": "settled: the report status, or report_unreadable. failed: the chat error code of a turn that ended without a report."
+          "description": "settled: the report status, or report_unreadable. failed: the chat error code of a turn that ended without a report, or interrupted (a restart ended the round and it was not rerun)."
         },
         "report": { "$ref": "#/$defs/report" },
         "errorCode": { "type": "string" },
         "turnId": { "type": "string" },
-        "startedAt": { "type": "string", "format": "date-time" },
+        "startedAt": { "type": "string", "format": "date-time", "description": "When the round started, or when a boot last reran it." },
         "finishedAt": { "type": "string", "format": "date-time" }
       }
     },

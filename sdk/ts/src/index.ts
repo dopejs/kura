@@ -3666,10 +3666,12 @@ export interface WorkItemRound {
   requestId: string;
   state: "running" | "settled" | "failed";
   queryText: string;
+  /** settled: the report status, or `report_unreadable`. failed: the turn's error code, or `interrupted` when a restart ended the round and it was not rerun. */
   outcome?: string;
   report?: WorkItemReport;
   errorCode?: string;
   turnId?: string;
+  /** When the round started, or when a boot last reran it. */
   startedAt: string;
   finishedAt?: string;
 }

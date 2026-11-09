@@ -191,3 +191,35 @@ fn test_work_item_outbox_dropped_event_refuses_a_body_or_an_unknown_reason() {
         );
     }
 }
+
+/// Slice 4: an item whose round 2 a restart interrupted and the boot did
+/// not rerun, and whose round 3 the next boot reran with its recovery note;
+/// and the interrupted round_settled event.
+const RECOVERED_ITEM: &str = r##"{"itemId":"wi_0193a1b2c3d4e5f6a7b8c9d5","tenantId":"ten_a","title":"Fix the flaky build","state":"open","stage":"working","threadId":"thr_wi_0193a1b2c3d4e5f6a7b8c9d5","seq":3,"mandate":{"basis":"api","strength":"explicit","policyHash":"","matchedRules":[],"sender":{"principalId":"prn_1"},"source":{"kind":"api"},"scopeText":"Fix CI on main.","createdAt":"2026-11-03T10:00:00Z"},"createdAt":"2026-11-03T10:00:00Z","updatedAt":"2026-11-03T12:00:00Z","rounds":[{"seq":2,"requestId":"wi_0193a1b2c3d4e5f6a7b8c9d5_r2","state":"failed","queryText":"This is round 2 of the work item.","outcome":"interrupted","errorCode":"interrupted","startedAt":"2026-11-03T10:05:00Z","finishedAt":"2026-11-03T11:00:00Z"},{"seq":3,"requestId":"wi_0193a1b2c3d4e5f6a7b8c9d5_r3","state":"running","queryText":"This is round 3 of the work item.","startedAt":"2026-11-03T12:00:00Z"}],"inputs":[{"seq":4,"kind":"recovery","authorIsPerson":false,"body":"The daemon restarted while you were working on this round.","state":"consumed","roundSeq":3,"createdAt":"2026-11-03T12:00:00Z"}]}"##;
+
+#[test]
+fn test_work_item_slice4_schemas_accept_canonical_fixtures() {
+    let validator = Validator::new(schema_root_dir());
+    let interrupted = r##"{"eventId":"evt_13","sequence":13,"tenantId":"ten_a","category":"work_item","name":"work_item.round_settled","occurredAt":"2026-11-03T11:00:00Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"api","roundSeq":2,"requestId":"wi_1_r2","state":"failed","outcome":"interrupted","stage":"person/delivery","reason":"recover_off"}}"##;
+    let fixtures: &[Fixture] = &[
+        (
+            r##"schemas/api/work-item-resource.schema.json"##,
+            RECOVERED_ITEM,
+        ),
+        (
+            r##"schemas/events/work-item-round-settled.event.schema.json"##,
+            interrupted,
+        ),
+    ];
+    validate_fixtures(&validator, fixtures);
+    let unknown = interrupted.replace("recover_off", "because");
+    assert!(
+        validator
+            .validate_relative(
+                "schemas/events/work-item-round-settled.event.schema.json",
+                unknown.as_bytes()
+            )
+            .is_err(),
+        "accepted an unknown reason"
+    );
+}

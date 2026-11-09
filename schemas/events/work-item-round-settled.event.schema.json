@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kura.local/schemas/events/work-item-round-settled.event.schema.json",
   "title": "WorkItemRoundSettledEvent",
-  "description": "A round ended: with a report (state settled; outcome is the report status, or report_unreadable) or without one (state failed; outcome is the turn's error code). Carries no message bodies (work-items.md \u00a710).",
+  "description": "A round ended: with a report (state settled; outcome is the report status, or report_unreadable) or without one (state failed; outcome is the turn's error code, or interrupted when a restart ended the round and the boot did not rerun it, with the reason). Carries no message bodies (work-items.md \u00a710).",
   "type": "object",
   "allOf": [
     {
@@ -86,6 +86,17 @@
             },
             "turnId": {
               "type": "string"
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "recover_off",
+                "item_ended",
+                "recovery_limit",
+                "hourly_cap",
+                "throttled"
+              ],
+              "description": "outcome interrupted only: why the boot did not rerun the round (work-items.md §12 slice 4)."
             }
           }
         }
