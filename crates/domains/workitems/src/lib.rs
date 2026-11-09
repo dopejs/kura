@@ -12,9 +12,12 @@
 //! and stop. Slice 3: the outbox, which sends an item's replies to a
 //! conversation in order and retries them across restarts. Slice 4: restart
 //! recovery, which reruns at boot the rounds a previous process left
-//! running. Attention answers, rules and webhooks arrive in the later
-//! slices. Off unless `entries.work-items.config.enabled` is true.
+//! running. Slice 5: attention, the queue of items waiting on a person,
+//! `/answer`, and approvals: a round whose tool call gave up waiting on an
+//! approval waits on it, and its resolution wakes the item. Rules and
+//! webhooks arrive in the later slices. Off unless `entries.work-items.config.enabled` is true.
 
+mod attention;
 mod driver;
 mod im;
 mod manager;
@@ -27,6 +30,7 @@ mod tool;
 mod types;
 mod wake;
 
+pub use attention::{APPROVAL_SWEEP_INTERVAL, call_fingerprint};
 pub use driver::{Drive, DriveStop, DrivenRound};
 pub use im::{ImHook, round_reply};
 pub use manager::{
@@ -47,8 +51,9 @@ pub use report::{
 pub use stage::{StageFacts, derive_stage};
 pub use tool::{OPEN_TOOL, OpenTool, is_round_thread};
 pub use types::{
-    Attention, Basis, EndReason, Input, InputKind, InputState, ItemState, Mandate, MandateSource,
-    MandateSourceKind, MatchedRule, OutboxDropReason, OutboxRow, OutboxState, Report, ReportReason,
+    ApprovalLink, ApprovalLinkState, Attention, AttentionEntry, AttentionKind, Basis, EndReason,
+    Input, InputKind, InputState, ItemState, Mandate, MandateSource, MandateSourceKind,
+    MatchedRule, OutboxDropReason, OutboxRow, OutboxState, Report, ReportAttention, ReportReason,
     ReportStatus, RevokeReason, Round, RoundState, Sender, Stage, Strength, Subscription,
     SubscriptionRole, WorkItem, WorkItemsConfig,
 };

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/api/work-item-answer.request.schema.json",
+  "title": "WorkItemAnswerRequest",
+  "description": "POST /v1/work-items/{itemId}/answer: a person answers the item's question (work-items.md §7). The question is cleared and the text becomes the next round's input, as the requester's; the item is then driven on. 409 work_item_not_asking when the item asks nothing now: it ended, its question was answered already, or it waits on an approval, which is resolved through /v1/policy/approvals/{approvalId}/resolve and not answered.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["text"],
+  "properties": {
+    "text": { "type": "string", "minLength": 1, "maxLength": 16384 }
+  }
+}

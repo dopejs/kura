@@ -92,6 +92,11 @@
               "type": "integer",
               "minimum": 1,
               "description": "The running round a steered input reached."
+            },
+            "approvalId": {
+              "type": "string",
+              "minLength": 1,
+              "description": "For kind approval: the approval whose resolution the input reports (slice 5)."
             }
           }
         }

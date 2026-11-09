@@ -1495,6 +1495,133 @@ async fn a_tool_nobody_approves_is_not_run() {
     assert!(output.content.contains("approve"), "{}", output.content);
 }
 
+/// A turn's approval memory (a work item's round) that hands back an
+/// approval, as a test double: what it was told, and what it holds.
+#[derive(Default)]
+struct Memory {
+    holds: Mutex<Option<String>>,
+    gave_up: Mutex<Vec<String>>,
+    used: Mutex<Vec<String>>,
+}
+
+impl kura_policy::TurnApprovals for Memory {
+    fn held(&self, _call: &kura_policy::ApprovalCall<'_>) -> Option<String> {
+        self.holds.lock().unwrap().clone()
+    }
+    fn gave_up(
+        &self,
+        call: &kura_policy::ApprovalCall<'_>,
+        approval: &kura_policy::Approval,
+        _decision: Option<&kura_policy::Decision>,
+    ) -> Option<String> {
+        assert_eq!(call.resource_id, approval.resource_id);
+        self.gave_up
+            .lock()
+            .unwrap()
+            .push(approval.approval_id.clone());
+        Some("The work item waits for it.".to_string())
+    }
+    fn used(&self, approval_id: &str) {
+        self.used.lock().unwrap().push(approval_id.to_string());
+    }
+}
+
+fn remembering_tool(
+    manager: &Arc<kura_mcp::Manager>,
+    memory: &Arc<Memory>,
+    wait: Duration,
+) -> kura_mcp::McpTool {
+    let memory: Arc<dyn kura_policy::TurnApprovals> = memory.clone();
+    approving_tool(manager, wait).with_turn_approvals(Some(memory))
+}
+
+/// Slice 5 of work items: a call that gives up tells the turn's memory,
+/// which may add to what the model reads; the approval stays pending.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_that_gives_up_tells_the_turns_memory() {
+    let (manager, policy) = started_server_with_policy(fake_tool("advance"));
+    allow(&manager, "advance", ExposureMode::ApprovalRequired);
+    let memory = Arc::new(Memory::default());
+    let output = remembering_tool(&manager, &memory, Duration::from_millis(150))
+        .call(&invocation("srv-1__advance", "{}"))
+        .await
+        .unwrap();
+    assert!(!output.success);
+    assert!(
+        output.content.contains("waits for it"),
+        "{}",
+        output.content
+    );
+    let pending = policy.list_approvals(Some(kura_policy::ApprovalStatus::Pending));
+    assert_eq!(
+        *memory.gave_up.lock().unwrap(),
+        [pending[0].approval_id.clone()]
+    );
+    assert!(memory.used.lock().unwrap().is_empty());
+}
+
+/// A held approval that is approved runs the call under it, once, without
+/// asking again; one that is for another call is never used.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_held_approval_runs_only_the_call_it_was_raised_for() {
+    let (manager, policy) = started_server_with_policy(fake_tool("advance"));
+    allow(&manager, "advance", ExposureMode::ApprovalRequired);
+    let raise = |resource_id: &str| {
+        let (approval, _) = policy
+            .request_approval(kura_policy::RequestApprovalInput {
+                action: "tool_call.execute".to_string(),
+                resource_kind: kura_mcp::RESOURCE_KIND_TOOL.to_string(),
+                resource_id: resource_id.to_string(),
+                reason: "run advance".to_string(),
+                requested_by: "agent".to_string(),
+                ..kura_policy::RequestApprovalInput::default()
+            })
+            .unwrap();
+        policy
+            .resolve_approval(
+                &approval.approval_id,
+                kura_policy::ResolveApprovalInput {
+                    resolution: "approved".to_string(),
+                    comment: String::new(),
+                },
+            )
+            .unwrap();
+        approval.approval_id
+    };
+
+    let memory = Arc::new(Memory::default());
+    let other = raise("srv-1:other:chat");
+    *memory.holds.lock().unwrap() = Some(other);
+    let output = remembering_tool(&manager, &memory, Duration::from_millis(150))
+        .call(&invocation("srv-1__advance", "{}"))
+        .await
+        .unwrap();
+    assert!(!output.success, "another call's approval let this one run");
+    assert!(memory.used.lock().unwrap().is_empty());
+    assert_eq!(
+        policy
+            .list_approvals(Some(kura_policy::ApprovalStatus::Pending))
+            .len(),
+        1,
+        "it asked for its own approval instead"
+    );
+
+    let own = raise("srv-1:advance:chat");
+    *memory.holds.lock().unwrap() = Some(own.clone());
+    let before = policy.list_approvals(None).len();
+    let output = remembering_tool(&manager, &memory, Duration::from_millis(150))
+        .call(&invocation("srv-1__advance", "{}"))
+        .await
+        .unwrap();
+    assert!(output.success, "{}", output.content);
+    assert_eq!(*memory.used.lock().unwrap(), [own]);
+    assert_eq!(
+        policy.list_approvals(None).len(),
+        before,
+        "nothing new was asked"
+    );
+}
+
 #[tokio::test]
 async fn a_tool_with_no_exposure_rule_is_refused() {
     // Blocked is the default, and a tool nobody exposed must stay that way

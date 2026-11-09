@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://kura.local/schemas/events/work-item-attention-cleared.event.schema.json",
   "title": "WorkItemAttentionClearedEvent",
-  "description": "A person's input answered the item's question: the round that reads it cleared the attention (work-items.md \u00a77). Carries no message bodies (\u00a710).",
+  "description": "The item no longer waits on a person (work-items.md \u00a77). by round: a person's message answered the question and the round that reads it cleared it (roundSeq). by answer: POST /v1/work-items/{id}/answer answered it. by approval: the approval it waited on was resolved (approvalId). Before slice 5 only rounds cleared attention, and `by` was absent. Carries no message bodies (\u00a710).",
   "type": "object",
   "allOf": [
     {
@@ -44,8 +44,7 @@
           "type": "object",
           "required": [
             "itemId",
-            "basis",
-            "roundSeq"
+            "basis"
           ],
           "additionalProperties": false,
           "properties": {
@@ -64,6 +63,18 @@
             "roundSeq": {
               "type": "integer",
               "minimum": 1
+            },
+            "by": {
+              "type": "string",
+              "enum": [
+                "round",
+                "answer",
+                "approval"
+              ]
+            },
+            "approvalId": {
+              "type": "string",
+              "minLength": 1
             }
           }
         }

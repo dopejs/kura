@@ -145,13 +145,79 @@ pub enum ReportReason {
     ReportUnreadable,
 }
 
-/// The one question a person must answer for the work to go on.
+/// The question a round's report asks a person (§3.4), as the model wrote
+/// it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Attention {
+pub struct ReportAttention {
     pub question: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
+}
+
+/// What an item's attention waits for (§7).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttentionKind {
+    /// A person's answer to the report's question: their next message on
+    /// the owner conversation, or `POST /v1/work-items/{id}/answer`.
+    #[default]
+    Question,
+    /// A pending approval a round's tool call gave up waiting on; resolved
+    /// through `/v1/policy/approvals/{id}/resolve` like any other.
+    Approval,
+}
+
+impl AttentionKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Question => "question",
+            Self::Approval => "approval",
+        }
+    }
+}
+
+/// The one thing a person must do for the work to go on. Set only by a
+/// round: from its report's structured `attention`, or by the daemon when
+/// the round's tool call left an approval pending (slice 5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Attention {
+    /// Absent in rows written before slice 5: a question.
+    #[serde(default)]
+    pub kind: AttentionKind,
+    /// The report's question, or for an approval what it asks (its reason).
+    pub question: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    /// The approval waited on, for kind `approval`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub approval_id: String,
+}
+
+impl Attention {
+    /// The report's question as the item's attention.
+    #[must_use]
+    pub fn question(asked: &ReportAttention) -> Self {
+        Self {
+            kind: AttentionKind::Question,
+            question: asked.question.clone(),
+            options: asked.options.clone(),
+            approval_id: String::new(),
+        }
+    }
+
+    /// A pending approval as the item's attention.
+    #[must_use]
+    pub fn approval(approval_id: &str, question: &str) -> Self {
+        Self {
+            kind: AttentionKind::Approval,
+            question: question.to_string(),
+            options: Vec::new(),
+            approval_id: approval_id.to_string(),
+        }
+    }
 }
 
 /// A round's report as recorded.
@@ -161,7 +227,7 @@ pub struct Report {
     pub status: ReportStatus,
     pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attention: Option<Attention>,
+    pub attention: Option<ReportAttention>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<ReportReason>,
 }
@@ -433,6 +499,86 @@ pub struct WorkItem {
     /// On a single-item read only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outbox: Option<Vec<OutboxRow>>,
+    /// On a single-item read only (slice 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approvals: Option<Vec<ApprovalLink>>,
+}
+
+/// Where an approval an item waited on stands (§7, slice 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalLinkState {
+    /// Not resolved yet; the item waits for it.
+    Pending,
+    /// A person approved it; the item's next round may run the call once.
+    Approved,
+    Rejected,
+    /// The policy engine no longer has it.
+    Gone,
+    /// A round ran the approved call under it.
+    Used,
+}
+
+impl ApprovalLinkState {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+            Self::Gone => "gone",
+            Self::Used => "used",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "approved" => Ok(Self::Approved),
+            "rejected" => Ok(Self::Rejected),
+            "gone" => Ok(Self::Gone),
+            "used" => Ok(Self::Used),
+            other => Err(format!("unknown work item approval state {other:?}")),
+        }
+    }
+}
+
+/// An approval a round's tool call gave up waiting on, which the item
+/// waits on (§7). The approval itself is in `/v1/policy/approvals`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalLink {
+    pub approval_id: String,
+    /// The round whose call last waited on it.
+    pub round_seq: i64,
+    pub state: ApprovalLinkState,
+    /// What the person is asked: the approval's reason.
+    pub question: String,
+    pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_at: Option<DateTime<Utc>>,
+}
+
+/// One entry of the attention queue (`GET /v1/work-items/attention`): an
+/// open item in a `person/*` stage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionEntry {
+    pub item_id: String,
+    pub title: String,
+    pub stage: Stage,
+    pub basis: Basis,
+    /// The question or the approval, for `person/answer` and
+    /// `person/approval`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention: Option<Attention>,
+    /// The last report's summary: why a blocked or failed item stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// When the item last changed: roughly how long it has waited.
+    pub updated_at: DateTime<Utc>,
 }
 
 /// What a subscription grants (§4, §5.2).

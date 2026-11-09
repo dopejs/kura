@@ -23,9 +23,9 @@ use serde_json::{Map, Value, json};
 use crate::report::{read_report, round_instructions, round_query, unreadable_report};
 use crate::stage::{StageFacts, derive_stage};
 use crate::types::{
-    Attention, Basis, EndReason, Input, InputKind, InputState, ItemState, Mandate, MandateSource,
-    MandateSourceKind, Report, Round, RoundState, Sender, Stage, Strength, Subscription,
-    SubscriptionRole, WorkItem, WorkItemsConfig,
+    ApprovalLink, ApprovalLinkState, Attention, AttentionKind, Basis, EndReason, Input, InputKind,
+    InputState, ItemState, Mandate, MandateSource, MandateSourceKind, Report, Round, RoundState,
+    Sender, Stage, Strength, Subscription, SubscriptionRole, WorkItem, WorkItemsConfig,
 };
 
 const MAX_TITLE_CHARS: usize = 200;
@@ -57,6 +57,11 @@ pub enum WorkItemError {
     /// The row's conversation is being sent to right now.
     #[error("work item outbox row {0} is being sent; try again")]
     OutboxRowSending(i64),
+    /// `/answer` on an item that asks no question now: it ended, its
+    /// question was answered already, or it waits on an approval (resolved
+    /// through the approval, not answered).
+    #[error("{0}")]
+    NotAsking(String),
     #[error("work item store: {0}")]
     Store(String),
 }
@@ -74,6 +79,7 @@ impl WorkItemError {
             Self::OutboxRowNotFound(_) => "work_item_outbox_row_not_found",
             Self::OutboxRowSettled { .. } => "work_item_outbox_row_settled",
             Self::OutboxRowSending(_) => "work_item_outbox_row_sending",
+            Self::NotAsking(_) => "work_item_not_asking",
             Self::Store(_) => "store",
         }
     }
@@ -140,7 +146,7 @@ pub enum RoundOutcome {
 /// Work items for every tenant on this daemon.
 pub struct Manager {
     pub(crate) store: Arc<StorePool>,
-    bus: Arc<Bus>,
+    pub(crate) bus: Arc<Bus>,
     pub(crate) config: WorkItemsConfig,
     /// Runs rounds (`driver.rs`). Absent in tests that only record.
     pub(crate) chat: Option<Arc<kura_chat::Service>>,
@@ -156,6 +162,12 @@ pub struct Manager {
     pub(crate) boot_at: DateTime<Utc>,
     /// The boot recovery was started (it runs once per manager).
     pub(crate) recovery_started: std::sync::atomic::AtomicBool,
+    /// The approvals rounds wait on live here (`attention.rs`, slice 5).
+    /// Absent in tests that do not wait on approvals.
+    pub(crate) policy: Option<Arc<kura_policy::Engine>>,
+    /// The approval watcher thread, and its stop flag.
+    pub(crate) approval_watcher: parking_lot::Mutex<Option<std::thread::JoinHandle<()>>>,
+    pub(crate) approval_watcher_stop: std::sync::atomic::AtomicBool,
 }
 
 impl Manager {
@@ -170,6 +182,9 @@ impl Manager {
             outbox: crate::outbox::Outbox::default(),
             boot_at: Utc::now(),
             recovery_started: std::sync::atomic::AtomicBool::new(false),
+            policy: None,
+            approval_watcher: parking_lot::Mutex::default(),
+            approval_watcher_stop: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -437,12 +452,33 @@ impl Manager {
             ),
         };
         let ends = report.as_ref().and_then(|report| report.status.ends_with());
-        let attention = report.as_ref().and_then(|report| report.attention.clone());
         let report_json = report
             .as_ref()
             .map(serde_json::to_string)
             .transpose()
             .map_err(|err| WorkItemError::Store(format!("encode report: {err}")))?;
+        // One writer hold from here to the settlement: an approval resolved
+        // meanwhile is either seen as resolved here (the item reads its
+        // outcome next), or resolved after the attention below is written
+        // (and the resolution clears it). Never a link to an answered one.
+        let store = self.store.write();
+        // A tool call of the round gave up waiting on an approval that is
+        // still pending (§7): unless the report ends the item, the item now
+        // waits on that approval, whatever else the report asks. The
+        // report keeps its own question.
+        let waits_on = match (&report, ends) {
+            (Some(_), None) => store
+                .pending_work_item_approval_of_round(&turn.tenant_id, &turn.item_id, turn.seq)
+                .map_err(WorkItemError::Store)?,
+            _ => None,
+        };
+        let attention = match &waits_on {
+            Some(link) => Some(Attention::approval(&link.approval_id, &link.question)),
+            None => report
+                .as_ref()
+                .and_then(|report| report.attention.as_ref())
+                .map(Attention::question),
+        };
         let settlement = WorkItemRoundSettlement {
             round_state: round_state.as_str().to_string(),
             outcome: label.clone(),
@@ -465,11 +501,10 @@ impl Manager {
                 .transpose()
                 .map_err(|err| WorkItemError::Store(format!("encode attention: {err}")))?,
         };
-        let applied = self
-            .store
-            .write()
+        let applied = store
             .settle_work_item_round(&turn.tenant_id, &turn.item_id, turn.seq, &settlement)
             .map_err(WorkItemError::Store)?;
+        drop(store);
         if !applied {
             return Err(WorkItemError::RoundNotRunning(turn.request_id.clone()));
         }
@@ -499,11 +534,24 @@ impl Manager {
         }
         self.publish(&after, "round_settled", payload);
         if let Some(attention) = &attention {
-            self.publish(
-                &after,
-                "attention_raised",
-                json!({"roundSeq": turn.seq, "optionCount": attention.options.len()}),
-            );
+            let mut payload = json!({
+                "roundSeq": turn.seq,
+                "kind": attention.kind.as_str(),
+                "optionCount": attention.options.len(),
+            });
+            if attention.kind == AttentionKind::Approval {
+                payload["approvalId"] = json!(attention.approval_id);
+                log_change(
+                    &after,
+                    stage_name(after.stage),
+                    after.stage,
+                    &format!(
+                        "round {} waits on approval {}",
+                        turn.seq, attention.approval_id
+                    ),
+                );
+            }
+            self.publish(&after, "attention_raised", payload);
         }
         if let Some(reason) = ends {
             self.publish(
@@ -534,6 +582,9 @@ impl Manager {
         let outbox = store
             .list_work_item_outbox(&record.tenant_id, &record.item_id)
             .map_err(WorkItemError::Store)?;
+        let approvals = store
+            .list_work_item_approvals(&record.tenant_id, &record.item_id)
+            .map_err(WorkItemError::Store)?;
         drop(store);
         let mut item = to_view(record, &activity)?;
         item.rounds = Some(
@@ -558,6 +609,12 @@ impl Manager {
             outbox
                 .into_iter()
                 .map(crate::outbox::row_view)
+                .collect::<Result<_, _>>()?,
+        );
+        item.approvals = Some(
+            approvals
+                .into_iter()
+                .map(approval_view)
                 .collect::<Result<_, _>>()?,
         );
         Ok(item)
@@ -763,9 +820,14 @@ pub(crate) fn to_view(
         // A reply that failed 3 times in a row holds the item here too,
         // though the outbox keeps retrying it (§8).
         delivery_problem: last_round == Some(RoundState::Failed) || activity.outbox_problem,
-        // Linking approvals arrives with slice 5.
-        approval_pending: false,
-        attention: attention.is_some(),
+        // The attention names a pending approval: a resolution clears it
+        // in the same write that records the outcome (slice 5).
+        approval_pending: attention
+            .as_ref()
+            .is_some_and(|attention| attention.kind == AttentionKind::Approval),
+        attention: attention
+            .as_ref()
+            .is_some_and(|attention| attention.kind == AttentionKind::Question),
         last_report: last_report.as_ref().map(|report| report.status),
         // A round consumes every input pending when it starts, and a round
         // only starts past a blocked or failed report on a person's input:
@@ -795,6 +857,7 @@ pub(crate) fn to_view(
         inputs: None,
         subscriptions: None,
         outbox: None,
+        approvals: None,
     })
 }
 
@@ -810,6 +873,20 @@ fn subscription_view(record: WorkItemSubscriptionRecord) -> Result<Subscription,
         last_event_at: record.last_event_at,
         dropped_at: record.dropped_at,
         drop_reason: record.drop_reason,
+    })
+}
+
+fn approval_view(
+    record: kura_store::work_item_approvals::WorkItemApprovalRecord,
+) -> Result<ApprovalLink, WorkItemError> {
+    Ok(ApprovalLink {
+        state: ApprovalLinkState::parse(&record.state).map_err(WorkItemError::Store)?,
+        approval_id: record.approval_id,
+        round_seq: record.round_seq,
+        question: record.question,
+        created_at: record.created_at,
+        resolved_at: record.resolved_at,
+        used_at: record.used_at,
     })
 }
 

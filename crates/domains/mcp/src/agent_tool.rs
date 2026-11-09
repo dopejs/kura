@@ -57,7 +57,26 @@ pub struct McpTool {
     approval_wait: Duration,
     /// The server declared the tool read-only (`readOnlyHint`).
     read_only: bool,
+    /// What the turn remembers about approvals (a work item's round): a
+    /// call it holds an approval for waits on, or runs under, that approval
+    /// instead of raising another. `None` for an ordinary turn.
+    turn_approvals: Option<Arc<dyn kura_policy::TurnApprovals>>,
 }
+
+/// What an approval for a call of `tool_name` on `server_id` and
+/// `runtime_surface` is raised for: the same action, resource kind and
+/// resource id `Manager::authorize_tool` gives it.
+fn approval_call<'a>(resource_id: &'a str, arguments: &'a str) -> kura_policy::ApprovalCall<'a> {
+    kura_policy::ApprovalCall {
+        action: TOOL_CALL_ACTION,
+        resource_kind: crate::RESOURCE_KIND_TOOL,
+        resource_id,
+        arguments,
+    }
+}
+
+/// The action an MCP tool's approval is for (`Manager::authorize_tool`).
+const TOOL_CALL_ACTION: &str = "tool_call.execute";
 
 impl McpTool {
     #[must_use]
@@ -78,7 +97,22 @@ impl McpTool {
             runtime_surface: runtime_surface.into(),
             approval_wait: APPROVAL_WAIT,
             read_only: false,
+            turn_approvals: None,
         }
+    }
+
+    /// What the turn remembers about approvals (work-items.md §7). With
+    /// one, a call the turn already holds a pending or approved approval
+    /// for waits on, or runs under, that approval instead of raising a new
+    /// one; a call that gives up waiting tells it, so the turn's owner can
+    /// wait for the approval.
+    #[must_use]
+    pub fn with_turn_approvals(
+        mut self,
+        turn_approvals: Option<Arc<dyn kura_policy::TurnApprovals>>,
+    ) -> Self {
+        self.turn_approvals = turn_approvals;
+        self
     }
 
     /// Marks the tool as declared read-only by its server, which lets the
@@ -147,6 +181,32 @@ impl Tool for McpTool {
                 }
             };
 
+            let resource_id = format!(
+                "{}:{}:{}",
+                self.server_id.trim(),
+                self.tool_name.trim(),
+                self.runtime_surface.trim()
+            );
+            let call = approval_call(&resource_id, &invocation.arguments);
+
+            // An approval the turn already holds for exactly this call (a
+            // work item's round, coming back for the call a person was
+            // asked about): run under it, or wait on it, rather than raise a
+            // second one.
+            if let Some(held) = self.held_approval(&call) {
+                let granted = match held.status {
+                    kura_policy::ApprovalStatus::Approved => self.authorize_with(&held.approval_id),
+                    _ => self.await_approval(&held.approval_id).await,
+                };
+                let Some(granted) = granted else {
+                    return Ok(self.not_approved(&call, &held.approval_id, None));
+                };
+                if let Some(turn_approvals) = &self.turn_approvals {
+                    turn_approvals.used(&held.approval_id);
+                }
+                return self.run(arguments, granted).await;
+            }
+
             let authorization = self
                 .manager
                 .authorize_tool(
@@ -170,16 +230,28 @@ impl Tool for McpTool {
                 // rather than failing the turn, because the person is being
                 // asked right now and a turn that ended here would make them
                 // start it over.
-                ToolAuthorizationStatus::Pending => match self.await_approval(&authorization).await
-                {
-                    Some(granted) => granted,
-                    None => {
-                        return Ok(ToolOutput::failed(format!(
-                            "{} was not run: it needs a person to approve it, and none did",
-                            self.tool_name
-                        )));
+                ToolAuthorizationStatus::Pending => {
+                    let approval_id = authorization
+                        .approval
+                        .as_ref()
+                        .map(|approval| approval.approval_id.clone())
+                        .unwrap_or_default();
+                    match self.await_approval(&approval_id).await {
+                        Some(granted) => {
+                            if let Some(turn_approvals) = &self.turn_approvals {
+                                turn_approvals.used(&approval_id);
+                            }
+                            granted
+                        }
+                        None => {
+                            return Ok(self.not_approved(
+                                &call,
+                                &approval_id,
+                                authorization.decision.as_ref(),
+                            ));
+                        }
                     }
-                },
+                }
                 ToolAuthorizationStatus::Rejected | ToolAuthorizationStatus::Blocked => {
                     let reason = if authorization.message.is_empty() {
                         "it is not available on this surface".to_string()
@@ -192,7 +264,19 @@ impl Tool for McpTool {
                     )));
                 }
             };
+            self.run(arguments, authorization).await
+        })
+    }
+}
 
+impl McpTool {
+    /// Runs the call under `authorization`, which allowed it.
+    async fn run(
+        &self,
+        arguments: Value,
+        authorization: ToolAuthorizationResponse,
+    ) -> Result<ToolOutput, ToolError> {
+        {
             // `call_tool` blocks on the server's reply. Off the async
             // worker, or it would stall every other future on it — including
             // the calls running beside this one (2.6).
@@ -231,12 +315,80 @@ impl Tool for McpTool {
                 None => String::new(),
             };
             Ok(ToolOutput::ok(output))
-        })
+        }
     }
-}
 
-impl McpTool {
-    /// Wait for a person to answer the approval this call raised.
+    /// The approval the turn holds for `call`, as the engine has it now,
+    /// when it is still one to wait on or run under.
+    fn held_approval(&self, call: &kura_policy::ApprovalCall<'_>) -> Option<kura_policy::Approval> {
+        let approval_id = self.turn_approvals.as_ref()?.held(call)?;
+        let approval = self.manager.approval(&approval_id)?;
+        // The engine's record must be for this very call: a memory that
+        // handed back another call's approval must not let this one run.
+        let same_call = approval.action == call.action
+            && approval.resource_kind == call.resource_kind
+            && approval.resource_id == call.resource_id;
+        let usable = matches!(
+            approval.status,
+            kura_policy::ApprovalStatus::Pending | kura_policy::ApprovalStatus::Approved
+        );
+        (same_call && usable).then_some(approval)
+    }
+
+    /// What the model reads when the call was not approved: refused, or
+    /// nobody answered in time. In the second case the approval is still
+    /// pending and the turn's memory is told, so its owner can wait for it.
+    fn not_approved(
+        &self,
+        call: &kura_policy::ApprovalCall<'_>,
+        approval_id: &str,
+        decision: Option<&kura_policy::Decision>,
+    ) -> ToolOutput {
+        let pending = self
+            .manager
+            .approval(approval_id)
+            .filter(|approval| approval.status == kura_policy::ApprovalStatus::Pending);
+        let Some(pending) = pending else {
+            return ToolOutput::failed(format!(
+                "{} was not run: it was not approved, or is no longer allowed",
+                self.tool_name
+            ));
+        };
+        let mut message = format!(
+            "{} was not run: it needs a person to approve it, and none did",
+            self.tool_name
+        );
+        if let Some(note) = self
+            .turn_approvals
+            .as_ref()
+            .and_then(|turn_approvals| turn_approvals.gave_up(call, &pending, decision))
+        {
+            message.push_str(". ");
+            message.push_str(note.trim());
+        }
+        ToolOutput::failed(message)
+    }
+
+    /// The authorization for a call under the approved `approval_id`, if
+    /// the runtime still allows it.
+    fn authorize_with(&self, approval_id: &str) -> Option<ToolAuthorizationResponse> {
+        let granted = self
+            .manager
+            .authorize_tool(
+                &self.server_id,
+                &self.tool_name,
+                &AuthorizeToolInput {
+                    runtime_surface: self.runtime_surface.clone(),
+                    arguments: String::new(),
+                    approval_id: approval_id.to_string(),
+                    requested_by: "agent".to_string(),
+                },
+            )
+            .ok()?;
+        (granted.status == ToolAuthorizationStatus::Allowed).then_some(granted)
+    }
+
+    /// Wait for a person to answer the approval `approval_id`.
     ///
     /// Returns the second authorization -- the one carrying the approval id --
     /// when it was granted, and `None` when it was refused or nobody answered
@@ -249,34 +401,17 @@ impl McpTool {
     /// is handed, so dropping the check here changes the message the model gets
     /// and not whether the tool runs. Defence in depth, said plainly so nobody
     /// reads it as the guard.
-    async fn await_approval(
-        &self,
-        pending: &ToolAuthorizationResponse,
-    ) -> Option<ToolAuthorizationResponse> {
-        let approval_id = pending.approval.as_ref()?.approval_id.clone();
+    async fn await_approval(&self, approval_id: &str) -> Option<ToolAuthorizationResponse> {
         if approval_id.is_empty() {
             return None;
         }
         let deadline = std::time::Instant::now() + self.approval_wait;
         loop {
-            match self.manager.approval(&approval_id) {
+            match self.manager.approval(approval_id) {
                 // Answered yes. Ask again with the id, and let the runtime say
                 // whether that is still enough.
                 Some(approval) if approval.status == kura_policy::ApprovalStatus::Approved => {
-                    let granted = self
-                        .manager
-                        .authorize_tool(
-                            &self.server_id,
-                            &self.tool_name,
-                            &AuthorizeToolInput {
-                                runtime_surface: self.runtime_surface.clone(),
-                                arguments: String::new(),
-                                approval_id: approval_id.clone(),
-                                requested_by: "agent".to_string(),
-                            },
-                        )
-                        .ok()?;
-                    return (granted.status == ToolAuthorizationStatus::Allowed).then_some(granted);
+                    return self.authorize_with(approval_id);
                 }
                 // Answered no, or withdrawn. Either way there is nothing to
                 // wait for.
@@ -306,7 +441,7 @@ impl McpTool {
 /// [`tools_for_tenant`].
 #[must_use]
 pub fn tools_for_surface(manager: &Arc<Manager>, runtime_surface: &str) -> Vec<Arc<dyn Tool>> {
-    collect_tools(manager, manager.list_servers(), runtime_surface)
+    collect_tools(manager, manager.list_servers(), runtime_surface, None)
 }
 
 /// The tools a turn acting for `tenant_id` may be offered: its own tenant's
@@ -324,9 +459,28 @@ pub fn tools_for_tenant(
     runtime_surface: &str,
     include_unowned: bool,
 ) -> Vec<Arc<dyn Tool>> {
+    tools_for_tenant_with_approvals(manager, tenant_id, runtime_surface, include_unowned, None)
+}
+
+/// [`tools_for_tenant`] for a turn that remembers its approvals (a work
+/// item's round, work-items.md §7): every tool is built
+/// [`McpTool::with_turn_approvals`].
+#[must_use]
+pub fn tools_for_tenant_with_approvals(
+    manager: &Arc<Manager>,
+    tenant_id: &str,
+    runtime_surface: &str,
+    include_unowned: bool,
+    turn_approvals: Option<Arc<dyn kura_policy::TurnApprovals>>,
+) -> Vec<Arc<dyn Tool>> {
     let tenant_id = tenant_id.trim();
     if tenant_id.is_empty() {
-        return tools_for_surface(manager, runtime_surface);
+        return collect_tools(
+            manager,
+            manager.list_servers(),
+            runtime_surface,
+            turn_approvals,
+        );
     }
     let servers = manager
         .list_servers()
@@ -336,13 +490,14 @@ pub fn tools_for_tenant(
             owner == tenant_id || (include_unowned && owner.is_empty())
         })
         .collect();
-    collect_tools(manager, servers, runtime_surface)
+    collect_tools(manager, servers, runtime_surface, turn_approvals)
 }
 
 fn collect_tools(
     manager: &Arc<Manager>,
     servers: Vec<crate::ServerResource>,
     runtime_surface: &str,
+    turn_approvals: Option<Arc<dyn kura_policy::TurnApprovals>>,
 ) -> Vec<Arc<dyn Tool>> {
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
     for server in servers {
@@ -360,7 +515,8 @@ fn collect_tools(
                     resource.tool.input_schema.clone(),
                     runtime_surface,
                 )
-                .with_read_only(resource.tool.read_only_hint),
+                .with_read_only(resource.tool.read_only_hint)
+                .with_turn_approvals(turn_approvals.clone()),
             ));
         }
     }

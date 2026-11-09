@@ -3634,15 +3634,53 @@ export type WorkItemStage =
   | "idle";
 export type WorkItemReportStatus = "progress" | "waiting" | "ready" | "blocked" | "failed" | "dropped";
 
-export interface WorkItemAttention {
+/** The question a round's report asks, as the model wrote it. */
+export interface WorkItemReportAttention {
   question: string;
   options?: string[];
+}
+
+/**
+ * What the item waits on a person for (slice 5). `question`: answer it with `answerWorkItem` (or the requester's next
+ * message). `approval`: resolve `approvalId` with `resolveApproval`; `question` is what the approval asks. `kind` is
+ * absent only on rows written before slice 5, and then means `question`.
+ */
+export interface WorkItemAttention {
+  kind?: "question" | "approval";
+  question: string;
+  options?: string[];
+  approvalId?: string;
+}
+
+/** An approval a round's tool call gave up waiting on, which the item waits on (slice 5). */
+export interface WorkItemApprovalLink {
+  approvalId: string;
+  roundSeq: number;
+  /** approved: the next round may run that very call once under it; used: it did. */
+  state: "pending" | "approved" | "rejected" | "gone" | "used";
+  question: string;
+  createdAt: string;
+  resolvedAt?: string;
+  usedAt?: string;
+}
+
+/** One entry of `listWorkItemAttention`: an open item waiting on a person. */
+export interface WorkItemAttentionEntry {
+  itemId: string;
+  title: string;
+  stage: "person/delivery" | "person/approval" | "person/answer" | "person/blocked" | "person/failed";
+  basis: WorkItemMandate["basis"];
+  /** The question (person/answer) or the approval (person/approval). */
+  attention?: WorkItemAttention;
+  /** The last report's summary; absent for person/delivery. */
+  summary?: string;
+  updatedAt: string;
 }
 
 export interface WorkItemReport {
   status: WorkItemReportStatus;
   summary: string;
-  attention?: WorkItemAttention;
+  attention?: WorkItemReportAttention;
   /** Set by the daemon when the round's reply could not be read as a report. */
   reason?: "report_unreadable";
 }
@@ -3752,6 +3790,8 @@ export interface WorkItem {
   subscriptions?: WorkItemSubscription[];
   /** Present on getWorkItem only. */
   outbox?: WorkItemOutboxRow[];
+  /** Present on getWorkItem only (slice 5). */
+  approvals?: WorkItemApprovalLink[];
 }
 
 export interface WorkItemCreateInput {
@@ -4997,6 +5037,20 @@ export class KuraClient {
       `/v1/work-items/${encodeURIComponent(itemId)}/outbox/${encodeURIComponent(String(seq))}/withdraw`,
       { method: "POST", tenant: tenantOptions },
     );
+  }
+
+  /** Answers the item's question; the answer is its next round's input. 409 when it asks nothing now (ended, answered already, or waiting on an approval, which is resolved with `resolveApproval`). */
+  async answerWorkItem(itemId: string, text: string, tenantOptions?: TenantRequestOptions): Promise<WorkItem> {
+    return this.requestJSON<WorkItem>(`/v1/work-items/${encodeURIComponent(itemId)}/answer`, {
+      method: "POST",
+      body: { text },
+      tenant: tenantOptions,
+    });
+  }
+
+  /** The tenant's open work items waiting on a person, the longest waiting first. 404 until the work-items plugin is enabled. */
+  async listWorkItemAttention(tenantOptions?: TenantRequestOptions): Promise<{ items: WorkItemAttentionEntry[] }> {
+    return this.requestJSON<{ items: WorkItemAttentionEntry[] }>("/v1/work-items/attention", { tenant: tenantOptions });
   }
 
   async getSessionFrame(threadId: string, tenantOptions?: TenantRequestOptions): Promise<SessionFrame> {

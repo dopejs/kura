@@ -33,6 +33,11 @@
       "type": "array",
       "description": "The replies the item sent or will send, oldest first (work-items.md §8). Present on GET /v1/work-items/{id} only.",
       "items": { "$ref": "#/$defs/outboxRow" }
+    },
+    "approvals": {
+      "type": "array",
+      "description": "The approvals the item waited on, oldest first (work-items.md §7, slice 5). Present on GET /v1/work-items/{id} only.",
+      "items": { "$ref": "#/$defs/approvalLink" }
     }
   },
   "$defs": {
@@ -97,10 +102,38 @@
     "attention": {
       "type": "object",
       "additionalProperties": false,
+      "description": "The one thing a person must do for the work to go on (work-items.md §7), set only by a round. question: the report's structured question, cleared by the requester's next message or POST /v1/work-items/{id}/answer. approval: a pending approval a round's tool call gave up waiting on; `question` is what the approval asks, and its resolution through /v1/policy/approvals/{approvalId}/resolve clears it and wakes the item. `kind` is absent only in rows written before slice 5, and then means question.",
+      "required": ["question"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["question", "approval"] },
+        "question": { "type": "string" },
+        "options": { "type": "array", "items": { "type": "string" } },
+        "approvalId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "reportAttention": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The question a report asks, as the model wrote it.",
       "required": ["question"],
       "properties": {
         "question": { "type": "string" },
         "options": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "approvalLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An approval a round's tool call gave up waiting on, which the item waits on (work-items.md §7). The approval itself is in /v1/policy/approvals. pending: not resolved yet; approved: the item's next round may run that very call (same tool and arguments) once under it; rejected; gone: the policy engine no longer has it; used: a round ran the call under it.",
+      "required": ["approvalId", "roundSeq", "state", "question", "createdAt"],
+      "properties": {
+        "approvalId": { "type": "string", "minLength": 1 },
+        "roundSeq": { "type": "integer", "minimum": 1, "description": "The round whose call last waited on it." },
+        "state": { "type": "string", "enum": ["pending", "approved", "rejected", "gone", "used"] },
+        "question": { "type": "string", "description": "What the approval asks: its reason." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "resolvedAt": { "type": "string", "format": "date-time" },
+        "usedAt": { "type": "string", "format": "date-time" }
       }
     },
     "report": {
@@ -111,7 +144,7 @@
       "properties": {
         "status": { "type": "string", "enum": ["progress", "waiting", "ready", "blocked", "failed", "dropped"] },
         "summary": { "type": "string" },
-        "attention": { "$ref": "#/$defs/attention" },
+        "attention": { "$ref": "#/$defs/reportAttention" },
         "reason": { "type": "string", "enum": ["report_unreadable"] }
       }
     },
