@@ -50,6 +50,7 @@ pub const WORK_ITEMS_OPENED_TOTAL: &str = "kura_work_items_opened_total";
 pub const WORK_ITEM_INPUTS_TOTAL: &str = "kura_work_item_inputs_total";
 pub const WORK_ITEM_MANDATE_CHECKS_TOTAL: &str = "kura_work_item_mandate_checks_total";
 pub const WORK_ITEM_OUTBOX_TOTAL: &str = "kura_work_item_outbox_total";
+pub const WORK_ITEM_RECOVERED_TOTAL: &str = "kura_work_item_recovered_total";
 
 /// Help text per series, rendered as `# HELP`.
 const HELP: &[(&str, &str)] = &[
@@ -175,7 +176,7 @@ const HELP: &[(&str, &str)] = &[
     ),
     (
         WORK_ITEM_ROUNDS_TOTAL,
-        "Work item rounds that ended, by outcome (progress|waiting|ready|blocked|failed|dropped|report_unreadable|turn_error). turn_error: the turn ended without a report.",
+        "Work item rounds that ended, by outcome (progress|waiting|ready|blocked|failed|dropped|report_unreadable|turn_error|interrupted). turn_error: the turn ended without a report; interrupted: a restart ended it and the boot did not rerun it.",
     ),
     (
         WORK_ITEMS_OPENED_TOTAL,
@@ -192,6 +193,10 @@ const HELP: &[(&str, &str)] = &[
     (
         WORK_ITEM_OUTBOX_TOTAL,
         "Work item outbox attempts and drops, by result (sent|retry|dropped). retry: a failed attempt that will be tried again.",
+    ),
+    (
+        WORK_ITEM_RECOVERED_TOTAL,
+        "Work item rounds a restart left running, by what the boot did (mode=resumed|fresh|skipped). resumed: rerun from its checkpoint; fresh: rerun from its question (no checkpoint, or one older than 24 h); skipped: ended as interrupted without a rerun.",
     ),
 ];
 

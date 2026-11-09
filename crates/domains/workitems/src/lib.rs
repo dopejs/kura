@@ -10,8 +10,9 @@
 //! item on its requester's message (steering a running round, or running
 //! the next one), resume of an ended item after its mandate is revalidated,
 //! and stop. Slice 3: the outbox, which sends an item's replies to a
-//! conversation in order and retries them across restarts. Restart
-//! recovery, attention answers, rules and webhooks arrive in the later
+//! conversation in order and retries them across restarts. Slice 4: restart
+//! recovery, which reruns at boot the rounds a previous process left
+//! running. Attention answers, rules and webhooks arrive in the later
 //! slices. Off unless `entries.work-items.config.enabled` is true.
 
 mod driver;
@@ -19,6 +20,7 @@ mod im;
 mod manager;
 mod mandate;
 mod outbox;
+mod recovery;
 mod report;
 mod stage;
 mod tool;
@@ -34,8 +36,12 @@ pub use manager::{
 pub use outbox::{
     Flushed, OUTBOX_FIRST_BACKOFF_SECS, OUTBOX_MAX_BACKOFF_SECS, ReplyBinding, outbox_backoff,
 };
+pub use recovery::{
+    MAX_RERUNS_PER_ROUND, NotRerun, RECOVERY_WORKERS, RecoveredRound, Recovery, RecoveryMode,
+};
 pub use report::{
-    QuotedInput, REPORT_FORMAT_NAME, frame_input, read_report, report_schema, round_instructions,
+    OutboundEntry, QuotedInput, RECOVERY_NOTE_MAX_BODY_CHARS, RECOVERY_NOTE_MAX_MESSAGES,
+    REPORT_FORMAT_NAME, frame_input, read_report, recovery_note, report_schema, round_instructions,
     round_query, unreadable_report,
 };
 pub use stage::{StageFacts, derive_stage};

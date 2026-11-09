@@ -641,6 +641,10 @@ pub struct WorkItemsConfig {
     /// unbounded. Inputs over the cap stay queued until the item is woken
     /// again.
     pub max_rounds_per_item_per_hour: u32,
+    /// At boot, rerun the rounds a previous process left running (D7, §6),
+    /// with the same request id so they resume from their checkpoint. With
+    /// `false` they are ended as interrupted and wait for a person.
+    pub recover_on_boot: bool,
 }
 
 impl Default for WorkItemsConfig {
@@ -650,6 +654,7 @@ impl Default for WorkItemsConfig {
             max_open_items: 50,
             subscription_idle_days: 14,
             max_rounds_per_item_per_hour: 20,
+            recover_on_boot: true,
         }
     }
 }

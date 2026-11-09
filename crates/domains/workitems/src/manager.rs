@@ -150,6 +150,12 @@ pub struct Manager {
     /// Reply senders, the conversations being sent to now, and the
     /// sweeper's signal (`outbox.rs`).
     pub(crate) outbox: crate::outbox::Outbox,
+    /// When this manager, and so this process, came up: a round still
+    /// running that started before it was left by a previous process
+    /// (`recovery.rs`, slice 4).
+    pub(crate) boot_at: DateTime<Utc>,
+    /// The boot recovery was started (it runs once per manager).
+    pub(crate) recovery_started: std::sync::atomic::AtomicBool,
 }
 
 impl Manager {
@@ -162,6 +168,8 @@ impl Manager {
             chat: None,
             origins: parking_lot::Mutex::default(),
             outbox: crate::outbox::Outbox::default(),
+            boot_at: Utc::now(),
+            recovery_started: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

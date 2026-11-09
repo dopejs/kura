@@ -159,7 +159,7 @@ impl Outbox {
     }
 
     /// Wakes the sweeper to look again now.
-    fn poke(&self) {
+    pub(crate) fn poke(&self) {
         self.signal.state.lock().poked = true;
         self.signal.wake.notify_all();
     }
