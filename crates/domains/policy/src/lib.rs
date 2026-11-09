@@ -300,6 +300,47 @@ impl Engine {
     }
 }
 
+/// One call that needs a person's approval, as a [`TurnApprovals`] sees it:
+/// what would be approved (the same `action`, `resource_kind` and
+/// `resource_id` an approval for it carries) and the call's arguments as the
+/// model wrote them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApprovalCall<'a> {
+    pub action: &'a str,
+    pub resource_kind: &'a str,
+    pub resource_id: &'a str,
+    pub arguments: &'a str,
+}
+
+/// What one turn remembers about the approvals its calls waited on, beyond
+/// the call that raised them (work-items.md §7).
+///
+/// An ordinary turn has none: a call that gives up waiting leaves its
+/// approval pending and nobody comes back for it. A work item's round has
+/// one, so the item can wait for the approval and its next round can run the
+/// very call a person approved instead of raising a second approval for it.
+/// The engine stays the only place a person grants anything; this only
+/// remembers which approval belongs to which call.
+pub trait TurnApprovals: Send + Sync {
+    /// An approval this turn's owner already holds for exactly `call` (same
+    /// action, resource and arguments) that is pending or approved and not
+    /// used yet. The caller reads its status from the engine.
+    fn held(&self, call: &ApprovalCall<'_>) -> Option<String>;
+
+    /// `call` gave up waiting on `approval`, which is still pending. Returns
+    /// what to tell the model besides "not run", if anything.
+    fn gave_up(
+        &self,
+        call: &ApprovalCall<'_>,
+        approval: &Approval,
+        decision: Option<&Decision>,
+    ) -> Option<String>;
+
+    /// `call` is about to run under the approved `approval_id`: it is spent
+    /// and is never [`Self::held`] again.
+    fn used(&self, approval_id: &str);
+}
+
 #[must_use]
 fn new_approval_id() -> String {
     format!("approval_{}", random_suffix())
