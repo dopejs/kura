@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kura.local/schemas/events/work-item-outbox-dropped.event.schema.json",
+  "title": "WorkItemOutboxDroppedEvent",
+  "description": "A reply in the item's outbox was dropped and will never be sent (work-items.md §8): the connector no longer receives the conversation, the platform said the conversation is gone or posting is forbidden, or a person withdrew it. The replies after it in the same conversation go on. Carries no message bodies (§10).",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "./runtime-event.schema.json"
+    },
+    {
+      "type": "object",
+      "required": [
+        "tenantId"
+      ],
+      "properties": {
+        "category": {
+          "const": "work_item"
+        },
+        "name": {
+          "const": "work_item.outbox_dropped"
+        },
+        "tenantId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resource": {
+          "type": "object",
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "work_item"
+            },
+            "id": {
+              "type": "string"
+            }
+          }
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "itemId",
+            "basis",
+            "outboxSeq",
+            "reason",
+            "attempts",
+            "connectorId"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "itemId": {
+              "type": "string"
+            },
+            "basis": {
+              "type": "string",
+              "enum": [
+                "api",
+                "im_mention",
+                "im_direct",
+                "rule"
+              ]
+            },
+            "outboxSeq": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "connector_gone",
+                "conversation_gone",
+                "forbidden",
+                "withdrawn"
+              ]
+            },
+            "attempts": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Failed attempts in a row before the drop."
+            },
+            "connectorId": {
+              "type": "string"
+            },
+            "roundSeq": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    }
+  ]
+}

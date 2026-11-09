@@ -151,3 +151,43 @@ fn test_work_item_events_carry_their_tenant() {
             .is_err()
     );
 }
+
+/// Slice 3: an item whose outbox holds a sent reply, a failed one waiting
+/// for its retry, one queued behind it and one dropped; and the
+/// outbox_dropped event.
+const OUTBOX_ITEM: &str = r##"{"itemId":"wi_0193a1b2c3d4e5f6a7b8c9d4","tenantId":"ten_a","title":"Fix the flaky build","state":"open","stage":"person/delivery","threadId":"thr_wi_0193a1b2c3d4e5f6a7b8c9d4","seq":2,"mandate":{"basis":"im_mention","strength":"explicit","policyHash":"","matchedRules":[],"sender":{"connectorId":"slack-main","authorId":"U1"},"source":{"kind":"im","ref":"delivery_1","conversation":"C1"},"scopeText":"Fix CI on main.","createdAt":"2026-11-03T10:00:00Z"},"createdAt":"2026-11-03T10:00:00Z","updatedAt":"2026-11-03T10:05:00Z","outbox":[{"seq":1,"conversationKey":"thr_src_0a1b2c3d4e5f6a7b8c9d0e1f","connectorId":"slack-main","conversationId":"C1","roundSeq":1,"body":"Found the flaky test.","state":"sent","attempts":0,"externalMessageId":"1730628000.000100","createdAt":"2026-11-03T10:01:00Z","sentAt":"2026-11-03T10:01:01Z"},{"seq":2,"conversationKey":"thr_src_0a1b2c3d4e5f6a7b8c9d0e1f","connectorId":"slack-main","conversationId":"C1","roundSeq":2,"body":"Pushed the fix.","state":"failed","attempts":3,"nextAttemptAt":"2026-11-03T10:06:00Z","lastError":"send_failed","createdAt":"2026-11-03T10:05:00Z"},{"seq":3,"conversationKey":"thr_src_0a1b2c3d4e5f6a7b8c9d0e1f","connectorId":"slack-main","body":"Added to the work item's running round.","state":"queued","attempts":0,"nextAttemptAt":"2026-11-03T10:05:10Z","createdAt":"2026-11-03T10:05:10Z"},{"seq":4,"conversationKey":"thr_src_ffff","connectorId":"slack-main","body":"Done.","state":"dropped","attempts":1,"lastError":"conversation_gone","dropReason":"conversation_gone","createdAt":"2026-11-03T10:02:00Z","droppedAt":"2026-11-03T10:02:05Z"}]}"##;
+
+#[test]
+fn test_work_item_slice3_schemas_accept_canonical_fixtures() {
+    let validator = Validator::new(schema_root_dir());
+    let fixtures: &[Fixture] = &[
+        (
+            r##"schemas/api/work-item-resource.schema.json"##,
+            OUTBOX_ITEM,
+        ),
+        (
+            r##"schemas/events/work-item-outbox-dropped.event.schema.json"##,
+            r##"{"eventId":"evt_10","sequence":10,"tenantId":"ten_a","category":"work_item","name":"work_item.outbox_dropped","occurredAt":"2026-11-03T10:02:05Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"im_mention","outboxSeq":4,"reason":"conversation_gone","attempts":1,"connectorId":"slack-main","roundSeq":2}}"##,
+        ),
+    ];
+    validate_fixtures(&validator, fixtures);
+}
+
+#[test]
+fn test_work_item_outbox_dropped_event_refuses_a_body_or_an_unknown_reason() {
+    let validator = Validator::new(schema_root_dir());
+    for bad in [
+        r##"{"eventId":"evt_11","sequence":11,"tenantId":"ten_a","category":"work_item","name":"work_item.outbox_dropped","occurredAt":"2026-11-03T10:02:05Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"api","outboxSeq":1,"reason":"withdrawn","attempts":0,"connectorId":"slack-main","body":"secret"}}"##,
+        r##"{"eventId":"evt_12","sequence":12,"tenantId":"ten_a","category":"work_item","name":"work_item.outbox_dropped","occurredAt":"2026-11-03T10:02:05Z","scope":{},"resource":{"kind":"work_item","id":"wi_1"},"payload":{"itemId":"wi_1","basis":"api","outboxSeq":1,"reason":"timeout","attempts":0,"connectorId":"slack-main"}}"##,
+    ] {
+        assert!(
+            validator
+                .validate_relative(
+                    "schemas/events/work-item-outbox-dropped.event.schema.json",
+                    bad.as_bytes()
+                )
+                .is_err(),
+            "accepted {bad}"
+        );
+    }
+}

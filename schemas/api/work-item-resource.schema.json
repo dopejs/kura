@@ -28,6 +28,11 @@
       "type": "array",
       "description": "Every source the item follows or followed, live or dropped. Present on GET /v1/work-items/{id} only.",
       "items": { "$ref": "#/$defs/subscription" }
+    },
+    "outbox": {
+      "type": "array",
+      "description": "The replies the item sent or will send, oldest first (work-items.md §8). Present on GET /v1/work-items/{id} only.",
+      "items": { "$ref": "#/$defs/outboxRow" }
     }
   },
   "$defs": {
@@ -161,6 +166,32 @@
         "lastEventAt": { "type": "string", "format": "date-time" },
         "droppedAt": { "type": "string", "format": "date-time" },
         "dropReason": { "type": "string", "enum": ["stopped", "revoked", "superseded", "idle"] }
+      }
+    },
+    "outboxRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A reply to a conversation (work-items.md §8). For one (item, conversationKey) a row is sent only once every earlier row is sent or dropped. queued: not tried yet; failed: tried and retried at nextAttemptAt (5 s doubling to 300 s), still unsent; sent and dropped are final. After 3 failures in a row the item shows person/delivery. The body is shown here as an input's is; events never carry it.",
+      "required": ["seq", "conversationKey", "connectorId", "body", "state", "attempts", "createdAt"],
+      "properties": {
+        "seq": { "type": "integer", "minimum": 1 },
+        "conversationKey": { "type": "string", "description": "With the item, the order key. For IM, the conversation's thr_src_ thread id." },
+        "connectorId": { "type": "string" },
+        "conversationId": { "type": "string" },
+        "roundSeq": { "type": "integer", "minimum": 1, "description": "The round the reply reports, when it reports one." },
+        "body": { "type": "string" },
+        "state": { "type": "string", "enum": ["queued", "failed", "sent", "dropped"] },
+        "attempts": { "type": "integer", "minimum": 0, "description": "Failed attempts in a row." },
+        "nextAttemptAt": { "type": "string", "format": "date-time", "description": "Present while unsent." },
+        "lastError": {
+          "type": "string",
+          "description": "A stable code for the last failure, never the transport's own text: send_failed, receive_check_failed, or the drop reason."
+        },
+        "dropReason": { "type": "string", "enum": ["connector_gone", "conversation_gone", "forbidden", "withdrawn"] },
+        "externalMessageId": { "type": "string", "description": "The platform's id of the last part sent." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "sentAt": { "type": "string", "format": "date-time" },
+        "droppedAt": { "type": "string", "format": "date-time" }
       }
     }
   }
